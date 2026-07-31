@@ -1,0 +1,36 @@
+# Field Ops (TIQCollect) — rules specific to this app.
+#
+# The platform-wide basics (.env, .venv/, node_modules/, __pycache__/, dist/)
+# are already covered by ../.gitignore; this file only adds what TIQCollect
+# needs on top, and re-includes two files that the root rules would swallow.
+
+# ── Secrets ─────────────────────────────────────────────────────────────────
+firebase-credentials.json
+*.pem
+*.key
+*.p12
+*.pfx
+
+# ── Not a secret: the offline-build flag file, only VITE_OFFLINE_SNAPSHOTS=1.
+#    Needed by `vite build --mode offline`, but the root's `.env.*` rule would
+#    otherwise ignore it.
+!frontend/.env.offline
+
+# ── Python tooling caches ───────────────────────────────────────────────────
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# ── Data & uploads ──────────────────────────────────────────────────────────
+backend/data/incoming/
+
+# ── Docker ──────────────────────────────────────────────────────────────────
+docker-compose.override.yml
+
+# NOTE: backend/static/tiqcollect-offline/ is deliberately NOT ignored. It is a
+# build artifact of frontend/, but it is committed so Field Recovery works on a
+# fresh clone without an npm install — the same reason this repo commits the
+# Parquet datasets and model .joblib files.

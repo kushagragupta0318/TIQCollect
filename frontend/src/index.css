@@ -1,0 +1,484 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   index.css — TIQCollect Design System (aligned to frontend_team Apple Glass)
+   ───────────────────────────────────────────────────────────────────────────── */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* ── Brand Colors ─────────────────────────────────────────────────────── */
+    --primary:            213 100% 54%;   /* #1677FF */
+    --primary-foreground: 0 0% 100%;
+    --primary-dark:       217 88% 37%;    /* #0C4DB3 */
+    --secondary:          258 90% 66%;    /* #8B5CF6 */
+    --secondary-foreground: 0 0% 100%;
+
+    /* ── Status Colors ────────────────────────────────────────────────────── */
+    --success:            142 71% 36%;    /* #16A34A */
+    --success-foreground: 0 0% 100%;
+    --warning:            32 95% 44%;     /* #D97706 */
+    --warning-foreground: 20 14% 12%;
+    --destructive:        0 72% 51%;      /* #DC2626 */
+    --destructive-foreground: 0 0% 100%;
+
+    /* ── Surface & Background ─────────────────────────────────────────────── */
+    --background:         240 15% 98%;    /* ≈ #F9F9FB ultra-soft off-white */
+    --foreground:         240 10% 12%;    /* ≈ #1C1C1F carbon gray */
+    --card:               0 0% 100%;
+    --card-foreground:    240 10% 12%;
+    --popover:            0 0% 100%;
+    --popover-foreground: 240 10% 12%;
+    --muted:              240 5% 95%;
+    --muted-foreground:   240 4% 46%;
+    --accent:             213 100% 96%;   /* soft blue tint */
+    --accent-foreground:  213 100% 32%;
+    --border:             240 6% 90%;
+    --input:              240 6% 90%;
+    --ring:               213 100% 54%;
+
+    /* ── Radius ───────────────────────────────────────────────────────────── */
+    --radius: 1.375rem; /* 22px — card radius baseline */
+
+    /* ── Legacy hex vars (kept for any inline styles still using them) ─────── */
+    --ease:    cubic-bezier(0.16, 1, 0.3, 1);
+    --border-color: #EAEBEF;
+    --bg:      #F9F9FB;
+    --fg:      #1C1C1F;
+    --muted-hex: #6B6D76;
+    --color-primary: #1677ff;
+    --color-bg-app:     #FAFAFC;
+    --color-bg-content: #FFFFFF;
+  }
+
+  /* Border-color uses the border token at 60% opacity globally */
+  * {
+    box-sizing: border-box;
+    border-color: hsl(var(--border) / 0.6);
+  }
+
+  html {
+    -webkit-tap-highlight-color: transparent;
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    @apply bg-background text-foreground font-sans antialiased;
+    font-feature-settings: "rlig" 1, "calt" 1;
+    letter-spacing: -0.011em;
+    height: 100%;
+  }
+
+  #root { width: 100%; min-height: 100svh; }
+
+  /* Every Tailwind transition-* class inherits the spring curve */
+  [class*="transition-"] {
+    transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+  }
+}
+
+@layer components {
+  /* ── Panel (frontend_team primary card class) ──────────────────────────────
+     Same appearance as .card but uses semantic CSS vars and p-6 default.
+     Pages that use .card keep working — see .card below.                   */
+  .panel {
+    @apply bg-card border border-border/60 p-6 transition-all;
+    border-radius: var(--radius);
+    box-shadow: 0 1px 2px rgba(17,24,39,0.03), 0 1px 3px rgba(17,24,39,0.04);
+    transition: box-shadow 180ms cubic-bezier(0.16,1,0.3,1),
+                border-color 180ms cubic-bezier(0.16,1,0.3,1),
+                transform 180ms cubic-bezier(0.16,1,0.3,1);
+  }
+  .panel:hover {
+    box-shadow: 0 6px 20px rgba(22,119,255,0.12), 0 2px 6px rgba(17,24,39,0.06);
+    border-color: hsl(var(--border) / 0.9);
+    transform: translateY(-2px);
+  }
+
+  .panel-title {
+    @apply text-[9.5px] font-semibold tracking-widest text-muted-foreground uppercase mb-5;
+  }
+
+  /* ── Card (TIQCollect pages use this class everywhere) ─────────────────────
+     Updated to lighter resting shadow matching frontend_team aesthetic.
+     Hover lift changed from -4px to -3px with blue-tinted shadow.          */
+  .card {
+    @apply bg-white p-4;
+    border: 1px solid hsl(var(--border) / 0.6);
+    border-radius: 22px;
+    box-shadow: 0 1px 2px rgba(17,24,39,0.03), 0 1px 3px rgba(17,24,39,0.04);
+    transition: transform 200ms cubic-bezier(0.16,1,0.3,1),
+                box-shadow 200ms cubic-bezier(0.16,1,0.3,1),
+                border-color 200ms cubic-bezier(0.16,1,0.3,1);
+  }
+  .card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 6px 20px rgba(22,119,255,0.12), 0 2px 6px rgba(17,24,39,0.06);
+    border-color: hsl(var(--border) / 0.9);
+  }
+
+  /* ── Card Base (semantic version of .card, no padding) ─────────────────── */
+  .card-base {
+    @apply bg-card border border-border/60 transition-all;
+    border-radius: var(--radius);
+    box-shadow: 0 1px 2px rgba(17,24,39,0.03), 0 1px 3px rgba(17,24,39,0.04);
+    transition: box-shadow 180ms cubic-bezier(0.16,1,0.3,1),
+                border-color 180ms cubic-bezier(0.16,1,0.3,1),
+                transform 180ms cubic-bezier(0.16,1,0.3,1);
+  }
+  .card-base:hover {
+    box-shadow: 0 6px 20px rgba(22,119,255,0.12), 0 2px 6px rgba(17,24,39,0.06);
+    border-color: hsl(var(--border) / 0.9);
+    transform: translateY(-4px);
+  }
+
+  /* ── Agentic Panel (dark AI surface) ────────────────────────────────────── */
+  .agentic-panel {
+    @apply bg-[#0B0D14] transition-all relative overflow-hidden;
+    border-radius: var(--radius);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2), 0 28px 56px -18px rgba(139,92,246,0.3);
+  }
+  .agentic-panel:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 6px 16px rgba(0,0,0,0.25), 0 36px 64px -16px rgba(139,92,246,0.36);
+  }
+
+  /* ── Glass Surfaces ─────────────────────────────────────────────────────── */
+  .tiq-glass {
+    background: rgba(255, 255, 255, 0.68);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.4);
+  }
+
+  /* ── Icon Circle ─────────────────────────────────────────────────────────── */
+  .icon-circle {
+    @apply w-10 h-10 rounded-full flex items-center justify-center text-white shrink-0;
+    transition: transform 200ms cubic-bezier(0.16,1,0.3,1);
+  }
+  .card:hover .icon-circle,
+  .card-base:hover .icon-circle,
+  .panel:hover .icon-circle,
+  .agentic-panel:hover .icon-circle,
+  .group:hover .icon-circle {
+    transform: scale(1.08) rotate(-4deg);
+  }
+
+  /* ── Chip Badge ──────────────────────────────────────────────────────────── */
+  .chip-badge {
+    @apply px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider rounded-full inline-block;
+  }
+
+  /* ── Inputs ─────────────────────────────────────────────────────────────── */
+  .tiq-input {
+    @apply w-full bg-muted/40 border border-border/55 px-4 py-2.5 text-[12.5px] text-foreground outline-none placeholder:text-muted-foreground/50;
+    border-radius: 0.75rem;
+    transition: border-color 160ms cubic-bezier(0.16,1,0.3,1),
+                box-shadow 160ms cubic-bezier(0.16,1,0.3,1),
+                background 160ms cubic-bezier(0.16,1,0.3,1);
+  }
+  .tiq-input:focus {
+    @apply bg-card border-primary/50;
+    box-shadow: 0 0 0 3px hsl(var(--primary) / 0.08);
+  }
+  .tiq-input:focus-visible {
+    outline: 2px solid hsl(var(--primary) / 0.5);
+    outline-offset: 1px;
+  }
+
+  /* Legacy .input kept for pages that use it */
+  .input {
+    @apply w-full rounded-xl border px-3 py-2.5 text-sm placeholder-slate-400 outline-none transition;
+    border-color: hsl(var(--border) / 0.6);
+    background: hsl(var(--card));
+  }
+  .input:focus {
+    @apply ring-2 ring-primary/30 border-primary/50;
+    outline: none;
+  }
+
+  .tiq-label {
+    @apply block text-[11.5px] font-semibold text-foreground/80 mb-1.5 uppercase tracking-wider;
+  }
+
+  .tiq-file-upload {
+    @apply border border-dashed border-border/70 p-6 text-center bg-muted/20 transition-all cursor-pointer;
+    border-radius: 0.75rem;
+  }
+  .tiq-file-upload:hover {
+    @apply border-primary/55 bg-muted/40;
+  }
+
+  /* ── Buttons ────────────────────────────────────────────────────────────── */
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-1.5 font-semibold text-xs px-5 py-2.5 text-white shadow-sm disabled:opacity-50 disabled:cursor-not-allowed;
+    background-color: hsl(var(--primary));
+    border-radius: 0.75rem;
+    transition: background-color 160ms cubic-bezier(0.16,1,0.3,1),
+                box-shadow 160ms cubic-bezier(0.16,1,0.3,1),
+                transform 160ms cubic-bezier(0.16,1,0.3,1);
+  }
+  .btn-primary:hover {
+    background-color: hsl(var(--primary) / 0.9);
+    box-shadow: 0 2px 8px hsl(var(--primary) / 0.3);
+  }
+  .btn-primary:focus-visible {
+    outline: 2px solid hsl(var(--primary) / 0.6);
+    outline-offset: 2px;
+  }
+  .btn-primary:active { transform: scale(0.98); }
+
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-1.5 font-semibold text-xs px-4 py-2.5 border;
+    color: hsl(var(--foreground));
+    background-color: hsl(var(--muted));
+    border-color: hsl(var(--border) / 0.4);
+    border-radius: 0.75rem;
+    transition: background-color 160ms cubic-bezier(0.16,1,0.3,1),
+                border-color 160ms cubic-bezier(0.16,1,0.3,1);
+  }
+  .btn-secondary:hover {
+    background-color: hsl(var(--muted) / 0.8);
+  }
+  .btn-secondary:focus-visible {
+    outline: 2px solid hsl(var(--primary) / 0.4);
+    outline-offset: 2px;
+  }
+
+  .btn-danger {
+    @apply inline-flex items-center justify-center gap-1.5 font-semibold text-xs px-4 py-2.5 text-white;
+    background-color: hsl(var(--destructive));
+    border-radius: 0.75rem;
+    transition: background-color 160ms cubic-bezier(0.16,1,0.3,1);
+  }
+  .btn-danger:hover {
+    background-color: hsl(var(--destructive) / 0.88);
+  }
+
+  .btn-ghost {
+    @apply inline-flex items-center gap-1.5 text-[12px] font-semibold;
+    color: hsl(var(--muted-foreground));
+    transition: color 160ms cubic-bezier(0.16,1,0.3,1);
+  }
+  .btn-ghost:hover {
+    color: hsl(var(--foreground));
+  }
+
+  /* ── Badge system ────────────────────────────────────────────────────────── */
+  .badge        { @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold; }
+  .badge-red    { @apply badge; background: rgba(220,38,38,0.10); color: #991B1B; }
+  .badge-orange { @apply badge; background: rgba(249,115,22,0.10); color: #9A3412; }
+  .badge-yellow { @apply badge; background: rgba(217,119,6,0.10);  color: #92400E; }
+  .badge-green  { @apply badge; background: rgba(22,163,74,0.10);  color: #14532D; }
+  .badge-purple { @apply badge; background: rgba(139,92,246,0.12); color: #5B21B6; }
+  .badge-blue   { @apply badge; background: rgba(22,119,255,0.10); color: #1E40AF; }
+  .badge-gray   { @apply badge bg-slate-100 text-slate-600; }
+
+  /* Premium pill badges */
+  .badge-premium-blue {
+    @apply bg-primary/5 border border-primary/10 text-primary px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider inline-block;
+    border-radius: 9999px;
+  }
+  .badge-premium-green {
+    @apply bg-success/5 border border-success/10 text-success px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider inline-block;
+    border-radius: 9999px;
+  }
+  .badge-premium-red {
+    @apply bg-destructive/5 border border-destructive/10 text-destructive px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider inline-block;
+    border-radius: 9999px;
+  }
+  .badge-premium-amber {
+    @apply bg-warning/10 border border-warning/20 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider inline-block;
+    border-radius: 9999px;
+    color: hsl(var(--warning));
+  }
+
+  /* ── Tables ─────────────────────────────────────────────────────────────── */
+  .tiq-table { @apply w-full border-collapse; }
+  .tiq-table th {
+    @apply text-muted-foreground font-semibold uppercase text-[9px] tracking-widest px-5 py-3.5 border-b text-left bg-muted/10;
+    border-color: hsl(var(--border) / 0.4);
+  }
+  .tiq-table td {
+    @apply px-5 py-4 border-b text-[12px] font-semibold;
+    color: hsl(var(--foreground));
+    border-color: hsl(var(--border) / 0.3);
+  }
+  .tiq-table tbody tr {
+    transition: background-color 150ms cubic-bezier(0.16,1,0.3,1);
+  }
+  .tiq-table tbody tr:hover { background: hsl(var(--muted) / 0.3); }
+}
+
+@layer utilities {
+  /* ── Card hover — utilities layer so it wins over shadow-* utility classes ─
+     All interactive cards get the same blue lift: shadow, border, translate.  */
+  .card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 6px 20px rgba(22, 119, 255, 0.14), 0 2px 6px rgba(17, 24, 39, 0.06);
+    border-color: rgba(22, 119, 255, 0.22);
+  }
+  .panel:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(22, 119, 255, 0.14), 0 2px 6px rgba(17, 24, 39, 0.06);
+    border-color: rgba(22, 119, 255, 0.22);
+  }
+  .card-base:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 8px 24px rgba(22, 119, 255, 0.16), 0 2px 6px rgba(17, 24, 39, 0.06);
+    border-color: rgba(22, 119, 255, 0.22);
+  }
+
+  /* ── Page & Card Entrance Animations ───────────────────────────────────── */
+  .page-fade-in {
+    animation: fadeIn 350ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+
+  .card-enter {
+    animation: slideUpCard 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  .hero-fade-up {
+    animation: heroFadeUp 500ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  /* Stagger: apply .card-enter and set --stagger-i as inline CSS var */
+  .stagger-item {
+    animation-delay: calc(var(--stagger-i, 0) * 50ms);
+    animation-fill-mode: both;
+  }
+
+  /* Legacy .animate-enter shorthand kept for existing markup */
+  .animate-enter { animation: enter 420ms cubic-bezier(0.16,1,0.3,1) both; }
+
+  /* ── Glow helpers ────────────────────────────────────────────────────────── */
+  .hero-glow-primary     { box-shadow: 0 0 80px -20px rgba(22, 119, 255, 0.25); }
+  .hero-glow-destructive { box-shadow: 0 0 80px -20px rgba(220, 38, 38, 0.20); }
+  .hero-glow-warning     { box-shadow: 0 0 80px -20px rgba(217, 119, 6, 0.20); }
+  .hero-glow-success     { box-shadow: 0 0 80px -20px rgba(22, 163, 74, 0.20); }
+
+  /* ── Sidebar section collapse ────────────────────────────────────────────── */
+  .sidebar-section-items {
+    overflow: hidden;
+    transition: max-height 200ms cubic-bezier(0.16,1,0.3,1),
+                opacity 200ms cubic-bezier(0.16,1,0.3,1);
+  }
+  .sidebar-section-items.collapsed { max-height: 0; opacity: 0; }
+  .sidebar-section-items.expanded  { max-height: 400px; opacity: 1; }
+
+  /* ── Live status dot ─────────────────────────────────────────────────────── */
+  .live-dot { animation: liveRing 1.8s cubic-bezier(0.16,1,0.3,1) infinite; }
+
+  /* ── Cursor blink (AI streaming) ─────────────────────────────────────────── */
+  .cursor-blink {
+    animation: cursorBlink 0.75s step-end infinite;
+    display: inline-block;
+    width: 3px;
+    background: currentColor;
+    margin-left: 2px;
+    border-radius: 1px;
+    vertical-align: baseline;
+    position: relative;
+    top: -2px;
+  }
+
+  /* ── Thin scrollbar ──────────────────────────────────────────────────────── */
+  .scrollbar-thin::-webkit-scrollbar       { width: 5px; height: 5px; }
+  .scrollbar-thin::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 9999px; }
+  .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+
+  /* ── Safe area ───────────────────────────────────────────────────────────── */
+  .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+  .safe-top    { padding-top:    env(safe-area-inset-top); }
+}
+
+/* ── Keyframes ────────────────────────────────────────────────────────────── */
+
+/* Original TIQCollect entrance — kept for all inline animation: `enter` usage */
+@keyframes enter {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* frontend_team system keyframes */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideUpCard {
+  from { opacity: 0; transform: translateY(18px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes heroFadeUp {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes liveRing {
+  0%   { box-shadow: 0 0 0 0   rgba(52, 211, 153, 0.55); }
+  65%  { box-shadow: 0 0 0 7px rgba(52, 211, 153, 0); }
+  100% { box-shadow: 0 0 0 0   rgba(52, 211, 153, 0); }
+}
+
+@keyframes cursorBlink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+
+/* SVG chart animations */
+@keyframes drawLine {
+  from { stroke-dashoffset: 2400; }
+  to   { stroke-dashoffset: 0; }
+}
+
+@keyframes growUp {
+  from { transform: scaleY(0); transform-origin: bottom; }
+  to   { transform: scaleY(1); transform-origin: bottom; }
+}
+
+@keyframes dotPop {
+  0%   { r: 0; opacity: 0; }
+  60%  { r: 4.5; opacity: 1; }
+  100% { r: 3; opacity: 0.9; }
+}
+
+@keyframes pulse-dot {
+  0%   { box-shadow: 0 0 0 0   rgba(34, 197, 94, 0.5); }
+  70%  { box-shadow: 0 0 0 7px rgba(34, 197, 94, 0); }
+  100% { box-shadow: 0 0 0 0   rgba(34, 197, 94, 0); }
+}
+
+/* ── Global scrollbar ─────────────────────────────────────────────────────── */
+::-webkit-scrollbar       { width: 5px; height: 5px; }
+::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 9999px; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* ── Range sliders — Apple style ─────────────────────────────────────────── */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+input[type="range"]::-webkit-slider-track {
+  height: 4px;
+  border-radius: 9999px;
+  background: hsl(var(--border) / 0.5);
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #FFFFFF;
+  border: 1px solid rgba(0,0,0,0.1);
+  box-shadow: 0 2px 5px rgba(0,0,0,0.1), 0 1px 1px rgba(0,0,0,0.05);
+  margin-top: -7px;
+  transition: transform 120ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+input[type="range"]::-webkit-slider-thumb:hover  { transform: scale(1.1); }
+input[type="range"]::-webkit-slider-thumb:active { transform: scale(0.95); }

@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Collection Command Center</title>
+
+    <link rel="stylesheet" href="style.css">
+
+    <!-- Embed mode: when this page is framed by the Command Center's Field
+         Recovery route it is opened with ?embed=1. The class hides the page's
+         own blue rail so there is only ONE sidebar on screen (the Command
+         Center's). Opened directly, the page renders exactly as before. -->
+    <script>
+        if (new URLSearchParams(location.search).has("embed")) {
+            document.documentElement.classList.add("embed");
+        }
+    </script>
+</head>
+
+<body>
+
+    <div class="dashboard">
+
+        <!-- Sidebar -->
+        <aside class="sidebar">
+
+            <div class="logo">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="22" height="22"><path d="M3 21h18"/><path d="M5 21V9l7-5 7 5v12"/><path d="M9 21v-6h6v6"/></svg>
+            </div>
+
+        </aside>
+
+        <main class="main-content">
+
+    <!-- Page heading -->
+    <div class="page-header">
+
+    <div class="page-title">
+        <h1>Collection Agency's Overview</h1>
+    </div>
+
+</div>
+
+    <section class="overview">
+        <div class="card">
+
+    <div class="card-top">
+        <h3>Collection Rate</h3>
+        <span class="card-icon icon-blue"><svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="19" height="19"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg></span>
+    </div>
+
+    <h2 id="collectionRate">82%</h2>
+
+    <div class="kpi-comparison">
+
+        <div id="collectionChange" class="change-value">
+            ▲ 0%
+        </div>
+
+        <div class="comparison-text">
+            vs Previous Month
+        </div>
+
+    </div>
+
+</div>
+
+<div class="card">
+
+    <div class="card-top">
+        <h3>PTP Conversion</h3>
+        <span class="card-icon icon-orange"><svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="19" height="19"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span>
+    </div>
+
+<h2 id="ptpRate">68%</h2>
+<div id="ptpTrend" class="trend-indicator">
+</div>
+<div class="kpi-comparison">
+
+    <div id="ptpChange" class="change-value">
+        ▲0%
+    </div>
+
+    <div class="comparison-text">
+        vs Previous Month
+    </div>
+
+</div>
+</div>
+
+<div class="card">
+    <div class="card-top">
+        <h3>Total Assigned Cases</h3>
+        <span class="card-icon icon-green"><svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="19" height="19"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span>
+    </div>
+    <!-- Filled by updateKPIs() from the leaderboard total; no seeded value -->
+    <h2 id="casesAssigned">—</h2>
+</div>
+
+<div class="card">
+    <div class="card-top">
+        <h3>No. of Agencies</h3>
+        <span class="card-icon icon-gray"><svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="19" height="19"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg></span>
+    </div>
+    <h2 id="agencyCount">5</h2>
+</div>
+
+    
+
+</section>
+<!-- Trend Chart -->
+<section class="trend-section">
+
+    <div class="trend-header">
+
+        <div class="section-title">
+            <h2>Collection & PTP Trend (Last 6 Months)</h2>
+        </div>
+
+        <div class="trend-mode-toggle" id="trendModeToggle">
+            <button type="button" class="mode-btn active" data-mode="total">Total</button>
+            <button type="button" class="mode-btn" data-mode="peragency">Per Agency</button>
+        </div>
+
+    </div>
+
+    <div class="agency-pills" id="agencyPills" style="display:none;">
+        <!-- Agency pills (and a Clear pill) are rendered dynamically by script.js -->
+    </div>
+
+    <div class="agency-spotlight" id="agencySpotlight" style="display:none;">
+        <!-- Selected agency's stat chips are rendered dynamically by script.js -->
+    </div>
+
+    <div class="chart-container">
+        <canvas id="trendChart"></canvas>
+    </div>
+
+    <div class="month-selector" id="monthButtons">
+        <!-- Month buttons are rendered dynamically by script.js -->
+    </div>
+
+</section>
+<!-- Agency Leaderboard -->
+
+<section class="leaderboard-section">
+
+    <div class="leaderboard-header">
+
+        <h2>Agency Performance Leaderboard</h2>
+
+        <div class="leaderboard-filter">
+
+            <label>Agency</label>
+
+            <select id="agencyFilter">
+                <option>All Agencies</option>
+                <option>ABC Collections</option>
+                <option>XYZ Services</option>
+                <option>PQR Recovery</option>
+                <option>LMN Associates</option>
+                <option>RST Recovery</option>
+            </select>
+
+        </div>
+
+    </div>
+
+    <div class="table-scroll">
+
+    <table class="leaderboard-table">
+
+        <thead>
+
+            <tr>
+                <!-- Every header is title-line + sub-line, even when the
+                     sub-line is empty. The empty .th-sub still reserves its
+                     row, which is what keeps all the titles on one line. -->
+                <th><span class="th-title">Rank</span><span class="th-sub"></span></th>
+                <th><span class="th-title">Agency Name</span><span class="th-sub"></span></th>
+                <th><span class="th-title">Collection Rate</span><span class="th-sub">(%) (MTD)</span></th>
+                <th><span class="th-title">PTP Conversion Rate</span><span class="th-sub">(%) (MTD)</span></th>
+                <th><span class="th-title">Cases Assigned</span><span class="th-sub">(MTD)</span></th>
+                <th><span class="th-title">Collection</span><span class="th-sub">(MTD)</span></th>
+                <th><span class="th-title">Number of Agents</span><span class="th-sub"></span></th>
+            </tr>
+
+        </thead>
+
+        <tbody id="agencyTable">
+
+        </tbody>
+
+    </table>
+
+    </div>
+
+</section>
+
+</main>
+
+    </div>
+
+
+    <!-- Chart.js Library -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<!-- Your Script -->
+<script src="script.js"></script>
+
+</body>
+
+</html>

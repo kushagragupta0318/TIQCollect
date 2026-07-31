@@ -1,0 +1,175 @@
+export type UserRole = "FIELD_AGENT" | "AGENCY_MANAGER" | "AGENCY_ADMIN";
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  full_name: string;
+  role: UserRole;
+  is_active: boolean;
+}
+
+export interface LoginResponse {
+  access_token: string;
+  refresh_token: string;
+  token_type: string;
+  role: UserRole;
+  user_id: string;
+  full_name: string;
+}
+
+export type DPDBucket = "CURRENT" | "BUCKET_1" | "BUCKET_2" | "BUCKET_3" | "NPA";
+export type CaseStatus = "UNASSIGNED" | "ASSIGNED" | "IN_PROGRESS" | "PTP_SET" | "PARTIALLY_PAID" | "PAID" | "ESCALATED" | "CLOSED" | "WRITTEN_OFF";
+export type CasePriority = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+export type AgentTier = "TIER_1" | "TIER_2" | "TIER_3";
+export type AgentStatus = "ON_DUTY" | "OFF_DUTY" | "ON_LEAVE" | "SUSPENDED";
+export type VisitOutcome =
+  | "PAID_FULL"       // Full target amount collected
+  | "PART_PAID"       // Partial amount collected, no PTP
+  | "PTP"             // Promise to Pay — no money today
+  | "PART_PAID_PTP"   // Partial payment + PTP for remainder
+  | "BROKEN_PTP"      // Had a PTP, didn't honour it
+  | "RTP"             // Refuse to Pay
+  | "DISPUTE"         // Disputes loan / amount
+  | "NOT_AVAILABLE"   // Customer not present
+  | "ADDRESS_ISSUE"   // Wrong address / shifted
+  | "DECEASED"        // Customer deceased
+  | "REVISIT";        // Needs revisit
+
+export type PersonMet =
+  | "BORROWER" | "CO_BORROWER" | "SPOUSE" | "PARENT"
+  | "SIBLING" | "CHILD" | "RELATIVE" | "EMPLOYER"
+  | "NEIGHBOR" | "SECURITY" | "OTHER";
+
+export type DefaultReason =
+  | "JOB_LOSS" | "SALARY_CUT" | "BUSINESS_FAILURE" | "MEDICAL"
+  | "DEATH_IN_FAMILY" | "MARITAL_DISPUTE" | "ALREADY_PAID"
+  | "AMOUNT_DISPUTED" | "FRAUD_CLAIM" | "OVER_LEVERAGED" | "OTHER";
+export type PaymentMode = "CASH" | "UPI" | "NEFT" | "RTGS" | "CHEQUE" | "DD" | "ONLINE";
+export type RiskCategory = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+
+export interface Agent {
+  id: string;
+  user_id: string;
+  employee_code: string;
+  id_card_number: string;
+  full_name: string;
+  territory: string;
+  status: AgentStatus;
+  tier: AgentTier;
+  ranking_score: number;
+  current_month_visits: number;
+  current_month_collections: number;
+  current_month_ptps_set: number;
+  current_month_ptps_honored: number;
+  lifetime_collection_rate: number;
+  last_known_latitude: number | null;
+  last_known_longitude: number | null;
+  sos_active: boolean;
+  max_cases_per_day: number;
+  specialization: string;
+  languages_spoken: string[];
+  today_collected: number;
+  today_target: number;
+  ptp_rate_pct: number;
+  collection_rate_pct: number;
+}
+
+export interface Customer {
+  id: string;
+  customer_ref: string;
+  full_name: string;
+  phone_primary: string;
+  city: string;
+  state: string;
+  latitude: number;
+  longitude: number;
+  risk_category: RiskCategory;
+  risk_score: number;
+  cibil_score: number | null;
+  is_hostile: boolean;
+  language_preference: string;
+}
+
+export interface Loan {
+  id: string;
+  loan_account_number: string;
+  loan_account_masked: string | null;
+  loan_type: string;
+  bank_name: string;
+  dpd: number;
+  dpd_bucket: DPDBucket;
+  status: string;
+  npa_flag: boolean;
+  // financial — only shown after borrower verification in detail page
+  total_outstanding: number;
+  overdue_amount: number;
+  emi_amount: number;
+  outstanding_principal: number;
+  outstanding_interest: number;
+  penal_charges: number;
+  interest_rate: number;
+  tenure_months: number;
+  last_payment_date: string | null;
+  last_payment_amount: number | null;
+  next_due_date: string | null;
+  legal_status: string;
+  settlement_status: string;
+}
+
+export interface Case {
+  id: string;
+  case_number: string;
+  customer: Customer;
+  loan: Loan;
+  agent_id: string | null;
+  agent_name?: string | null;
+  status: CaseStatus;
+  priority: CasePriority;
+  target_amount: number;
+  collected_amount: number;
+  allocation_date: string | null;
+  collection_stage: string | null;
+  visit_count: number;
+  max_visits_allowed: number;
+  is_escalated: boolean;
+  handover_notes: string | null;
+  is_visited_today?: boolean;
+  ptp_due_today?: boolean;
+}
+
+export interface Beat {
+  id: string;
+  beat_date: string;
+  beat_number: string;
+  ordered_case_ids: string[];
+  total_cases: number;
+  estimated_distance_km: number;
+  estimated_duration_minutes: number;
+  total_target_amount: number;
+  status: "PLANNED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED";
+  cases_completed: number;
+  amount_collected: number;
+}
+
+export interface PTP {
+  id: string;
+  committed_amount: number;
+  committed_date: string;
+  status: "ACTIVE" | "HONORED" | "BROKEN" | "PARTIALLY_HONORED" | "EXPIRED" | "RESCHEDULED";
+  customer_reason: string | null;
+}
+
+export interface DashboardSummary {
+  total_agents: number;
+  agents_on_duty: number;
+  total_cases: number;
+  cases_assigned: number;
+  cases_today: number;
+  cases_resolved_today: number;
+  visits_today: number;
+  amount_collected_today: number;
+  amount_target_today: number;
+  collection_rate_today: number;   // already a percentage (0–100)
+  ptps_due_today: number;
+  sos_active_count: number;
+}

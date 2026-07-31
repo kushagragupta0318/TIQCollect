@@ -1,16 +1,32 @@
-"""Field Ops development stub.
+"""Field Ops contract stub — runs on :8300, alongside the real app in app/.
 
-Field Operations (FOS agent tracking, geofencing, visit logging) is being built as a
-separate platform by an external team — this is not that platform. It implements the
-contract documented in shared/field-ops-contract.md with seeded data, so Command
-Center's Field Operations page has a real HTTP boundary to develop and demo against
-instead of hardcoded UI fixtures. Swap FIELD_OPS_URL to the real service when it
-exists; no frontend or Command Center proxy change is needed.
+Two backends live in this folder and they do different jobs:
+
+  app/           TIQCollect proper — the real Field Ops platform (:8400, needs
+                 Postgres/Redis/MinIO, see ../docker-compose.yml)
+  stub_main.py   this file — the /api/field-ops/* contract from
+                 ../../FIELD_OPS_INTEGRATION.md, served from seeded data
+
+Command Center proxies to FIELD_OPS_URL (default :8300) for that contract, and
+TIQCollect does not implement it — its schema is cases/attendance/DPD, not
+geofencing/visits/zones. So this stub keeps Command Center's Field Operations
+page working while TIQCollect runs beside it. When TIQCollect grows those four
+endpoints, point FIELD_OPS_URL at :8400 and delete this file.
+
+It also HOSTS the Field Recovery UI (TIQCollect's Collection Agency overview +
+manager analytics) at /tiqcollect — see the mount at the bottom of this file.
+The UI belongs to the field-ops side of the boundary, so it is served from here
+rather than baked into Command Center's own frontend bundle.
+
+    python -m uvicorn stub_main:app --port 8300 --app-dir field-ops-stub/backend
 """
+import os
 import random
+import pathlib
 import datetime
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 app = FastAPI(title="Field Ops (dev stub)")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -125,3 +141,25 @@ def visits(account_id: str | None = None):
     if account_id:
         return [v for v in _VISITS if v["account_id"] == account_id]
     return _VISITS[:50]
+
+
+# ── Field Recovery UI ────────────────────────────────────────────────────────
+# The static, backend-free TIQCollect build (Collection Agency's Overview, plus
+# the manager analytics view its leaderboard links into). Command Center's Field
+# Recovery page frames this over HTTP rather than shipping it in its own bundle,
+# which keeps the whole field-ops surface — data AND UI — behind one boundary
+# that FIELD_OPS_URL points at.
+#
+#   /tiqcollect/collection_dashboard/index.html   ← the agency overview (entry)
+#   /tiqcollect/index.html#/manager-bridge        ← manager analytics
+#
+# The bundle is a build artifact of ../frontend (this repo now holds its source),
+# rebuilt with: node field-ops-stub/frontend/scripts/build-offline-bundle.mjs
+UI_DIR = pathlib.Path(__file__).parent / "static" / "tiqcollect-offline"
+UI_PATH = os.getenv("FIELD_OPS_UI_PATH", "/tiqcollect")
+
+if UI_DIR.is_dir():
+    app.mount(UI_PATH, StaticFiles(directory=UI_DIR, html=True), name="field-recovery-ui")
+else:
+    print(f"[field-ops-stub] Field Recovery UI not found at {UI_DIR} — "
+          f"{UI_PATH} will 404. Build it with scripts/build-tiqcollect-offline.mjs")
