@@ -7,16 +7,27 @@ Two backends live in this folder and they do different jobs:
   stub_main.py   this file — the /api/field-ops/* contract from
                  ../../FIELD_OPS_INTEGRATION.md, served from seeded data
 
-Command Center proxies to FIELD_OPS_URL (default :8300) for that contract, and
-TIQCollect does not implement it — its schema is cases/attendance/DPD, not
-geofencing/visits/zones. So this stub keeps Command Center's Field Operations
-page working while TIQCollect runs beside it. When TIQCollect grows those four
-endpoints, point FIELD_OPS_URL at :8400 and delete this file.
+Command Center proxies to FIELD_OPS_URL (default :8300) for that contract. This
+stub answers it from randomly generated agents and visits — plausible shapes,
+not TIQCollect data.
 
-It also HOSTS the Field Recovery UI (TIQCollect's Collection Agency overview +
-manager analytics) at /tiqcollect — see the mount at the bottom of this file.
-The UI belongs to the field-ops side of the boundary, so it is served from here
-rather than baked into Command Center's own frontend bundle.
+TIQCollect now implements the same four endpoints itself, translating them out
+of its real cases/visits/payments schema:
+
+    app/api/v1/endpoints/field_ops.py
+
+so the contract no longer needs a stub. Set FIELD_OPS_URL=http://127.0.0.1:8400
+in command-center/backend/.env and Command Center's Field Operations page reads
+live data. This file stays only because :8400 needs Postgres/Redis/MinIO up,
+while :8300 needs nothing — it is the fallback for a demo on a bare machine, not
+the intended source.
+
+It also HOSTS the Field Recovery UI (TIQCollect's Collection Agency overview) at
+/tiqcollect — see the mount at the bottom of this file. The UI belongs to the
+field-ops side of the boundary, so it is served from here rather than baked into
+Command Center's own frontend bundle. Note the mount serves the prebuilt offline
+bundle, so it is frozen at its last build; Command Center can be pointed at the
+live :5473 dev server instead via command-center/frontend/.env.example.
 
     python -m uvicorn stub_main:app --port 8300 --app-dir field-ops-stub/backend
 """

@@ -1,10 +1,21 @@
 // ─── Offline snapshot adapter ────────────────────────────────────────────────
 // 2026-07-30 — collection_dashboard: lets the app run with NO backend at all.
 //   Used only by the `offline` build mode (see .env.offline), which is what the
-//   Collections Command Center embeds so its Field Recovery → agency click can
-//   open the manager analytics view without anyone starting this project's
-//   frontend or backend. Normal dev/build never loads this file's behaviour:
-//   axios.ts installs the adapter only when VITE_OFFLINE_SNAPSHOTS is set.
+//   Collections Command Center frames on its Field Recovery page — so that page
+//   works with nothing of this project's running. Normal dev/build never loads
+//   this file's behaviour: axios.ts installs the adapter only when
+//   VITE_OFFLINE_SNAPSHOTS is set.
+//
+//   Originally this also carried the manager analytics view, which the agency
+//   click navigated the frame to. It no longer does: the click posts up to
+//   Command Center, which renders analytics itself from the live TIQCollect API
+//   (command-center/backend/routers/field_ops_manager.py). What this bundle
+//   still owns is the agency OVERVIEW — the entry screen — and the snapshots
+//   below only need to cover that.
+//
+//   Command Center can also be pointed at this project's live dev server
+//   instead of the built bundle, which bypasses this adapter entirely; see
+//   command-center/frontend/.env.example.
 //
 //   Responses are replayed from public/offline/snapshots.json, captured from a
 //   live backend by scripts/capture-offline-snapshots.py. Reads are served from
