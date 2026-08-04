@@ -7,13 +7,20 @@ Center's Field Operations page has a real HTTP boundary to develop and demo agai
 instead of hardcoded UI fixtures. Swap FIELD_OPS_URL to the real service when it
 exists; no frontend or Command Center proxy change is needed.
 """
+import os
 import random
 import datetime
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="Field Ops (dev stub)")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+_origins = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_origins or ["*"],
+    allow_credentials=bool(_origins),
+    allow_methods=["*"], allow_headers=["*"],
+)
 
 _rng = random.Random(42)
 _ZONES = ["North", "South", "East", "West", "Central"]
