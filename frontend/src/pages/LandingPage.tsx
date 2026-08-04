@@ -1,4 +1,4 @@
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import {
   ShieldCheck, Map, Zap, Brain, BarChart3, FileCheck, CheckCircle,
   ArrowRight, Phone, Navigation, Bell, Lock, Star, Users, IndianRupee, TrendingUp,

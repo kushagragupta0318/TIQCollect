@@ -1,5 +1,5 @@
 import { useState, type FormEvent, useEffect } from "react";
-import { useNavigate, useLocation } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router";
 import { Eye, EyeOff, Lock, Mail, ShieldCheck } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { login as apiLogin } from "@/api/auth";

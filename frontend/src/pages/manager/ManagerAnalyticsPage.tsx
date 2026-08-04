@@ -392,6 +392,19 @@ export default function ManagerAnalyticsPage() {
   const { kpis, monthly_trend, dpd_breakdown } = analytics;
   const { months, agents } = agentPerf;
 
+  // Window totals — the sum of every month on this page, so the unselected
+  // KPI cards agree with the trend chart beneath them.
+  //
+  // Deliberately NOT kpis.total_collected_lakhs / total_target_lakhs /
+  // overall_collection_rate_pct: that block is a portfolio snapshot (current
+  // collected vs target across cases) and measures something different, so it
+  // read far below the months on show — 214.1L against 1572.0L summed, and
+  // 19.1% against 43.9%. Scoped to this page; the backend is untouched and
+  // every other consumer of `kpis` keeps its existing figures.
+  const windowCollectedLakhs = monthly_trend.reduce((t, m) => t + m.collected_lakhs, 0);
+  const windowTargetLakhs    = monthly_trend.reduce((t, m) => t + m.target_lakhs, 0);
+  const windowRatePct        = windowTargetLakhs > 0 ? (windowCollectedLakhs / windowTargetLakhs) * 100 : 0;
+
   // Team-month dynamic KPI computation
   const selTeamTrend = selTeamMonth ? monthly_trend.find((m) => monthLabel(m.month) === selTeamMonth) ?? null : null;
   const prevTeamTrend = selTeamTrend ? (() => {
@@ -442,20 +455,20 @@ export default function ManagerAnalyticsPage() {
         {[
           {
             label: "Collection Rate",
-            value: selTeamTrend ? `${selTeamTrend.collection_rate_pct.toFixed(1)}%` : `${kpis.overall_collection_rate_pct.toFixed(1)}%`,
-            sub: selTeamTrend ? "" : "all-time",
+            value: selTeamTrend ? `${selTeamTrend.collection_rate_pct.toFixed(1)}%` : `${windowRatePct.toFixed(1)}%`,
+            sub: selTeamTrend ? "" : "across all months",
             delta: teamRateDelta, deltaSuffix: "%",
             icon: <TrendingUp className="w-5 h-5" />, color: "text-brand-600",
           },
           {
             label: "Total Collected",
-            value: selTeamTrend ? `₹${selTeamTrend.collected_lakhs.toFixed(1)}L` : `₹${kpis.total_collected_lakhs.toFixed(1)}L`,
-            sub: selTeamTrend ? `of ₹${selTeamTrend.target_lakhs.toFixed(1)}L target` : `of ₹${kpis.total_target_lakhs.toFixed(1)}L target`,
+            value: selTeamTrend ? `₹${selTeamTrend.collected_lakhs.toFixed(1)}L` : `₹${windowCollectedLakhs.toFixed(1)}L`,
+            sub: selTeamTrend ? `of ₹${selTeamTrend.target_lakhs.toFixed(1)}L target` : `of ₹${windowTargetLakhs.toFixed(1)}L target`,
             delta: teamCollectDelta, deltaSuffix: "%",
             icon: <IndianRupee className="w-5 h-5" />, color: "text-success-600",
           },
           {
-            label: "PTP Conversion",
+            label: "PTP Conversion Rate",
             value: teamPTPSel !== null ? `${teamPTPSel}%` : `${kpis.ptp_conversion_rate_pct.toFixed(1)}%`,
             sub: teamPTPSel !== null ? "" : "PTPs honored",
             delta: teamPTPDelta, deltaSuffix: "%",
@@ -1230,10 +1243,22 @@ function KPICard({ label, value, sub, icon, color, deltaText, deltaPositive }: {
         <div className="min-w-0">
           <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: "#6B6D76" }}>{label}</p>
           <p className={`text-2xl font-semibold mt-1.5 leading-none tracking-tight ${color}`}>{value}</p>
-          {deltaText ? (
-            <p className="text-xs mt-1 font-semibold" style={{ color: deltaPositive ? "#16a34a" : "#dc2626" }}>{deltaText}</p>
-          ) : (
-            <p className="text-xs mt-1" style={{ color: "#6B6D76" }}>{sub}</p>
+          {/* Delta and sub-line together, not either/or. The old ternary meant
+              any month with a month-over-month delta dropped its sub-line, so
+              "of ₹NNNL target" showed up only on the first month of the window
+              — the one with no previous month to compare against.
+              flex-wrap + items-baseline: they sit on one baseline while they
+              fit, and the sub-line drops to its own line on a narrow card
+              instead of being clipped. */}
+          {(deltaText || sub) && (
+            <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 mt-1">
+              {deltaText && (
+                <span className="text-xs font-semibold" style={{ color: deltaPositive ? "#16a34a" : "#dc2626" }}>
+                  {deltaText}
+                </span>
+              )}
+              {sub && <span className="text-xs" style={{ color: "#6B6D76" }}>{sub}</span>}
+            </div>
           )}
         </div>
         <div className={`icon-circle flex-shrink-0 text-white ${iconBg}`} style={{ transition: "transform 200ms cubic-bezier(0.16,1,0.3,1)" }}>

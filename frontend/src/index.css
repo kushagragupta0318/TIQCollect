@@ -170,6 +170,54 @@
     @apply px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider rounded-full inline-block;
   }
 
+  /* ── Accent Row ─────────────────────────────────────────────────────────
+     Shared by the Field Agents table and Case Management. One definition, so
+     the two lists cannot drift apart the way two copies would.
+
+     Real :hover, not mouseenter/mouseleave writing inline styles. A row that
+     scrolls out from under a stationary cursor never fires mouseleave, so a
+     JS-driven row stays stuck lit after it moves away.
+
+     The accent stripe is an inset box-shadow rather than a border or a
+     pseudo-element with width, so turning it on costs no layout and the row
+     does not reflow on hover.
+
+     Base tints live here too: an inline background would outrank these class
+     rules and the :hover state would never paint.
+
+     Variants: default (blue) · -danger (SOS / escalated) · -done (visited
+     today, which also sits dimmed until hovered). */
+  .row-accent {
+    transition: background-color 150ms cubic-bezier(0.16, 1, 0.3, 1),
+                box-shadow 150ms cubic-bezier(0.16, 1, 0.3, 1),
+                opacity 150ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .row-accent:hover,
+  .row-accent.is-expanded {
+    background-color: rgba(22, 119, 255, 0.07);
+    box-shadow: inset 3px 0 0 0 #1677ff;
+  }
+
+  .row-accent-danger {
+    background-color: rgba(220, 38, 38, 0.04);
+  }
+  .row-accent-danger:hover,
+  .row-accent-danger.is-expanded {
+    background-color: rgba(220, 38, 38, 0.07);
+    box-shadow: inset 3px 0 0 0 #dc2626;
+  }
+
+  .row-accent-done {
+    background-color: rgba(34, 197, 94, 0.04);
+    opacity: 0.52;
+  }
+  .row-accent-done:hover,
+  .row-accent-done.is-expanded {
+    background-color: rgba(34, 197, 94, 0.07);
+    box-shadow: inset 3px 0 0 0 #22c55e;
+    opacity: 1;
+  }
+
   /* ── Inputs ─────────────────────────────────────────────────────────────── */
   .tiq-input {
     @apply w-full bg-muted/40 border border-border/55 px-4 py-2.5 text-[12.5px] text-foreground outline-none placeholder:text-muted-foreground/50;

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router";
 import { MapPin, Navigation, Phone, MessageCircle, ChevronRight, Search, Briefcase, Sparkles, RefreshCw, Loader2 } from "lucide-react";
 import { DPDBadge, PriorityBadge, CaseStatusBadge } from "@/components/ui/Badge";
 import { Input } from "@/components/ui/Input";

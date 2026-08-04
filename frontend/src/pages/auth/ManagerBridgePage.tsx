@@ -8,7 +8,7 @@
 //   cross-origin and produces real, working tokens for the analytics API calls.
 // ─────────────────────────────────────────────────────────────────────────────
 import { useEffect, useRef } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import { toast } from "react-hot-toast";
 import { login as apiLogin } from "@/api/auth";
 import { useAuthStore } from "@/store/authStore";

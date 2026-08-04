@@ -1,4 +1,4 @@
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useNavigate } from "react-router";
 import { Home, Briefcase, User, Map, LogOut, WifiOff, ShieldCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "react-hot-toast";

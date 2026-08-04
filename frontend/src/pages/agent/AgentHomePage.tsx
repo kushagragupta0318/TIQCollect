@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import type { NavigateFunction } from "react-router-dom";
+import { useNavigate } from "react-router";
+import type { NavigateFunction } from "react-router";
 import { Briefcase, CheckCircle, IndianRupee, Calendar, MapPin, Clock, Camera, X } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { checkIn as apiCheckIn } from "@/api/agent";

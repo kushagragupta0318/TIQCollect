@@ -1,6 +1,6 @@
 // collection_dashboard: public bridge route — exchanges a link token for a real session, no login form shown
 import { useEffect, useRef } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router";
 import { toast } from "react-hot-toast";
 import { quickLogin } from "@/api/auth";
 import { useAuthStore } from "@/store/authStore";

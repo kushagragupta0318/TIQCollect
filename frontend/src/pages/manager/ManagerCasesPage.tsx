@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router";
 import { createPortal } from "react-dom";
 import {
   Search, X, MapPin, Clock, CheckCircle2, AlertTriangle,
@@ -603,27 +603,19 @@ export default function ManagerCasesPage() {
             </div>
           ) : (
             displayed.map((c) => (
+              // Same hover treatment as the Field Agents table — .row-accent in
+              // index.css. Real CSS :hover rather than mouseenter/mouseleave: a
+              // row that scrolls out from under a stationary cursor never fires
+              // mouseleave and stays stuck lit. Base tint and the dimmed
+              // visited-today state moved into the class too; leaving them
+              // inline would outrank :hover.
               <div
                 key={c.id}
                 onClick={() => setSelectedCaseId(c.id)}
-                className="grid grid-cols-12 gap-3 px-4 py-3 border-b text-sm items-center cursor-pointer transition-colors"
-                style={{
-                  borderColor: "#EAEBEF",
-                  opacity: c.is_visited_today ? 0.52 : 1,
-                  background: c.is_visited_today
-                    ? "rgba(34,197,94,0.04)"
-                    : c.is_escalated
-                    ? "rgba(220,38,38,0.04)"
-                    : "transparent",
-                }}
-                onMouseEnter={(e) => {
-                  (e.currentTarget as HTMLDivElement).style.opacity = "1";
-                  (e.currentTarget as HTMLDivElement).style.background = c.is_visited_today ? "rgba(34,197,94,0.08)" : c.is_escalated ? "rgba(220,38,38,0.08)" : "rgba(22,119,255,0.04)";
-                }}
-                onMouseLeave={(e) => {
-                  (e.currentTarget as HTMLDivElement).style.opacity = c.is_visited_today ? "0.52" : "1";
-                  (e.currentTarget as HTMLDivElement).style.background = c.is_visited_today ? "rgba(34,197,94,0.04)" : c.is_escalated ? "rgba(220,38,38,0.04)" : "transparent";
-                }}
+                className={`grid grid-cols-12 gap-3 px-4 py-3 border-b text-sm items-center cursor-pointer row-accent${
+                  c.is_visited_today ? " row-accent-done" : c.is_escalated ? " row-accent-danger" : ""
+                }`}
+                style={{ borderColor: "#EAEBEF" }}
               >
                 <div className="col-span-2">
                   <p className="text-xs font-mono font-medium" style={{ color: "#6B6D76" }}>{c.case_number}</p>

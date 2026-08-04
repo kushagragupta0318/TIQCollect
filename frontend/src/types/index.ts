@@ -172,4 +172,10 @@ export interface DashboardSummary {
   collection_rate_today: number;   // already a percentage (0–100)
   ptps_due_today: number;
   sos_active_count: number;
+  /**
+   * The day the "today" figures above were measured against (latest beat date,
+   * ISO yyyy-mm-dd). Optional: an offline snapshot captured before this field
+   * existed won't carry it, so consumers must fall back to the wall clock.
+   */
+  effective_date?: string;
 }

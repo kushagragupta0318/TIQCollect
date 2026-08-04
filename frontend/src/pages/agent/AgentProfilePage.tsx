@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Star, TrendingUp, CheckCircle, Calendar, LogOut, Shield } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import { toast } from "react-hot-toast";
 import { getProfile, getAvailabilityCalendar } from "@/api/agent";
 import type { AvailabilityCalendar } from "@/api/agent";

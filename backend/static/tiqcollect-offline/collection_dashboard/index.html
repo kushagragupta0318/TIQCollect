@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Collection Command Center</title>
 
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=2">
 
     <!-- Embed mode: when this page is framed by the Command Center's Field
          Recovery route it is opened with ?embed=1. The class hides the page's
@@ -208,7 +208,10 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
 <!-- Your Script -->
-<script src="script.js"></script>
+<!-- ?v= is a cache buster: this bundle is edited in place and the
+     filenames never change, so a browser that cached an older copy would
+     keep running it. Bump the number when editing script.js or style.css. -->
+<script src="script.js?v=2"></script>
 
 </body>
 

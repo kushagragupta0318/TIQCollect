@@ -4,6 +4,10 @@
 # `detail` message string, per final_changes.md §8 ("typed error codes,
 # not free text"). Nothing else in this file changed. See changelog.md
 # for full context.
+# 2026-07-31 — Mounted the Command Centre contract router (bottom of file).
+# It hangs off the app directly rather than off api_router because the
+# integration contract fixes its paths at /api/field-ops/*, outside our
+# /api/v1 namespace. See api/v1/endpoints/field_ops.py for the mapping.
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,6 +22,7 @@ from app.core.config import settings
 from app.core.database import engine
 from app.core.errors import AppException
 from app.api.v1.router import api_router
+from app.api.v1.endpoints import field_ops
 
 logger = structlog.get_logger()
 
@@ -85,3 +90,6 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 app.include_router(api_router)
+# Command Centre integration contract — paths are fixed at /api/field-ops/*,
+# so this cannot sit under api_router's /api/v1 prefix.
+app.include_router(field_ops.router)

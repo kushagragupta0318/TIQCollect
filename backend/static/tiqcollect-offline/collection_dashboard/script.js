@@ -467,14 +467,30 @@ const MANAGER_URL =
     new URLSearchParams(location.search).get("manager") ||
     "http://localhost:5473/manager-bridge";
 
+// Set by Command Center when it frames this page (see FieldRecovery.jsx).
+const EMBEDDED = new URLSearchParams(location.search).has("embed");
+
 window.openManagerDashboard = async function (agency) {
 
     console.log("Opening manager dashboard for:", agency);
 
-    // Always route through the app's /manager-bridge, which force-logs-in as
-    // Manager 1 and then lands on /manager/analytics. This makes the destination
-    // independent of the current session (field agent / other manager / logged
-    // out) — every agency click ends up on the Manager 1 analytics view.
+    // Framed inside Command Center (?embed=1): hand the click up rather than
+    // navigating this frame. Command Center renders its own analytics page from
+    // the TIQCollect API, scoped to the agency that was clicked — navigating
+    // here would instead load that whole app inside this iframe.
+    //
+    // postMessage rather than window.top.location: the parent is a different
+    // origin, and this keeps the destination Command Center's decision instead
+    // of hardcoding one of its routes into this file.
+    if (EMBEDDED && window.parent !== window) {
+        window.parent.postMessage({ type: "tiqcollect:open-agency", agency: agency }, "*");
+        return;
+    }
+
+    // Standalone: route through the app's /manager-bridge, which force-logs-in
+    // as Manager 1 and then lands on /manager/analytics. This makes the
+    // destination independent of the current session (field agent / other
+    // manager / logged out).
     window.location.href = MANAGER_URL;
 };
 
@@ -492,6 +508,15 @@ window.openManagerDashboard = async function (agency) {
 // of a segmented one.
 // =========================================================
 if (typeof Chart !== "undefined") {
+
+    // Chart.js paints its text onto a canvas, so it inherits nothing from the
+    // page's CSS — left alone it uses its own Helvetica fallback and the axis
+    // labels and tooltip render in a different typeface from the markup around
+    // them. Setting the default once covers ticks, tooltip and legend alike.
+    // Keep in step with body{} in style.css.
+    Chart.defaults.font.family =
+        '-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,Helvetica,Arial,sans-serif';
+
     Chart.register({
         id: "lineRevealClip",
         beforeDatasetsDraw(chart) {
@@ -566,7 +591,15 @@ window.addEventListener("load", function () {
     let trendMode = "total";
     let selectedAgency = null;
 
-    function buildChart(labels, collectionData, ptpData){
+    // `accent` colours the Collection Rate line. Total mode leaves it out and
+    // gets the default blue; drilling into one agency passes that agency's
+    // colour from agencyColors, so the line matches the dot on its pill —
+    // XYZ Services is green in the pill row, so its line is green too.
+    // PTP Conversion stays grey in both modes: it distinguishes the metric,
+    // not the agency, and tinting it as well would leave nothing to read the
+    // accent against.
+    function buildChart(labels, collectionData, ptpData, accent){
+        const lineColor = accent || '#2E86DE';
 
         if(trendChart){
             trendChart.destroy();
@@ -584,8 +617,8 @@ window.addEventListener("load", function () {
                 {
                     label: 'Collection Rate',
                     data: collectionData,
-                    borderColor: '#2E86DE',
-                    backgroundColor: '#2E86DE',
+                    borderColor: lineColor,
+                    backgroundColor: lineColor,
                     borderWidth: 2.0,
                     tension: 0.45,
                     cubicInterpolationMode: 'monotone',
@@ -596,8 +629,8 @@ window.addEventListener("load", function () {
                     pointHoverRadius: 6,
                     pointHitRadius: 12,
                     pointHoverBorderWidth: 3,
-                    pointBackgroundColor: (context) => context.dataIndex === selectedIndex ? '#FFFFFF' : '#2E86DE',
-                    pointBorderColor: '#2E86DE',
+                    pointBackgroundColor: (context) => context.dataIndex === selectedIndex ? '#FFFFFF' : lineColor,
+                    pointBorderColor: lineColor,
                     pointBorderWidth: (context) => context.dataIndex === selectedIndex ? 4 : 1
                 },
                 {
@@ -629,9 +662,23 @@ window.addEventListener("load", function () {
 
     // The left-to-right draw-in is handled by the lineRevealClip plugin
     // (a single smooth clip sweep - see playTrendReveal below), so Chart.js's
-    // own per-point animation is turned off here to avoid a second, competing
-    // animation.
-    animation: false,
+    // own per-point entry animation is zeroed out here to avoid a second,
+    // competing animation.
+    //
+    // Zeroed rather than `false`: Chart.js skips resolving *every* transition
+    // when the root animation is off, hover included. That is what made the
+    // tooltip teleport between months and the hover dots pop in at full size.
+    // A 0ms default keeps the entry draw instant (the sweep still owns it)
+    // while leaving the `transitions.active` block below free to ease hover.
+    animation: { duration: 0 },
+
+    // Hover in/out only. `chart.update()` on click still runs at the 0ms
+    // default above, so selecting a point stays instant as before.
+    transitions: {
+        active: {
+            animation: { duration: 260, easing: 'easeOutCubic' }
+        }
+    },
 
     // Clicking a point on the chart highlights that point (it grows and
     // gets a hollow "selected" look) and switches the month dropdown to
@@ -673,7 +720,7 @@ window.addEventListener("load", function () {
                 padding: 20,
                 color: '#4B5563',
                 font: {
-                    family: "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif",
+                    // family comes from Chart.defaults.font.family above.
                     size: 13,
                     weight: '600'
                 }
@@ -692,6 +739,10 @@ window.addEventListener("load", function () {
             boxPadding: 4,
             usePointStyle: true,
             borderWidth: 0,
+            // Glides the box (and its caret) between months instead of
+            // snapping. Matched to the point-hover duration above so the
+            // dot and the tooltip settle together.
+            animation: { duration: 260, easing: 'easeOutCubic' },
             callbacks: {
 
     label: function (context) {
@@ -728,7 +779,12 @@ window.addEventListener("load", function () {
             }
         },
         y: {
-            beginAtZero: true,
+            // 50-100% rather than 0-100: every series sits in the upper half,
+            // so anchoring at zero spent half the plot area on empty space and
+            // flattened the month-to-month movement. beginAtZero is dropped
+            // rather than left alongside min — it forces 0 into the range and
+            // would fight the floor.
+            min: 50,
             max: 100,
             grid: {
                 color: '#EEF1F6',
@@ -833,10 +889,16 @@ window.addEventListener("load", function () {
                 responsive: true,
                 maintainAspectRatio: false,
 
-                // The left-to-right draw-in is handled by the lineRevealClip
-                // plugin (a single smooth clip sweep - see playTrendReveal),
-                // so Chart.js's own per-point animation is disabled here.
-                animation: false,
+                // Same reasoning as buildChart above: a 0ms entry animation
+                // (not `false`) so the reveal sweep stays the only draw-in,
+                // while hover transitions are still resolved and can ease.
+                animation: { duration: 0 },
+
+                transitions: {
+                    active: {
+                        animation: { duration: 260, easing: 'easeOutCubic' }
+                    }
+                },
 
                 onClick: (evt, elements) => {
                     if (!elements.length) return;
@@ -876,6 +938,7 @@ window.addEventListener("load", function () {
                         boxPadding: 4,
                         usePointStyle: true,
                         borderWidth: 0,
+                        animation: { duration: 260, easing: 'easeOutCubic' },
                         callbacks: {
                             label: function (context) {
                                 return context.dataset.label + ': ' + context.parsed.y + '%';
@@ -895,7 +958,9 @@ window.addEventListener("load", function () {
                         ticks: { color: '#9CA3AF', font: { size: 12 } }
                     },
                     y: {
-                        beginAtZero: true,
+                        // Per-agency chart — same 50-100% floor as the total
+                        // above, so switching modes does not silently rescale.
+                        min: 50,
                         max: 100,
                         grid: {
                             color: '#EEF1F6',
@@ -933,12 +998,14 @@ window.addEventListener("load", function () {
     }
 
     // Renders one agency's own Collection Rate vs PTP Conversion trend —
-    // reuses buildChart() as-is, since the shape is identical to Total mode.
+    // reuses buildChart(), since the shape is identical to Total mode, and
+    // passes the agency's own colour so the line matches its pill and the
+    // colour it carries in the multi-agency overlay.
     function showSingleAgencyChart(agencyName){
 
         const history = getAgencyMonthlyHistory(agencyName);
 
-        buildChart(history.labels, history.collection, history.ptp);
+        buildChart(history.labels, history.collection, history.ptp, getAgencyColor(agencyName));
     }
 
     // ============================

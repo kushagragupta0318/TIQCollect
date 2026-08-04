@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import { ArrowLeft, Navigation, CheckCircle, MapPin, ChevronRight, Zap, Route, RefreshCw } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { reoptimizeBeat } from "@/api/agent";

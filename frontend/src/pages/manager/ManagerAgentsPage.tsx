@@ -5,7 +5,7 @@
 //   confirming their manager has seen the alert. Full detail: /changelog.md.
 // ─────────────────────────────────────────────────────────────────────────
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import { Search, MapPin, AlertTriangle, Phone, ChevronDown, Brain, Shuffle, X, Loader2, TrendingUp, TrendingDown, Minus, IndianRupee } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { getAgents, getAgentInsight, getReallocationPlan, updateAgentStatus, acknowledgeAgentSos } from "@/api/manager";
@@ -141,7 +141,7 @@ export default function ManagerAgentsPage() {
             <button
               key={s}
               onClick={() => setStatusFilter(s)}
-              className="px-3 py-2 text-xs font-semibold transition-colors"
+              className="px-3 py-2 text-xs font-semibold transition hover:brightness-95"
               style={{
                 background: statusFilter === s ? "#1677FF" : "#fff",
                 color: statusFilter === s ? "#fff" : "#6B6D76",
@@ -156,7 +156,7 @@ export default function ManagerAgentsPage() {
             <button
               key={t}
               onClick={() => setTierFilter(t)}
-              className="px-3 py-2 text-xs font-semibold transition-colors"
+              className="px-3 py-2 text-xs font-semibold transition hover:brightness-95"
               style={{
                 background: tierFilter === t ? "#1677FF" : "#fff",
                 color: tierFilter === t ? "#fff" : "#6B6D76",
@@ -294,12 +294,15 @@ function AgentRow({
         animation: `enter 380ms cubic-bezier(0.16,1,0.3,1) ${delay}ms both`,
       }}
     >
+      {/* Hover and the expanded state are both driven by .row-accent in
+          index.css, shared with Case Management. No inline background here on
+          purpose: an inline style would outrank the class rule and the :hover
+          would never show. */}
       <div
-        className="hidden lg:grid grid-cols-12 gap-4 px-4 py-3.5 transition-colors text-sm items-center cursor-pointer"
-        style={{ background: expanded ? "rgba(22,119,255,0.04)" : undefined }}
+        className={`hidden lg:grid grid-cols-12 gap-4 px-4 py-3.5 text-sm items-center cursor-pointer row-accent${
+          agent.sos_active ? " row-accent-danger" : ""
+        }${expanded ? " is-expanded" : ""}`}
         onClick={onToggle}
-        onMouseEnter={(e) => { if (!expanded) (e.currentTarget as HTMLDivElement).style.background = "rgba(22,119,255,0.04)"; }}
-        onMouseLeave={(e) => { if (!expanded) (e.currentTarget as HTMLDivElement).style.background = "transparent"; }}
       >
         <span className="col-span-1 font-medium" style={{ color: "#6B6D76" }}>{rank}</span>
 
@@ -416,21 +419,21 @@ function AgentRow({
                 const dateTo   = new Date().toISOString().slice(0, 10);
                 navigate(`/manager/cases?agent_id=${agent.id}&agent_name=${encodeURIComponent(agent.full_name)}&date_from=${dateFrom}&date_to=${dateTo}`);
               }}
-              className="text-xs px-3 py-1.5 rounded-xl font-semibold transition-colors"
+              className="text-xs px-3 py-1.5 rounded-xl font-semibold transition hover:brightness-95"
               style={{ background: "#0C66E4", color: "white" }}
             >
               View Cases →
             </button>
             <button
               onClick={() => toast.success(`Message sent to ${agent.full_name}`)}
-              className="text-xs px-3 py-1.5 rounded-xl font-semibold badge-blue transition-colors"
+              className="text-xs px-3 py-1.5 rounded-xl font-semibold badge-blue transition hover:brightness-95"
             >
               Send Message
             </button>
             <button
               onClick={fetchPlan}
               disabled={planLoading}
-              className="text-xs px-3 py-1.5 rounded-xl font-semibold transition-colors flex items-center gap-1.5"
+              className="text-xs px-3 py-1.5 rounded-xl font-semibold transition hover:brightness-95 flex items-center gap-1.5"
               style={{ background: planLoading ? "#e2e8f0" : "#f1f5f9", color: "#475569", border: "1px solid #e2e8f0" }}
             >
               {planLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Shuffle className="w-3 h-3" />}
@@ -439,7 +442,7 @@ function AgentRow({
             {!insight && !insightLoading && (
               <button
                 onClick={fetchInsight}
-                className="text-xs px-3 py-1.5 rounded-xl font-semibold transition-colors flex items-center gap-1.5"
+                className="text-xs px-3 py-1.5 rounded-xl font-semibold transition hover:brightness-95 flex items-center gap-1.5"
                 style={{ background: "linear-gradient(135deg, #7c3aed, #a855f7)", color: "white" }}
               >
                 <Brain className="w-3 h-3" /> AI Insight
@@ -453,7 +456,7 @@ function AgentRow({
             <button
               onClick={toggleStatus}
               disabled={statusUpdating}
-              className="text-xs px-3 py-1.5 rounded-xl font-semibold transition-colors flex items-center gap-1.5"
+              className="text-xs px-3 py-1.5 rounded-xl font-semibold transition hover:brightness-95 flex items-center gap-1.5"
               style={{
                 background: agent.status === "ON_DUTY" ? "rgba(245,158,11,0.10)" : "rgba(22,163,74,0.10)",
                 color: agent.status === "ON_DUTY" ? "#d97706" : "#16a34a",
@@ -470,7 +473,7 @@ function AgentRow({
               <button
                 onClick={acknowledgeSos}
                 disabled={sosAcking}
-                className="text-xs text-white px-3 py-1.5 rounded-xl font-semibold animate-pulse transition-colors flex items-center gap-1.5"
+                className="text-xs text-white px-3 py-1.5 rounded-xl font-semibold animate-pulse transition hover:brightness-95 flex items-center gap-1.5"
                 style={{ background: "#DC2626" }}
               >
                 {sosAcking ? <Loader2 className="w-3 h-3 animate-spin" /> : "🆘"} Emergency Response
@@ -678,14 +681,14 @@ function ReallocationModal({ plan, onClose }: { plan: ReallocationPlan; onClose:
         <div className="px-5 py-4 flex gap-3" style={{ borderTop: "1px solid #EAEBEF" }}>
           <button
             onClick={() => { toast.success(`Reallocation plan logged for ${plan.from_agent.name}`); onClose(); }}
-            className="flex-1 py-2.5 rounded-xl text-sm font-semibold text-white transition-colors"
+            className="flex-1 py-2.5 rounded-xl text-sm font-semibold text-white transition hover:brightness-95"
             style={{ background: "#0C66E4" }}
           >
             Apply Plan
           </button>
           <button
             onClick={onClose}
-            className="px-4 py-2.5 rounded-xl text-sm font-semibold transition-colors"
+            className="px-4 py-2.5 rounded-xl text-sm font-semibold transition hover:brightness-95"
             style={{ background: "#F5F6F9", color: "#475569" }}
           >
             Cancel

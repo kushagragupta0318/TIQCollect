@@ -11,7 +11,7 @@
 // ──────────────────────────────────────────────────────────────────────────
 import { useEffect, useState, useCallback } from "react";
 import { useAnimatedValue } from "@/hooks/useAnimatedValue";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate } from "react-router";
 import { ArrowLeft, Phone, Navigation, Calendar, MapPin, CheckCircle, MessageCircle, Lock, Unlock, Sparkles, RefreshCw, Clock, AlertTriangle, TrendingUp, Zap, PhoneCall, X } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { getCaseDetail, flagCustomer, handoverCase, getVisitStrategy, logCall, notifyCase, reoptimizeBeat, type VisitStrategyBrief, type LogCallPayload } from "@/api/agent";

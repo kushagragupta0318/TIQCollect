@@ -226,6 +226,11 @@ def dashboard(current_user: ManagerOnly, db: DbSession):
         "collection_rate_today": collection_rate_pct,
         "ptps_due_today": ptps_due_today,
         "sos_active_count": sos_active_count,
+        # The day every "today" figure above is actually measured against —
+        # the latest beat date, which on seeded data trails the wall clock.
+        # Exposed so drill-through links can filter on the same day the card
+        # counted, instead of date.today() and landing on an empty result.
+        "effective_date": today_date.isoformat(),
     }
 
 

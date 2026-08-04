@@ -40,7 +40,7 @@
 // ──────────────────────────────────────────────────────────────────────────
 import { useEffect, useRef, useState } from "react";
 import QRCode from "react-qr-code";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router";
 import { useAuthStore } from "@/store/authStore";
 import {
   ArrowLeft, Camera, MapPin, CheckCircle, IndianRupee,

@@ -158,8 +158,29 @@ def visits(account_id: str | None = None):
 UI_DIR = pathlib.Path(__file__).parent / "static" / "tiqcollect-offline"
 UI_PATH = os.getenv("FIELD_OPS_UI_PATH", "/tiqcollect")
 
+class _RevalidatingStaticFiles(StaticFiles):
+    """StaticFiles that always makes the browser revalidate.
+
+    Plain StaticFiles sends ETag and Last-Modified but no Cache-Control, so
+    browsers fall back to heuristic caching and may serve a stale copy without
+    asking. That bites here because collection_dashboard/script.js is edited in
+    place and the filename never changes: an edit would appear to have no
+    effect until someone thought to hard-refresh, and a framed copy inside
+    Command Center is even more prone to it.
+
+    `no-cache` does not mean "do not cache" — it means "cache, but revalidate
+    before reuse". The existing ETag still turns that into a cheap 304, so this
+    costs a conditional request, not a re-download.
+    """
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 if UI_DIR.is_dir():
-    app.mount(UI_PATH, StaticFiles(directory=UI_DIR, html=True), name="field-recovery-ui")
+    app.mount(UI_PATH, _RevalidatingStaticFiles(directory=UI_DIR, html=True), name="field-recovery-ui")
 else:
     print(f"[field-ops-stub] Field Recovery UI not found at {UI_DIR} — "
           f"{UI_PATH} will 404. Build it with scripts/build-tiqcollect-offline.mjs")

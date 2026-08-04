@@ -4,13 +4,23 @@
     box-sizing: border-box;
 }
 
+/* Typography is kept identical to the two React apps this page sits beside —
+   the `font-sans` stack in ../../tailwind.config.js and the base body rule in
+   ../../src/index.css (which command-center/frontend/src/index.css matches
+   token for token). This page is plain HTML with no Tailwind, so the same
+   three declarations have to be stated by hand or its text renders visibly
+   looser than every other screen in the product. */
 body{
 
     background:#F5F6F8;
 
-    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,Helvetica,Arial,sans-serif;
 
     -webkit-font-smoothing:antialiased;
+
+    font-feature-settings:"rlig" 1,"calt" 1;
+
+    letter-spacing:-0.011em;
 
 }
 
@@ -204,20 +214,33 @@ body{
 
     box-shadow:0 2px 10px rgba(11,42,111,.05);
 
-    transition:.25s;
+    /* Named properties rather than the bare `.25s` shorthand this used to be:
+       unqualified, it transitioned `all`, so any layout property that changed
+       (padding, height as the KPI text is swapped on a month change) animated
+       too. Curve is the product's spring, matching .panel in
+       command-center/frontend/src/index.css. */
+    transition:transform 200ms cubic-bezier(0.16,1,0.3,1),
+               box-shadow 200ms cubic-bezier(0.16,1,0.3,1),
+               border-color 200ms cubic-bezier(0.16,1,0.3,1);
 
     display:flex;
 
     flex-direction:column;
 
     justify-content:flex-start;
-    
+
 }
+
+/* Lift + blue-tinted shadow — the same hover signature as .panel:hover in the
+   Command Center and .fo-analytics .card:hover on the native analytics page,
+   so the affordance feels identical either side of the iframe boundary. */
 .card:hover{
 
-    transform:translateY(-2px);
+    transform:translateY(-3px);
 
-    box-shadow:0 8px 18px rgba(11,42,111,.10);
+    box-shadow:0 6px 20px rgba(22,119,255,.12), 0 2px 6px rgba(17,24,39,.06);
+
+    border-color:#D8DAE2;
 
 }
 
@@ -256,6 +279,16 @@ body{
     flex-shrink:0;
 
     box-shadow:0 4px 10px rgba(11,42,111,.15);
+
+    transition:transform 200ms cubic-bezier(0.16,1,0.3,1);
+
+}
+
+/* The icon badge answers the card's hover too — same nudge the native
+   analytics page gives its .icon-circle. */
+.card:hover .card-icon{
+
+    transform:scale(1.08) rotate(-4deg);
 
 }
 
@@ -324,6 +357,22 @@ body{
     border:1px solid #E8EEF7;
 
     box-shadow:0 8px 20px rgba(11,42,111,.06);
+
+    transition:box-shadow 200ms cubic-bezier(0.16,1,0.3,1),
+               border-color 200ms cubic-bezier(0.16,1,0.3,1);
+
+}
+
+/* The two full-width panels get the shadow and border response but NOT the
+   translate the small KPI cards use. Lifting a panel this tall — especially
+   one holding a chart you are about to point at — reads as a glitch rather
+   than an affordance. Same rule the native Cases table follows via
+   .fo-no-lift. */
+.trend-section:hover{
+
+    box-shadow:0 10px 26px rgba(22,119,255,.10), 0 2px 6px rgba(17,24,39,.05);
+
+    border-color:#D8DAE2;
 
 }
 
@@ -674,6 +723,18 @@ Agency Leaderboard
     border:1px solid #E8EEF7;
 
     box-shadow:0 8px 20px rgba(11,42,111,.06);
+
+    transition:box-shadow 200ms cubic-bezier(0.16,1,0.3,1),
+               border-color 200ms cubic-bezier(0.16,1,0.3,1);
+
+}
+
+/* No lift here either — see .trend-section:hover above. */
+.leaderboard-section:hover{
+
+    box-shadow:0 10px 26px rgba(22,119,255,.10), 0 2px 6px rgba(17,24,39,.05);
+
+    border-color:#D8DAE2;
 
 }
 
