@@ -43,13 +43,6 @@ body{
     padding:16px 0;
 }
 
-/* Embedded inside the Command Center (?embed=1): drop this page's own rail so
-   the host app's sidebar is the only one, and let the frame own the scrolling
-   height (100vh inside an iframe is the iframe's height, which is what we want). */
-.embed .sidebar {
-    display: none;
-}
-
 .main-content {
     flex: 1;
     min-width: 0;

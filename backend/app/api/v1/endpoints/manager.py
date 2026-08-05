@@ -325,6 +325,7 @@ def list_agents(current_user: ManagerOnly, db: DbSession):
     return result
 
 
+
 # ---------------------------------------------------------------------------
 # GET /manager/cases
 # ---------------------------------------------------------------------------
@@ -360,7 +361,32 @@ def list_cases(
         q = q.filter(Case.allocation_date <= date_to)
 
     total = q.count()
-    cases = q.order_by(Case.created_at.desc()).offset(offset).limit(limit).all()
+    # Newest allocation_date first, and WITHIN a day the cases carrying money
+    # lead, largest collected first. Date stays the primary key so page 1 is
+    # still the most recent day's work; payment only reorders inside it.
+    #
+    # Ordered in the query, not in the page component: the list is paginated
+    # server-side, so a client-side sort would only reorder the 50 rows already
+    # fetched and leave a paid case on page 3 sitting on page 3.
+    #
+    # Two NULL guards, both because Postgres defaults a DESC sort to NULLS
+    # FIRST — the opposite of what either column wants:
+    #   * allocation_date is nullable (models/case.py:58), so undated cases
+    #     would otherwise head the list ahead of the newest real day.
+    #   * collected_amount is NOT NULL today (models/case.py:54), but were that
+    #     to change, unpaid rows would float above paid ones.
+    # allocation_date is String(10) 'YYYY-MM-DD', so lexicographic DESC is
+    # chronological DESC.
+    cases = (
+        q.order_by(
+            Case.allocation_date.desc().nullslast(),
+            func.coalesce(Case.collected_amount, 0).desc(),
+            Case.created_at.desc(),
+        )
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
 
     # Build agent name map for this page only
     page_agent_ids = {c.agent_id for c in cases if c.agent_id}
@@ -396,6 +422,43 @@ def list_cases(
         "total": total,
         "cases": [_format_case(c, agent_name_map, visited_today_ids) for c in cases],
     }
+
+
+# ---------------------------------------------------------------------------
+# GET /manager/cases/date-range   — the span the Cases page defaults to
+#
+# MUST stay above /cases/{case_id}: FastAPI matches in declaration order, so
+# below it "date-range" would be taken as a case_id. That fails as a 500, not a
+# 404 — Postgres rejects the value as an invalid UUID before any lookup runs.
+# ---------------------------------------------------------------------------
+
+@router.get("/cases/date-range")
+def cases_date_range(current_user: ManagerOnly, db: DbSession):
+    """Oldest and newest allocation_date across this manager's cases.
+
+    The Cases page used to default to "six months ago → today", which on seeded
+    data both clipped the earliest cases and included a long empty tail: the
+    newest allocation_date trails the wall clock. Returning the real span lets
+    the page open on exactly the data that exists.
+
+    Both are null when the manager has no cases; the page then leaves its date
+    inputs empty, which list_cases above treats as unbounded.
+    """
+    my_agent_ids = [
+        a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()
+    ]
+    if not my_agent_ids:
+        return {"min": None, "max": None}
+
+    # allocation_date is String(10) holding an ISO date, not a Date column (see
+    # models/case.py), so MIN/MAX compare lexicographically — exactly right for
+    # yyyy-mm-dd — and the values come back as strings already.
+    row = (
+        db.query(func.min(Case.allocation_date), func.max(Case.allocation_date))
+        .filter(Case.agent_id.in_(my_agent_ids))
+        .one()
+    )
+    return {"min": row[0], "max": row[1]}
 
 
 # ---------------------------------------------------------------------------
@@ -496,7 +559,15 @@ def get_case_detail(case_id: str, current_user: ManagerOnly, db: DbSession):
             # AI-generated audit report
             "ai_visit_note": v.ai_visit_note,
         }
-        for v in sorted(case.visits, key=lambda x: x.check_in_time or datetime.min.replace(tzinfo=timezone.utc))
+        # Most recent visit first — opening a case should show what happened
+        # last, not the oldest attempt. The datetime.min fallback keeps visits
+        # with no check-in time at the BOTTOM under this reverse ordering, which
+        # is where an unknown timestamp belongs.
+        for v in sorted(
+            case.visits,
+            key=lambda x: x.check_in_time or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )
     ]
 
     base["payments"] = [

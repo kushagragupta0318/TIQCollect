@@ -459,38 +459,21 @@ function getLastSixMonths(selectedMonth){
 
 }
 
-// Where an agency click goes. The Command Center passes the destination in as
-// ?manager=… — it points at the static, backend-free build served by the Field
-// Ops service at :8300/tiqcollect, so nothing extra has to be running.
-// Opened standalone this falls back to this app's own dev server on :5473.
+// Where an agency click goes. Overridable with ?manager=… so this page can be
+// pointed at a different TIQCollect deployment; otherwise it falls back to the
+// app's own dev server on :5473.
 const MANAGER_URL =
     new URLSearchParams(location.search).get("manager") ||
     "http://localhost:5473/manager-bridge";
-
-// Set by Command Center when it frames this page (see FieldRecovery.jsx).
-const EMBEDDED = new URLSearchParams(location.search).has("embed");
 
 window.openManagerDashboard = async function (agency) {
 
     console.log("Opening manager dashboard for:", agency);
 
-    // Framed inside Command Center (?embed=1): hand the click up rather than
-    // navigating this frame. Command Center renders its own analytics page from
-    // the TIQCollect API, scoped to the agency that was clicked — navigating
-    // here would instead load that whole app inside this iframe.
-    //
-    // postMessage rather than window.top.location: the parent is a different
-    // origin, and this keeps the destination Command Center's decision instead
-    // of hardcoding one of its routes into this file.
-    if (EMBEDDED && window.parent !== window) {
-        window.parent.postMessage({ type: "tiqcollect:open-agency", agency: agency }, "*");
-        return;
-    }
-
-    // Standalone: route through the app's /manager-bridge, which force-logs-in
-    // as Manager 1 and then lands on /manager/analytics. This makes the
-    // destination independent of the current session (field agent / other
-    // manager / logged out).
+    // Route through the app's /manager-bridge, which force-logs-in as Manager 1
+    // and then lands on /manager/analytics. This makes the destination
+    // independent of the current session (field agent / other manager /
+    // logged out).
     window.location.href = MANAGER_URL;
 };
 

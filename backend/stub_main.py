@@ -22,22 +22,17 @@ live data. This file stays only because :8400 needs Postgres/Redis/MinIO up,
 while :8300 needs nothing — it is the fallback for a demo on a bare machine, not
 the intended source.
 
-It also HOSTS the Field Recovery UI (TIQCollect's Collection Agency overview) at
-/tiqcollect — see the mount at the bottom of this file. The UI belongs to the
-field-ops side of the boundary, so it is served from here rather than baked into
-Command Center's own frontend bundle. Note the mount serves the prebuilt offline
-bundle, so it is frozen at its last build; Command Center can be pointed at the
-live :5473 dev server instead via command-center/frontend/.env.example.
+This service serves JSON only. It used to also host a static TIQCollect build at
+/tiqcollect for Command Center to frame; that page is now built inside Command
+Center, so nothing is mounted here.
 
     python -m uvicorn stub_main:app --port 8300 --app-dir field-ops-stub/backend
 """
 import os
 import random
-import pathlib
 import datetime
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 
 app = FastAPI(title="Field Ops (dev stub)")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -154,44 +149,15 @@ def visits(account_id: str | None = None):
     return _VISITS[:50]
 
 
-# ── Field Recovery UI ────────────────────────────────────────────────────────
-# The static, backend-free TIQCollect build (Collection Agency's Overview, plus
-# the manager analytics view its leaderboard links into). Command Center's Field
-# Recovery page frames this over HTTP rather than shipping it in its own bundle,
-# which keeps the whole field-ops surface — data AND UI — behind one boundary
-# that FIELD_OPS_URL points at.
+# ── No UI is served from here ────────────────────────────────────────────────
+# This service used to mount a static TIQCollect build at /tiqcollect, which
+# Command Center's Field Recovery page loaded in an <iframe>.
 #
-#   /tiqcollect/collection_dashboard/index.html   ← the agency overview (entry)
-#   /tiqcollect/index.html#/manager-bridge        ← manager analytics
+# That is gone. Command Center builds /field itself now, because the agencies
+# are separately owned — a view aggregating across all of them is Command
+# Center's concern, and no single agency's service should serve it. This stub is
+# a JSON contract only: /api/field-ops/*.
 #
-# The bundle is a build artifact of ../frontend (this repo now holds its source),
-# rebuilt with: node field-ops-stub/frontend/scripts/build-offline-bundle.mjs
-UI_DIR = pathlib.Path(__file__).parent / "static" / "tiqcollect-offline"
-UI_PATH = os.getenv("FIELD_OPS_UI_PATH", "/tiqcollect")
-
-class _RevalidatingStaticFiles(StaticFiles):
-    """StaticFiles that always makes the browser revalidate.
-
-    Plain StaticFiles sends ETag and Last-Modified but no Cache-Control, so
-    browsers fall back to heuristic caching and may serve a stale copy without
-    asking. That bites here because collection_dashboard/script.js is edited in
-    place and the filename never changes: an edit would appear to have no
-    effect until someone thought to hard-refresh, and a framed copy inside
-    Command Center is even more prone to it.
-
-    `no-cache` does not mean "do not cache" — it means "cache, but revalidate
-    before reuse". The existing ETag still turns that into a cheap 304, so this
-    costs a conditional request, not a re-download.
-    """
-
-    def file_response(self, *args, **kwargs):
-        response = super().file_response(*args, **kwargs)
-        response.headers["Cache-Control"] = "no-cache"
-        return response
-
-
-if UI_DIR.is_dir():
-    app.mount(UI_PATH, _RevalidatingStaticFiles(directory=UI_DIR, html=True), name="field-recovery-ui")
-else:
-    print(f"[field-ops-stub] Field Recovery UI not found at {UI_DIR} — "
-          f"{UI_PATH} will 404. Build it with scripts/build-tiqcollect-offline.mjs")
+# Removed with it: static/tiqcollect-offline/ (the prebuilt bundle),
+# frontend/scripts/build-offline-bundle.mjs (which produced it), and the
+# StaticFiles subclass that added Cache-Control: no-cache for it.

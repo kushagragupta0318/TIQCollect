@@ -29,8 +29,3 @@ backend/data/incoming/
 
 # ── Docker ──────────────────────────────────────────────────────────────────
 docker-compose.override.yml
-
-# NOTE: backend/static/tiqcollect-offline/ is deliberately NOT ignored. It is a
-# build artifact of frontend/, but it is committed so Field Recovery works on a
-# fresh clone without an npm install — the same reason this repo commits the
-# Parquet datasets and model .joblib files.

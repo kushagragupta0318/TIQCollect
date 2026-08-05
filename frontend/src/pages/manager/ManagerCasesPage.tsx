@@ -6,7 +6,7 @@ import {
   Calendar, User, FileText, ChevronRight,
 } from "lucide-react";
 import { toast } from "react-hot-toast";
-import { getCases, getCaseDetail } from "@/api/manager";
+import { getCases, getCaseDetail, getCasesDateRange } from "@/api/manager";
 import type { ManagerCaseDetail, VisitRecord } from "@/api/manager";
 import { Input } from "@/components/ui/Input";
 import { DPDBadge, PriorityBadge, CaseStatusBadge } from "@/components/ui/Badge";
@@ -15,15 +15,11 @@ import type { Case } from "@/types";
 const EASE = "cubic-bezier(0.16,1,0.3,1)";
 const PAGE_SIZE = 50;
 
-function sixMonthsAgo() {
-  const d = new Date();
-  d.setMonth(d.getMonth() - 6);
-  return d.toISOString().split("T")[0];
-}
-
-function todayStr() {
-  return new Date().toISOString().split("T")[0];
-}
+// The date filter used to default to [six months ago, today]. Cases are filtered
+// on allocation_date, whose newest value trails the wall clock on seeded data,
+// so that window both clipped the earliest days and included a stretch with
+// nothing in it. The defaults now come from the data itself, via
+// GET /manager/cases/date-range.
 
 // ── Outcome helpers ──────────────────────────────────────────────────────────
 
@@ -464,8 +460,14 @@ export default function ManagerCasesPage() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [bucketFilter, setBucketFilter] = useState("ALL");
-  const [dateFrom, setDateFrom] = useState(() => searchParams.get("date_from") || sixMonthsAgo());
-  const [dateTo, setDateTo] = useState(() => searchParams.get("date_to") || todayStr());
+  const [dateFrom, setDateFrom] = useState(() => searchParams.get("date_from") || "");
+  const [dateTo, setDateTo] = useState(() => searchParams.get("date_to") || "");
+  // Gate the first fetch until the defaults are known, so the page doesn't load
+  // unfiltered and then immediately reload with the range applied. A URL that
+  // already carries dates (the leaderboard drill-through) needs no lookup.
+  const [datesReady, setDatesReady] = useState(
+    () => Boolean(searchParams.get("date_from") || searchParams.get("date_to"))
+  );
   const [agentId, setAgentId] = useState<string | null>(() => searchParams.get("agent_id"));
   const [agentName] = useState<string | null>(() => searchParams.get("agent_name"));
   const [page, setPage] = useState(0);
@@ -492,10 +494,27 @@ export default function ManagerCasesPage() {
     [statusFilter, dateFrom, dateTo, agentId]
   );
 
+  // Seed the filter from the data's own span. Runs once; failure just leaves the
+  // inputs empty, which means "no date filter" — every case, not zero cases.
   useEffect(() => {
+    if (datesReady) return;
+    let cancelled = false;
+    getCasesDateRange()
+      .then((r) => {
+        if (cancelled) return;
+        if (r.min) setDateFrom(r.min);
+        if (r.max) setDateTo(r.max);
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setDatesReady(true); });
+    return () => { cancelled = true; };
+  }, [datesReady]);
+
+  useEffect(() => {
+    if (!datesReady) return;
     setPage(0);
     fetchCases(0);
-  }, [fetchCases]);
+  }, [fetchCases, datesReady]);
 
   const displayed = cases.filter((c) => {
     if (bucketFilter !== "ALL" && c.loan.dpd_bucket !== bucketFilter) return false;
@@ -583,8 +602,9 @@ export default function ManagerCasesPage() {
             className="grid grid-cols-12 gap-3 px-4 py-3 border-b text-xs font-semibold uppercase tracking-wide"
             style={{ background: "#F5F6F9", borderColor: "#EAEBEF", color: "#6B6D76" }}
           >
-            <span className="col-span-2">Case</span>
+            <span className="col-span-1">Case</span>
             <span className="col-span-2">Customer</span>
+            <span className="col-span-1">Location</span>
             <span className="col-span-1">DPD</span>
             <span className="col-span-1">Priority</span>
             <span className="col-span-1">Status</span>
@@ -617,18 +637,27 @@ export default function ManagerCasesPage() {
                 }`}
                 style={{ borderColor: "#EAEBEF" }}
               >
-                <div className="col-span-2">
+                <div className="col-span-1">
                   <p className="text-xs font-mono font-medium" style={{ color: "#6B6D76" }}>{c.case_number}</p>
-                  <div className="flex items-center gap-1.5 mt-0.5">
-                    <p className="text-xs" style={{ color: "#6B6D76" }}>{c.loan.bank_name?.split(" ")[0]}</p>
-                    {c.is_visited_today && (
+                  {/* The bank's short name used to sit under the case number.
+                      Dropped: every case in this list belongs to the same
+                      agency, so it repeated on every row without separating
+                      anything. The visited chip keeps that line, now rendered
+                      only when set so unvisited rows don't carry a blank one. */}
+                  {c.is_visited_today && (
+                    <div className="flex items-center gap-1.5 mt-0.5">
                       <span className="text-xs font-semibold px-1.5 py-0.5 rounded-full" style={{ background: "rgba(34,197,94,0.15)", color: "#15803D", fontSize: 10 }}>✓ Visited</span>
-                    )}
-                  </div>
+                    </div>
+                  )}
                 </div>
                 <div className="col-span-2 min-w-0">
                   <p className="font-semibold truncate" style={{ color: "#1C1C1F" }}>{c.customer.full_name}</p>
-                  <p className="text-xs" style={{ color: "#6B6D76" }}>{c.customer.city}</p>
+                </div>
+                {/* City moved out from under the name into its own column, so it
+                    lines up down the table instead of reading as a second line
+                    of the customer cell. */}
+                <div className="col-span-1 text-xs truncate" style={{ color: "#6B6D76" }}>
+                  {c.customer.city}
                 </div>
                 <div className="col-span-1"><DPDBadge bucket={c.loan.dpd_bucket} /></div>
                 <div className="col-span-1"><PriorityBadge priority={c.priority} /></div>

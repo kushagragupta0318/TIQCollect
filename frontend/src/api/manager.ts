@@ -34,6 +34,13 @@ export async function getCases(params?: {
   return data as { total: number; cases: unknown[] };
 }
 
+/** Oldest/newest allocation_date across the manager's cases, for seeding the
+ *  cases page's date filter. Either field is null when there are no cases. */
+export async function getCasesDateRange() {
+  const { data } = await api.get<{ min: string | null; max: string | null }>("/manager/cases/date-range");
+  return data;
+}
+
 export async function getCompliance() {
   const { data } = await api.get("/manager/compliance");
   return data;
