@@ -7,6 +7,8 @@ import { useBeat } from "@/contexts/BeatContext";
 import { getRankedCases, notifyVisit, type RankedCase } from "@/api/agent";
 import { toast } from "react-hot-toast";
 import { useVoiceCall } from "@/hooks/useVoiceCall";
+import { useLiveLocation } from "@/hooks/useLiveLocation";
+import { haversineM, formatDistance, GEO_FENCE_METRES } from "@/lib/geo";
 import CallModal from "@/components/ui/CallModal";
 import type { Case, CaseStatus, CasePriority } from "@/types";
 
@@ -33,6 +35,7 @@ export default function AgentCasesPage() {
   const [rankedCases, setRankedCases] = useState<RankedCase[] | null>(null);
   const [rankLoading, setRankLoading] = useState(false);
   const { activeCall, startCall, hangUp } = useVoiceCall();
+  const liveLoc = useLiveLocation();
 
   async function fetchRanked() {
     setRankLoading(true);
@@ -58,16 +61,48 @@ export default function AgentCasesPage() {
   }
 
   // Derive cases from beat: visited-today → done (bottom), rest → pending (sorted by priority)
+  const here = liveLoc.coords;
+
   const cases = useMemo<Case[]>(() => {
     if (!beat) return [];
     const visitedSet = new Set(beat.visited_today_ids ?? []);
     const all = (beat.cases ?? []).map((c) => ({ ...c, is_visited_today: visitedSet.has(c.id) }));
-    const pending = all.filter((c) => !c.is_visited_today).sort((a, b) =>
-      (_PRIORITY_ORDER[a.priority] ?? 9) - (_PRIORITY_ORDER[b.priority] ?? 9)
-    );
+
+    const pending = all.filter((c) => !c.is_visited_today);
+    if (here) {
+      // Nearest first — the cases the agent can actually reach right now.
+      //
+      // Distance is computed once per case and sorted on the cached value.
+      // Calling haversineM inside the comparator instead ran it twice per
+      // comparison, i.e. ~2·n·log(n) trig-heavy calls per sort rather than n.
+      //
+      // Sorted on the distance rounded to SORT_BUCKET_M, not the raw metres.
+      // Consumer GPS wanders a few metres while standing still, and two cases
+      // 3m apart would otherwise trade places every fix — rows visibly
+      // swapping under the agent's thumb. Bucketing makes the order stable
+      // under that noise while still being strictly nearest-first at any
+      // distance the agent can perceive; priority breaks ties inside a bucket.
+      const distOf = new Map<string, number>();
+      for (const c of pending) {
+        distOf.set(c.id, haversineM(here.lat, here.lon, c.customer.latitude, c.customer.longitude));
+      }
+      const bucket = (c: Case) =>
+        Math.round((distOf.get(c.id) ?? Infinity) / SORT_BUCKET_M);
+      pending.sort(
+        (a, b) =>
+          bucket(a) - bucket(b) ||
+          (_PRIORITY_ORDER[a.priority] ?? 9) - (_PRIORITY_ORDER[b.priority] ?? 9) ||
+          a.id.localeCompare(b.id),
+      );
+    } else {
+      // No GPS fix yet: keep the previous priority ordering rather than an
+      // arbitrary one.
+      pending.sort((a, b) => (_PRIORITY_ORDER[a.priority] ?? 9) - (_PRIORITY_ORDER[b.priority] ?? 9));
+    }
+
     const done = all.filter((c) => c.is_visited_today);
     return [...pending, ...done];
-  }, [beat]);
+  }, [beat, here]);
 
   // Use ranked list when smart order is on, otherwise use beat order
   const activeList = useMemo<(Case | RankedCase)[]>(() => {
@@ -110,7 +145,7 @@ export default function AgentCasesPage() {
   return (
     <div className="flex flex-col h-full">
       {activeCall && <CallModal call={activeCall} onHangUp={hangUp} />}
-      <div className="p-4 pb-2 space-y-3 bg-white border-b border-slate-100 sticky top-0 z-10">
+      <div className="p-4 lg:px-6 pb-2 space-y-3 bg-white border-b border-slate-100 sticky top-0 z-10">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-lg font-bold text-slate-900">
@@ -137,7 +172,7 @@ export default function AgentCasesPage() {
             <button
               onClick={toggleSmartOrder}
               disabled={rankLoading}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border transition-all ${
+              className={`tap-target flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border transition-all ${
                 smartOrder
                   ? "bg-purple-600 text-white border-purple-600"
                   : "bg-white text-purple-600 border-purple-200 hover:border-purple-400"
@@ -159,7 +194,7 @@ export default function AgentCasesPage() {
             <button
               key={f.value}
               onClick={() => setStatusFilter(f.value)}
-              className={`flex-shrink-0 px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+              className={`tap-target-h flex-shrink-0 inline-flex items-center px-3 py-1 rounded-full text-xs font-medium transition-colors ${
                 statusFilter === f.value
                   ? "bg-brand-600 text-white"
                   : "bg-slate-100 text-slate-600 hover:bg-slate-200"
@@ -171,9 +206,9 @@ export default function AgentCasesPage() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
+      <div className="flex-1 overflow-y-auto divide-y divide-slate-100 lg:divide-y-0 lg:grid lg:grid-cols-2 xl:grid-cols-3 lg:gap-4 lg:p-6 lg:content-start">
         {filtered.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-16 text-slate-400">
+          <div className="flex flex-col items-center justify-center py-16 text-slate-400 lg:col-span-full">
             <Briefcase className="w-10 h-10 mb-3 opacity-40" />
             <p className="text-sm">No cases found</p>
           </div>
@@ -192,6 +227,7 @@ export default function AgentCasesPage() {
               onCall={(e) => callCustomer(c.customer.phone_primary, c.customer.full_name, e)}
               onWhatsapp={async (e) => { e.stopPropagation(); try { await notifyVisit(c.id); toast.success("Visit notification sent"); } catch { toast.error("Could not send notification"); } }}
               onOpen={() => navigate(`/agent/cases/${c.id}`)}
+              distanceM={here ? haversineM(here.lat, here.lon, c.customer.latitude, c.customer.longitude) : null}
             />
           );
         })}
@@ -199,6 +235,19 @@ export default function AgentCasesPage() {
     </div>
   );
 }
+
+// Hidden for now, on request — both are computed and styled exactly as before,
+// so flipping either back to true restores it with no other change.
+//   SLA badge:     "10h left" / "OVERDUE" / "3d SLA" beside the customer name.
+//   In-range pill: the green "In range · 30 m" chip. With this off the distance
+//                  still shows, just as plain grey text like every other row —
+//                  it is what the list is sorted by, so dropping it entirely
+//                  would leave the ordering unexplained.
+// Distance-sort granularity, in metres. See the sort in `cases` below.
+const SORT_BUCKET_M = 10;
+
+const SHOW_SLA_BADGE = false;
+const SHOW_IN_RANGE_PILL = false;
 
 function getSLAInfo(allocationDate: string | null | undefined) {
   if (!allocationDate) return null;
@@ -218,8 +267,9 @@ const RANK_BADGE_STYLES: Record<string, string> = {
   grey:   "bg-slate-50 text-slate-500 border-slate-200",
 };
 
-function CaseCard({ case_: c, rank, rankBadge, rankBadgeColor, rankReason, onNavigate, onCall, onWhatsapp, onOpen }: {
+function CaseCard({ case_: c, rank, rankBadge, rankBadgeColor, rankReason, onNavigate, onCall, onWhatsapp, onOpen, distanceM }: {
   case_: Case;
+  distanceM?: number | null;
   rank?: number;
   rankBadge?: string;
   rankBadgeColor?: string;
@@ -233,7 +283,7 @@ function CaseCard({ case_: c, rank, rankBadge, rankBadgeColor, rankReason, onNav
   const sla = getSLAInfo(c.allocation_date);
   const isBlocked = rankBadge?.startsWith("BLOCKED") || rankBadge === "DO NOT VISIT";
   return (
-    <div onClick={onOpen} className={`bg-white p-4 active:bg-slate-50 cursor-pointer ${isDone || isBlocked ? "opacity-60" : ""}`}>
+    <div onClick={onOpen} className={`bg-white p-4 active:bg-slate-50 cursor-pointer lg:rounded-2xl lg:border lg:border-slate-100 lg:h-full lg:flex lg:flex-col ${isDone || isBlocked ? "opacity-60" : ""}`}>
       <div className="flex items-start justify-between mb-2">
         <div className="flex items-start gap-2.5 flex-1 min-w-0">
           {/* Rank number OR done tick */}
@@ -255,7 +305,7 @@ function CaseCard({ case_: c, rank, rankBadge, rankBadgeColor, rankReason, onNav
               <span className="text-sm font-semibold text-slate-900">{c.customer.full_name}</span>
               {c.customer.is_hostile && <span className="badge badge-red text-xs">⚠ Hostile</span>}
               {c.is_escalated && <span className="badge badge-red text-xs">🔴 Escalated</span>}
-              {sla && <span className={`text-xs px-1.5 py-0.5 rounded-full border font-medium ${sla.cls}`}>{sla.label}</span>}
+              {SHOW_SLA_BADGE && sla && <span className={`text-xs px-1.5 py-0.5 rounded-full border font-medium ${sla.cls}`}>{sla.label}</span>}
             </div>
             <p className="text-xs text-slate-400 mt-0.5">{c.case_number} · {c.loan.bank_name}</p>
           </div>
@@ -296,20 +346,33 @@ function CaseCard({ case_: c, rank, rankBadge, rankBadgeColor, rankReason, onNav
         )}
       </div>
 
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-1 text-xs text-slate-400">
-          <MapPin className="w-3 h-3" />
+      <div className="flex flex-wrap items-center justify-between gap-2 lg:mt-auto">
+        <div className="flex items-center gap-1 text-xs text-slate-400 flex-wrap">
+          <MapPin className="w-3 h-3 flex-shrink-0" />
           <span>{c.customer.city}</span>
-          {c.visit_count > 0 && <span className="ml-2 text-slate-300">· {c.visit_count} visit{c.visit_count > 1 ? "s" : ""}</span>}
+          {distanceM != null && (
+            <span
+              className={
+                SHOW_IN_RANGE_PILL && distanceM <= GEO_FENCE_METRES
+                  ? "ml-1 px-1.5 py-0.5 rounded-full font-semibold bg-success-50 text-success-700 border border-success-200"
+                  : "ml-1 text-slate-400"
+              }
+            >
+              {SHOW_IN_RANGE_PILL && distanceM <= GEO_FENCE_METRES
+                ? `In range · ${formatDistance(distanceM)}`
+                : formatDistance(distanceM)}
+            </span>
+          )}
+          {c.visit_count > 0 && <span className="ml-1 text-slate-300">· {c.visit_count} visit{c.visit_count > 1 ? "s" : ""}</span>}
         </div>
-        <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
-          <button onClick={onCall} className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg bg-success-50 text-success-700 hover:bg-success-100 transition-colors">
+        <div className="flex flex-wrap gap-2" onClick={(e) => e.stopPropagation()}>
+          <button onClick={onCall} className="tap-target flex items-center justify-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg bg-success-50 text-success-700 hover:bg-success-100 transition-colors">
             <Phone className="w-3 h-3" /> Call
           </button>
-          <button onClick={onWhatsapp} className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg bg-green-50 text-green-700 hover:bg-green-100 transition-colors">
+          <button onClick={onWhatsapp} className="tap-target flex items-center justify-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg bg-green-50 text-green-700 hover:bg-green-100 transition-colors">
             <MessageCircle className="w-3 h-3" /> WhatsApp
           </button>
-          <button onClick={onNavigate} className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg bg-brand-50 text-brand-700 hover:bg-brand-100 transition-colors">
+          <button onClick={onNavigate} className="tap-target flex items-center justify-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg bg-brand-50 text-brand-700 hover:bg-brand-100 transition-colors">
             <Navigation className="w-3 h-3" /> Navigate
           </button>
         </div>

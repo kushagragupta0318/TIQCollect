@@ -1,4 +1,11 @@
-import { CheckCircle, X, Share2, Copy } from "lucide-react";
+// ─── CHANGELOG (prototype → product) ───
+// 2026-07-30 — Gained a `verified` flag so the receipt reflects borrower OTP
+//   status: verified (green "Borrower-verified via OTP") vs the offline path
+//   (amber "Pending borrower verification"). Backs the OTP gate in
+//   RecordVisitPage — an offline collection must not read as "Auto-verified".
+//   See prototype_to_product/30.07.md and /changelog.md.
+// ───────────────────────────────────────────────────────────────────────────
+import { CheckCircle, Clock, X, Share2, Copy } from "lucide-react";
 import { toast } from "react-hot-toast";
 
 interface Props {
@@ -12,11 +19,13 @@ interface Props {
     agentName: string;
     timestamp: string;
     upiRef?: string;
+    verified?: boolean;   // borrower confirmed the amount via OTP
   };
   onClose: () => void;
 }
 
 export default function PaymentReceiptModal({ receipt: r, onClose }: Props) {
+  const verified = r.verified !== false;   // default to verified unless explicitly pending
   const text = `PAYMENT RECEIPT\n─────────────────\nReceipt No: ${r.receiptNumber}\nAmount: ₹${r.amount.toLocaleString("en-IN")}\nMode: ${r.mode}\nCustomer: ${r.customerName}\nLoan: ${r.loanAccount}\nCase: ${r.caseNumber}\nAgent: ${r.agentName}\nDate: ${new Date(r.timestamp).toLocaleString("en-IN")}\n─────────────────\nTIQCollect · RBI Compliant`;
 
   async function handleShare() {
@@ -39,13 +48,14 @@ export default function PaymentReceiptModal({ receipt: r, onClose }: Props) {
     <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
       <div className="bg-white w-full max-w-sm rounded-2xl overflow-hidden shadow-2xl">
         {/* Header */}
-        <div className="bg-success-600 text-white p-5 text-center relative">
+        <div className={`${verified ? "bg-success-600" : "bg-amber-500"} text-white p-5 text-center relative`}>
           <button onClick={onClose} className="absolute top-3 right-3 text-white/70 hover:text-white">
             <X className="w-5 h-5" />
           </button>
-          <CheckCircle className="w-10 h-10 mx-auto mb-2" />
-          <p className="font-bold text-lg">Payment Collected!</p>
+          {verified ? <CheckCircle className="w-10 h-10 mx-auto mb-2" /> : <Clock className="w-10 h-10 mx-auto mb-2" />}
+          <p className="font-bold text-lg">{verified ? "Payment Collected!" : "Payment Recorded"}</p>
           <p className="text-2xl font-extrabold mt-1">₹{r.amount.toLocaleString("en-IN")}</p>
+          <p className="text-xs mt-1 opacity-90">{verified ? "Borrower-verified via OTP" : "Pending borrower verification"}</p>
         </div>
 
         {/* Receipt body */}
@@ -63,7 +73,7 @@ export default function PaymentReceiptModal({ receipt: r, onClose }: Props) {
             <ReceiptRow label="Date & Time" value={new Date(r.timestamp).toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })} />
           </div>
           <div className="border-t border-dashed border-slate-200 pt-3 text-center text-xs text-slate-400">
-            TIQCollect · RBI Compliant · Auto-verified
+            TIQCollect · RBI Compliant · {verified ? "Borrower-verified (OTP)" : "Awaiting borrower OTP"}
           </div>
         </div>
 

@@ -1,20 +1,11 @@
 import axios, { type AxiosError, type InternalAxiosRequestConfig } from "axios";
 import { useAuthStore } from "@/store/authStore";
-import { offlineAdapter } from "./offlineAdapter";
 
 const api = axios.create({
   baseURL: "/api/v1",
   timeout: 15000,
   headers: { "Content-Type": "application/json" },
 });
-
-// Offline build only (see .env.offline / offlineAdapter.ts): replay captured
-// responses instead of calling a backend. Unset in dev and in a normal build,
-// so this is a no-op there.
-export const IS_OFFLINE_BUILD = Boolean(import.meta.env.VITE_OFFLINE_SNAPSHOTS);
-if (IS_OFFLINE_BUILD) {
-  api.defaults.adapter = offlineAdapter;
-}
 
 // Attach access token to every request
 api.interceptors.request.use((config: InternalAxiosRequestConfig) => {

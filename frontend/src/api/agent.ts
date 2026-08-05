@@ -14,6 +14,11 @@
 //   task existed but nothing called it, so agent_recording_transcript/
 //   borrower_recording_transcript never populated. Wired from
 //   RecordVisitPage.tsx right after a successful recordVisit().
+// 2026-07-30 — Added sendPaymentOtp()/verifyPaymentOtp() for borrower payment
+//   verification, and collectPayment()'s payload gained an optional
+//   verification_id (the verified OTP → backend writes the Payment as VERIFIED
+//   instead of PENDING_VERIFICATION). Backs the OTP gate + offline branch in
+//   RecordVisitPage. See prototype_to_product/30.07.md.
 //   Full detail + why for all: /changelog.md
 // ──────────────────────────────────────────────────────────────────────────
 import api from "./axios";
@@ -203,8 +208,38 @@ export async function collectPayment(caseId: string, payload: {
   cheque_date?: string;
   cheque_bank?: string;
   bank_reference?: string;
+  verification_id?: string;   // verified borrower OTP → Payment written as VERIFIED
 }) {
   const { data } = await api.post(`/agent/cases/${caseId}/payment`, payload);
+  return data;
+}
+
+// ─── Borrower payment-verification OTP (2026-07-30) ─────────────────────────
+export interface OtpSendResult {
+  otp_id: string;
+  masked_phone: string;
+  expires_at: string;          // ISO
+  resend_available_at: string; // ISO
+}
+
+// Send a 4-digit OTP to the borrower's registered phone to confirm a collection
+// amount. The OTP is issued before the payment channel is chosen, so `mode` is
+// optional (the amount is what it binds to). Pass payment_id to re-verify an
+// existing pending (offline) payment.
+export async function sendPaymentOtp(caseId: string, payload: {
+  amount: number;
+  mode?: string;
+  payment_id?: string;
+}): Promise<OtpSendResult> {
+  const { data } = await api.post(`/agent/cases/${caseId}/payment/otp/send`, payload);
+  return data;
+}
+
+export async function verifyPaymentOtp(caseId: string, payload: {
+  otp_id: string;
+  code: string;
+}): Promise<{ verified: boolean; otp_id: string; payment_id?: string | null }> {
+  const { data } = await api.post(`/agent/cases/${caseId}/payment/otp/verify`, payload);
   return data;
 }
 

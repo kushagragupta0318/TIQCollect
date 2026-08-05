@@ -7,19 +7,33 @@
 //   actually set (line ~240) — a plain outcome log doesn't trigger it.
 //   Closes the loop: an agent tapping "ASAP (30 min)" now flows all the way
 //   through to CaseService.reoptimize_beat()'s forced_next override.
+// 2026-07-30 — Payments tab: PENDING_VERIFICATION payments (recorded offline,
+//   without a borrower OTP at visit time) now carry a "Verify now" affordance
+//   (PendingPaymentVerify, bottom of file) that runs sendPaymentOtp({payment_id})
+//   → verifyPaymentOtp once the borrower has signal, promoting the payment to
+//   VERIFIED. Closes the deferred half of the OTP feature. See
+//   prototype_to_product/30.07.md.
 //   Full detail + why: /changelog.md
+// 2026-08-05 - The bottom "Record Visit" bar is position:fixed but behaved as
+//   if absolute, appearing only after scrolling to the end of the page. Cause
+//   was not in this file: .page-fade-in on the layout's <main> retained a
+//   transform, which makes it the containing block for fixed descendants.
+//   Fixed in index.css; no change needed here.
 // ──────────────────────────────────────────────────────────────────────────
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useAnimatedValue } from "@/hooks/useAnimatedValue";
 import { useParams, useNavigate } from "react-router";
-import { ArrowLeft, Phone, Navigation, Calendar, MapPin, CheckCircle, MessageCircle, Lock, Unlock, Sparkles, RefreshCw, Clock, AlertTriangle, TrendingUp, Zap, PhoneCall, X } from "lucide-react";
+import { ArrowLeft, Phone, Navigation, Calendar, MapPin, CheckCircle, MessageCircle, Lock, Unlock, Sparkles, RefreshCw, Clock, AlertTriangle, TrendingUp, Zap, PhoneCall, X, ShieldCheck, Send } from "lucide-react";
 import { toast } from "react-hot-toast";
-import { getCaseDetail, flagCustomer, handoverCase, getVisitStrategy, logCall, notifyCase, reoptimizeBeat, type VisitStrategyBrief, type LogCallPayload } from "@/api/agent";
+import { getCaseDetail, flagCustomer, handoverCase, getVisitStrategy, logCall, notifyCase, reoptimizeBeat, sendPaymentOtp, verifyPaymentOtp, type VisitStrategyBrief, type LogCallPayload } from "@/api/agent";
 import { useVoiceCall } from "@/hooks/useVoiceCall";
 import CallModal from "@/components/ui/CallModal";
 import { useBeat } from "@/contexts/BeatContext";
+import { useModalA11y } from "@/hooks/useModalA11y";
 import { DPDBadge, PriorityBadge, CaseStatusBadge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import OtpInput from "@/components/ui/OtpInput";
+import { haversineM } from "@/lib/geo";
 
 interface CaseDetail {
   id: string; case_number: string; status: string; priority: string;
@@ -98,7 +112,7 @@ export default function AgentCaseDetailPage() {
   const { refresh: refreshBeat } = useBeat();
   const [caseData, setCaseData] = useState<CaseDetail | null>(null);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<"overview" | "visits" | "payments" | "ptps" | "strategy">("overview");
+  const [tab, setTab] = useState<"overview" | "visits" | "payments" | "ptps" | "strategy" | "photos">("overview");
   const [strategy, setStrategy] = useState<VisitStrategyBrief | null>(null);
   const [strategyLoading, setStrategyLoading] = useState(false);
   const [handoverNotes, setHandoverNotes] = useState("");
@@ -106,21 +120,61 @@ export default function AgentCaseDetailPage() {
   const [handoverDone, setHandoverDone] = useState(false);
   const [flagLoading, setFlagLoading] = useState(false);
   const [userLoc, setUserLoc] = useState<{ lat: number; lon: number } | null>(null);
+  const [geoError, setGeoError] = useState<string | null>(null);
   const [showCallModal, setShowCallModal] = useState(false);
+  const callModalRef = useRef<HTMLDivElement>(null);
   const { activeCall, startCall, hangUp } = useVoiceCall();
   const [callSubmitting, setCallSubmitting] = useState(false);
   const initCallForm = (): LogCallPayload => ({ outcome: "ANSWERED", phone_used: "PRIMARY" });
   const [callForm, setCallForm] = useState<LogCallPayload>(initCallForm());
 
-  useEffect(() => {
-    if (!navigator.geolocation) return;
-    const watchId = navigator.geolocation.watchPosition(
-      (p) => setUserLoc({ lat: p.coords.latitude, lon: p.coords.longitude }),
-      () => {},
-      { enableHighAccuracy: true, maximumAge: 5000 },
-    );
-    return () => navigator.geolocation.clearWatch(watchId);
+  // Declared after callForm — it resets that state, so it cannot be hoisted
+  // above the useState that creates it.
+  const closeCallModal = useCallback(() => {
+    setShowCallModal(false);
+    setCallForm(initCallForm());
   }, []);
+  // Body scroll lock, focus trap, focus restore and Escape for the call modal.
+  useModalA11y(showCallModal, callModalRef, closeCallModal);
+
+  const requestLocation = useCallback((): number | undefined => {
+    if (!navigator.geolocation) {
+      setGeoError("This device/browser does not support location.");
+      return undefined;
+    }
+    setGeoError(null);
+    const onPos = (p: GeolocationPosition) => { setUserLoc({ lat: p.coords.latitude, lon: p.coords.longitude }); setGeoError(null); };
+    const onErr = (e: GeolocationPositionError) => {
+      setGeoError(
+        e.code === e.PERMISSION_DENIED
+          ? "Location is blocked. Click the tune/lock icon next to the URL → Location → Allow, then tap Retry. (Geolocation also needs HTTPS or localhost.)"
+          : e.code === e.POSITION_UNAVAILABLE
+            ? "Location unavailable. Move to an open area and tap Retry."
+            : "Location timed out. Tap Retry.",
+      );
+    };
+    // Fast first fix: coarse/cached, ~1s, hard-capped at 5s so it never hangs.
+    navigator.geolocation.getCurrentPosition(onPos, onErr, {
+      enableHighAccuracy: false, timeout: 5000, maximumAge: 60000,
+    });
+    // Then refine to a precise fix for the 100m geo-fence.
+    return navigator.geolocation.watchPosition(onPos, onErr, {
+      enableHighAccuracy: true, timeout: 10000, maximumAge: 5000,
+    });
+  }, []);
+
+  useEffect(() => {
+    const watchId = requestLocation();
+    return () => { if (watchId !== undefined) navigator.geolocation.clearWatch(watchId); };
+  }, [requestLocation]);
+
+  const reloadCase = useCallback(async () => {
+    if (!id) return;
+    try {
+      const data = await getCaseDetail(id);
+      setCaseData(data as CaseDetail);
+    } catch { /* keep current view */ }
+  }, [id]);
 
   useEffect(() => {
     if (!id) return;
@@ -253,13 +307,7 @@ export default function AgentCaseDetailPage() {
 
   const canRecordVisit = !["PAID", "CLOSED", "WRITTEN_OFF"].includes(c.status);
 
-  function haversineM(lat1: number, lon1: number, lat2: number, lon2: number) {
-    const R = 6_371_000;
-    const p1 = lat1 * Math.PI / 180, p2 = lat2 * Math.PI / 180;
-    const dp = (lat2 - lat1) * Math.PI / 180, dl = (lon2 - lon1) * Math.PI / 180;
-    const a = Math.sin(dp / 2) ** 2 + Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) ** 2;
-    return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  }
+
 
   const distanceM = userLoc
     ? Math.round(haversineM(userLoc.lat, userLoc.lon, c.customer.latitude, c.customer.longitude))
@@ -281,11 +329,14 @@ export default function AgentCaseDetailPage() {
     { id: "visits",    label: `Visits (${c.visits.length})` },
     { id: "payments",  label: `Payments (${c.payments.length})` },
     { id: "ptps",      label: `PTPs (${c.ptps.length})` },
-    ...(photos.length > 0 ? [{ id: "photos", label: `Photos (${photos.length})` }] : []),
+    // The inner array needs its own `as const`: the outer one does not reach
+    // through a conditional spread, so `id` widened to `string` and broke
+    // setTab's parameter type.
+    ...(photos.length > 0 ? [{ id: "photos", label: `Photos (${photos.length})` }] as const : [] as const),
   ] as const;
 
   return (
-    <div className="min-h-screen bg-slate-50 pb-28">
+    <div className="min-h-svh bg-slate-50 pb-28 lg:pb-24">
       {activeCall && <CallModal call={activeCall} onHangUp={hangUp} />}
       {/* Header */}
       <div className="bg-white border-b border-slate-100 sticky top-0 z-20">
@@ -406,7 +457,7 @@ export default function AgentCaseDetailPage() {
             )}
 
             {/* Quick actions */}
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
               <ActionBtn icon={<Phone className="w-4 h-4" />} label="Call" color="bg-success-50 text-success-700 border-success-100" onClick={() => startCall(c.customer.phone_primary, c.customer.full_name)} />
               <ActionBtn icon={<Navigation className="w-4 h-4" />} label="Navigate" color="bg-brand-50 text-brand-700 border-brand-100" onClick={() => window.open(`https://www.google.com/maps/dir/?api=1&destination=${c.customer.latitude},${c.customer.longitude}&travelmode=driving`, "_blank")} />
               <ActionBtn icon={<MessageCircle className="w-4 h-4" />} label="WhatsApp" color="bg-green-50 text-green-700 border-green-100" onClick={() => openWhatsApp("reminder")} />
@@ -526,7 +577,7 @@ export default function AgentCaseDetailPage() {
                 )}
 
                 {/* Payment readiness + best time row */}
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
                   <div className="card flex flex-col gap-1.5">
                     <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-500 uppercase tracking-wide">
                       <TrendingUp className="w-3.5 h-3.5" /> Payment Signal
@@ -669,6 +720,9 @@ export default function AgentCaseDetailPage() {
                 </div>
                 <p className="text-xs text-slate-500">{p.mode} · {p.receipt_number}</p>
                 <p className="text-xs text-slate-400 mt-0.5">{new Date(p.payment_date).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</p>
+                {p.status !== "VERIFIED" && id && (
+                  <PendingPaymentVerify caseId={id} payment={p} onVerified={reloadCase} />
+                )}
                 <button onClick={() => openWhatsApp("receipt")} className="mt-2 flex items-center gap-1 text-xs text-green-600 font-medium hover:underline">
                   <MessageCircle className="w-3 h-3" /> Share receipt via WhatsApp
                 </button>
@@ -682,7 +736,7 @@ export default function AgentCaseDetailPage() {
             {photos.length === 0 ? (
               <EmptyState icon="📷" message="No photos captured" />
             ) : (
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
                 {photos.map((ph) => {
                   const typeLabel: Record<string, string> = {
                     AGENT_SELFIE: "Agent Selfie",
@@ -735,15 +789,28 @@ export default function AgentCaseDetailPage() {
 
       {/* Log Call Modal */}
       {showCallModal && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50" onClick={(e) => { if (e.target === e.currentTarget) { setShowCallModal(false); setCallForm(initCallForm()); } }}>
-          <div className="w-full max-w-md bg-white rounded-t-2xl max-h-[90vh] overflow-y-auto">
+        // Centred dialog at every size — a bottom sheet pinned the form to the
+        // bottom edge and pushed its fields out of comfortable reach. Same
+        // treatment as the manager case modal.
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Log call"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3 sm:p-4"
+          onClick={(e) => { if (e.target === e.currentTarget) closeCallModal(); }}
+        >
+          <div
+            ref={callModalRef}
+            tabIndex={-1}
+            className="w-full sm:max-w-md bg-white rounded-[22px] max-h-[88svh] overflow-y-auto outline-none"
+          >
             {/* Modal header */}
             <div className="flex items-center justify-between p-4 border-b border-slate-100 sticky top-0 bg-white z-10">
               <div className="flex items-center gap-2">
                 <PhoneCall className="w-4 h-4 text-purple-600" />
                 <h2 className="text-sm font-semibold text-slate-800">Log Call</h2>
               </div>
-              <button onClick={() => { setShowCallModal(false); setCallForm(initCallForm()); }} className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100">
+              <button onClick={closeCallModal} aria-label="Close log call" className="tap-target p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 flex items-center justify-center">
                 <X className="w-4 h-4" />
               </button>
             </div>
@@ -769,7 +836,7 @@ export default function AgentCaseDetailPage() {
               {callForm.outcome === "ANSWERED" && (
                 <>
                   {/* Duration + Phone used */}
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
                     <div>
                       <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1.5">Duration (seconds)</label>
                       <input
@@ -856,7 +923,7 @@ export default function AgentCaseDetailPage() {
                           </button>
                         ))}
                       </div>
-                      <div className="grid grid-cols-2 gap-3">
+                      <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
                         <div>
                           <label className="text-[11px] text-slate-400 block mb-1">From</label>
                           <input
@@ -961,37 +1028,46 @@ export default function AgentCaseDetailPage() {
       )}
 
       {/* Bottom CTA — constrained to max-w-md to stay inside the mobile frame */}
-      <div className="fixed bottom-16 left-0 right-0 z-20 pointer-events-none">
-        <div className="max-w-md mx-auto pointer-events-auto bg-white border-t border-slate-100 safe-bottom">
+      <div className="fixed bottom-16 lg:bottom-0 left-0 right-0 z-20 pointer-events-none" style={{ paddingLeft: "var(--rail-w, 0px)" }}>
+        <div className="max-w-md md:max-w-none mx-auto md:mx-0 pointer-events-auto bg-white border-t border-slate-100 safe-bottom">
           {/* Geo-fence status bar */}
           {canRecordVisit && (
-            <div className={`flex items-center justify-between px-4 py-2 text-xs font-medium border-b ${withinFence ? "bg-success-50 border-success-100 text-success-700" : distanceM === null ? "bg-slate-50 border-slate-100 text-slate-500" : "bg-danger-50 border-danger-100 text-danger-700"}`}>
+            <div className={`flex items-center justify-between gap-2 px-4 py-2 text-xs font-medium border-b ${withinFence ? "bg-success-50 border-success-100 text-success-700" : (geoError && distanceM === null) ? "bg-danger-50 border-danger-100 text-danger-700" : distanceM === null ? "bg-slate-50 border-slate-100 text-slate-500" : "bg-danger-50 border-danger-100 text-danger-700"}`}>
               <div className="flex items-center gap-1.5">
-                {withinFence ? <Unlock className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5" />}
-                {distanceM === null
-                  ? "Getting your location…"
-                  : withinFence
-                    ? `Within range (${distanceM}m) — visit unlocked`
-                    : `${distanceM}m away — move within 100m to record visit`}
+                {withinFence ? <Unlock className="w-3.5 h-3.5 flex-shrink-0" /> : <Lock className="w-3.5 h-3.5 flex-shrink-0" />}
+                {geoError && distanceM === null
+                  ? geoError
+                  : distanceM === null
+                    ? "Getting your location…"
+                    : withinFence
+                      ? `Within range (${distanceM}m) — visit unlocked`
+                      : `${distanceM}m away — move within 100m to record visit`}
               </div>
-              <MapPin className="w-3.5 h-3.5 opacity-60" />
+              <MapPin className="w-3.5 h-3.5 opacity-60 flex-shrink-0" />
             </div>
           )}
 
           <div className="p-4">
             {canRecordVisit ? (
               <div>
-                {withinFence || distanceM === null ? (
+                {withinFence ? (
+                  // Enabled ONLY once GPS is captured AND within the 100m fence.
                   <Button fullWidth onClick={() => navigate(`/agent/visit/${c.id}`)}>
                     <Unlock className="w-4 h-4" /> Record Visit
                   </Button>
+                ) : (geoError && distanceM === null) ? (
+                  // Location blocked/denied/unavailable → let the agent re-request.
+                  <Button fullWidth variant="secondary" onClick={() => requestLocation()}>
+                    <MapPin className="w-4 h-4" /> Retry location
+                  </Button>
                 ) : (
+                  // Location still loading OR out of fence → locked, non-clickable.
                   <button
                     disabled
-                    className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-slate-100 text-slate-400 text-sm font-medium cursor-not-allowed border border-slate-200"
-                    title={`${distanceM}m away — need to be within 100m`}
+                    className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-slate-200 text-slate-400 text-sm font-medium cursor-not-allowed border border-slate-200"
+                    title={distanceM === null ? "Getting your location…" : `${distanceM}m away — need to be within 100m`}
                   >
-                    <Lock className="w-4 h-4" /> Locked ({distanceM}m away)
+                    <Lock className="w-4 h-4" /> {distanceM === null ? "Getting your location…" : `Locked (${distanceM}m away)`}
                   </button>
                 )}
               </div>
@@ -1067,6 +1143,87 @@ function EmptyState({ icon, message }: { icon: string; message: string }) {
     <div className="flex flex-col items-center justify-center py-12 text-slate-400">
       <span className="text-4xl mb-3 opacity-50">{icon}</span>
       <p className="text-sm">{message}</p>
+    </div>
+  );
+}
+
+// ─── Deferred borrower-OTP verification for a pending payment (2026-07-30) ───
+// Shown on offline-recorded payments (status PENDING_VERIFICATION). Once the
+// borrower has signal, the agent sends an OTP bound to this exact payment and
+// verifies it — promoting the payment to VERIFIED server-side. See
+// otp_service.py / prototype_to_product/30.07.md.
+function PendingPaymentVerify({ caseId, payment, onVerified }: {
+  caseId: string;
+  payment: { id: string; amount: number; mode: string };
+  onVerified: () => void | Promise<void>;
+}) {
+  const [otp, setOtp] = useState<{ id: string; maskedPhone: string } | null>(null);
+  const [code, setCode] = useState("");
+  const [sending, setSending] = useState(false);
+  const [verifying, setVerifying] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [resendsUsed, setResendsUsed] = useState(0);   // max 3 resends
+
+  async function send() {
+    const isResend = !!otp;
+    if (isResend && resendsUsed >= 3) return;
+    setError(null);
+    setSending(true);
+    try {
+      const res = await sendPaymentOtp(caseId, { amount: payment.amount, mode: payment.mode, payment_id: payment.id });
+      setOtp({ id: res.otp_id, maskedPhone: res.masked_phone });
+      setCode("");
+      if (isResend) setResendsUsed((n) => n + 1);
+      toast.success(`OTP sent to borrower (${res.masked_phone})`);
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail;
+      setError(typeof detail === "string" ? detail : "Could not send OTP");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function verify() {
+    if (!otp || code.length < 4) return;
+    setError(null);
+    setVerifying(true);
+    try {
+      await verifyPaymentOtp(caseId, { otp_id: otp.id, code });
+      toast.success("Payment verified ✓");
+      await onVerified();
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail;
+      setError(typeof detail === "string" ? detail : "Incorrect OTP");
+    } finally {
+      setVerifying(false);
+    }
+  }
+
+  return (
+    <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2.5">
+      <div className="flex items-center gap-1.5 text-amber-800 mb-1.5">
+        <ShieldCheck className="w-3.5 h-3.5" />
+        <p className="text-xs font-semibold">Awaiting borrower verification</p>
+      </div>
+      {!otp ? (
+        <button onClick={send} disabled={sending} className="flex items-center gap-1 text-xs font-medium text-brand-600 disabled:text-slate-300">
+          <Send className="w-3.5 h-3.5" /> {sending ? "Sending…" : "Verify now — send OTP to borrower"}
+        </button>
+      ) : (
+        <div className="space-y-2">
+          <p className="text-[11px] text-amber-700 text-center">OTP sent to {otp.maskedPhone}. Enter the code the borrower reads out.</p>
+          <OtpInput value={code} onChange={(v) => { setCode(v); setError(null); }} length={4} autoFocus disabled={verifying} />
+          <div className="flex items-center gap-2">
+            <button onClick={verify} disabled={verifying || code.length < 4} className="flex-1 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-medium disabled:bg-slate-300">
+              {verifying ? "Verifying…" : "Verify"}
+            </button>
+            <button onClick={send} disabled={sending || resendsUsed >= 3} className="px-2 py-1.5 rounded-lg border border-amber-300 text-xs text-amber-700 disabled:text-slate-300">
+              {resendsUsed >= 3 ? "No resends" : "Resend"}
+            </button>
+          </div>
+        </div>
+      )}
+      {error && <p className="text-[11px] text-danger-600 font-medium mt-1 text-center">{error}</p>}
     </div>
   );
 }

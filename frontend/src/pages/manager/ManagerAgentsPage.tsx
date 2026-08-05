@@ -4,7 +4,7 @@
 //   call acknowledgeAgentSos(), which sends the agent a real SMS/WhatsApp
 //   confirming their manager has seen the alert. Full detail: /changelog.md.
 // ─────────────────────────────────────────────────────────────────────────
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { Search, MapPin, AlertTriangle, Phone, ChevronDown, Brain, Shuffle, X, Loader2, TrendingUp, TrendingDown, Minus, IndianRupee } from "lucide-react";
 import { toast } from "react-hot-toast";
@@ -12,7 +12,8 @@ import { getAgents, getAgentInsight, getReallocationPlan, updateAgentStatus, ack
 import type { AgentInsight, ReallocationPlan } from "@/api/manager";
 import { Input } from "@/components/ui/Input";
 import { TierBadge } from "@/components/ui/Badge";
-import type { Agent } from "@/types";
+import { useModalA11y } from "@/hooks/useModalA11y";
+import type { Agent, AgentStatus } from "@/types";
 
 const EASE = "cubic-bezier(0.16,1,0.3,1)";
 
@@ -29,7 +30,10 @@ export default function ManagerAgentsPage() {
     return getAgents().then((a) => setAgents(a)).catch(() => {});
   }, []);
 
-  const handleStatusChange = useCallback((id: string, newStatus: string) => {
+  // Typed as AgentStatus, not string — a plain `string` here widened the whole
+  // mapped array and made it unassignable back to Agent[] (the one real type
+  // error this file had).
+  const handleStatusChange = useCallback((id: string, newStatus: AgentStatus) => {
     setAgents((prev) => prev.map((a) => a.id === id ? { ...a, status: newStatus } : a));
   }, []);
 
@@ -72,22 +76,22 @@ export default function ManagerAgentsPage() {
     <div className="space-y-4">
       {/* Header */}
       <div
-        className="flex items-center justify-between"
+        className="flex items-center justify-between gap-3"
         style={{ animation: `enter 420ms ${EASE} 0ms both` }}
       >
-        <div>
-          <h1 className="text-xl font-bold" style={{ color: "#1C1C1F", letterSpacing: "-0.02em" }}>Field Agents</h1>
-          <p className="text-sm" style={{ color: "#6B6D76" }}>
+        <div className="min-w-0">
+          <h1 className="font-bold" style={{ color: "#1C1C1F", letterSpacing: "-0.02em", fontSize: "var(--page-title)" }}>Field Agents</h1>
+          <p className="text-[13px] sm:text-sm" style={{ color: "#6B6D76" }}>
             {onDuty} on duty · {agents.length - onDuty} off · {tier1} Tier 1 agents
           </p>
         </div>
         {sosAgents.length > 0 && (
           <div
-            className="flex items-center gap-2 px-4 py-2 rounded-xl font-semibold text-sm animate-pulse"
+            className="flex items-center gap-2 px-3 sm:px-4 py-2 rounded-xl font-semibold text-xs sm:text-sm animate-pulse flex-shrink-0"
             style={{ background: "rgba(220,38,38,0.10)", border: "1px solid rgba(220,38,38,0.25)", color: "#991B1B" }}
           >
-            <AlertTriangle className="w-4 h-4" />
-            {sosAgents.length} SOS Active
+            <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+            <span className="whitespace-nowrap">{sosAgents.length} SOS<span className="hidden sm:inline"> Active</span></span>
           </div>
         )}
       </div>
@@ -99,72 +103,82 @@ export default function ManagerAgentsPage() {
           style={{ background: "rgba(220,38,38,0.06)", border: "1px solid rgba(220,38,38,0.18)" }}
         >
           {sosAgents.map((a) => (
-            <div key={a.id} className="flex items-center gap-3">
+            <div key={a.id} className="flex flex-wrap items-center gap-2 sm:gap-3">
               <AlertTriangle className="w-4 h-4 animate-pulse flex-shrink-0" style={{ color: "#DC2626" }} />
-              <div className="flex-1">
+              <div className="flex-1 min-w-0" style={{ minWidth: "10rem" }}>
                 <span className="text-sm font-semibold" style={{ color: "#991B1B" }}>{a.full_name}</span>
                 <span className="text-xs ml-2" style={{ color: "#B91C1C" }}>{a.territory} · {a.employee_code}</span>
               </div>
-              <button
-                onClick={() => {
-                  acknowledgeAgentSos(a.id)
-                    .then(() => toast.success(`${a.full_name} notified — manager response acknowledged`))
-                    .catch(() => toast.error("Could not notify agent — check Twilio config"));
-                }}
-                className="text-xs text-white px-3 py-1.5 rounded-xl font-semibold transition-colors hover:opacity-90"
-                style={{ background: "#DC2626" }}
-              >
-                Respond
-              </button>
-              <a
-                href={`tel:${a.employee_code}`}
-                className="text-xs px-3 py-1.5 rounded-xl font-semibold flex items-center gap-1 transition-colors"
-                style={{ background: "#fff", border: "1px solid rgba(220,38,38,0.25)", color: "#DC2626" }}
-              >
-                <Phone className="w-3 h-3" /> Call
-              </a>
+              {/* Share the row once it wraps, so neither button becomes a sliver */}
+              <div className="flex gap-2 w-full sm:w-auto">
+                <button
+                  onClick={() => {
+                    acknowledgeAgentSos(a.id)
+                      .then(() => toast.success(`${a.full_name} notified — manager response acknowledged`))
+                      .catch(() => toast.error("Could not notify agent — check Twilio config"));
+                  }}
+                  className="tap-target flex-1 sm:flex-none text-xs text-white px-3 rounded-xl font-semibold transition-colors hover:opacity-90"
+                  style={{ background: "#DC2626" }}
+                >
+                  Respond
+                </button>
+                <a
+                  href={`tel:${a.employee_code}`}
+                  className="tap-target flex-1 sm:flex-none text-xs px-3 rounded-xl font-semibold flex items-center justify-center gap-1 transition-colors"
+                  style={{ background: "#fff", border: "1px solid rgba(220,38,38,0.25)", color: "#DC2626" }}
+                >
+                  <Phone className="w-3 h-3" /> Call
+                </a>
+              </div>
             </div>
           ))}
         </div>
       )}
 
       {/* Filters */}
+      {/* Filters — 7 segmented buttons will not fit across 360px, so below lg
+          they sit in a scroll rail. Every option stays visible and reachable;
+          only the viewport moves. Same idiom as AgentCasesPage's chip row. */}
       <div
-        className="flex flex-wrap gap-3"
+        className="space-y-2 lg:space-y-0 lg:flex lg:flex-wrap lg:gap-3"
         style={{ animation: `enter 420ms ${EASE} 60ms both` }}
       >
-        <div className="flex-1 min-w-48">
+        <div className="lg:flex-1 lg:min-w-48">
           <Input placeholder="Search name, ID, territory..." value={search} onChange={(e) => setSearch(e.target.value)} leftIcon={<Search className="w-4 h-4" />} />
         </div>
-        <div className="flex rounded-xl overflow-hidden" style={{ border: "1px solid #EAEBEF" }}>
-          {(["ALL", "ON_DUTY", "OFF_DUTY"] as const).map((s) => (
-            <button
-              key={s}
-              onClick={() => setStatusFilter(s)}
-              className="px-3 py-2 text-xs font-semibold transition hover:brightness-95"
-              style={{
-                background: statusFilter === s ? "#1677FF" : "#fff",
-                color: statusFilter === s ? "#fff" : "#6B6D76",
-              }}
-            >
-              {s === "ALL" ? "All" : s === "ON_DUTY" ? "On Duty" : "Off Duty"}
-            </button>
-          ))}
-        </div>
-        <div className="flex rounded-xl overflow-hidden" style={{ border: "1px solid #EAEBEF" }}>
-          {(["ALL", "TIER_1", "TIER_2", "TIER_3"] as const).map((t) => (
-            <button
-              key={t}
-              onClick={() => setTierFilter(t)}
-              className="px-3 py-2 text-xs font-semibold transition hover:brightness-95"
-              style={{
-                background: tierFilter === t ? "#1677FF" : "#fff",
-                color: tierFilter === t ? "#fff" : "#6B6D76",
-              }}
-            >
-              {t === "ALL" ? "All Tiers" : t}
-            </button>
-          ))}
+        <div className="rail scrollbar-hide gap-2 lg:gap-3 lg:overflow-visible -mx-3 px-3 sm:-mx-4 sm:px-4 lg:mx-0 lg:px-0">
+          <div className="flex rounded-xl overflow-hidden flex-shrink-0" style={{ border: "1px solid #EAEBEF" }}>
+            {(["ALL", "ON_DUTY", "OFF_DUTY"] as const).map((s) => (
+              <button
+                key={s}
+                onClick={() => setStatusFilter(s)}
+                aria-pressed={statusFilter === s}
+                className="tap-target-h px-3 py-2 text-xs font-semibold transition hover:brightness-95 whitespace-nowrap"
+                style={{
+                  background: statusFilter === s ? "#1677FF" : "#fff",
+                  color: statusFilter === s ? "#fff" : "#6B6D76",
+                }}
+              >
+                {s === "ALL" ? "All" : s === "ON_DUTY" ? "On Duty" : "Off Duty"}
+              </button>
+            ))}
+          </div>
+          <div className="flex rounded-xl overflow-hidden flex-shrink-0" style={{ border: "1px solid #EAEBEF" }}>
+            {(["ALL", "TIER_1", "TIER_2", "TIER_3"] as const).map((t) => (
+              <button
+                key={t}
+                onClick={() => setTierFilter(t)}
+                aria-pressed={tierFilter === t}
+                className="tap-target-h px-3 py-2 text-xs font-semibold transition hover:brightness-95 whitespace-nowrap"
+                style={{
+                  background: tierFilter === t ? "#1677FF" : "#fff",
+                  color: tierFilter === t ? "#fff" : "#6B6D76",
+                }}
+              >
+                {t === "ALL" ? "All Tiers" : t.replace("_", " ")}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -220,7 +234,7 @@ export default function ManagerAgentsPage() {
 function AgentRow({
   agent, rank, expanded, onToggle, barReady, delay, onStatusChange,
 }: {
-  agent: Agent; rank: number; expanded: boolean; onToggle: () => void; barReady: boolean; delay: number; onStatusChange: (id: string, newStatus: string) => void;
+  agent: Agent; rank: number; expanded: boolean; onToggle: () => void; barReady: boolean; delay: number; onStatusChange: (id: string, newStatus: AgentStatus) => void;
 }) {
   const navigate      = useNavigate();
   const ptpRate       = Math.round(agent.ptp_rate_pct ?? 0);
@@ -368,26 +382,71 @@ function AgentRow({
         </div>
       </div>
 
-      {/* Mobile card */}
-      <div className="lg:hidden p-4 cursor-pointer" onClick={onToggle}>
-        <div className="flex items-center gap-3">
+      {/* Mobile card — brought to parity with the desktop row: it was missing
+          rank and the collection-rate bar, both of which are the point of the
+          leaderboard ordering. */}
+      <div
+        className="lg:hidden p-4 cursor-pointer"
+        onClick={onToggle}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(); } }}
+      >
+        <div className="flex items-center gap-2.5">
+          <span
+            className="w-6 h-6 flex-shrink-0 flex items-center justify-center rounded-full text-xs font-bold"
+            style={{ background: "rgba(148,163,184,0.14)", color: "#64748b" }}
+          >
+            {rank}
+          </span>
           <div
-            className="w-10 h-10 rounded-full flex items-center justify-center font-bold"
+            className="w-10 h-10 rounded-full flex items-center justify-center font-bold flex-shrink-0"
             style={{ background: "rgba(22,119,255,0.12)", color: "#1677FF" }}
           >
             {agent.full_name.charAt(0)}
           </div>
-          <div className="flex-1">
-            <p className="font-semibold" style={{ color: "#1C1C1F" }}>{agent.full_name}</p>
-            <p className="text-xs" style={{ color: "#6B6D76" }}>{agent.employee_code} · {agent.territory}</p>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-1.5">
+              <p className="font-semibold truncate" style={{ color: "#1C1C1F" }}>{agent.full_name}</p>
+              {agent.sos_active && <AlertTriangle className="w-3.5 h-3.5 animate-pulse flex-shrink-0" style={{ color: "#DC2626" }} />}
+            </div>
+            <p className="text-xs truncate" style={{ color: "#6B6D76" }}>{agent.employee_code} · {agent.territory}</p>
           </div>
           <TierBadge tier={agent.tier} />
-          <span className={`w-2 h-2 rounded-full ${agent.status === "ON_DUTY" ? "bg-success-500" : "bg-slate-300"}`} />
+          <ChevronDown
+            className="w-4 h-4 flex-shrink-0 transition-transform"
+            style={{ color: "#C4C6CF", transform: expanded ? "rotate(180deg)" : "none" }}
+          />
         </div>
-        <div className="flex gap-4 mt-2 text-xs" style={{ color: "#6B6D76" }}>
-          <span>Score: <strong className="text-brand-600">{agent.ranking_score.toFixed(0)}</strong></span>
+
+        {/* Collection rate — the desktop row's headline metric */}
+        <div className="flex items-center gap-2 mt-2.5">
+          <div className="flex-1 rounded-full overflow-hidden" style={{ height: 6, background: "#EFF0F4" }}>
+            <div
+              className="h-full rounded-full"
+              style={{
+                width: barReady ? `${collectionPct}%` : "0%",
+                background: collectionPct >= 60 ? "#22c55e" : collectionPct >= 35 ? "#f59e0b" : "#ef4444",
+                transition: `width 900ms ${EASE}`,
+              }}
+            />
+          </div>
+          <span className={`text-xs font-bold flex-shrink-0 ${collectionPct >= 60 ? "text-success-600" : collectionPct >= 35 ? "text-warning-600" : "text-danger-600"}`}>
+            {collectionPct}%
+          </span>
+        </div>
+
+        <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2 text-xs" style={{ color: "#6B6D76" }}>
+          <span>Score <strong className="text-brand-600">{agent.ranking_score.toFixed(0)}</strong></span>
           <span>₹{(agent.current_month_collections / 100000).toFixed(1)}L collected</span>
-          <span>PTP: {ptpRate}%</span>
+          <span>{agent.current_month_visits} visits</span>
+          <span>PTP {ptpRate}%</span>
+          <span className="flex items-center gap-1 ml-auto">
+            <span className={`w-2 h-2 rounded-full ${agent.status === "ON_DUTY" ? "bg-success-500" : "bg-slate-300"}`} />
+            <span className={agent.status === "ON_DUTY" ? "text-success-600 font-medium" : "text-slate-400"}>
+              {agent.status === "ON_DUTY" ? "On Duty" : "Off"}
+            </span>
+          </span>
         </div>
       </div>
 
@@ -419,21 +478,21 @@ function AgentRow({
                 const dateTo   = new Date().toISOString().slice(0, 10);
                 navigate(`/manager/cases?agent_id=${agent.id}&agent_name=${encodeURIComponent(agent.full_name)}&date_from=${dateFrom}&date_to=${dateTo}`);
               }}
-              className="text-xs px-3 py-1.5 rounded-xl font-semibold transition hover:brightness-95"
+              className="tap-target text-xs px-3 py-1.5 rounded-xl font-semibold transition hover:brightness-95 inline-flex items-center justify-center"
               style={{ background: "#0C66E4", color: "white" }}
             >
               View Cases →
             </button>
             <button
               onClick={() => toast.success(`Message sent to ${agent.full_name}`)}
-              className="text-xs px-3 py-1.5 rounded-xl font-semibold badge-blue transition hover:brightness-95"
+              className="tap-target text-xs px-3 py-1.5 rounded-xl font-semibold badge-blue transition hover:brightness-95 inline-flex items-center justify-center"
             >
               Send Message
             </button>
             <button
               onClick={fetchPlan}
               disabled={planLoading}
-              className="text-xs px-3 py-1.5 rounded-xl font-semibold transition hover:brightness-95 flex items-center gap-1.5"
+              className="tap-target text-xs px-3 py-1.5 rounded-xl font-semibold transition hover:brightness-95 flex items-center justify-center gap-1.5"
               style={{ background: planLoading ? "#e2e8f0" : "#f1f5f9", color: "#475569", border: "1px solid #e2e8f0" }}
             >
               {planLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Shuffle className="w-3 h-3" />}
@@ -442,7 +501,7 @@ function AgentRow({
             {!insight && !insightLoading && (
               <button
                 onClick={fetchInsight}
-                className="text-xs px-3 py-1.5 rounded-xl font-semibold transition hover:brightness-95 flex items-center gap-1.5"
+                className="tap-target text-xs px-3 py-1.5 rounded-xl font-semibold transition hover:brightness-95 flex items-center justify-center gap-1.5"
                 style={{ background: "linear-gradient(135deg, #7c3aed, #a855f7)", color: "white" }}
               >
                 <Brain className="w-3 h-3" /> AI Insight
@@ -456,7 +515,7 @@ function AgentRow({
             <button
               onClick={toggleStatus}
               disabled={statusUpdating}
-              className="text-xs px-3 py-1.5 rounded-xl font-semibold transition hover:brightness-95 flex items-center gap-1.5"
+              className="tap-target text-xs px-3 py-1.5 rounded-xl font-semibold transition hover:brightness-95 flex items-center justify-center gap-1.5"
               style={{
                 background: agent.status === "ON_DUTY" ? "rgba(245,158,11,0.10)" : "rgba(22,163,74,0.10)",
                 color: agent.status === "ON_DUTY" ? "#d97706" : "#16a34a",
@@ -594,34 +653,47 @@ function AgentInsightStrip({ insight }: { insight: AgentInsight }) {
 }
 
 function ReallocationModal({ plan, onClose }: { plan: ReallocationPlan; onClose: () => void }) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  useModalA11y(true, panelRef, onClose);
+
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Reallocation plan"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
       style={{ background: "rgba(0,0,0,0.5)" }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div
-        className="w-full max-w-2xl max-h-[85vh] flex flex-col rounded-[22px] overflow-hidden"
+        ref={panelRef}
+        tabIndex={-1}
+        className="w-full sm:max-w-2xl max-h-[92svh] sm:max-h-[85svh] flex flex-col rounded-t-[22px] sm:rounded-[22px] overflow-hidden outline-none"
         style={{ background: "#fff" }}
       >
+        {/* Grab handle — sheet affordance, phone only */}
+        <div className="sm:hidden flex justify-center pt-2.5 pb-1 flex-shrink-0">
+          <span style={{ width: 36, height: 4, borderRadius: 999, background: "#C4C6CF" }} />
+        </div>
+
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: "1px solid #EAEBEF" }}>
-          <div>
+        <div className="flex items-center justify-between gap-3 px-4 sm:px-5 py-3 sm:py-4" style={{ borderBottom: "1px solid #EAEBEF" }}>
+          <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <Shuffle className="w-4 h-4" style={{ color: "#475569" }} />
-              <span className="font-bold text-base" style={{ color: "#1C1C1F" }}>Reallocation Plan</span>
+              <Shuffle className="w-4 h-4 flex-shrink-0" style={{ color: "#475569" }} />
+              <span className="font-bold text-base truncate" style={{ color: "#1C1C1F" }}>Reallocation Plan</span>
             </div>
-            <p className="text-xs mt-0.5" style={{ color: "#6B6D76" }}>
+            <p className="text-xs mt-0.5 truncate" style={{ color: "#6B6D76" }}>
               From {plan.from_agent.name} · {plan.from_agent.territory} · {plan.from_agent.tier}
             </p>
           </div>
-          <button onClick={onClose} className="p-2 rounded-xl transition-colors hover:bg-slate-100">
+          <button onClick={onClose} aria-label="Close reallocation plan" className="tap-target p-2 rounded-xl transition-colors hover:bg-slate-100 flex items-center justify-center flex-shrink-0">
             <X className="w-5 h-5" style={{ color: "#6B6D76" }} />
           </button>
         </div>
 
         {/* Summary bar */}
-        <div className="px-5 py-3 flex gap-4 text-xs" style={{ background: "#F5F6F9", borderBottom: "1px solid #EAEBEF" }}>
+        <div className="px-4 sm:px-5 py-3 flex flex-wrap gap-x-4 gap-y-1 text-xs" style={{ background: "#F5F6F9", borderBottom: "1px solid #EAEBEF" }}>
           <span><strong className="text-success-600">{plan.summary.can_reallocate}</strong> cases can be reallocated</span>
           <span><strong style={{ color: "#6B6D76" }}>{plan.summary.cannot_reallocate}</strong> at capacity</span>
           <span><strong className="text-brand-600">{plan.summary.agents_receiving}</strong> agent{plan.summary.agents_receiving !== 1 ? "s" : ""} receiving</span>
@@ -636,8 +708,10 @@ function ReallocationModal({ plan, onClose }: { plan: ReallocationPlan; onClose:
             </div>
           )}
           {plan.suggested_reallocations.map((r) => (
-            <div key={r.case_id} className="px-5 py-3">
-              <div className="flex items-start justify-between gap-3">
+            <div key={r.case_id} className="px-4 sm:px-5 py-3">
+              {/* Target agent drops below the case once the row is too narrow
+                  to hold both without truncating the customer name. */}
+              <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-1.5 sm:gap-3">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-sm font-semibold" style={{ color: "#1C1C1F" }}>{r.customer_name}</span>
@@ -653,7 +727,7 @@ function ReallocationModal({ plan, onClose }: { plan: ReallocationPlan; onClose:
                     <span>DPD {r.dpd}</span>
                   </div>
                 </div>
-                <div className="text-right flex-shrink-0">
+                <div className="text-left sm:text-right flex-shrink-0">
                   <p className="text-xs font-bold" style={{ color: "#0C66E4" }}>→ {r.to_agent_name}</p>
                   <p className="text-xs" style={{ color: "#6B6D76" }}>{r.to_agent_tier} · {r.to_agent_available_slots} slots free</p>
                 </div>
@@ -665,12 +739,12 @@ function ReallocationModal({ plan, onClose }: { plan: ReallocationPlan; onClose:
             </div>
           ))}
           {plan.unallocatable_cases.length > 0 && (
-            <div className="px-5 py-3">
+            <div className="px-4 sm:px-5 py-3">
               <p className="text-xs font-semibold mb-2" style={{ color: "#dc2626" }}>Cannot reallocate ({plan.unallocatable_cases.length})</p>
               {plan.unallocatable_cases.map((u) => (
-                <div key={u.case_number} className="flex justify-between text-xs py-1" style={{ color: "#6B6D76" }}>
-                  <span>{u.customer_name} · {u.case_number}</span>
-                  <span>₹{(u.target_amount / 1000).toFixed(0)}K · {u.reason}</span>
+                <div key={u.case_number} className="flex flex-wrap justify-between gap-x-3 text-xs py-1" style={{ color: "#6B6D76" }}>
+                  <span className="min-w-0">{u.customer_name} · {u.case_number}</span>
+                  <span className="flex-shrink-0">₹{(u.target_amount / 1000).toFixed(0)}K · {u.reason}</span>
                 </div>
               ))}
             </div>
@@ -678,17 +752,17 @@ function ReallocationModal({ plan, onClose }: { plan: ReallocationPlan; onClose:
         </div>
 
         {/* Footer */}
-        <div className="px-5 py-4 flex gap-3" style={{ borderTop: "1px solid #EAEBEF" }}>
+        <div className="px-4 sm:px-5 py-4 flex gap-3 safe-bottom" style={{ borderTop: "1px solid #EAEBEF" }}>
           <button
             onClick={() => { toast.success(`Reallocation plan logged for ${plan.from_agent.name}`); onClose(); }}
-            className="flex-1 py-2.5 rounded-xl text-sm font-semibold text-white transition hover:brightness-95"
+            className="tap-target flex-1 py-2.5 rounded-xl text-sm font-semibold text-white transition hover:brightness-95"
             style={{ background: "#0C66E4" }}
           >
             Apply Plan
           </button>
           <button
             onClick={onClose}
-            className="px-4 py-2.5 rounded-xl text-sm font-semibold transition hover:brightness-95"
+            className="tap-target px-4 py-2.5 rounded-xl text-sm font-semibold transition hover:brightness-95"
             style={{ background: "#F5F6F9", color: "#475569" }}
           >
             Cancel

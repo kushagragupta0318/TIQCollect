@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import type { NavigateFunction } from "react-router";
 import { Briefcase, CheckCircle, IndianRupee, Calendar, MapPin, Clock, Camera, X } from "lucide-react";
@@ -79,8 +79,22 @@ export default function AgentHomePage() {
     }
   }
 
+  // Auto re-anchor: whenever the home page opens while on duty, silently push
+  // the agent's current live GPS so the demo customers (Balraj + anchors) snap
+  // to wherever the agent physically is — no button tap. Runs once per mount.
+  const autoAnchoredRef = useRef(false);
+  useEffect(() => {
+    if (!checkedIn || autoAnchoredRef.current || !navigator.geolocation) return;
+    autoAnchoredRef.current = true;
+    navigator.geolocation.getCurrentPosition(
+      (p) => { apiCheckIn(p.coords.latitude, p.coords.longitude).catch(() => {}); },
+      () => {},
+      { enableHighAccuracy: true, timeout: 15000 }
+    );
+  }, [checkedIn]);
+
   return (
-    <div className="p-4 space-y-4 pb-6">
+    <div className="p-4 lg:p-6 space-y-4 pb-6">
       {/* Greeting + check-in */}
       <div className="flex items-center justify-between">
         <div>
@@ -121,7 +135,7 @@ export default function AgentHomePage() {
 
       {/* Stats */}
       {loading || !beat ? (
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           {[0, 1, 2, 3].map((i) => (
             <div key={i} className="card animate-pulse space-y-2">
               <div className="h-3 w-14 bg-slate-200 rounded" />
@@ -137,6 +151,7 @@ export default function AgentHomePage() {
       {/* Quick actions */}
       <div className="space-y-2">
         <h2 className="text-sm font-semibold text-slate-700">Quick Actions</h2>
+        <div className="space-y-2 lg:space-y-0 lg:grid lg:grid-cols-2 lg:gap-3">
         <QuickAction icon={<MapPin className="w-5 h-5 text-brand-600" />} label="Open Beat Map" sub="View today's optimised route" onClick={() => navigate("/agent/beat")} color="bg-brand-50" />
         <QuickAction icon={<Briefcase className="w-5 h-5 text-slate-600" />} label="All My Cases" sub={`${pendingCases} pending · ${beat?.cases_visited_today ?? 0} done`} onClick={() => navigate("/agent/cases")} color="bg-slate-50" />
         {ptpsDue > 0 && (
@@ -145,6 +160,7 @@ export default function AgentHomePage() {
         {checkedIn && (
           <QuickAction icon={<Clock className="w-5 h-5 text-success-600" />} label="Next Case on Beat" sub="Navigate to nearest unvisited" onClick={() => navigate("/agent/beat")} color="bg-success-50" />
         )}
+        </div>
       </div>
 
       {/* Selfie check-in modal */}
@@ -208,7 +224,7 @@ function StatGrid({ beat, navigate }: { beat: BeatData; navigate: NavigateFuncti
   const animatedPtpsDue = useCountUp(ptpsDue);
 
   return (
-    <div className="grid grid-cols-2 gap-3">
+    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
       <StatCard label="Pending" value={animatedPending} subtext={`of ${totalCases} cases`} icon={<Briefcase className="w-5 h-5" />} colorClass="text-brand-600" onClick={() => navigate("/agent/cases")} />
       <StatCard label="Done" value={animatedDone} subtext="visits today" icon={<CheckCircle className="w-5 h-5" />} colorClass="text-success-600" onClick={() => navigate("/agent/cases?filter=visited_today")} />
       <StatCard label="Collected" value={`₹${(collected / 1000).toFixed(0)}K`} subtext="today" icon={<IndianRupee className="w-5 h-5" />} colorClass="text-success-600" onClick={() => navigate("/agent/cases?filter=collected")} />

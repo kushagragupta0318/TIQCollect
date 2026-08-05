@@ -84,7 +84,7 @@ export default function AgentIDCard({ agentId, name, idCardNumber, territory, ti
         </h3>
         <button
           onClick={() => setFlipped((f) => !f)}
-          className="text-xs text-brand-600 font-medium flex items-center gap-1 hover:underline"
+          className="tap-target text-xs text-brand-600 font-medium inline-flex items-center justify-center gap-1 hover:underline"
         >
           <QrCode className="w-3.5 h-3.5" />
           {flipped ? "Show ID" : "Show QR"}

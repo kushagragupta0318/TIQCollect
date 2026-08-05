@@ -5,6 +5,12 @@
 //   regardless. Now navigates to /manager/agents, where each SOS'd agent has
 //   a real acknowledge action (sends them a real SMS/WhatsApp). Full detail:
 //   /changelog.md.
+// 2026-08-05 — Merged tiq-demo's Collections rework: tap-to-toggle exact
+//   rupees, count-up on the headline figure, quarter markers on the progress
+//   bar, clickable breakdown tiles, and donut rings on the leaderboard. The
+//   leaderboard row keeps that design but wraps below sm — rank plus three
+//   fixed-width figure blocks overflow a 320px row — and its hover moved
+//   from mouseenter/mouseleave handlers to .row-lift.
 // ─────────────────────────────────────────────────────────────────────────
 import { useCallback, useEffect, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
@@ -118,7 +124,7 @@ export default function ManagerOverviewPage() {
       {/* SOS Alert */}
       {sosCount > 0 && (
         <div
-          className="flex items-center gap-3 p-4 animate-pulse"
+          className="flex flex-wrap items-center gap-3 p-4 animate-pulse"
           style={{
             background: "#DC2626",
             borderRadius: "22px",
@@ -126,15 +132,17 @@ export default function ManagerOverviewPage() {
           }}
         >
           <AlertTriangle className="w-6 h-6 flex-shrink-0" />
-          <div className="flex-1">
+          <div className="flex-1 min-w-0" style={{ minWidth: "12rem" }}>
             <p className="font-bold">{sosCount} Agent SOS Alert{sosCount > 1 ? "s" : ""} Active!</p>
             <p className="text-sm" style={{ color: "rgba(255,255,255,0.75)" }}>
               Immediate attention required — check Agents page
             </p>
           </div>
+          {/* Full width once the row wraps, so it never ends up as a stranded
+              28px-tall sliver on a narrow screen. */}
           <button
             onClick={() => navigate("/manager/agents")}
-            className="px-3 py-1.5 rounded-xl text-sm font-semibold transition-colors"
+            className="tap-target w-full sm:w-auto px-4 py-2 rounded-xl text-sm font-semibold transition-colors"
             style={{ background: "#fff", color: "#DC2626" }}
           >
             Respond
@@ -143,7 +151,7 @@ export default function ManagerOverviewPage() {
       )}
 
       {/* KPI Grid — staggered entrance */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         {[
           { label: "Agents On Duty",  value: `${s.agents_on_duty}/${s.total_agents}`, icon: <Users className="w-5 h-5" />,       colorClass: "text-brand-600",   subtext: "active today" },
           // "cases visited", not "allocated": the backend derives cases_today
@@ -168,7 +176,7 @@ export default function ManagerOverviewPage() {
 
       {/* Collection progress */}
       <div
-        className="card p-6"
+        className="card p-4 sm:p-6"
         style={{
           animation: `enter 420ms ${EASE} 240ms both`,
           // backgroundImage, not background — .card supplies bg-white and the
@@ -176,26 +184,28 @@ export default function ManagerOverviewPage() {
           backgroundImage: "linear-gradient(160deg, rgba(22,119,255,0.055) 0%, rgba(22,119,255,0) 58%)",
         }}
       >
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <div className="icon-circle bg-success-600" style={{ width: 36, height: 36 }}>
+        {/* Title and figure sit side by side once there is room; below sm the
+            figure moves under the title rather than being squeezed against it. */}
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="icon-circle bg-success-600 flex-shrink-0" style={{ width: 36, height: 36 }}>
               <IndianRupee className="w-4 h-4 text-white" />
             </div>
-            <h2 className="text-base font-bold" style={{ color: "#1C1C1F" }}>Today's Collections</h2>
+            <h2 className="text-base font-bold truncate" style={{ color: "#1C1C1F" }}>Today's Collections</h2>
             {/* The verdict is in the words. Colouring it as well would say the
                 same thing twice and lean on hue to carry meaning. */}
             <span
-              className="text-xs font-semibold px-2 py-0.5 rounded-full whitespace-nowrap"
+              className="text-xs font-semibold px-2 py-0.5 rounded-full whitespace-nowrap flex-shrink-0"
               style={{ background: "rgba(148,163,184,0.16)", color: "#475569" }}
             >
               {paceVerdict(collectionPct)}
             </span>
           </div>
-          <div className="text-right">
+          <div className="text-left sm:text-right flex-shrink-0">
             <Amount
               exact={exactRupees}
               onToggle={() => setExactRupees((v) => !v)}
-              className="text-2xl font-semibold text-success-600 tracking-tight block ml-auto"
+              className="text-2xl font-semibold text-success-600 tracking-tight block sm:ml-auto"
             >
               <CountUpAmount value={s.amount_collected_today} format={(n) => bigMoney(n, exactRupees)} />
             </Amount>
@@ -254,7 +264,7 @@ export default function ManagerOverviewPage() {
           ))}
         </div>
 
-        <div className="flex justify-between text-sm mt-2">
+        <div className="flex flex-wrap justify-between gap-x-3 text-[13px] sm:text-sm mt-2">
           <span className="font-bold text-success-600">{collectionPct}% achieved</span>
           <span style={{ color: "#6B6D76" }}>
             <Amount exact={exactRupees} onToggle={() => setExactRupees((v) => !v)} className="text-sm" style={{ color: "#6B6D76" }}>
@@ -267,7 +277,7 @@ export default function ManagerOverviewPage() {
         {/* Collection breakdown. Dividers are absolutely positioned lines in
             this container: as borders on the tiles they would follow each
             tile's rounded-xl hover shape and read as a box, not a rule. */}
-        <div className="relative grid grid-cols-3 gap-4 mt-4 pt-4" style={{ borderTop: "1px solid #EAEBEF" }}>
+        <div className="relative grid grid-cols-3 gap-2 sm:gap-4 mt-4 pt-4" style={{ borderTop: "1px solid #EAEBEF" }}>
           <div className="absolute pointer-events-none" style={{ left: "33.333%", top: 16, bottom: 0, width: 1, background: "#EAEBEF" }} />
           <div className="absolute pointer-events-none" style={{ left: "66.666%", top: 16, bottom: 0, width: 1, background: "#EAEBEF" }} />
 
@@ -305,12 +315,12 @@ export default function ManagerOverviewPage() {
 
       {/* Agent Leaderboard */}
       <div
-        className="card p-6"
+        className="card p-4 sm:p-6"
         style={{ animation: `enter 420ms ${EASE} 300ms both` }}
       >
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-base font-bold" style={{ color: "#1C1C1F" }}>Agent Leaderboard</h2>
-          <a href="/manager/agents" className="text-sm font-semibold text-brand-600 hover:text-brand-700 transition-colors">
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <h2 className="text-base font-bold min-w-0 truncate" style={{ color: "#1C1C1F" }}>Agent Leaderboard</h2>
+          <a href="/manager/agents" className="tap-target inline-flex items-center text-sm font-semibold text-brand-600 hover:text-brand-700 transition-colors flex-shrink-0">
             View all →
           </a>
         </div>
@@ -329,7 +339,7 @@ export default function ManagerOverviewPage() {
       </div>
 
       {/* AI Briefing + DPD Portfolio */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4" style={{ animation: `enter 420ms ${EASE} 360ms both` }}>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4" style={{ animation: `enter 420ms ${EASE} 360ms both` }}>
         {/* AI Ops Briefing card */}
         {briefingLoading ? (
           <div className="card animate-pulse" style={{ height: 220, background: "#EFF0F4", border: "none", boxShadow: "none" }} />
@@ -362,9 +372,16 @@ export default function ManagerOverviewPage() {
               const maxCount = Math.max(...(briefing?.dpd_breakdown ?? []).map(x => x.case_count), 1);
               const barPct = Math.round((b.case_count / maxCount) * 100);
               return (
-                <div key={b.bucket} className="flex items-center gap-3">
-                  <span className="text-xs flex-shrink-0" style={{ color: "#6B6D76", width: 140 }}>{cfg.label}</span>
-                  <div className="flex-1 rounded-full overflow-hidden" style={{ height: 8, background: "#EFF0F4" }}>
+                // A fixed 140px label is 47% of the content width at 360px,
+                // which starves the bar. minmax lets it take 140px when there
+                // is room and shrink gracefully when there is not.
+                <div
+                  key={b.bucket}
+                  className="grid items-center gap-2 sm:gap-3"
+                  style={{ gridTemplateColumns: "minmax(0, 140px) minmax(60px, 1fr) auto" }}
+                >
+                  <span className="text-xs truncate" style={{ color: "#6B6D76" }}>{cfg.label}</span>
+                  <div className="rounded-full overflow-hidden" style={{ height: 8, background: "#EFF0F4" }}>
                     <div
                       className="h-full rounded-full"
                       style={{
@@ -384,7 +401,7 @@ export default function ManagerOverviewPage() {
             )}
           </div>
           {briefing?.dpd_breakdown && briefing.dpd_breakdown.length > 0 && (
-            <div className="mt-3 pt-3 flex gap-4 text-xs" style={{ borderTop: "1px solid #EAEBEF", color: "#6B6D76" }}>
+            <div className="mt-3 pt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs" style={{ borderTop: "1px solid #EAEBEF", color: "#6B6D76" }}>
               <span>Total: <strong style={{ color: "#1C1C1F" }}>₹{briefing.dpd_breakdown.reduce((s, b) => s + b.target_lakhs, 0).toFixed(1)}L</strong> target</span>
               <span>Collected: <strong className="text-success-600">₹{briefing.dpd_breakdown.reduce((s, b) => s + b.collected_lakhs, 0).toFixed(1)}L</strong></span>
             </div>
@@ -530,37 +547,25 @@ function AgentRow({ agent, rank, animated, delay, filterDate }: { agent: Agent; 
 
   // One blue for every row. Rank is conveyed by position and the rank chip
   // alone — tinting by rank as well made the list read as five categories.
-  const wash   = agent.sos_active
-    ? "linear-gradient(135deg, rgba(220,38,38,0.09) 0%, rgba(220,38,38,0.03) 100%)"
-    : "linear-gradient(135deg, rgba(22,119,255,0.07) 0%, rgba(22,119,255,0.02) 100%)";
-  const border = agent.sos_active ? "rgba(220,38,38,0.22)" : "rgba(22,119,255,0.14)";
-  const lift   = agent.sos_active
-    ? "0 4px 14px rgba(220,38,38,0.18)"
-    : "0 4px 14px rgba(22,119,255,0.16)";
+  const rowVars = {
+    "--lift-wash": agent.sos_active
+      ? "linear-gradient(135deg, rgba(220,38,38,0.09) 0%, rgba(220,38,38,0.03) 100%)"
+      : "linear-gradient(135deg, rgba(22,119,255,0.07) 0%, rgba(22,119,255,0.02) 100%)",
+    "--lift-border":       agent.sos_active ? "rgba(220,38,38,0.22)" : "rgba(22,119,255,0.14)",
+    "--lift-border-hover": agent.sos_active ? "rgba(220,38,38,0.38)" : "rgba(22,119,255,0.30)",
+    "--lift-shadow":       agent.sos_active
+      ? "0 4px 14px rgba(220,38,38,0.18)"
+      : "0 4px 14px rgba(22,119,255,0.16)",
+    animation: `enter 380ms cubic-bezier(0.16,1,0.3,1) ${delay}ms both`,
+  } as CSSProperties;
 
   const money = (n: number) => `₹${(n / 1000).toFixed(0)}K`;
 
   return (
-    <div
-      className="flex items-center gap-3 p-3 rounded-xl"
-      style={{
-        background: wash,
-        border: `1px solid ${border}`,
-        // `enter` sets fill-mode both and animates transform, so it keeps
-        // ownership of transform after it finishes — a hover translateY here
-        // would never apply. The lift is done with box-shadow instead.
-        animation: `enter 380ms cubic-bezier(0.16,1,0.3,1) ${delay}ms both`,
-        transition: "box-shadow 160ms cubic-bezier(0.16,1,0.3,1), border-color 160ms cubic-bezier(0.16,1,0.3,1)",
-      }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.boxShadow   = lift;
-        e.currentTarget.style.borderColor = agent.sos_active ? "rgba(220,38,38,0.38)" : "rgba(22,119,255,0.30)";
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.boxShadow   = "none";
-        e.currentTarget.style.borderColor = border;
-      }}
-    >
+    // flex-wrap, so on a phone the figures drop to a second line instead of
+    // crushing the name: rank + name + the three fixed-width figure blocks add
+    // up to more than a 320px row can hold.
+    <div className="row-lift flex flex-wrap items-center gap-x-3 gap-y-2 p-3 rounded-xl" style={rowVars}>
       <span
         className="w-7 h-7 flex-shrink-0 flex items-center justify-center rounded-full text-xs font-bold"
         style={{ background: "rgba(148,163,184,0.14)", color: "#64748b" }}
@@ -568,15 +573,17 @@ function AgentRow({ agent, rank, animated, delay, filterDate }: { agent: Agent; 
         {rank}
       </span>
 
-      <div className="flex-1 min-w-0 flex items-center gap-2">
+      <div className="flex-1 min-w-0 flex items-center gap-2 flex-wrap" style={{ minWidth: "6rem" }}>
         <button
           onClick={() => {
             navigate(`/manager/cases?agent_id=${agent.id}&agent_name=${encodeURIComponent(agent.full_name)}&date_from=${filterDate}&date_to=${filterDate}`);
           }}
-          className="text-sm font-semibold truncate text-left transition-colors"
-          style={{ color: "#0C66E4", background: "none", border: "none", cursor: "pointer", padding: 0 }}
-          onMouseEnter={(e) => { e.currentTarget.style.color = "#0A4FB0"; }}
-          onMouseLeave={(e) => { e.currentTarget.style.color = "#0C66E4"; }}
+          className="text-sm font-semibold truncate text-left max-w-full -my-1"
+          // padding lives here, not in a class: an inline `padding: 0` would
+          // have won over any Tailwind py-* utility. 4px of vertical padding
+          // lifts the hit area from 20px to 28px. Underlined rather than
+          // colour-shifted on hover, so it reads as a link without JS handlers.
+          style={{ color: "#0C66E4", background: "none", border: "none", cursor: "pointer", padding: "4px 0", textDecoration: "underline", textDecorationColor: "rgba(12,102,228,0.3)", textUnderlineOffset: 2 }}
         >
           {agent.full_name}
         </button>
@@ -585,44 +592,47 @@ function AgentRow({ agent, rank, animated, delay, filterDate }: { agent: Agent; 
       </div>
 
       {/* Fixed-width figure columns so amounts line up down the card no matter
-          how long the name above them is. */}
-      <div className="flex-shrink-0 text-right" style={{ width: 62 }}>
-        <p className="text-xs leading-tight" style={{ color: "#6B6D76" }}>Target</p>
-        <p className="text-sm font-semibold leading-tight" style={{ color: "#1C1C1F" }}>{money(target)}</p>
-      </div>
-      <div className="flex-shrink-0" style={{ width: 1, height: 28, background: "#EAEBEF" }} />
-      <div className="flex-shrink-0 text-right" style={{ width: 62 }}>
-        <p className="text-xs leading-tight" style={{ color: "#6B6D76" }}>Collected</p>
-        <p className="text-sm font-bold leading-tight text-success-600">{money(collected)}</p>
-      </div>
+          how long the name above them is. Kept together in one group so they
+          wrap as a unit rather than splitting across two lines. */}
+      <div className="flex items-center gap-3 flex-shrink-0 ml-auto">
+        <div className="text-right" style={{ width: 62 }}>
+          <p className="text-xs leading-tight" style={{ color: "#6B6D76" }}>Target</p>
+          <p className="text-sm font-semibold leading-tight" style={{ color: "#1C1C1F" }}>{money(target)}</p>
+        </div>
+        <div style={{ width: 1, height: 28, background: "#EAEBEF" }} />
+        <div className="text-right" style={{ width: 62 }}>
+          <p className="text-xs leading-tight" style={{ color: "#6B6D76" }}>Collected</p>
+          <p className="text-sm font-bold leading-tight text-success-600">{money(collected)}</p>
+        </div>
 
-      <div
-        className="relative flex-shrink-0 cursor-default"
-        style={{ width: DONUT_SIZE, height: DONUT_SIZE }}
-        title={`Collected ₹${collected.toLocaleString("en-IN")} of ₹${target.toLocaleString("en-IN")} today`}
-      >
-        <svg width={DONUT_SIZE} height={DONUT_SIZE} style={{ transform: "rotate(-90deg)" }}>
-          <circle
-            cx={DONUT_SIZE / 2} cy={DONUT_SIZE / 2} r={DONUT_R}
-            fill="none" stroke="#EFF0F4" strokeWidth={DONUT_STROKE}
-          />
-          <circle
-            cx={DONUT_SIZE / 2} cy={DONUT_SIZE / 2} r={DONUT_R}
-            fill="none" stroke="#1677FF" strokeWidth={DONUT_STROKE} strokeLinecap="round"
-            strokeDasharray={DONUT_C}
-            strokeDashoffset={animated ? DONUT_C * (1 - pct / 100) : DONUT_C}
-            style={{ transition: "stroke-dashoffset 1.1s cubic-bezier(0.16,1,0.3,1)" }}
-          />
-        </svg>
-        <span
-          className="absolute inset-0 flex items-center justify-center font-bold"
-          style={{ fontSize: 11, color: "#1C1C1F" }}
+        <div
+          className="relative flex-shrink-0 cursor-default"
+          style={{ width: DONUT_SIZE, height: DONUT_SIZE }}
+          title={`Collected ₹${collected.toLocaleString("en-IN")} of ₹${target.toLocaleString("en-IN")} today`}
         >
-          {pct}%
-        </span>
-      </div>
+          <svg width={DONUT_SIZE} height={DONUT_SIZE} style={{ transform: "rotate(-90deg)" }}>
+            <circle
+              cx={DONUT_SIZE / 2} cy={DONUT_SIZE / 2} r={DONUT_R}
+              fill="none" stroke="#EFF0F4" strokeWidth={DONUT_STROKE}
+            />
+            <circle
+              cx={DONUT_SIZE / 2} cy={DONUT_SIZE / 2} r={DONUT_R}
+              fill="none" stroke="#1677FF" strokeWidth={DONUT_STROKE} strokeLinecap="round"
+              strokeDasharray={DONUT_C}
+              strokeDashoffset={animated ? DONUT_C * (1 - pct / 100) : DONUT_C}
+              style={{ transition: "stroke-dashoffset 1.1s cubic-bezier(0.16,1,0.3,1)" }}
+            />
+          </svg>
+          <span
+            className="absolute inset-0 flex items-center justify-center font-bold"
+            style={{ fontSize: 11, color: "#1C1C1F" }}
+          >
+            {pct}%
+          </span>
+        </div>
 
-      <div className="w-2 h-2 rounded-full flex-shrink-0 bg-success-500" />
+        <div className="w-2 h-2 rounded-full flex-shrink-0 bg-success-500" />
+      </div>
     </div>
   );
 }
@@ -725,7 +735,7 @@ function AiBriefingCard({ briefing, onRefresh }: { briefing: BriefingData; onRef
       </div>
 
       {/* Pending actions summary row */}
-      <div className="mt-3 pt-3 flex gap-4 text-xs" style={{ borderTop: "1px solid #EAEBEF", color: "#6B6D76" }}>
+      <div className="mt-3 pt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs" style={{ borderTop: "1px solid #EAEBEF", color: "#6B6D76" }}>
         <span>PTPs due: <strong className="text-warning-600">{briefing.pending_actions.ptps_due}</strong></span>
         <span>No visit yet: <strong className="text-brand-600">{briefing.pending_actions.cases_pending_first_visit}</strong></span>
         <span>Escalated: <strong className="text-danger-600">{briefing.pending_actions.escalated_cases}</strong></span>

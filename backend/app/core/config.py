@@ -8,6 +8,13 @@
 #   hosted OpenAI Whisper vs. self-hosted faster-whisper. Default unchanged
 #   ("openai") — existing behavior is preserved until explicitly switched.
 #   Full detail + why for both days: /changelog.md
+# 2026-07-30 — Added borrower-OTP params (OTP_LENGTH/OTP_TTL_SECONDS/
+#   OTP_MAX_ATTEMPTS/OTP_RESEND_THROTTLE_SECONDS/OTP_MAX_SENDS, below Twilio):
+#   config seam for OtpService's payment-verification OTP. 4 digits / 5-min
+#   expiry are product decisions; a 4-digit code has only 10,000 combinations
+#   so OTP_MAX_ATTEMPTS (3) is the real brute-force defence, and
+#   RESEND_THROTTLE/MAX_SENDS bound SMS-bomb / cost abuse. See
+#   prototype_to_product/30.07.md and /changelog.md.
 # ───────────────────────────────────────────────────────────────────────────
 from functools import lru_cache
 from typing import List
@@ -21,6 +28,10 @@ class Settings(BaseSettings):
         case_sensitive=False,
         extra="ignore",
     )
+
+    # Agency identity — shown on the public agent-verification page.
+    AGENCY_NAME: str = "TIQ Financial Services Pvt. Ltd."
+    AGENCY_RBI_REG: str = "RB-2024-0192"
 
     # App
     APP_NAME: str = "TIQCollect"
@@ -92,9 +103,60 @@ class Settings(BaseSettings):
     WHISPER_MODEL_SIZE: str = "small"
     WHISPER_DEVICE: str = "cpu"
 
-    # RBI contact hours
+    # RBI contact hours — the window collections contact is legally allowed.
+    # Env-driven so a demo in a non-IST timezone can widen/shift it (see geo.py,
+    # which now reads these instead of its own hardcoded copies).
     CONTACT_HOUR_START: int = 8
     CONTACT_HOUR_END: int = 19
+
+    # Geo-fence radius (metres) an agent must be within to record a visit.
+    # Moved out of geo.py so it is a .env change, not a code change.
+    GEO_FENCE_METRES: int = 100
+
+    # ─── Demo / Showcase seams ──────────────────────────────────────────────
+    # Master switch. When true: (1) a fixed set of demo customers is re-placed
+    # within DEMO_ANCHOR_RADIUS_M of the agent's live GPS on every check-in, so
+    # the geo-fence passes wherever on earth the demo is run; (2) the demo
+    # contact (DEMO0003) name/phone is synced from the vars below on startup.
+    # Leave false in real deployments — none of this touches non-demo data.
+    DEMO_MODE: bool = False
+    # The showcase customer (DEMO0003). Swap the phone to your CEO's / manager's
+    # number here — no reseed, no rebuild; a backend restart applies it.
+    DEMO_CONTACT_NAME: str = "Balraj Singh"
+    DEMO_CONTACT_PHONE: str = "8015935790"
+    # customer_ref of that showcase customer. Also what _sync_demo_contact()
+    # renames on startup, so the name/phone and the anchoring agree by
+    # construction instead of by two copies of the same literal.
+    DEMO_CONTACT_REF: str = "DEMO0003"
+    # Which demo customers follow the agent's live location. Comma-separated
+    # customer_refs. DEMO_CONTACT_REF does not need to be listed — it is always
+    # anchored, and always first; see demo_anchor_refs_list.
+    DEMO_ANCHOR_REFS: str = "DEMO0003,DEMO0002,DEMO0006,DEMO0007,DEMO0010"
+    # Max spread (metres) of that cluster around the agent's live GPS.
+    DEMO_ANCHOR_RADIUS_M: int = 80
+
+    @property
+    def demo_anchor_refs_list(self) -> List[str]:
+        """Anchor refs with the showcase customer guaranteed first.
+
+        The whole point of the demo contact is that you can call/WhatsApp a real
+        person live, which needs their case inside the geo-fence. Editing
+        DEMO_ANCHOR_REFS and forgetting to keep DEMO_CONTACT_REF in the list
+        used to drop them out of range with no error — the demo just quietly
+        stopped working. Forced in here so no .env edit can break it.
+
+        First position is deliberate: offset[0] is the smallest of the
+        deterministic offsets, so the showcase customer lands nearest the agent
+        and therefore sorts to the top of the distance-ordered case list.
+        """
+        refs = [r.strip() for r in self.DEMO_ANCHOR_REFS.split(",") if r.strip()]
+        contact = self.DEMO_CONTACT_REF.strip()
+        if contact:
+            refs = [contact] + [r for r in refs if r != contact]
+        # De-duplicate, preserving order — a repeated ref would otherwise take
+        # the offset of its first occurrence and stack two customers on one spot.
+        seen: set[str] = set()
+        return [r for r in refs if not (r in seen or seen.add(r))]
 
     # SOS
     SOS_EMERGENCY_CONTACTS: str = ""
@@ -111,6 +173,12 @@ class Settings(BaseSettings):
     RAZORPAY_TEST_API: str = ""
     RAZORPAY_TEST_KEY_SECRET: str = ""
 
+    # Default country code (no '+') for bare national phone numbers, used by
+    # NotificationService.normalize_phone. Numbers entered in full '+<cc>...'
+    # form are respected as-is, so a foreign demo number works when written that
+    # way; this only fills in the code for a bare national number.
+    DEFAULT_COUNTRY_CODE: str = "91"
+
     # Twilio
     TWILIO_ACCOUNT_SID: str = ""
     TWILIO_AUTH_TOKEN: str = ""
@@ -119,6 +187,13 @@ class Settings(BaseSettings):
     TWILIO_API_KEY_SID: str = ""
     TWILIO_API_KEY_SECRET: str = ""
     TWILIO_TWIML_APP_SID: str = ""
+
+    # Borrower payment-verification OTP (see services/otp_service.py)
+    OTP_LENGTH: int = 4                       # product decision: 4-digit code
+    OTP_TTL_SECONDS: int = 300                # product decision: 5-minute expiry
+    OTP_MAX_ATTEMPTS: int = 3                 # wrong tries before the code is burned (brute-force cap)
+    OTP_RESEND_THROTTLE_SECONDS: int = 30     # min gap between two sends for the same collection
+    OTP_MAX_SENDS: int = 4                    # 1 initial send + up to 3 resends per collection
 
 
 @lru_cache

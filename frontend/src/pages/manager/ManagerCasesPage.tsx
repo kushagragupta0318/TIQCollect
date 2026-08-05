@@ -1,25 +1,35 @@
-import { useEffect, useState, useCallback } from "react";
+// ─── CHANGELOG (prototype → product) ───────────────────────────────────────
+// 2026-07-31 — Responsive pass. The 12-column case table needs ~900px and was
+//   rendering into ~200px on a phone. Below lg each row is now a card carrying
+//   all eight columns (nothing dropped), reusing the dual-render pattern that
+//   already existed in ManagerAgentsPage. Filters collapse behind a toggle
+//   below lg, with every applied filter still shown as a removable chip so
+//   nothing is hidden. CaseDetailModal becomes a full-height bottom sheet on
+//   mobile and gained a focus trap + body scroll lock. See docs/frontend-guide.md.
+// 2026-08-05 — Merged tiq-demo. The desktop table gained a Location column
+//   (customer city, previously a second line under the name) and dropped the
+//   bank short name, which repeated identically on every row; the phone card
+//   still shows both. Row tint/hover moved to .row-accent. The date filter
+//   now seeds from GET /manager/cases/date-range instead of a hardcoded
+//   six-month window, so the applied-filter chip compares against that span.
+// ─────────────────────────────────────────────────────────────────────────
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useSearchParams } from "react-router";
 import { createPortal } from "react-dom";
 import {
   Search, X, MapPin, Clock, CheckCircle2, AlertTriangle,
-  Calendar, User, FileText, ChevronRight,
+  Calendar, User, FileText, ChevronRight, SlidersHorizontal,
 } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { getCases, getCaseDetail, getCasesDateRange } from "@/api/manager";
 import type { ManagerCaseDetail, VisitRecord } from "@/api/manager";
 import { Input } from "@/components/ui/Input";
 import { DPDBadge, PriorityBadge, CaseStatusBadge } from "@/components/ui/Badge";
+import { useModalA11y } from "@/hooks/useModalA11y";
 import type { Case } from "@/types";
 
 const EASE = "cubic-bezier(0.16,1,0.3,1)";
 const PAGE_SIZE = 50;
-
-// The date filter used to default to [six months ago, today]. Cases are filtered
-// on allocation_date, whose newest value trails the wall clock on seeded data,
-// so that window both clipped the earliest days and included a stretch with
-// nothing in it. The defaults now come from the data itself, via
-// GET /manager/cases/date-range.
 
 // ── Outcome helpers ──────────────────────────────────────────────────────────
 
@@ -65,6 +75,7 @@ function CaseDetailModal({ caseId, onClose }: { caseId: string; onClose: () => v
   const [detail, setDetail] = useState<ManagerCaseDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<"visits" | "payments" | "ptps" | "photos">("visits");
+  const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     getCaseDetail(caseId)
@@ -73,21 +84,21 @@ function CaseDetailModal({ caseId, onClose }: { caseId: string; onClose: () => v
       .finally(() => setLoading(false));
   }, [caseId]);
 
-  // Close on Escape key
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [onClose]);
+  // Body scroll lock, focus trap, focus restore, and Escape-to-close.
+  useModalA11y(true, panelRef, onClose);
 
   const photos = detail?.photos ?? [];
 
   return createPortal(
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Case detail"
+      // Centred dialog at every size. A bottom sheet pinned the content to the
+      // bottom edge and pushed the detail out of comfortable reach; a centred
+      // card that scrolls internally reads the same on phone and laptop.
+      className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-4"
       style={{
-        position: "fixed", inset: 0, zIndex: 9999,
-        display: "flex", alignItems: "center", justifyContent: "center",
-        padding: 16,
         background: "rgba(0,0,0,0.45)",
         backdropFilter: "blur(6px)",
         WebkitBackdropFilter: "blur(6px)",
@@ -96,33 +107,34 @@ function CaseDetailModal({ caseId, onClose }: { caseId: string; onClose: () => v
     >
       {/* Modal */}
       <div
-        className="w-full max-w-2xl bg-white flex flex-col overflow-hidden"
+        ref={panelRef}
+        tabIndex={-1}
+        // max-h leaves backdrop visible above and below, so it reads as a
+        // floating dialog. The body below scrolls inside it.
+        className="w-full sm:max-w-2xl bg-white flex flex-col overflow-hidden rounded-[22px] sm:rounded-[26px] max-h-[88svh] sm:max-h-[90svh] outline-none"
         style={{
-          borderRadius: 26,
-          maxHeight: "90vh",
           boxShadow: "0 24px 80px rgba(0,0,0,0.22), 0 4px 16px rgba(0,0,0,0.10)",
-          animation: `scaleIn 220ms ${EASE} both`,
+          animation: `modalIn 240ms ${EASE} both`,
         }}
       >
         {/* Header */}
         <div
-          className="flex items-center justify-between px-5 py-4 flex-shrink-0"
+          className="flex items-center justify-between gap-3 px-4 sm:px-5 py-3 sm:py-4 flex-shrink-0"
           style={{ borderBottom: "1px solid #EAEBEF", background: "#F5F6F9" }}
         >
-          <div>
+          <div className="min-w-0">
             <p className="text-xs font-semibold uppercase tracking-widest" style={{ color: "#6B6D76" }}>Case Detail</p>
             {loading ? (
               <div className="h-5 w-32 bg-slate-200 rounded animate-pulse mt-1" />
             ) : (
-              <p className="text-base font-bold font-mono" style={{ color: "#1C1C1F" }}>{detail?.case_number}</p>
+              <p className="text-base font-bold font-mono truncate" style={{ color: "#1C1C1F" }}>{detail?.case_number}</p>
             )}
           </div>
           <button
             onClick={onClose}
-            className="flex items-center justify-center transition-colors"
+            aria-label="Close case detail"
+            className="tap-target flex items-center justify-center transition-colors flex-shrink-0 hover:bg-black/10"
             style={{ width: 32, height: 32, borderRadius: 10, background: "rgba(0,0,0,0.06)", border: "none" }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(0,0,0,0.12)"; }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(0,0,0,0.06)"; }}
           >
             <X className="w-4 h-4" style={{ color: "#6B6D76" }} />
           </button>
@@ -137,7 +149,7 @@ function CaseDetailModal({ caseId, onClose }: { caseId: string; onClose: () => v
         ) : detail ? (
           <div className="flex-1 overflow-y-auto">
             {/* Case summary */}
-            <div className="px-5 py-4" style={{ borderBottom: "1px solid #EAEBEF" }}>
+            <div className="px-4 sm:px-5 py-4" style={{ borderBottom: "1px solid #EAEBEF" }}>
               <div className="grid grid-cols-2 gap-3">
                 <InfoRow label="Customer" value={detail.customer.full_name} />
                 <InfoRow label="Agent" value={detail.agent_name ?? "Unassigned"} />
@@ -150,7 +162,7 @@ function CaseDetailModal({ caseId, onClose }: { caseId: string; onClose: () => v
               </div>
 
               {/* Financial summary */}
-              <div className="mt-4 grid grid-cols-3 gap-3">
+              <div className="mt-4 grid grid-cols-3 gap-2 sm:gap-3">
                 <AmountCard label="Target" amount={detail.target_amount} color="text-slate-900" />
                 <AmountCard label="Collected" amount={detail.collected_amount} color="text-success-600" />
                 <AmountCard label="Outstanding" amount={detail.loan.total_outstanding} color="text-danger-600" />
@@ -171,8 +183,11 @@ function CaseDetailModal({ caseId, onClose }: { caseId: string; onClose: () => v
               )}
             </div>
 
-            {/* Tabs */}
-            <div className="flex overflow-x-auto" style={{ borderBottom: "1px solid #EAEBEF", background: "#fff" }}>
+            {/* Tabs — sticky so they stay reachable while a long visit list scrolls */}
+            <div
+              className="flex overflow-x-auto scrollbar-hide sticky top-0 z-10"
+              style={{ borderBottom: "1px solid #EAEBEF", background: "#fff" }}
+            >
               {([
                 { key: "visits",   label: `Visits (${detail.visits.length})` },
                 { key: "payments", label: `Payments (${detail.payments.length})` },
@@ -182,7 +197,8 @@ function CaseDetailModal({ caseId, onClose }: { caseId: string; onClose: () => v
                 <button
                   key={t.key}
                   onClick={() => setTab(t.key as typeof tab)}
-                  className="flex-shrink-0 py-3 px-4 text-xs font-semibold transition-colors whitespace-nowrap"
+                  aria-current={tab === t.key}
+                  className="tap-target-h flex-shrink-0 py-3 px-4 text-xs font-semibold transition-colors whitespace-nowrap"
                   style={{
                     borderBottom: tab === t.key ? "2px solid #1677FF" : "2px solid transparent",
                     color: tab === t.key ? "#1677FF" : "#6B6D76",
@@ -195,7 +211,7 @@ function CaseDetailModal({ caseId, onClose }: { caseId: string; onClose: () => v
             </div>
 
             {/* Tab content */}
-            <div className="px-5 py-4 space-y-3">
+            <div className="px-4 sm:px-5 py-4 space-y-3">
               {tab === "visits" && (
                 detail.visits.length === 0 ? (
                   <EmptyState text="No visits recorded yet" />
@@ -209,20 +225,36 @@ function CaseDetailModal({ caseId, onClose }: { caseId: string; onClose: () => v
                   <EmptyState text="No payments collected" />
                 ) : (
                   <div className="space-y-2">
-                    <div className="grid grid-cols-12 text-xs font-semibold uppercase px-2 pb-1" style={{ color: "#6B6D76" }}>
+                    {/* Column headers only make sense once the row is a grid */}
+                    <div className="hidden sm:grid grid-cols-12 text-xs font-semibold uppercase px-2 pb-1" style={{ color: "#6B6D76" }}>
                       <span className="col-span-4">Receipt</span>
                       <span className="col-span-3">Mode</span>
                       <span className="col-span-3 text-right">Amount</span>
                       <span className="col-span-2 text-right">Date</span>
                     </div>
                     {detail.payments.map((p) => (
-                      <div key={p.id} className="grid grid-cols-12 text-sm items-center rounded-xl px-3 py-2.5" style={{ background: "#F5F6F9" }}>
-                        <span className="col-span-4 font-mono text-xs" style={{ color: "#6B6D76" }}>{p.receipt_number}</span>
-                        <span className="col-span-3 text-xs" style={{ color: "#6B6D76" }}>{p.mode.replace("_", " ")}</span>
-                        <span className="col-span-3 text-right font-bold text-success-600">
-                          ₹{p.amount.toLocaleString("en-IN")}
-                        </span>
-                        <span className="col-span-2 text-right text-xs" style={{ color: "#6B6D76" }}>{fmtDate(p.payment_date)}</span>
+                      <div
+                        key={p.id}
+                        // Below sm this is a stacked block: amount and mode on
+                        // one line, receipt and date beneath. A 4-column split
+                        // of ~260px gives each field ~60px, which clips the
+                        // receipt number and the amount alike.
+                        className="sm:grid sm:grid-cols-12 text-sm sm:items-center rounded-xl px-3 py-2.5"
+                        style={{ background: "#F5F6F9" }}
+                      >
+                        {/* col-start pins each field to its header column, so the
+                            mobile-first DOM order (amount first) does not shuffle
+                            the desktop grid. */}
+                        <div className="flex items-baseline justify-between gap-2 sm:contents">
+                          <span className="sm:col-start-8 sm:col-span-3 sm:text-right font-bold text-success-600">
+                            ₹{p.amount.toLocaleString("en-IN")}
+                          </span>
+                          <span className="sm:col-start-5 sm:col-span-3 sm:row-start-1 text-xs" style={{ color: "#6B6D76" }}>{p.mode.replace("_", " ")}</span>
+                        </div>
+                        <div className="flex items-baseline justify-between gap-2 mt-1 sm:mt-0 sm:contents">
+                          <span className="sm:col-start-1 sm:col-span-4 sm:row-start-1 font-mono text-xs truncate" style={{ color: "#6B6D76" }}>{p.receipt_number}</span>
+                          <span className="sm:col-start-11 sm:col-span-2 sm:row-start-1 sm:text-right text-xs whitespace-nowrap" style={{ color: "#6B6D76" }}>{fmtDate(p.payment_date)}</span>
+                        </div>
                       </div>
                     ))}
                     <div className="flex justify-end pt-2" style={{ borderTop: "1px solid #EAEBEF" }}>
@@ -300,7 +332,9 @@ function CaseDetailModal({ caseId, onClose }: { caseId: string; onClose: () => v
       </div>
 
       <style>{`
-        @keyframes scaleIn {
+        /* Same scale-in at every size — it is a centred dialog on phone and
+           laptop alike, so it should not animate like a sheet on one of them. */
+        @keyframes modalIn {
           from { opacity: 0; transform: scale(0.94) translateY(12px); }
           to   { opacity: 1; transform: scale(1) translateY(0); }
         }
@@ -450,6 +484,118 @@ function EmptyState({ text }: { text: string }) {
   );
 }
 
+// ── Case row — 12-col grid on desktop, card below lg ─────────────────────────
+// Both renderings carry the same eight fields. A case already visited today is
+// dimmed to de-emphasise it without hiding it.
+
+function CaseRow({ c, onOpen }: { c: Case; onOpen: () => void }) {
+  // Hover, base tint and the dimmed visited-today state all come from
+  // .row-accent in index.css, shared with the Field Agents table. Real CSS
+  // :hover rather than mouseenter/mouseleave writing inline styles: a row that
+  // scrolls out from under a stationary cursor never fires mouseleave and stays
+  // stuck lit. Nothing here may set background inline — an inline value would
+  // outrank the class rules and :hover would never paint.
+  const accent = c.is_visited_today
+    ? " row-accent-done"
+    : c.is_escalated
+    ? " row-accent-danger"
+    : "";
+
+  const visitedChip = c.is_visited_today && (
+    <span
+      className="font-semibold px-1.5 py-0.5 rounded-full flex-shrink-0"
+      style={{ background: "rgba(34,197,94,0.15)", color: "#15803D", fontSize: 10 }}
+    >
+      ✓ Visited
+    </span>
+  );
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(); } }}
+      className={`row-accent${accent} border-b last:border-0 cursor-pointer block w-full text-left`}
+      style={{ borderColor: "#EAEBEF" }}
+    >
+      {/* ── Desktop table row ── */}
+      <div className="hidden lg:grid grid-cols-12 gap-3 px-4 py-3 text-sm items-center">
+        <div className="col-span-1 min-w-0">
+          <p className="text-xs font-mono font-medium truncate" style={{ color: "#6B6D76" }}>{c.case_number}</p>
+          {/* The bank's short name used to sit under the case number. Dropped
+              here: every case in this list belongs to the same agency, so it
+              repeated on every row without separating anything. The phone card
+              below still shows it, where the row has space to spare. The
+              visited chip keeps this line, rendered only when set so unvisited
+              rows don't carry a blank one. */}
+          {visitedChip && (
+            <div className="flex items-center gap-1.5 mt-0.5 text-xs">{visitedChip}</div>
+          )}
+        </div>
+        <div className="col-span-2 min-w-0">
+          <p className="font-semibold truncate" style={{ color: "#1C1C1F" }}>{c.customer.full_name}</p>
+        </div>
+        {/* City moved out from under the name into its own column, so it lines
+            up down the table instead of reading as a second line of the
+            customer cell. */}
+        <div className="col-span-1 text-xs truncate min-w-0" style={{ color: "#6B6D76" }}>
+          {c.customer.city}
+        </div>
+        <div className="col-span-1"><DPDBadge bucket={c.loan.dpd_bucket} /></div>
+        <div className="col-span-1"><PriorityBadge priority={c.priority} /></div>
+        <div className="col-span-1"><CaseStatusBadge status={c.status} /></div>
+        <div className="col-span-2 min-w-0">
+          <p className="font-semibold truncate" style={{ color: "#1C1C1F" }}>₹{c.target_amount.toLocaleString("en-IN")}</p>
+          {c.collected_amount > 0 && (
+            <p className="text-xs text-success-600 truncate">₹{c.collected_amount.toLocaleString("en-IN")} paid</p>
+          )}
+        </div>
+        <div className="col-span-2 text-xs truncate" style={{ color: "#6B6D76" }}>
+          {c.agent_name ?? <span style={{ color: "#C4C6CF" }}>Unassigned</span>}
+        </div>
+        <div className="col-span-1 text-xs" style={{ color: "#6B6D76" }}>{c.allocation_date}</div>
+      </div>
+
+      {/* ── Mobile card ── */}
+      <div className="lg:hidden px-4 py-3.5">
+        {/* Case number + bank + visited */}
+        <div className="flex items-center gap-2 text-xs mb-1.5">
+          <span className="font-mono font-medium truncate" style={{ color: "#6B6D76" }}>{c.case_number}</span>
+          <span className="truncate" style={{ color: "#94a3b8" }}>{c.loan.bank_name?.split(" ")[0]}</span>
+          {visitedChip}
+          <ChevronRight className="w-4 h-4 ml-auto flex-shrink-0" style={{ color: "#C4C6CF" }} />
+        </div>
+
+        {/* Customer + city */}
+        <p className="font-semibold text-[15px] leading-tight truncate" style={{ color: "#1C1C1F" }}>{c.customer.full_name}</p>
+        <p className="text-xs mt-0.5 truncate" style={{ color: "#6B6D76" }}>{c.customer.city}</p>
+
+        {/* All three badges */}
+        <div className="flex flex-wrap items-center gap-1.5 mt-2">
+          <DPDBadge bucket={c.loan.dpd_bucket} />
+          <PriorityBadge priority={c.priority} />
+          <CaseStatusBadge status={c.status} />
+        </div>
+
+        {/* Money + agent + date */}
+        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 mt-2.5 pt-2.5" style={{ borderTop: "1px dashed #EAEBEF" }}>
+          <div className="min-w-0">
+            <span className="font-semibold text-sm" style={{ color: "#1C1C1F" }}>₹{c.target_amount.toLocaleString("en-IN")}</span>
+            {c.collected_amount > 0 && (
+              <span className="text-xs text-success-600 ml-1.5">₹{c.collected_amount.toLocaleString("en-IN")} paid</span>
+            )}
+          </div>
+          <div className="text-xs text-right min-w-0" style={{ color: "#6B6D76" }}>
+            <span className="truncate">{c.agent_name ?? <span style={{ color: "#C4C6CF" }}>Unassigned</span>}</span>
+            {c.allocation_date && <span className="ml-1.5" style={{ color: "#94a3b8" }}>· {c.allocation_date}</span>}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main cases page ──────────────────────────────────────────────────────────
 
 export default function ManagerCasesPage() {
@@ -462,16 +608,27 @@ export default function ManagerCasesPage() {
   const [bucketFilter, setBucketFilter] = useState("ALL");
   const [dateFrom, setDateFrom] = useState(() => searchParams.get("date_from") || "");
   const [dateTo, setDateTo] = useState(() => searchParams.get("date_to") || "");
-  // Gate the first fetch until the defaults are known, so the page doesn't load
+  // The date filter used to default to [six months ago, today]. Cases are
+  // filtered on allocation_date, whose newest value trails the wall clock on
+  // seeded data, so that window both clipped the earliest days and included a
+  // stretch with nothing in it. The defaults now come from the data itself, via
+  // GET /manager/cases/date-range.
+  //
+  // Gate the first fetch until they are known, so the page doesn't load
   // unfiltered and then immediately reload with the range applied. A URL that
   // already carries dates (the leaderboard drill-through) needs no lookup.
   const [datesReady, setDatesReady] = useState(
     () => Boolean(searchParams.get("date_from") || searchParams.get("date_to"))
   );
+  // The data's own span, kept so the applied-filter chip can tell "the user
+  // narrowed the range" from "these are just the defaults", and so clearing
+  // that chip restores the full span rather than a hardcoded window.
+  const [defaultRange, setDefaultRange] = useState<{ min: string; max: string } | null>(null);
   const [agentId, setAgentId] = useState<string | null>(() => searchParams.get("agent_id"));
   const [agentName] = useState<string | null>(() => searchParams.get("agent_name"));
   const [page, setPage] = useState(0);
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
   const fetchCases = useCallback(
     (pg: number) => {
@@ -504,6 +661,7 @@ export default function ManagerCasesPage() {
         if (cancelled) return;
         if (r.min) setDateFrom(r.min);
         if (r.max) setDateTo(r.max);
+        if (r.min && r.max) setDefaultRange({ min: r.min, max: r.max });
       })
       .catch(() => {})
       .finally(() => { if (!cancelled) setDatesReady(true); });
@@ -531,6 +689,34 @@ export default function ManagerCasesPage() {
 
   const totalPages = Math.ceil(total / PAGE_SIZE);
 
+  // Applied filters, surfaced as removable chips whenever the panel is
+  // collapsed — the panel hides the controls, never the state.
+  const activeFilters = useMemo(() => {
+    const out: Array<{ key: string; label: string; clear: () => void }> = [];
+    if (statusFilter !== "ALL") {
+      out.push({ key: "status", label: statusFilter.replace(/_/g, " "), clear: () => setStatusFilter("ALL") });
+    }
+    if (bucketFilter !== "ALL") {
+      const labels: Record<string, string> = { BUCKET_2: "31–60 DPD", BUCKET_3: "61–90 DPD", NPA: "NPA 90+" };
+      out.push({ key: "bucket", label: labels[bucketFilter] ?? bucketFilter, clear: () => setBucketFilter("ALL") });
+    }
+    // A chip only when the user has actually narrowed the range. The baseline
+    // is the data's own span once we know it; arriving from the leaderboard
+    // with dates in the URL counts as narrowed, and clearing then means "no
+    // date filter" since we never looked the full span up.
+    const narrowed = defaultRange
+      ? dateFrom !== defaultRange.min || dateTo !== defaultRange.max
+      : Boolean(dateFrom || dateTo);
+    if (narrowed) {
+      out.push({
+        key: "dates",
+        label: [dateFrom && fmtDate(dateFrom), dateTo && fmtDate(dateTo)].filter(Boolean).join(" → "),
+        clear: () => { setDateFrom(defaultRange?.min ?? ""); setDateTo(defaultRange?.max ?? ""); },
+      });
+    }
+    return out;
+  }, [statusFilter, bucketFilter, dateFrom, dateTo, defaultRange]);
+
   return (
     <>
       {selectedCaseId && (
@@ -539,9 +725,9 @@ export default function ManagerCasesPage() {
 
       <div className="space-y-4">
         <div className="flex items-center justify-between" style={{ animation: `enter 420ms ${EASE} 0ms both` }}>
-          <div>
-            <h1 className="text-xl font-bold" style={{ color: "#1C1C1F", letterSpacing: "-0.02em" }}>Case Management</h1>
-            <p className="text-sm" style={{ color: "#6B6D76" }}>
+          <div className="min-w-0">
+            <h1 className="font-bold" style={{ color: "#1C1C1F", letterSpacing: "-0.02em", fontSize: "var(--page-title)" }}>Case Management</h1>
+            <p className="text-[13px] sm:text-sm" style={{ color: "#6B6D76" }}>
               {total.toLocaleString()} total cases · {cases.filter((c) => c.is_escalated).length} escalated (this page)
             </p>
           </div>
@@ -566,40 +752,95 @@ export default function ManagerCasesPage() {
           </div>
         )}
 
-        {/* Filters */}
-        <div className="flex flex-wrap gap-3" style={{ animation: `enter 420ms ${EASE} 60ms both` }}>
-          <div className="flex-1 min-w-48">
-            <Input
-              placeholder="Search customer, case no, agent..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              leftIcon={<Search className="w-4 h-4" />}
-            />
+        {/* Filters — search is always visible; the rest collapse below lg so
+            the list starts near the top of a phone screen. Applied filters
+            stay on screen as chips, so collapsing hides controls, not state. */}
+        <div className="space-y-3" style={{ animation: `enter 420ms ${EASE} 60ms both` }}>
+          <div className="flex gap-2 items-start">
+            <div className="flex-1 min-w-0">
+              <Input
+                placeholder="Search customer, case no, agent..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                leftIcon={<Search className="w-4 h-4" />}
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => setFiltersOpen((v) => !v)}
+              aria-expanded={filtersOpen}
+              className="tap-target lg:hidden flex items-center gap-1.5 px-3 rounded-xl text-xs font-semibold flex-shrink-0 transition-colors"
+              style={{
+                background: activeFilters.length > 0 ? "#EEF3FD" : "#fff",
+                border: `1px solid ${activeFilters.length > 0 ? "#C7D9FA" : "hsl(var(--border) / 0.6)"}`,
+                color: activeFilters.length > 0 ? "#0C66E4" : "#6B6D76",
+              }}
+            >
+              <SlidersHorizontal className="w-4 h-4 flex-shrink-0" />
+              Filters
+              {activeFilters.length > 0 && (
+                <span
+                  className="flex items-center justify-center rounded-full text-white font-bold"
+                  style={{ minWidth: 16, height: 16, fontSize: 10, background: "#0C66E4", padding: "0 4px" }}
+                >
+                  {activeFilters.length}
+                </span>
+              )}
+            </button>
           </div>
-          <select className="input w-auto" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-            <option value="ALL">All Status</option>
-            {["ASSIGNED", "IN_PROGRESS", "PTP_SET", "PARTIALLY_PAID", "PAID", "ESCALATED", "CLOSED"].map((s) => (
-              <option key={s} value={s}>{s.replace(/_/g, " ")}</option>
-            ))}
-          </select>
-          <select className="input w-auto" value={bucketFilter} onChange={(e) => setBucketFilter(e.target.value)}>
-            <option value="ALL">All Buckets</option>
-            <option value="BUCKET_2">31–60 DPD</option>
-            <option value="BUCKET_3">61–90 DPD</option>
-            <option value="NPA">NPA 90+</option>
-          </select>
-          <div className="flex items-center gap-2 text-xs" style={{ color: "#6B6D76" }}>
-            <span>From</span>
-            <input type="date" className="input text-xs py-1.5 px-2 w-36" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-            <span>To</span>
-            <input type="date" className="input text-xs py-1.5 px-2 w-36" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+
+          {/* Active-filter chips — visible whether or not the panel is open */}
+          {activeFilters.length > 0 && (
+            <div className="flex flex-wrap gap-2 lg:hidden">
+              {activeFilters.map((f) => (
+                <span
+                  key={f.key}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium"
+                  style={{ background: "#EEF3FD", color: "#0C66E4", border: "1px solid #C7D9FA" }}
+                >
+                  {f.label}
+                  <button
+                    onClick={f.clear}
+                    aria-label={`Remove ${f.label} filter`}
+                    className="flex items-center justify-center"
+                    style={{ width: 16, height: 16, background: "none", border: "none", color: "#0C66E4", cursor: "pointer", padding: 0 }}
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+
+          <div className={`${filtersOpen ? "grid" : "hidden"} lg:flex grid-cols-2 gap-2 lg:gap-3 lg:flex-wrap lg:items-center`}>
+            <select className="input w-full lg:w-auto tap-target-h" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} aria-label="Filter by status">
+              <option value="ALL">All Status</option>
+              {["ASSIGNED", "IN_PROGRESS", "PTP_SET", "PARTIALLY_PAID", "PAID", "ESCALATED", "CLOSED"].map((s) => (
+                <option key={s} value={s}>{s.replace(/_/g, " ")}</option>
+              ))}
+            </select>
+            <select className="input w-full lg:w-auto tap-target-h" value={bucketFilter} onChange={(e) => setBucketFilter(e.target.value)} aria-label="Filter by DPD bucket">
+              <option value="ALL">All Buckets</option>
+              <option value="BUCKET_2">31–60 DPD</option>
+              <option value="BUCKET_3">61–90 DPD</option>
+              <option value="NPA">NPA 90+</option>
+            </select>
+            <label className="flex items-center gap-2 text-xs min-w-0" style={{ color: "#6B6D76" }}>
+              <span className="flex-shrink-0">From</span>
+              <input type="date" className="input text-xs py-1.5 px-2 w-full lg:w-36 tap-target-h" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+            </label>
+            <label className="flex items-center gap-2 text-xs min-w-0" style={{ color: "#6B6D76" }}>
+              <span className="flex-shrink-0">To</span>
+              <input type="date" className="input text-xs py-1.5 px-2 w-full lg:w-36 tap-target-h" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+            </label>
           </div>
         </div>
 
-        {/* Cases table */}
+        {/* Cases — 12-col table on desktop, cards below lg. Same eight fields
+            either way; only the arrangement changes. */}
         <div className="card p-0 overflow-hidden" style={{ animation: `enter 420ms ${EASE} 120ms both` }}>
           <div
-            className="grid grid-cols-12 gap-3 px-4 py-3 border-b text-xs font-semibold uppercase tracking-wide"
+            className="hidden lg:grid grid-cols-12 gap-3 px-4 py-3 border-b text-xs font-semibold uppercase tracking-wide"
             style={{ background: "#F5F6F9", borderColor: "#EAEBEF", color: "#6B6D76" }}
           >
             <span className="col-span-1">Case</span>
@@ -615,88 +856,40 @@ export default function ManagerCasesPage() {
 
           {loading ? (
             Array.from({ length: 10 }).map((_, i) => (
-              <div key={i} className="h-12 border-b animate-pulse" style={{ borderColor: "#EAEBEF", background: "#F5F6F9" }} />
+              <div key={i} className="h-20 lg:h-12 border-b animate-pulse" style={{ borderColor: "#EAEBEF", background: "#F5F6F9" }} />
             ))
           ) : displayed.length === 0 ? (
-            <div className="py-16 text-center" style={{ color: "#6B6D76" }}>
+            <div className="py-16 px-4 text-center" style={{ color: "#6B6D76" }}>
+              <FileText className="w-8 h-8 mx-auto mb-2 opacity-30" />
               <p className="text-sm">No cases match the current filters</p>
+              <p className="text-xs mt-1" style={{ color: "#94a3b8" }}>Try widening the date range or clearing a filter.</p>
             </div>
           ) : (
-            displayed.map((c) => (
-              // Same hover treatment as the Field Agents table — .row-accent in
-              // index.css. Real CSS :hover rather than mouseenter/mouseleave: a
-              // row that scrolls out from under a stationary cursor never fires
-              // mouseleave and stays stuck lit. Base tint and the dimmed
-              // visited-today state moved into the class too; leaving them
-              // inline would outrank :hover.
-              <div
-                key={c.id}
-                onClick={() => setSelectedCaseId(c.id)}
-                className={`grid grid-cols-12 gap-3 px-4 py-3 border-b text-sm items-center cursor-pointer row-accent${
-                  c.is_visited_today ? " row-accent-done" : c.is_escalated ? " row-accent-danger" : ""
-                }`}
-                style={{ borderColor: "#EAEBEF" }}
-              >
-                <div className="col-span-1">
-                  <p className="text-xs font-mono font-medium" style={{ color: "#6B6D76" }}>{c.case_number}</p>
-                  {/* The bank's short name used to sit under the case number.
-                      Dropped: every case in this list belongs to the same
-                      agency, so it repeated on every row without separating
-                      anything. The visited chip keeps that line, now rendered
-                      only when set so unvisited rows don't carry a blank one. */}
-                  {c.is_visited_today && (
-                    <div className="flex items-center gap-1.5 mt-0.5">
-                      <span className="text-xs font-semibold px-1.5 py-0.5 rounded-full" style={{ background: "rgba(34,197,94,0.15)", color: "#15803D", fontSize: 10 }}>✓ Visited</span>
-                    </div>
-                  )}
-                </div>
-                <div className="col-span-2 min-w-0">
-                  <p className="font-semibold truncate" style={{ color: "#1C1C1F" }}>{c.customer.full_name}</p>
-                </div>
-                {/* City moved out from under the name into its own column, so it
-                    lines up down the table instead of reading as a second line
-                    of the customer cell. */}
-                <div className="col-span-1 text-xs truncate" style={{ color: "#6B6D76" }}>
-                  {c.customer.city}
-                </div>
-                <div className="col-span-1"><DPDBadge bucket={c.loan.dpd_bucket} /></div>
-                <div className="col-span-1"><PriorityBadge priority={c.priority} /></div>
-                <div className="col-span-1"><CaseStatusBadge status={c.status} /></div>
-                <div className="col-span-2">
-                  <p className="font-semibold" style={{ color: "#1C1C1F" }}>₹{c.target_amount.toLocaleString("en-IN")}</p>
-                  {c.collected_amount > 0 && (
-                    <p className="text-xs text-success-600">₹{c.collected_amount.toLocaleString("en-IN")} paid</p>
-                  )}
-                </div>
-                <div className="col-span-2 text-xs truncate" style={{ color: "#6B6D76" }}>
-                  {c.agent_name ?? <span style={{ color: "#C4C6CF" }}>Unassigned</span>}
-                </div>
-                <div className="col-span-1 text-xs" style={{ color: "#6B6D76" }}>{c.allocation_date}</div>
-              </div>
-            ))
+            displayed.map((c) => <CaseRow key={c.id} c={c} onOpen={() => setSelectedCaseId(c.id)} />)
           )}
         </div>
 
         {/* Pagination */}
         {totalPages > 1 && (
-          <div className="flex items-center justify-between text-sm">
-            <span style={{ color: "#6B6D76" }}>
+          // Count above the controls on a phone; single row once there is room.
+          <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-2 text-sm">
+            <span className="text-xs sm:text-sm text-center sm:text-left" style={{ color: "#6B6D76" }}>
               Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, total)} of {total}
             </span>
-            <div className="flex gap-2">
+            <div className="flex items-center gap-2 justify-between sm:justify-end">
               <button
                 disabled={page === 0}
-                onClick={() => { const np = page - 1; setPage(np); fetchCases(np); }}
-                className="px-3 py-1.5 rounded-xl border text-xs font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                onClick={() => { const np = page - 1; setPage(np); fetchCases(np); window.scrollTo({ top: 0 }); }}
+                className="tap-target flex-1 sm:flex-none px-4 rounded-xl border text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                 style={{ borderColor: "#EAEBEF", color: "#6B6D76" }}
               >
                 Previous
               </button>
-              <span className="px-3 py-1.5 text-xs" style={{ color: "#6B6D76" }}>{page + 1} / {totalPages}</span>
+              <span className="px-2 text-xs whitespace-nowrap flex-shrink-0" style={{ color: "#6B6D76" }}>{page + 1} / {totalPages}</span>
               <button
                 disabled={page >= totalPages - 1}
-                onClick={() => { const np = page + 1; setPage(np); fetchCases(np); }}
-                className="px-3 py-1.5 rounded-xl border text-xs font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                onClick={() => { const np = page + 1; setPage(np); fetchCases(np); window.scrollTo({ top: 0 }); }}
+                className="tap-target flex-1 sm:flex-none px-4 rounded-xl border text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                 style={{ borderColor: "#EAEBEF", color: "#6B6D76" }}
               >
                 Next

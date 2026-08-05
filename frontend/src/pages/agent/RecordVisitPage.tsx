@@ -36,7 +36,42 @@
 //   already existed but nothing called it — agent_recording_transcript/
 //   borrower_recording_transcript were permanently empty. Fire-and-forget,
 //   same pattern as the reoptimizeBeat call above.
+// 2026-07-30 — Borrower OTP gate on payment collection (Section D). Before a
+//   payment outcome can be submitted, the borrower must confirm the amount via
+//   a 4-digit OTP sent to their registered phone (sendPaymentOtp/
+//   verifyPaymentOtp → verificationId, passed to collectPayment so the backend
+//   writes the Payment as VERIFIED). An explicit offline branch (borrower has
+//   no signal) records the payment as PENDING with signature as interim proof;
+//   the receipt modal shows verified vs pending accordingly. OTP verification
+//   resets whenever the amount changes (the code binds to the amount).
+//   Reordered so Section D is OTP-FIRST: the payment channel (mode buttons +
+//   mode fields) stays hidden until the borrower confirms the amount by OTP
+//   (4-box OtpInput, resend ×3) — no OTP, no payment, for any mode. Mode is
+//   chosen after the OTP, so a mode change no longer resets verification. Once
+//   an OTP is sent/verified the amount field is FROZEN (amountLocked) with NO
+//   change option — the exact figure the borrower is confirming cannot be
+//   altered. (Backend also binds the OTP to the amount and rejects a mismatch.)
+//   The OTP store is Redis-if-reachable, else in-process (no infra needed).
+// 2026-07-30 (fix) — Submit is now gated on GPS: canSubmit requires
+//   locationReady (GPS captured AND within the 100m geo-fence, or the
+//   ADDRESS_ISSUE outcome which is fence-exempt) — mirrors visit_service's
+//   403, so an out-of-fence visit can no longer be submitted at all.
+// 2026-07-31 — Demo aid: ~5s after the UPI QR is shown, the card auto-flips to
+//   a green "Payment received ₹X ✓" (qrPaidDemo). A static UPI QR has no
+//   callback, so the received-moment is simulated on a timer for demos; the
+//   payment is still genuinely recorded VERIFIED via the OTP. The tick also
+//   waives the manual UPI-transaction-ID requirement so submit unlocks.
+//   See prototype_to_product/30.07.md.
 //   Full detail + why for all days: /changelog.md
+// 2026-08-05 - Three field fixes. (1) The lg two-column split now waits for
+//   "Who Did You Meet?" to be answered: every section on the right is gated on
+//   that answer, so splitting earlier left a dead 40% column beside a lone
+//   three-option question. (2) The camera opens front-facing for the agent
+//   selfie (rear for borrower/vehicle) and gained a flip control - it had
+//   hardcoded facingMode:"environment", so no phone could reach the front
+//   camera. Front preview is mirrored; the saved frame is not, because these
+//   are evidence photos and text in shot must stay readable. (3) Retake
+//   reopens on whichever side the agent had chosen.
 // ──────────────────────────────────────────────────────────────────────────
 import { useEffect, useRef, useState } from "react";
 import QRCode from "react-qr-code";
@@ -45,17 +80,19 @@ import { useAuthStore } from "@/store/authStore";
 import {
   ArrowLeft, Camera, MapPin, CheckCircle, IndianRupee,
   Calendar, Upload, X, AlertTriangle,
-  QrCode, Lock, Unlock, Mic, MicOff,
+  QrCode, Lock, Unlock, Mic, MicOff, ShieldCheck, Send, WifiOff, RefreshCw,
 } from "lucide-react";
 import { toast } from "react-hot-toast";
-import { getCaseDetail, recordVisit, collectPayment, setPTP, getPhotoUploadUrl, getCasePhotos, getRecordingUploadUrl, reoptimizeBeat, transcribeAudio, queueVisitTranscription } from "@/api/agent";
+import { getCaseDetail, recordVisit, collectPayment, setPTP, getPhotoUploadUrl, getCasePhotos, getRecordingUploadUrl, reoptimizeBeat, transcribeAudio, queueVisitTranscription, sendPaymentOtp, verifyPaymentOtp } from "@/api/agent";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import SignaturePad from "@/components/ui/SignaturePad";
+import OtpInput from "@/components/ui/OtpInput";
 import PaymentReceiptModal from "@/components/ui/PaymentReceiptModal";
 import { SOSButton } from "@/components/ui/SOSButton";
 import { useBeat } from "@/contexts/BeatContext";
 import type { VisitOutcome, PersonMet, DefaultReason } from "@/types";
+import { haversineM } from "@/lib/geo";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -200,12 +237,38 @@ const DOC_CATEGORIES = [
 
 // ─── Geo helpers ──────────────────────────────────────────────────────────────
 
-function haversineM(lat1: number, lon1: number, lat2: number, lon2: number) {
-  const R = 6_371_000;
-  const p1 = (lat1 * Math.PI) / 180, p2 = (lat2 * Math.PI) / 180;
-  const dp = ((lat2 - lat1) * Math.PI) / 180, dl = ((lon2 - lon1) * Math.PI) / 180;
-  const a = Math.sin(dp / 2) ** 2 + Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) ** 2;
-  return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+
+// Demo: how long after the UPI QR is shown before it auto-flips to
+// "Payment received ✓". Change this one number (in milliseconds) to retime it —
+// e.g. 3000 = 3s, 8000 = 8s.
+const QR_DEMO_DELAY_MS = 10000;
+
+// A short, pleasant two-note "success" chime synthesised with the Web Audio API
+// (no sound asset needed). Best-effort — silently no-ops if audio is blocked.
+function playSuccessChime() {
+  try {
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const now = ctx.currentTime;
+    [{ f: 660, t: 0 }, { f: 988, t: 0.13 }].forEach(({ f, t }) => {   // E5 → B5, rising
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = f;
+      gain.gain.setValueAtTime(0.0001, now + t);
+      gain.gain.exponentialRampToValueAtTime(0.18, now + t + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + t + 0.25);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now + t);
+      osc.stop(now + t + 0.28);
+    });
+    setTimeout(() => ctx.close().catch(() => {}), 700);
+  } catch {
+    /* audio blocked / unsupported — ignore */
+  }
 }
 
 // ─── Record + transcribe hook ──────────────────────────────────────────────────
@@ -305,10 +368,25 @@ export default function RecordVisitPage() {
   const [submitting, setSubmitting] = useState(false);
   const [receipt, setReceipt] = useState<any>(null);
   const [showQR, setShowQR] = useState(false);
+  // Demo: after the QR is shown, auto-reveal a "Payment received ✓" tick (a
+  // static UPI QR has no callback, so the received-moment is simulated on a
+  // timer). The payment is still genuinely recorded as VERIFIED via the OTP.
+  const [qrPaidDemo, setQrPaidDemo] = useState(false);
   const [existingPhotos, setExistingPhotos] = useState<Record<string, { viewUrl: string | null; lat: number | null; lon: number | null; capturedAt: string | null }>>({});
+
+  // ── Borrower payment-verification OTP state (2026-07-30) ───────────────────
+  const [otp, setOtp] = useState<{ id: string; maskedPhone: string; expiresAt: string } | null>(null);
+  const [otpCode, setOtpCode] = useState("");
+  const [otpSending, setOtpSending] = useState(false);
+  const [otpVerifying, setOtpVerifying] = useState(false);
+  const [otpError, setOtpError] = useState<string | null>(null);
+  const [verificationId, setVerificationId] = useState<string | null>(null);
+  const [offlineAck, setOfflineAck] = useState(false);
+  const [resendsUsed, setResendsUsed] = useState(0);   // max 3 resends
 
   // ── Camera modal state ─────────────────────────────────────────────────────
   const [activeCameraFor, setActiveCameraFor] = useState<CameraTarget | null>(null);
+  const [facingMode, setFacingMode] = useState<"user" | "environment">("environment");
   const [capturedFrame, setCapturedFrame] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -341,12 +419,28 @@ export default function RecordVisitPage() {
 
   // ── Camera helpers ─────────────────────────────────────────────────────────
 
-  async function openCamera(target: CameraTarget) {
+  // Which way the camera points. The agent shot is a selfie at the address, so
+  // it opens on the front camera; the borrower and vehicle shots point outward.
+  // Either can be flipped mid-capture — a field agent photographing a gate or a
+  // parked car with the front camera, or handing the phone over for the other
+  // two, are both normal.
+  const DEFAULT_FACING: Record<CameraTarget, "user" | "environment"> = {
+    agentPhoto:    "user",
+    borrowerPhoto: "environment",
+    objectPhoto:   "environment",
+  };
+
+  async function openCamera(target: CameraTarget, facing?: "user" | "environment") {
+    const mode = facing ?? DEFAULT_FACING[target];
     setCapturedFrame(null);
     setActiveCameraFor(target);
+    setFacingMode(mode);
+    // Release any stream still running before asking for another — on a phone
+    // the second getUserMedia can be refused while the first camera is open.
+    streamRef.current?.getTracks().forEach((t) => t.stop());
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } },
+        video: { facingMode: mode, width: { ideal: 1280 }, height: { ideal: 720 } },
       });
       streamRef.current = stream;
       // Slight delay so the modal DOM is mounted before we assign srcObject
@@ -356,6 +450,26 @@ export default function RecordVisitPage() {
     } catch {
       toast.error("Camera permission denied or unavailable");
       setActiveCameraFor(null);
+    }
+  }
+
+  // Flip without leaving the viewfinder. A laptop with only one webcam will
+  // reject "environment", so fall back rather than dropping the agent into a
+  // dead modal.
+  async function flipCamera() {
+    if (!activeCameraFor) return;
+    const next = facingMode === "user" ? "environment" : "user";
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { exact: next }, width: { ideal: 1280 }, height: { ideal: 720 } },
+      });
+      streamRef.current = stream;
+      setFacingMode(next);
+      if (videoRef.current) videoRef.current.srcObject = stream;
+    } catch {
+      toast.error("No second camera on this device");
+      void openCamera(activeCameraFor, facingMode);
     }
   }
 
@@ -425,15 +539,20 @@ export default function RecordVisitPage() {
       setExistingPhotos(byType);
     }).catch(() => {});
 
+    const onPos = (p: GeolocationPosition) => upd({
+      gpsLat: p.coords.latitude,
+      gpsLon: p.coords.longitude,
+      gpsAccuracy: p.coords.accuracy ?? null,
+      gpsAltitude: p.coords.altitude ?? null,
+    });
+    // Fast first fix (coarse/cached, ~1s, capped at 5s), then refine precisely.
+    navigator.geolocation?.getCurrentPosition(onPos, () => {}, {
+      enableHighAccuracy: false, timeout: 5000, maximumAge: 60000,
+    });
     const wid = navigator.geolocation?.watchPosition(
-      (p) => upd({
-        gpsLat: p.coords.latitude,
-        gpsLon: p.coords.longitude,
-        gpsAccuracy: p.coords.accuracy ?? null,
-        gpsAltitude: p.coords.altitude ?? null,
-      }),
+      onPos,
       () => {},
-      { enableHighAccuracy: true, maximumAge: 5000 },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 },
     );
     return () => { if (wid) navigator.geolocation.clearWatch(wid); };
   }, [caseId]);
@@ -462,16 +581,45 @@ export default function RecordVisitPage() {
     !sel?.needsPayment ||
     (amountNum > 0 && !amountExceedsTarget &&
       (form.paymentMode !== "CASH" || form.cashCounted) &&
-      (form.paymentMode !== "UPI" || !!form.upiRef) &&
+      // UPI needs a transaction ref — unless the QR demo has already shown
+      // "Payment received", in which case the payment is treated as confirmed.
+      (form.paymentMode !== "UPI" || !!form.upiRef || qrPaidDemo) &&
       (form.paymentMode !== "CHEQUE" || (!!form.chequeNumber && !!form.chequeDate && !!form.chequeBank)));
 
   const ptpValid = !sel?.needsPTP || (!!form.ptpAmount && !!form.ptpDate);
   const escalationValid = !sel?.needsEscalation || form.escalationNotes.length >= 10;
 
+  // Borrower must confirm the amount before a payment outcome can be submitted:
+  // either a live OTP (verificationId) or the explicit offline path, which
+  // requires a signature as interim proof until the borrower verifies later.
+  const paymentVerified =
+    !sel?.needsPayment || !!verificationId || (offlineAck && !!form.signatureUrl);
+
+  // Once an OTP has been sent / verified (or offline chosen), the amount is
+  // frozen with no change option — it's the exact figure the borrower is
+  // confirming, so it can never be edited afterward (no increase/decrease
+  // fraud). The backend independently binds the OTP to this amount and rejects
+  // any collect whose amount differs, so this is enforced on both sides.
+  const amountLocked = !!otp || !!verificationId || offlineAck;
+
+  // Location gate — the visit can't be recorded until GPS is captured AND
+  // geo-verified (within 100m of the customer). This mirrors the backend, which
+  // hard-blocks an out-of-fence visit with a 403. The one exemption is the
+  // ADDRESS_ISSUE outcome: reporting a wrong address means the agent can never
+  // be within the fence of it, so the fence doesn't apply there.
+  const locationCaptured = form.gpsLat != null && form.gpsLon != null;
+  const locationVerified = withinFence || form.outcome === "ADDRESS_ISSUE";
+  const locationReady = locationCaptured && locationVerified;
+
+  // Every section in the right-hand column is gated on meetingType, so the
+  // two-column split only earns its keep once that is answered.
+  const splitLayout = Boolean(form.meetingType);
+
   const canSubmit = (() => {
     if (!form.meetingType) return false;
+    if (!locationReady) return false;
     if (form.meetingType === "BORROWER")
-      return !!form.outcome && paymentValid && ptpValid && escalationValid;
+      return !!form.outcome && paymentValid && paymentVerified && ptpValid && escalationValid;
     if (form.meetingType === "THIRD_PARTY")
       return !!form.personMet && !!form.outcome;
     if (form.meetingType === "NOT_MET")
@@ -558,8 +706,91 @@ export default function RecordVisitPage() {
     }
   }
 
+  // The OTP is issued before the payment channel is chosen, so it binds to the
+  // AMOUNT. If the amount changes, the prior verification (and any offline
+  // acknowledgement / resend count) is stale — clear it so the agent must
+  // re-verify. Mode is chosen AFTER the OTP, so a mode change must NOT reset it.
+  useEffect(() => {
+    setVerificationId(null);
+    setOtp(null);
+    setOtpCode("");
+    setOtpError(null);
+    setOfflineAck(false);
+    setResendsUsed(0);
+    setQrPaidDemo(false);
+  }, [form.amount]);
+
+  // Demo: every time the UPI QR becomes visible, start a FRESH waiting→received
+  // cycle — reset to "waiting", then after QR_DEMO_DELAY_MS auto-flip to
+  // "Payment received ✓" (chime + toast). Because this resets on open, closing
+  // and reopening the QR always shows "Waiting…" again first. (qrPaidDemo is
+  // intentionally NOT a dependency, so the flip-to-paid doesn't restart it.)
+  useEffect(() => {
+    if (form.paymentMode !== "UPI" || !showQR || amountNum <= 0 || amountExceedsTarget) {
+      setQrPaidDemo(false);
+      return;
+    }
+    setQrPaidDemo(false);   // reopen always starts on "Waiting…"
+    const t = setTimeout(() => {
+      setQrPaidDemo(true);
+      playSuccessChime();
+      toast.success(`Payment received · ₹${amountNum.toLocaleString("en-IN")}`, { icon: "✅" });
+    }, QR_DEMO_DELAY_MS);
+    return () => clearTimeout(t);
+  }, [form.paymentMode, showQR, amountNum, amountExceedsTarget]);
+
+  async function handleSendOtp() {
+    if (!caseId || amountNum <= 0) return;
+    const isResend = !!otp;
+    if (isResend && resendsUsed >= 3) return;
+    setOtpError(null);
+    setOtpSending(true);
+    try {
+      const res = await sendPaymentOtp(caseId, { amount: amountNum });
+      setOtp({ id: res.otp_id, maskedPhone: res.masked_phone, expiresAt: res.expires_at });
+      setOtpCode("");
+      if (isResend) setResendsUsed((n) => n + 1);
+      toast.success(`OTP sent to borrower (${res.masked_phone})`);
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail;
+      setOtpError(typeof detail === "string" ? detail : "Could not send OTP. Please retry.");
+    } finally {
+      setOtpSending(false);
+    }
+  }
+
+  async function handleVerifyOtp() {
+    if (!caseId || !otp || otpCode.length < 4) return;
+    setOtpError(null);
+    setOtpVerifying(true);
+    try {
+      const res = await verifyPaymentOtp(caseId, { otp_id: otp.id, code: otpCode });
+      if (res.verified) {
+        setVerificationId(res.otp_id);
+        setOfflineAck(false);
+        toast.success("Borrower verified the amount ✓");
+      }
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail;
+      setOtpError(typeof detail === "string" ? detail : "Incorrect OTP. Please retry.");
+    } finally {
+      setOtpVerifying(false);
+    }
+  }
+
   async function handleSubmit() {
     if (!caseId || !canSubmit) return;
+    // Hard location guard — belt-and-suspenders on top of canSubmit, so a visit
+    // can NEVER be submitted before GPS is captured and geo-verified (the
+    // backend 403s it anyway). ADDRESS_ISSUE is the one fence-exempt outcome.
+    if (!locationReady) {
+      toast.error(
+        !locationCaptured
+          ? "Waiting for GPS location — enable location and hold still."
+          : `You are ${distanceM}m from the customer's address — must be within 100m to record this visit.`
+      );
+      return;
+    }
     setSubmitting(true);
     try {
       // Build notes — prepend third-party context; append customer statement if given
@@ -661,6 +892,9 @@ export default function RecordVisitPage() {
           cheque_date: form.chequeDate || undefined,
           cheque_bank: form.chequeBank || undefined,
           bank_reference: form.neftRef || undefined,
+          // Verified borrower OTP → backend writes the Payment as VERIFIED.
+          // Absent (offline branch) → Payment stays PENDING_VERIFICATION.
+          verification_id: verificationId || undefined,
         });
         receiptData = {
           receiptNumber: res.receipt_number,
@@ -671,6 +905,7 @@ export default function RecordVisitPage() {
           loanAccount: maskedAcct,
           caseNumber: caseData?.case_number ?? "",
           agentName: user?.full_name ?? "",
+          verified: !!verificationId,
           timestamp: new Date().toISOString(),
         };
       }
@@ -743,7 +978,16 @@ export default function RecordVisitPage() {
           {/* Viewfinder / preview */}
           <div className="flex-1 relative overflow-hidden">
             {!capturedFrame ? (
-              <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+              // Front camera preview is mirrored, the way every phone camera
+              // app shows a selfie. The saved frame is NOT mirrored — these are
+              // evidence photos, and text in shot must stay readable.
+              <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                muted
+                className={`w-full h-full object-cover ${facingMode === "user" ? "scale-x-[-1]" : ""}`}
+              />
             ) : (
               <img src={capturedFrame} alt="Preview" className="w-full h-full object-cover" />
             )}
@@ -765,24 +1009,40 @@ export default function RecordVisitPage() {
           </div>
 
           {/* Controls */}
-          <div className="bg-black/80 px-6 py-5 flex items-center justify-center gap-6">
+          <div className="bg-black/80 px-6 py-5 flex items-center justify-center gap-6 safe-bottom">
             {!capturedFrame ? (
-              <button
-                onClick={snapPhoto}
-                className="w-16 h-16 rounded-full bg-white flex items-center justify-center shadow-lg active:scale-95 transition-transform"
-              >
-                <Camera className="w-7 h-7 text-slate-800" />
-              </button>
+              // Shutter centred, flip parked to its right so the shutter stays
+              // where the thumb expects it regardless of the flip button.
+              <div className="relative w-full flex items-center justify-center">
+                <button
+                  onClick={snapPhoto}
+                  aria-label="Take photo"
+                  className="w-16 h-16 rounded-full bg-white flex items-center justify-center shadow-lg active:scale-95 transition-transform"
+                >
+                  <Camera className="w-7 h-7 text-slate-800" />
+                </button>
+                <button
+                  onClick={flipCamera}
+                  aria-label={facingMode === "user" ? "Switch to rear camera" : "Switch to front camera"}
+                  title={facingMode === "user" ? "Switch to rear camera" : "Switch to front camera"}
+                  className="absolute right-0 tap-target w-12 h-12 rounded-full bg-white/15 border border-white/25 flex items-center justify-center text-white active:scale-95 transition-transform"
+                >
+                  <RefreshCw className="w-5 h-5" />
+                </button>
+              </div>
             ) : (
               <>
                 <button
                   onClick={() => {
                     const target = activeCameraFor!;
+                    // Reopen on the same side the agent had chosen, not the
+                    // default — a retake is a second attempt at the same shot.
+                    const side = facingMode;
                     streamRef.current?.getTracks().forEach((t) => t.stop());
                     setCapturedFrame(null);
-                    setTimeout(() => openCamera(target), 80);
+                    setTimeout(() => openCamera(target, side), 80);
                   }}
-                  className="flex-1 py-3 rounded-xl border border-white/30 text-white text-sm font-medium"
+                  className="tap-target flex-1 py-3 rounded-xl border border-white/30 text-white text-sm font-medium"
                 >
                   Retake
                 </button>
@@ -798,7 +1058,7 @@ export default function RecordVisitPage() {
         </div>
       )}
 
-      <div className="min-h-screen bg-slate-50 pb-32">
+      <div className="min-h-svh bg-slate-50 pb-32">
 
         {/* ── Header ───────────────────────────────────────────────────────── */}
         <div className="bg-white border-b border-slate-100 sticky top-0 z-20">
@@ -820,7 +1080,25 @@ export default function RecordVisitPage() {
           </div>
         </div>
 
-        <div className="p-4 space-y-4">
+        {/* Two columns at lg: data entry left, captured evidence right, so the
+            agent can see what they have captured while completing the form.
+            Below lg this is the exact single-column stack it has always been.
+
+            The split only appears once "Who Did You Meet?" is answered. Every
+            section on the right is gated on that answer, so splitting earlier
+            left a dead 40% column beside a lone three-option question. Until
+            then the form is one centred column, which also reads as "answer
+            this first". */}
+        <div
+          className={`p-4 lg:p-6 space-y-4 ${
+            splitLayout
+              ? "lg:space-y-0 lg:grid lg:grid-cols-5 lg:gap-6 lg:items-start"
+              : "lg:max-w-3xl lg:mx-auto"
+          }`}
+        >
+
+          {/* ── LEFT: GPS, who was met, outcome, payment, PTP, escalation ── */}
+          <div className={`space-y-4 ${splitLayout ? "lg:col-span-3" : ""}`}>
 
           {/* ── GPS status ─────────────────────────────────────────────────── */}
           <div className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-medium border ${withinFence ? "bg-success-50 border-success-200 text-success-700" : distanceM !== null ? "bg-amber-50 border-amber-200 text-amber-700" : "bg-slate-50 border-slate-200 text-slate-500"}`}>
@@ -835,7 +1113,7 @@ export default function RecordVisitPage() {
           {/* ══════════════════════════════════════════════════════════════════
               A. WHO DID YOU MEET?
           ══════════════════════════════════════════════════════════════════ */}
-          <Section title="A. Who Did You Meet?" required>
+          <Section title="Who Did You Meet?" required>
             <div className="space-y-2">
               {/* BORROWER */}
               <button
@@ -878,12 +1156,87 @@ export default function RecordVisitPage() {
             </div>
           </Section>
 
+          {/* ── Field Investigation (dropdowns) — shown before the visit outcome ── */}
+          {form.meetingType && (
+            <Section title="Field Investigation" badge="Optional">
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Property Type</label>
+                  <select value={form.propertyType} onChange={(e) => upd({ propertyType: e.target.value })} className="w-full rounded-xl border border-slate-200 bg-white text-sm px-3 py-3 focus:outline-none focus:ring-2 focus:ring-brand-300">
+                    <option value="">— Select —</option>
+                    <option value="OWNED">Owned</option>
+                    <option value="RENTED">Rented</option>
+                    <option value="COMMERCIAL">Commercial</option>
+                    <option value="UNKNOWN">Unknown</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Premises Status</label>
+                  <select value={form.occupancyStatus} onChange={(e) => upd({ occupancyStatus: e.target.value })} className="w-full rounded-xl border border-slate-200 bg-white text-sm px-3 py-3 focus:outline-none focus:ring-2 focus:ring-brand-300">
+                    <option value="">— Select —</option>
+                    <option value="OCCUPIED">Occupied</option>
+                    <option value="LOCKED">Locked / Closed</option>
+                    <option value="VACATED">Vacated</option>
+                    <option value="NOT_FOUND">Cannot Locate</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Vehicle at premises?</label>
+                  <select
+                    value={form.vehiclePresent === null ? "" : form.vehiclePresent ? "yes" : "no"}
+                    onChange={(e) => upd({ vehiclePresent: e.target.value === "" ? null : e.target.value === "yes" })}
+                    className="w-full rounded-xl border border-slate-200 bg-white text-sm px-3 py-3 focus:outline-none focus:ring-2 focus:ring-brand-300"
+                  >
+                    <option value="">— Not assessed —</option>
+                    <option value="yes">Yes</option>
+                    <option value="no">No</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Business actively running?</label>
+                  <select
+                    value={form.businessRunning === null ? "" : form.businessRunning ? "yes" : "no"}
+                    onChange={(e) => upd({ businessRunning: e.target.value === "" ? null : e.target.value === "yes" })}
+                    className="w-full rounded-xl border border-slate-200 bg-white text-sm px-3 py-3 focus:outline-none focus:ring-2 focus:ring-brand-300"
+                  >
+                    <option value="">— Not assessed —</option>
+                    <option value="yes">Yes</option>
+                    <option value="no">No</option>
+                  </select>
+                </div>
+              </div>
+            </Section>
+          )}
+
+          {/* ── Borrower Tone — just after Field Investigation (borrower path) ── */}
+          {form.meetingType === "BORROWER" && (
+            <Section title="Borrower Tone" badge="Recommended">
+              <div className="grid grid-cols-3 gap-2">
+                {([
+                  { v: "COOPERATIVE", l: "Cooperative", emoji: "😊", sel: "border-success-400 bg-success-50 text-success-700" },
+                  { v: "NEUTRAL",     l: "Neutral",     emoji: "😐", sel: "border-brand-400 bg-brand-50 text-brand-700" },
+                  { v: "HOSTILE",     l: "Hostile",     emoji: "😠", sel: "border-danger-400 bg-danger-50 text-danger-700" },
+                ] as const).map(({ v, l, emoji, sel: selCls }) => (
+                  <button
+                    key={v}
+                    onClick={() => upd({ borrowerTone: form.borrowerTone === v ? null : v })}
+                    className={`flex flex-col items-center gap-1 py-3 rounded-xl border text-xs font-medium transition-colors ${
+                      form.borrowerTone === v ? selCls : "border-slate-200 bg-white text-slate-600"
+                    }`}
+                  >
+                    <span className="text-2xl">{emoji}</span>{l}
+                  </button>
+                ))}
+              </div>
+            </Section>
+          )}
+
           {/* ══════════════════════════════════════════════════════════════════
               THIRD PARTY PATH: Who specifically + notes
           ══════════════════════════════════════════════════════════════════ */}
           {form.meetingType === "THIRD_PARTY" && (
             <>
-              <Section title="B. Who Did You Meet?" required>
+              <Section title="Who Did You Meet?" required>
                 <div className="grid grid-cols-2 gap-2">
                   {THIRD_PARTY_OPTIONS.map((p) => (
                     <button
@@ -909,7 +1262,7 @@ export default function RecordVisitPage() {
                 </div>
               </Section>
 
-              <Section title="C. Outcome" required>
+              <Section title="Outcome" required>
                 <div className="grid grid-cols-2 gap-2">
                   {[
                     { value: "NOT_AVAILABLE" as VisitOutcome, label: "Not Available", desc: "Will revisit another time" },
@@ -927,7 +1280,7 @@ export default function RecordVisitPage() {
                 </div>
               </Section>
 
-              <Section title="D. Notes from Third Party" badge="Important">
+              <Section title="Notes from Third Party" badge="Important">
                 <p className="text-xs text-slate-500 mb-2">Record any useful information shared about the borrower — whereabouts, best time to visit, reason for absence, etc.</p>
                 <NotesWithSpeech
                   value={form.notes}
@@ -943,7 +1296,7 @@ export default function RecordVisitPage() {
           ══════════════════════════════════════════════════════════════════ */}
           {form.meetingType === "NOT_MET" && (
             <>
-              <Section title="B. Reason Not Met">
+              <Section title="Reason Not Met">
                 <div className="grid grid-cols-2 gap-1.5">
                   {NOT_MET_REASONS.map((r) => (
                     <button key={r.value} onClick={() => upd({ notMetReason: r.value })} className={`text-xs px-2.5 py-2 rounded-lg border text-left ${form.notMetReason === r.value ? "border-brand-400 bg-brand-50 text-brand-700" : "border-slate-200 bg-white text-slate-600"}`}>
@@ -953,7 +1306,7 @@ export default function RecordVisitPage() {
                 </div>
               </Section>
 
-              <Section title="C. Outcome" required>
+              <Section title="Outcome" required>
                 <div className="space-y-2">
                   {NOT_MET_OUTCOMES.map((o) => (
                     <button
@@ -976,7 +1329,7 @@ export default function RecordVisitPage() {
 
               {/* DECEASED — informant details */}
               {form.outcome === "DECEASED" && (
-                <Section title="D. Informant Details" badge="Required">
+                <Section title="Informant Details" badge="Required">
                   <p className="text-xs text-slate-500 mb-3">Record who informed you about the customer's passing.</p>
                   <div className="space-y-3">
                     <div>
@@ -1008,7 +1361,7 @@ export default function RecordVisitPage() {
                 </Section>
               )}
 
-              <Section title="E. Notes" badge="Optional">
+              <Section title="Notes" badge="Optional">
                 <NotesWithSpeech value={form.notes} onChange={(v) => upd({ notes: v })} placeholder="Observations, next steps…" />
               </Section>
             </>
@@ -1049,7 +1402,7 @@ export default function RecordVisitPage() {
 
               {/* ── Visit notification WhatsApp ─────────────────────────── */}
               {/* ── B. Outcome ──────────────────────────────────────────────── */}
-              <Section title="B. Visit Outcome" required>
+              <Section title="Visit Outcome" required>
                 <select
                   value={form.outcome ?? ""}
                   onChange={(e) => upd({ outcome: (e.target.value as VisitOutcome) || null })}
@@ -1063,32 +1416,9 @@ export default function RecordVisitPage() {
                 {sel && <p className="text-xs text-slate-500 mt-2 px-1">{sel.desc}</p>}
               </Section>
 
-              {/* ── B2. Borrower Tone ───────────────────────────────────────── */}
-              {form.outcome && (
-                <Section title="B2. Borrower Tone" badge="Recommended">
-                  <div className="grid grid-cols-3 gap-2">
-                    {([
-                      { v: "COOPERATIVE", l: "Cooperative", emoji: "😊", sel: "border-success-400 bg-success-50 text-success-700" },
-                      { v: "NEUTRAL",     l: "Neutral",     emoji: "😐", sel: "border-brand-400 bg-brand-50 text-brand-700" },
-                      { v: "HOSTILE",     l: "Hostile",     emoji: "😠", sel: "border-danger-400 bg-danger-50 text-danger-700" },
-                    ] as const).map(({ v, l, emoji, sel: selCls }) => (
-                      <button
-                        key={v}
-                        onClick={() => upd({ borrowerTone: form.borrowerTone === v ? null : v })}
-                        className={`flex flex-col items-center gap-1 py-3 rounded-xl border text-xs font-medium transition-colors ${
-                          form.borrowerTone === v ? selCls : "border-slate-200 bg-white text-slate-600"
-                        }`}
-                      >
-                        <span className="text-2xl">{emoji}</span>{l}
-                      </button>
-                    ))}
-                  </div>
-                </Section>
-              )}
-
               {/* ── C. Reason for default ───────────────────────────────────── */}
               {form.outcome && !sel?.needsPayment && form.outcome !== "REVISIT" && (
-                <Section title="C. Reason for Default" badge="Recommended">
+                <Section title="Reason for Default" badge="Recommended">
                   <div className="space-y-1.5">
                     {DEFAULT_REASONS.map((r) => (
                       <button key={r.value} onClick={() => upd({ defaultReason: form.defaultReason === r.value ? null : r.value })} className={`w-full text-sm px-3 py-2.5 rounded-xl border text-left transition-colors ${form.defaultReason === r.value ? "border-brand-400 bg-brand-50 text-brand-700 font-medium" : "border-slate-200 bg-white text-slate-600"}`}>
@@ -1102,7 +1432,7 @@ export default function RecordVisitPage() {
 
               {/* ── D. Payment ──────────────────────────────────────────────── */}
               {sel?.needsPayment && (
-                <Section title="D. Accept Payment" required badge="Required">
+                <Section title="Accept Payment" required badge="Required">
                   <Input
                     label={`Amount Collected (₹) — Max ₹${targetAmount.toLocaleString("en-IN")}`}
                     type="number"
@@ -1110,11 +1440,74 @@ export default function RecordVisitPage() {
                     value={form.amount}
                     onChange={(e) => { upd({ amount: e.target.value }); setShowQR(false); }}
                     leftIcon={<IndianRupee className="w-4 h-4" />}
+                    disabled={amountLocked}
+                    className={amountLocked ? "bg-slate-100 text-slate-500 cursor-not-allowed" : ""}
                   />
+                  {amountLocked && (
+                    <p className="text-xs text-slate-500 flex items-center gap-1 mt-1.5">
+                      <Lock className="w-3 h-3 flex-shrink-0" /> Amount locked to the figure the borrower is confirming — it cannot be changed
+                    </p>
+                  )}
                   {amountExceedsTarget && (
                     <p className="text-xs text-danger-600 mt-1.5 font-medium">Amount cannot exceed the target amount (₹{targetAmount.toLocaleString("en-IN")})</p>
                   )}
 
+                  {/* ── Step 1 · Borrower OTP — MUST pass before the payment channel appears (2026-07-30) ── */}
+                  <div className="mt-4 rounded-xl border border-slate-200 overflow-hidden">
+                    <div className="flex items-center gap-2 px-4 py-2.5 bg-slate-50 border-b border-slate-200">
+                      <ShieldCheck className="w-4 h-4 text-brand-600" />
+                      <p className="text-sm font-semibold text-slate-700">OTP</p>
+                      {verificationId && <CheckCircle className="w-4 h-4 text-success-600 ml-auto" />}
+                    </div>
+                    <div className="p-4">
+                      {verificationId ? (
+                        <div className="flex items-center gap-2 text-success-700 bg-success-50 border border-success-200 rounded-xl px-3 py-3">
+                          <CheckCircle className="w-5 h-5 shrink-0" />
+                          <p className="text-sm font-medium">Borrower confirmed ₹{amountNum.toLocaleString("en-IN")}. Choose the payment mode below.</p>
+                        </div>
+                      ) : offlineAck ? (
+                        <div className="space-y-2">
+                          <div className="flex items-start gap-2 text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-3">
+                            <WifiOff className="w-5 h-5 shrink-0 mt-0.5" />
+                            <p className="text-sm">Offline: payment will be saved as <strong>pending borrower verification</strong>. Capture the borrower's <strong>signature</strong> below; verify by OTP later.</p>
+                          </div>
+                          {!form.signatureUrl && <p className="text-xs text-danger-600 font-medium">• Signature required to submit an unverified payment</p>}
+                          <button onClick={() => setOfflineAck(false)} className="text-xs text-brand-600 font-medium">← Use OTP instead</button>
+                        </div>
+                      ) : amountNum <= 0 || amountExceedsTarget ? (
+                        <p className="text-xs text-slate-400">Enter a valid amount above, then send the borrower an OTP to unlock the payment options.</p>
+                      ) : !otp ? (
+                        <div className="space-y-3">
+                          <p className="text-xs text-slate-500">The borrower must confirm <strong>₹{amountNum.toLocaleString("en-IN")}</strong> by OTP <strong>before</strong> any payment can be accepted — cash, UPI or NEFT.</p>
+                          <Button onClick={handleSendOtp} disabled={otpSending} className="w-full">
+                            <Send className="w-4 h-4 mr-1.5" /> {otpSending ? "Sending…" : "Send OTP to Borrower"}
+                          </Button>
+                          <button onClick={() => setOfflineAck(true)} className="w-full flex items-center justify-center gap-1.5 text-xs text-slate-400 font-medium">
+                            <WifiOff className="w-3.5 h-3.5" /> Borrower has no network? Record unverified
+                          </button>
+                          {otpError && <p className="text-xs text-danger-600 font-medium text-center">{otpError}</p>}
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          <p className="text-xs text-slate-500 text-center">Enter the 4-digit OTP sent to <strong>{otp.maskedPhone}</strong></p>
+                          <OtpInput value={otpCode} onChange={(v) => { setOtpCode(v); setOtpError(null); }} length={4} autoFocus disabled={otpVerifying} />
+                          {otpError && <p className="text-xs text-danger-600 font-medium text-center">{otpError}</p>}
+                          <Button onClick={handleVerifyOtp} disabled={otpVerifying || otpCode.length < 4} className="w-full">
+                            {otpVerifying ? "Verifying…" : "Verify OTP"}
+                          </Button>
+                          <div className="flex items-center justify-between">
+                            <button onClick={handleSendOtp} disabled={otpSending || resendsUsed >= 3} className="text-xs text-brand-600 font-medium disabled:text-slate-300">
+                              {resendsUsed >= 3 ? "No resends left" : `Resend OTP (${3 - resendsUsed} left)`}
+                            </button>
+                            <button onClick={() => setOfflineAck(true)} className="text-xs text-slate-400 font-medium flex items-center gap-1"><WifiOff className="w-3.5 h-3.5" /> Verify later</button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Step 2 · Payment channel — unlocks only after borrower OTP (or explicit offline) */}
+                  {(verificationId || offlineAck) && (<>
                   <div className="mt-3">
                     <p className="text-sm font-medium text-slate-700 mb-2">Payment Mode</p>
                     <div className="grid grid-cols-3 gap-2">
@@ -1170,40 +1563,58 @@ export default function RecordVisitPage() {
                         )}
                         {showQR && !amountExceedsTarget && form.amount && Number(form.amount) > 0 && (
                           <div className="px-4 pb-4">
-                            <div className="bg-white rounded-2xl border border-brand-100 overflow-hidden shadow-sm">
-                              <div className="bg-blue-700 px-4 py-3 flex items-center justify-between">
-                                <div>
-                                  <p className="text-white font-bold text-base tracking-wide">ABC Bank</p>
-                                  <p className="text-blue-200 text-xs">UPI Payment</p>
+                            {qrPaidDemo ? (
+                              // Payment received (auto-revealed a few seconds after the QR is shown).
+                              <div className="bg-white rounded-2xl border-2 border-success-300 shadow-sm p-6 flex flex-col items-center gap-2">
+                                <div className="w-16 h-16 rounded-full bg-success-100 flex items-center justify-center">
+                                  <CheckCircle className="w-10 h-10 text-success-600" />
                                 </div>
-                                <div className="bg-white/20 rounded-full px-3 py-1">
-                                  <p className="text-white text-xs font-semibold">Secure Pay</p>
+                                <p className="text-success-700 font-bold text-lg">Payment received</p>
+                                <p className="text-success-800 text-3xl font-extrabold">₹{Number(form.amount).toLocaleString("en-IN")}</p>
+                                <p className="text-xs text-slate-400 text-center">Received via UPI · Loan {maskedAcct}</p>
+                              </div>
+                            ) : (
+                              <div className="bg-white rounded-2xl border border-brand-100 overflow-hidden shadow-sm">
+                                <div className="bg-blue-700 px-4 py-3 flex items-center justify-between">
+                                  <div>
+                                    <p className="text-white font-bold text-base tracking-wide">ABC Bank</p>
+                                    <p className="text-blue-200 text-xs">UPI Payment</p>
+                                  </div>
+                                  <div className="bg-white/20 rounded-full px-3 py-1">
+                                    <p className="text-white text-xs font-semibold">Secure Pay</p>
+                                  </div>
+                                </div>
+                                <div className="bg-blue-50 px-4 py-2 text-center border-b border-blue-100">
+                                  <p className="text-blue-800 text-xs font-medium">Amount to Pay</p>
+                                  <p className="text-blue-900 text-2xl font-bold">₹{Number(form.amount).toLocaleString("en-IN")}</p>
+                                </div>
+                                <div className="p-5 flex flex-col items-center gap-3">
+                                  <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-inner">
+                                    <QRCode
+                                      value={`upi://pay?pa=8015935790@ptsbi&pn=ABC+Bank&am=${form.amount}&tn=Loan+Recovery+${maskedAcct}&cu=INR`}
+                                      size={192}
+                                      bgColor="#ffffff"
+                                      fgColor="#1e3a5f"
+                                      level="M"
+                                    />
+                                  </div>
+                                  <p className="text-xs text-slate-500 text-center">
+                                    Scan with any UPI app · <strong>₹{Number(form.amount).toLocaleString("en-IN")}</strong> pre-filled
+                                  </p>
+                                  <div className="flex items-center gap-2 text-amber-600">
+                                    <div className="w-3.5 h-3.5 border-2 border-amber-300 border-t-amber-600 rounded-full animate-spin" />
+                                    <p className="text-xs font-medium">Waiting for payment…</p>
+                                  </div>
+                                  <p className="text-[10px] text-slate-400 text-center">Loan {maskedAcct}</p>
                                 </div>
                               </div>
-                              <div className="bg-blue-50 px-4 py-2 text-center border-b border-blue-100">
-                                <p className="text-blue-800 text-xs font-medium">Amount to Pay</p>
-                                <p className="text-blue-900 text-2xl font-bold">₹{Number(form.amount).toLocaleString("en-IN")}</p>
-                              </div>
-                              <div className="p-5 flex flex-col items-center gap-3">
-                                <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-inner">
-                                  <QRCode
-                                    value={`upi://pay?pa=8015935790@ptsbi&pn=ABC+Bank&am=${form.amount}&tn=Loan+Recovery+${maskedAcct}&cu=INR`}
-                                    size={192}
-                                    bgColor="#ffffff"
-                                    fgColor="#1e3a5f"
-                                    level="M"
-                                  />
-                                </div>
-                                <p className="text-xs text-slate-500 text-center">
-                                  Scan with any UPI app · <strong>₹{Number(form.amount).toLocaleString("en-IN")}</strong> pre-filled
-                                </p>
-                                <p className="text-[10px] text-slate-400 text-center">Loan {maskedAcct}</p>
-                              </div>
-                            </div>
+                            )}
                           </div>
                         )}
                       </div>
-                      <Input label="UPI Transaction ID *" placeholder="12-digit transaction ID from notification" value={form.upiRef} onChange={(e) => upd({ upiRef: e.target.value })} />
+                      {!qrPaidDemo && (
+                        <Input label="UPI Transaction ID *" placeholder="12-digit transaction ID from notification" value={form.upiRef} onChange={(e) => upd({ upiRef: e.target.value })} />
+                      )}
                     </div>
                   )}
 
@@ -1243,12 +1654,13 @@ export default function RecordVisitPage() {
                       </div>
                     </div>
                   )}
+                  </>)}
                 </Section>
               )}
 
               {/* ── E. PTP ──────────────────────────────────────────────────── */}
               {sel?.needsPTP && (
-                <Section title={sel.needsPayment ? "E. PTP for Remaining Balance" : "D. Promise to Pay Details"} required badge="Required">
+                <Section title={sel.needsPayment ? "PTP for Remaining Balance" : "Promise to Pay Details"} required badge="Required">
                   <div className="bg-brand-50 rounded-lg px-3 py-2 text-xs text-brand-700 mb-3">
                     Remaining after payment: ₹{remainingAfterPayment.toLocaleString("en-IN")}
                   </div>
@@ -1293,45 +1705,19 @@ export default function RecordVisitPage() {
             </>
           )}
 
+          </div>
+
+          {/* ── RIGHT: captured evidence + what is still blocking submit.
+                 Sticky so it stays in view while the left column scrolls.
+                 Not rendered at all until there is something to put in it. ── */}
+          {splitLayout && (
+          <div className="space-y-4 mt-4 lg:mt-0 lg:col-span-2 lg:sticky lg:top-24">
+
           {/* ══════════════════════════════════════════════════════════════════
               FIELD INVESTIGATION & PHOTOS (always optional)
           ══════════════════════════════════════════════════════════════════ */}
           {form.meetingType && (
             <>
-              <Section title="Field Investigation" badge="Optional">
-                <div className="space-y-4">
-                  <div>
-                    <p className="text-sm font-medium text-slate-700 mb-2">Property Type</p>
-                    <div className="grid grid-cols-2 gap-2">
-                      {[{ v: "OWNED", l: "Owned" }, { v: "RENTED", l: "Rented" }, { v: "COMMERCIAL", l: "Commercial" }, { v: "UNKNOWN", l: "Unknown" }].map(({ v, l }) => (
-                        <button key={v} onClick={() => upd({ propertyType: form.propertyType === v ? "" : v })} className={`py-2 rounded-lg text-sm font-medium border ${form.propertyType === v ? "border-brand-400 bg-brand-50 text-brand-700" : "border-slate-200 bg-white text-slate-600"}`}>{l}</button>
-                      ))}
-                    </div>
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium text-slate-700 mb-2">Premises Status</p>
-                    <div className="grid grid-cols-2 gap-2">
-                      {[{ v: "OCCUPIED", l: "Occupied" }, { v: "LOCKED", l: "Locked / Closed" }, { v: "VACATED", l: "Vacated" }, { v: "NOT_FOUND", l: "Cannot Locate" }].map(({ v, l }) => (
-                        <button key={v} onClick={() => upd({ occupancyStatus: form.occupancyStatus === v ? "" : v })} className={`py-2 rounded-lg text-sm font-medium border ${form.occupancyStatus === v ? "border-brand-400 bg-brand-50 text-brand-700" : "border-slate-200 bg-white text-slate-600"}`}>{l}</button>
-                      ))}
-                    </div>
-                  </div>
-                  {([
-                    { key: "vehiclePresent" as const, label: "Vehicle at premises?" },
-                    { key: "businessRunning" as const, label: "Business actively running?" },
-                  ]).map(({ key, label }) => (
-                    <div key={key} className="flex items-center justify-between">
-                      <span className="text-sm text-slate-600">{label}</span>
-                      <div className="flex gap-1.5">
-                        {([{ v: true, l: "Yes" }, { v: false, l: "No" }, { v: null, l: "N/A" }] as const).map(({ v, l }) => (
-                          <button key={l} onClick={() => upd({ [key]: v })} className={`px-2.5 py-1 rounded-lg text-xs font-medium border ${form[key] === v ? "border-brand-400 bg-brand-50 text-brand-700" : "border-slate-200 bg-white text-slate-500"}`}>{l}</button>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </Section>
-
               <Section title="Photos & Documents" badge="Optional">
                 {/* ── Three geo-tagged photo captures ── */}
                 {(
@@ -1504,32 +1890,50 @@ export default function RecordVisitPage() {
           {!canSubmit && form.meetingType && (
             <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-xs text-amber-800 space-y-1">
               <p className="font-bold mb-1">Still required:</p>
-              {form.meetingType === "BORROWER" && !form.outcome && <p>• Select visit outcome (Section B)</p>}
-              {form.meetingType === "THIRD_PARTY" && !form.personMet && <p>• Select who you met (Section B)</p>}
-              {form.meetingType === "THIRD_PARTY" && !form.outcome && <p>• Select outcome (Section C)</p>}
-              {form.meetingType === "NOT_MET" && !form.outcome && <p>• Select outcome (Section C)</p>}
-              {sel?.needsPayment && (!form.amount || amountNum <= 0) && <p>• Enter payment amount (Section D)</p>}
+              {!locationCaptured && <p>• Waiting for GPS location — enable location and hold still</p>}
+              {locationCaptured && !locationVerified && <p>• Move within 100m of the customer's address to verify GPS (or select "Address Issue" if the address is wrong)</p>}
+              {form.meetingType === "BORROWER" && !form.outcome && <p>• Select visit outcome</p>}
+              {form.meetingType === "THIRD_PARTY" && !form.personMet && <p>• Select who you met</p>}
+              {form.meetingType === "THIRD_PARTY" && !form.outcome && <p>• Select outcome</p>}
+              {form.meetingType === "NOT_MET" && !form.outcome && <p>• Select outcome</p>}
+              {sel?.needsPayment && (!form.amount || amountNum <= 0) && <p>• Enter payment amount</p>}
               {sel?.needsPayment && amountExceedsTarget && <p>• Payment amount exceeds target amount (max ₹{targetAmount.toLocaleString("en-IN")})</p>}
-              {sel?.needsPayment && form.paymentMode === "CASH" && !form.cashCounted && <p>• Confirm cash counted (Section D)</p>}
-              {sel?.needsPayment && form.paymentMode === "UPI" && !form.upiRef && <p>• Enter UPI transaction ID (Section D)</p>}
-              {sel?.needsPayment && form.paymentMode === "CHEQUE" && (!form.chequeNumber || !form.chequeDate || !form.chequeBank) && <p>• Complete cheque details (Section D)</p>}
+              {sel?.needsPayment && form.paymentMode === "CASH" && !form.cashCounted && <p>• Confirm cash counted</p>}
+              {sel?.needsPayment && form.paymentMode === "UPI" && !form.upiRef && !qrPaidDemo && <p>• Enter UPI transaction ID (or show the QR and wait for "Payment received")</p>}
+              {sel?.needsPayment && form.paymentMode === "CHEQUE" && (!form.chequeNumber || !form.chequeDate || !form.chequeBank) && <p>• Complete cheque details</p>}
+              {sel?.needsPayment && paymentValid && !paymentVerified && <p>• Verify the amount with the borrower via OTP (or use the offline option + signature)</p>}
               {sel?.needsPTP && (!form.ptpAmount || !form.ptpDate) && <p>• Complete PTP commitment details</p>}
               {sel?.needsEscalation && form.escalationNotes.length < 10 && <p>• Add escalation notes (min 10 chars)</p>}
             </div>
           )}
 
+          </div>
+          )}
         </div>
 
         {/* ── Fixed bottom submit — constrained to mobile frame ────────── */}
+        {/* No rail offset here: Record Visit is its own top-level route, outside
+            AgentLayout, so there is no sidebar to clear. Offsetting it pushed
+            the bar 220px right of the content it belongs to. */}
         <div className="fixed bottom-0 left-0 right-0 z-20 pointer-events-none">
-          <div className="max-w-md mx-auto pointer-events-auto bg-white border-t border-slate-100 p-4">
+          <div className="max-w-md md:max-w-none mx-auto pointer-events-auto bg-white border-t border-slate-100 p-4 lg:px-6">
             <div className="flex items-center justify-between text-xs text-slate-400 mb-2">
               <span>{withinFence ? "✓ GPS verified" : distanceM !== null ? `⚠ ${distanceM}m (unverified)` : "Getting GPS…"}</span>
               {form.outcome && <span className="font-mono font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded">{sel?.tag ?? form.outcome}</span>}
             </div>
-            <Button fullWidth onClick={handleSubmit} loading={submitting} disabled={!canSubmit}>
-              <CheckCircle className="w-4 h-4" />
-              {submitting ? "Submitting…" : "Submit Visit Record"}
+            <Button
+              fullWidth
+              onClick={handleSubmit}
+              loading={submitting}
+              disabled={!canSubmit}
+              className={!canSubmit ? "!bg-slate-200 !text-slate-400 hover:!bg-slate-200 active:!bg-slate-200 !shadow-none" : undefined}
+            >
+              {canSubmit ? <CheckCircle className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
+              {submitting
+                ? "Submitting…"
+                : !locationReady
+                  ? (locationCaptured ? `Move within 100m (${distanceM}m away)` : "Waiting for GPS…")
+                  : "Submit Visit Record"}
             </Button>
           </div>
         </div>

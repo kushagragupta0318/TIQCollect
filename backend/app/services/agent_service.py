@@ -12,19 +12,37 @@ from __future__ import annotations
 
 from datetime import datetime, date, timezone, timedelta
 from collections import defaultdict
+from math import cos, radians
 
 from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
+from app.core.config import settings
+from app.core.security import create_agent_verify_token
 from app.models.agent import Agent, AgentStatus
 from app.models.beat import Beat
 from app.models.case import Case
+from app.models.customer import Customer
 from app.models.payment import Payment
 from app.models.ptp import PTP, PTPStatus
 from app.models.user import User
 from app.models.visit import Visit
 from app.services.notification_service import NotificationService
+
+# Fixed offsets (as fractions of DEMO_ANCHOR_RADIUS_M) used to scatter the demo
+# "anchor" customers a few tens of metres around the agent's live GPS. Each
+# magnitude is < 1.0 so every customer stays inside the radius (and inside the
+# 100m geo-fence). Deterministic → the cluster is stable between check-ins.
+_DEMO_ANCHOR_OFFSETS = [
+    (0.20, 0.30),   # ~29% of radius
+    (0.55, -0.30),
+    (-0.40, 0.50),
+    (0.30, 0.62),
+    (-0.55, -0.35),
+    (0.62, 0.18),
+    (-0.22, -0.58),
+]
 
 import structlog
 
@@ -98,8 +116,35 @@ class AgentService:
         agent.last_known_latitude = req.latitude
         agent.last_known_longitude = req.longitude
         agent.last_location_update = datetime.now(timezone.utc).isoformat()
+        if settings.DEMO_MODE:
+            self._anchor_demo_customers(req.latitude, req.longitude)
         self.db.commit()
         return {"status": "ON_DUTY", "message": "Check-in successful. Have a safe day!"}
+
+    def _anchor_demo_customers(self, lat: float, lon: float) -> None:
+        """DEMO_MODE only: re-place the configured demo 'anchor' customers a few
+        tens of metres around the agent's live GPS (lat/lon) so the geo-fence
+        passes wherever on earth the demo is run. Deterministic offsets keep the
+        cluster stable. Non-anchor customers are left untouched, so out-of-range
+        cases still exist to demo the fence blocking a visit."""
+        refs = settings.demo_anchor_refs_list
+        if not refs:
+            return
+        radius = settings.DEMO_ANCHOR_RADIUS_M
+        # metres → degrees (longitude scaled by latitude); guard the pole edge case
+        m_per_deg_lat = 111_111.0
+        m_per_deg_lon = 111_111.0 * max(cos(radians(lat)), 1e-6)
+        customers = (
+            self.db.query(Customer)
+            .filter(Customer.customer_ref.in_(refs))
+            .all()
+        )
+        for c in customers:
+            north_m, east_m = _DEMO_ANCHOR_OFFSETS[
+                refs.index(c.customer_ref) % len(_DEMO_ANCHOR_OFFSETS)
+            ]
+            c.latitude = lat + (north_m * radius) / m_per_deg_lat
+            c.longitude = lon + (east_m * radius) / m_per_deg_lon
 
     # -----------------------------------------------------------------
     # GET /agent/beat

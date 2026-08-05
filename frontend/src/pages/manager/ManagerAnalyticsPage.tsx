@@ -1,4 +1,12 @@
+// ─── CHANGELOG (prototype → product) ───────────────────────────────────────
+// 2026-07-31 — Responsive pass. Densest page in the manager flow: the agent
+//   pill row (up to 18 wrapping pills, ~180px tall before the chart is even
+//   visible) becomes a select below lg; the 6-month selector grids become
+//   scroll rails rather than squeezing "Jul '26" into 49px; chart heights and
+//   calendar cells scale down on touch. See docs/frontend-guide.md.
+// ─────────────────────────────────────────────────────────────────────────
 import { useEffect, useState } from "react";
+import { useIsBelowLg, useMediaQuery } from "@/hooks/useMediaQuery";
 import { TrendingUp, BarChart2, IndianRupee, Users, Calendar, X, Brain, Loader2 } from "lucide-react";
 import { toast } from "react-hot-toast";
 import {
@@ -63,13 +71,16 @@ function AgentDualChart({ months, monthlyData, color, animate, onMonthClick }: {
   animate: boolean;
   onMonthClick: (label: string) => void;
 }) {
+  const isMobile = useMediaQuery("(max-width: 639px)");
   const gradId = `grad-dual-${color.replace("#", "")}`;
   const data = months.map((m) => {
     const e = monthlyData.find((x) => x.month === m);
     return { month: monthLabel(m), collected: e?.collected ?? 0, target: e?.target ?? 0 };
   });
   return (
-    <ResponsiveContainer width="100%" height={150}>
+    // Recharts handles width via ResponsiveContainer; height is a fixed number
+    // and needs stepping down so the chart does not dominate a short viewport.
+    <ResponsiveContainer width="100%" height={isMobile ? 128 : 150}>
       <RLineChart
         data={data}
         margin={{ top: 10, right: 12, left: 0, bottom: 0 }}
@@ -112,6 +123,8 @@ function TeamLineChart({ months, series, animate, onMonthClick }: {
   animate: boolean;
   onMonthClick?: (label: string) => void;
 }) {
+  const isMobile = useMediaQuery("(max-width: 639px)");
+  const chartHeight = isMobile ? 170 : 200;
   const data = months.map((m, i) => {
     const row: Record<string, string | number> = { month: monthLabel(m) };
     series.forEach((s) => { row[s.label] = s.values[i] ?? 0; });
@@ -120,7 +133,7 @@ function TeamLineChart({ months, series, animate, onMonthClick }: {
   const gradId = `grad-team-${series[0]?.color.replace("#", "") ?? "blue"}`;
   if (series.length === 1) {
     return (
-      <ResponsiveContainer width="100%" height={200}>
+      <ResponsiveContainer width="100%" height={chartHeight}>
         <AreaChart data={data} margin={{ top: 10, right: 12, left: 0, bottom: 0 }}
           style={onMonthClick ? { cursor: "pointer" } : undefined}
           onClick={(d) => { if (onMonthClick && d?.activeLabel) onMonthClick(String(d.activeLabel)); }}
@@ -143,7 +156,7 @@ function TeamLineChart({ months, series, animate, onMonthClick }: {
     );
   }
   return (
-    <ResponsiveContainer width="100%" height={200}>
+    <ResponsiveContainer width="100%" height={chartHeight}>
       <RLineChart
         data={data}
         margin={{ top: 10, right: 12, left: 0, bottom: 0 }}
@@ -233,6 +246,8 @@ function AgentSpotlight({ entry, months, color, animate, onClose, selMonth, onMo
       {/* Close */}
       <button
         onClick={onClose}
+        aria-label="Close agent spotlight"
+        className="tap-target"
         style={{
           position: "absolute", top: 14, right: 14,
           width: 26, height: 26, borderRadius: 8, border: "none",
@@ -269,9 +284,9 @@ function AgentSpotlight({ entry, months, color, animate, onClose, selMonth, onMo
           { label: "visits",    value: String(visits),           colorVal: "#1C1C1F",        delta: visitsDelta  },
           { label: "PTP conv.", value: `${ptpRate}%`,            colorVal: rateCol(ptpRate), delta: ptpDelta     },
         ] as { label: string; value: string; colorVal: string; delta: number | null }[]).map(({ label, value, colorVal, delta }) => (
-          <div key={label} className="flex flex-col items-center rounded-xl px-3 py-1.5"
+          <div key={label} className="flex flex-col items-center rounded-xl px-2.5 sm:px-3 py-1.5 flex-1 sm:flex-none"
             style={{ background: "#fff", border: "1px solid #EAEBEF", minWidth: 60 }}>
-            <p className="text-sm font-bold leading-none" style={{ color: colorVal }}>{value}</p>
+            <p className="text-sm font-bold leading-none whitespace-nowrap" style={{ color: colorVal }}>{value}</p>
             {delta !== null ? (
               <p className="text-xs mt-0.5 font-semibold" style={{ color: delta >= 0 ? "#16a34a" : "#dc2626" }}>
                 {delta >= 0 ? "↑" : "↓"}{Math.abs(delta)}%
@@ -301,8 +316,11 @@ function AgentSpotlight({ entry, months, color, animate, onClose, selMonth, onMo
         </span>
       </div>
 
-      {/* Monthly selector — month + year only, values shown above */}
-      <div className="grid mt-1 gap-x-1 gap-y-1" style={{ gridTemplateColumns: `repeat(${months.length}, 1fr)` }}>
+      {/* Monthly selector — same scroll-rail treatment as the team selector */}
+      <div
+        className="grid mt-1 gap-1 overflow-x-auto scrollbar-hide"
+        style={{ gridTemplateColumns: `repeat(${months.length}, minmax(60px, 1fr))` }}
+      >
         {entry.monthly.map((m) => {
           const isActive = selMonth === monthLabel(m.month);
           const [y] = m.month.split("-");
@@ -311,7 +329,8 @@ function AgentSpotlight({ entry, months, color, animate, onClose, selMonth, onMo
             <button
               key={m.month}
               onClick={() => onMonthClick(monthLabel(m.month))}
-              className="text-center w-full"
+              aria-pressed={isActive}
+              className="tap-target-h text-center w-full"
               style={{
                 borderRadius: 8, padding: "5px 2px",
                 background: isActive ? `${color}15` : "transparent",
@@ -320,7 +339,7 @@ function AgentSpotlight({ entry, months, color, animate, onClose, selMonth, onMo
                 transition: "all 150ms ease",
               }}
             >
-              <p className="text-xs font-semibold" style={{ color: isActive ? color : "#6B6D76" }}>{label}</p>
+              <p className="text-xs font-semibold whitespace-nowrap" style={{ color: isActive ? color : "#6B6D76" }}>{label}</p>
             </button>
           );
         })}
@@ -338,6 +357,9 @@ export default function ManagerAnalyticsPage() {
   const [chartMode, setChartMode]   = useState<"team" | "individual">("team");
   const [barReady, setBarReady]     = useState(false);
   const [selectedAgent, setSelectedAgent] = useState<AgentPerfEntry | null>(null);
+  // Behavioural switches only — pill row becomes a select, copy changes from
+  // "Click"/"Hover" to "Tap"/"Pick". Layout itself is done with Tailwind.
+  const isBelowLg = useIsBelowLg();
   const [selTeamMonth, setSelTeamMonth]   = useState<string | null>(null);
   const [selAgentMonth, setSelAgentMonth] = useState<string | null>(null);  // month label e.g. "Apr"
   const [agentCalendar, setAgentCalendar]   = useState<AgentAvailabilityCalendar | null>(null);
@@ -446,12 +468,12 @@ export default function ManagerAnalyticsPage() {
   return (
     <div className="space-y-5">
       <div style={{ animation: `enter 420ms ${EASE} 0ms both` }}>
-        <h1 className="text-xl font-bold" style={{ color: "#1C1C1F", letterSpacing: "-0.02em" }}>ABC Collections</h1>
-        <p className="text-sm mt-0.5" style={{ color: "#6B6D76" }}>6-month collection performance, DPD breakdown, and agent rankings</p>
+        <h1 className="font-bold" style={{ color: "#1C1C1F", letterSpacing: "-0.02em", fontSize: "var(--page-title)" }}>ABC Collections</h1>
+        <p className="text-[13px] sm:text-sm mt-0.5" style={{ color: "#6B6D76" }}>6-month collection performance, DPD breakdown, and agent rankings</p>
       </div>
 
       {/* KPI row — updates dynamically when a team month is selected */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         {[
           {
             label: "Collection Rate",
@@ -494,20 +516,23 @@ export default function ManagerAnalyticsPage() {
       </div>
 
       {/* Collection trend chart */}
-      <div className="card p-6" style={{ animation: `enter 420ms ${EASE} 240ms both` }}>
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h2 className="text-base font-bold" style={{ color: "#1C1C1F" }}>Collection Trend — Last 6 Months</h2>
+      <div className="card p-4 sm:p-6" style={{ animation: `enter 420ms ${EASE} 240ms both` }}>
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+          <div className="min-w-0">
+            <h2 className="text-[15px] sm:text-base font-bold" style={{ color: "#1C1C1F" }}>Collection Trend — Last 6 Months</h2>
             <p className="text-xs mt-0.5" style={{ color: "#6B6D76" }}>
-              {chartMode === "individual" ? "Click an agent pill to see their spotlight and update the panels below" : "Hover for values"}
+              {chartMode === "individual"
+                ? (isBelowLg ? "Pick an agent to see their spotlight and update the panels below" : "Click an agent pill to see their spotlight and update the panels below")
+                : (isBelowLg ? "Tap a month to drill in" : "Hover for values")}
             </p>
           </div>
-          <div className="flex rounded-xl overflow-hidden text-xs" style={{ border: "1px solid #EAEBEF" }}>
+          <div className="flex rounded-xl overflow-hidden text-xs self-start sm:self-auto flex-shrink-0" style={{ border: "1px solid #EAEBEF" }}>
             {(["team", "individual"] as const).map((mode) => (
               <button
                 key={mode}
                 onClick={() => { setChartMode(mode); setSelectedAgent(null); }}
-                className="px-3 py-1.5 font-semibold transition-colors"
+                aria-pressed={chartMode === mode}
+                className="tap-target-h px-3 py-1.5 font-semibold transition-colors whitespace-nowrap"
                 style={{ background: chartMode === mode ? "#1677FF" : "#fff", color: chartMode === mode ? "#fff" : "#6B6D76" }}
               >
                 {mode === "team" ? "Team Total" : "Per Agent"}
@@ -534,10 +559,15 @@ export default function ManagerAnalyticsPage() {
               </span>
             </div>
 
-            {!selTeamMonth && <p className="text-xs mt-2 text-center" style={{ color: "#94a3b8" }}>Click a month below to drill in</p>}
+            {!selTeamMonth && <p className="text-xs mt-2 text-center" style={{ color: "#94a3b8" }}>{isBelowLg ? "Tap" : "Click"} a month below to drill in</p>}
 
-            {/* Clickable monthly breakdown grid — month + year label only */}
-            <div className="grid mt-3 gap-2" style={{ gridTemplateColumns: `repeat(${months.length}, 1fr)` }}>
+            {/* Monthly breakdown — a 6-across grid gives each button 49px at
+                360px, which cannot hold "Jul '26". Minimum 64px in a scroll
+                rail instead: every month stays reachable, nothing is clipped. */}
+            <div
+              className="grid mt-3 gap-2 overflow-x-auto scrollbar-hide -mx-1 px-1"
+              style={{ gridTemplateColumns: `repeat(${months.length}, minmax(64px, 1fr))` }}
+            >
               {monthly_trend.map((m) => {
                 const isActive = selTeamMonth === monthLabel(m.month);
                 const [y] = m.month.split("-");
@@ -546,7 +576,8 @@ export default function ManagerAnalyticsPage() {
                   <button
                     key={m.month}
                     onClick={() => setSelTeamMonth((prev) => prev === monthLabel(m.month) ? null : monthLabel(m.month))}
-                    className="text-center w-full"
+                    aria-pressed={isActive}
+                    className="tap-target-h text-center w-full"
                     style={{
                       borderRadius: 10, padding: "8px 4px",
                       background: isActive ? "#EFF3FF" : "transparent",
@@ -554,7 +585,7 @@ export default function ManagerAnalyticsPage() {
                       cursor: "pointer", transition: "all 150ms ease",
                     }}
                   >
-                    <p className="text-xs font-semibold" style={{ color: isActive ? "#1677FF" : "#6B6D76" }}>{label}</p>
+                    <p className="text-xs font-semibold whitespace-nowrap" style={{ color: isActive ? "#1677FF" : "#6B6D76" }}>{label}</p>
                   </button>
                 );
               })}
@@ -562,14 +593,45 @@ export default function ManagerAnalyticsPage() {
           </>
         ) : (
           <>
-            {/* Agent pills */}
-            <div className="flex flex-wrap gap-1.5 mb-4">
+            {/* Agent selector.
+                Desktop keeps the pill row — scanning 18 colour-coded names at
+                once is the point of it. On a phone those same pills wrap to
+                about six rows and push the chart itself below the fold, so the
+                same choice is offered as a native select instead. */}
+            <div className="lg:hidden mb-4 flex gap-2">
+              <select
+                className="input flex-1 min-w-0 tap-target-h"
+                aria-label="Select an agent"
+                value={selectedAgent?.agent_id ?? ""}
+                onChange={(e) => {
+                  const found = agentSeries.find((s) => s.agent.agent_id === e.target.value);
+                  setSelectedAgent(found ? found.agent : null);
+                }}
+              >
+                <option value="">All agents</option>
+                {agentSeries.map((s) => (
+                  <option key={s.agent.agent_id} value={s.agent.agent_id}>{s.label}</option>
+                ))}
+              </select>
+              {selectedAgent && (
+                <button
+                  onClick={() => setSelectedAgent(null)}
+                  className="tap-target px-4 rounded-xl text-xs font-semibold flex-shrink-0"
+                  style={{ background: "#1677FF", color: "white", border: "1px solid #1677FF" }}
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+
+            <div className="hidden lg:flex flex-wrap gap-1.5 mb-4">
               {agentSeries.map((s) => {
                 const isSelected = selectedAgent?.agent_id === s.agent.agent_id;
                 return (
                   <button
                     key={s.agent.agent_id}
                     onClick={() => setSelectedAgent(isSelected ? null : s.agent)}
+                    aria-pressed={isSelected}
                     className="flex items-center gap-1.5 rounded-full text-xs font-semibold transition-all"
                     style={{
                       padding: "5px 12px",
@@ -835,13 +897,13 @@ function DutyCalendarCard({ cal, loading, jumpToMonth }: { cal: AgentAvailabilit
           {/* Calendar grid */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: "2px 0" }}>
             {DOW_LABELS.map((lbl) => (
-              <div key={lbl} style={{ textAlign: "center", fontSize: 9, fontWeight: 600, color: "#CBD5E1", paddingBottom: 3 }}>
+              <div key={lbl} style={{ textAlign: "center", fontSize: "var(--cal-dow)", fontWeight: 600, color: "#CBD5E1", paddingBottom: 3 }}>
                 {lbl}
               </div>
             ))}
             {calRows.flatMap((row, ri) =>
               row.map((cell, ci) => {
-                if (!cell) return <div key={`${ri}-${ci}`} style={{ height: 22 }} />;
+                if (!cell) return <div key={`${ri}-${ci}`} style={{ height: "var(--cal-cell-agent)" }} />;
                 const hasData = !!cell.data;
                 const numColor = cell.isFuture ? "#E2E8F0" : hasData ? "#16a34a" : "#ef4444";
 
@@ -853,7 +915,7 @@ function DutyCalendarCard({ cal, loading, jumpToMonth }: { cal: AgentAvailabilit
                       : hasData     ? `${cell.dateStr} · On Duty · ${cell.data!.cases} cases`
                       :               `${cell.dateStr} · Off Duty`
                     }
-                    style={{ textAlign: "center", height: 22, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}
+                    style={{ textAlign: "center", height: "var(--cal-cell-agent)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}
                   >
                     <p style={{ fontSize: 11, fontWeight: 600, color: numColor, lineHeight: 1 }}>
                       {cell.dayNum}
@@ -951,25 +1013,25 @@ function AgencyDutyOverview({ months }: { months: string[] }) {
       {/* Month nav */}
       <div className="flex items-center justify-between mb-3">
         <button onClick={() => canPrev && setVisibleMonth(months[monthIdx - 1])} disabled={!canPrev}
-          style={{ opacity: canPrev ? 1 : 0.25, cursor: canPrev ? "pointer" : "default", fontSize: 16, fontWeight: 700, color: "#6B6D76", lineHeight: 1, background: "none", border: "none", padding: "0 4px" }}>‹</button>
+          style={{ opacity: canPrev ? 1 : 0.25, cursor: canPrev ? "pointer" : "default", fontSize: 16, fontWeight: 700, color: "#6B6D76", lineHeight: 1, background: "none", border: "none", padding: "0 10px" }} className="tap-target">‹</button>
         <p className="text-xs font-semibold" style={{ color: "#6B6D76" }}>{hdr} · {total} agents</p>
         <button onClick={() => canNext && setVisibleMonth(months[monthIdx + 1])} disabled={!canNext}
-          style={{ opacity: canNext ? 1 : 0.25, cursor: canNext ? "pointer" : "default", fontSize: 16, fontWeight: 700, color: "#6B6D76", lineHeight: 1, background: "none", border: "none", padding: "0 4px" }}>›</button>
+          style={{ opacity: canNext ? 1 : 0.25, cursor: canNext ? "pointer" : "default", fontSize: 16, fontWeight: 700, color: "#6B6D76", lineHeight: 1, background: "none", border: "none", padding: "0 10px" }} className="tap-target">›</button>
       </div>
 
       {/* Calendar */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: "2px 0" }}>
         {DOW_TEAM.map((lbl) => (
-          <div key={lbl} style={{ textAlign: "center", fontSize: 9, fontWeight: 600, color: "#CBD5E1", paddingBottom: 3 }}>{lbl}</div>
+          <div key={lbl} style={{ textAlign: "center", fontSize: "var(--cal-dow)", fontWeight: 600, color: "#CBD5E1", paddingBottom: 3 }}>{lbl}</div>
         ))}
         {calRows.flatMap((row, ri) =>
           row.map((cell, ci) => {
-            if (!cell) return <div key={`${ri}-${ci}`} style={{ height: 26 }} />;
+            if (!cell) return <div key={`${ri}-${ci}`} style={{ height: "var(--cal-cell-team)" }} />;
             const col = countColor(cell.count, cell.isFuture);
             return (
               <div key={`${ri}-${ci}`}
                 title={cell.isFuture ? cell.dateStr : `${cell.dateStr} · ${cell.count}/${total} on duty`}
-                style={{ textAlign: "center", height: 26, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
+                style={{ textAlign: "center", height: "var(--cal-cell-team)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
                 <p style={{ fontSize: 10, fontWeight: 700, color: col, lineHeight: 1 }}>{cell.dayNum}</p>
                 {!cell.isFuture && total > 0 && (
                   <p style={{ fontSize: 8, color: col, lineHeight: 1, marginTop: 1, opacity: 0.85 }}>{cell.count}/{total}</p>
@@ -1148,7 +1210,7 @@ function MonthlyReportSection({ months, selectedAgent, preSelectedMonth }: { mon
   }
 
   return (
-    <div className="card p-6" style={{ animation: `enter 420ms ${EASE} 360ms both` }}>
+    <div className="card p-4 sm:p-6" style={{ animation: `enter 420ms ${EASE} 360ms both` }}>
       <div className="flex flex-wrap items-center gap-3 mb-4">
         <div className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0"
           style={{ background: "linear-gradient(135deg, #7c3aed, #a855f7)" }}>
@@ -1161,11 +1223,12 @@ function MonthlyReportSection({ months, selectedAgent, preSelectedMonth }: { mon
             {" · "}60–100 word AI performance brief
           </p>
         </div>
-        <div className="flex items-center gap-2 flex-shrink-0">
+        <div className="flex items-center gap-2 flex-shrink-0 w-full sm:w-auto">
           <select
             value={month}
             onChange={(e) => { setMonth(e.target.value); setReport(null); }}
-            className="text-xs rounded-xl px-3 py-1.5 font-semibold"
+            aria-label="Report month"
+            className="tap-target-h text-xs rounded-xl px-3 py-1.5 font-semibold flex-1 sm:flex-none min-w-0"
             style={{ border: "1px solid #EAEBEF", color: "#1C1C1F", background: "#F5F6F9", outline: "none" }}
           >
             {months.map((m) => (
@@ -1177,7 +1240,7 @@ function MonthlyReportSection({ months, selectedAgent, preSelectedMonth }: { mon
           <button
             onClick={generate}
             disabled={loading}
-            className="text-xs px-4 py-1.5 rounded-xl font-semibold flex items-center gap-1.5 transition-opacity"
+            className="tap-target text-xs px-4 py-1.5 rounded-xl font-semibold flex items-center justify-center gap-1.5 transition-opacity flex-shrink-0"
             style={{ background: "linear-gradient(135deg, #7c3aed, #a855f7)", color: "white", opacity: loading ? 0.7 : 1 }}
           >
             {loading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Brain className="w-3 h-3" />}

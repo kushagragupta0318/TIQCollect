@@ -57,7 +57,7 @@ export function SOSButton({ compact = false }: { compact?: boolean }) {
       disabled={sosLoading}
       title={sosActive ? "SOS active — tap to cancel" : "Trigger SOS emergency alert"}
       className={clsx(
-        "flex items-center gap-1.5 rounded-xl font-bold text-sm transition-all select-none",
+        "tap-target flex items-center justify-center gap-1.5 rounded-xl font-bold text-sm transition-all select-none",
         compact ? "px-2.5 py-1.5" : "px-3 py-2 shadow-lg",
         sosActive
           ? "bg-danger-500 text-white ring-2 ring-danger-300 ring-offset-1 animate-pulse"

@@ -31,6 +31,12 @@
 #   since Pydantic v2 treats a literal leading-underscore attribute name
 #   as a private attribute, not a model field. Full detail + why:
 #   /changelog.md
+# 2026-07-30 — Borrower OTP verification: CollectPaymentRequest gained an
+#   optional `verification_id` (the used OTP that authorises writing the
+#   Payment straight as VERIFIED; absent = offline/pending path, unchanged).
+#   Added OtpSendRequest/OtpSendResponse and OtpVerifyRequest/OtpVerifyResponse
+#   (end of file) for the two new OTP endpoints. See
+#   prototype_to_product/30.07.md and /changelog.md.
 # ───────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field
@@ -112,6 +118,10 @@ class CollectPaymentRequest(BaseModel):
     cheque_bank: Optional[str] = None
     bank_reference: Optional[str] = None     # UTR / NEFT reference
     receipt_photo_key: Optional[str] = None
+    # Borrower OTP that authorises this collection. Present → Payment is written
+    # as VERIFIED. Absent → Payment stays PENDING_VERIFICATION (offline/deferred
+    # path; borrower verifies later once they have signal).
+    verification_id: Optional[str] = None
 
 
 class SetPTPRequest(BaseModel):
@@ -215,6 +225,35 @@ class PTPResponse(BaseModel):
     committed_date: str   # already .isoformat()'d before being returned
     follow_up_date: Optional[str] = None
     status: PTPStatus
+
+
+# ─── Borrower payment-verification OTP (2026-07-30) ───────────────────────
+class OtpSendRequest(BaseModel):
+    amount: float = Field(gt=0)
+    # Optional: the OTP is issued before the payment channel is chosen, so it
+    # binds to the amount. Only the deferred flow (existing payment) has a mode.
+    mode: Optional[PaymentMode] = None
+    # Present → deferred flow: re-verify an already-created PENDING payment.
+    # Absent  → pre-collection flow: verify first, then collect.
+    payment_id: Optional[str] = None
+
+
+class OtpSendResponse(BaseModel):
+    otp_id: str
+    masked_phone: str
+    expires_at: str            # ISO — already .isoformat()'d
+    resend_available_at: str   # ISO — earliest a resend is allowed (throttle)
+
+
+class OtpVerifyRequest(BaseModel):
+    otp_id: str
+    code: str
+
+
+class OtpVerifyResponse(BaseModel):
+    verified: bool
+    otp_id: str
+    payment_id: Optional[str] = None   # set when the OTP verified an existing (deferred) payment
 
 
 class HandoverResponse(BaseModel):

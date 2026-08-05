@@ -1,12 +1,20 @@
 from math import radians, sin, cos, sqrt, atan2
 from datetime import datetime, timezone, timedelta
 
+from app.core.config import settings
+
 EARTH_RADIUS_M = 6_371_000
-GEO_FENCE_METRES = 100
 
 IST = timezone(timedelta(hours=5, minutes=30))
-RBI_CONTACT_START = 8   # 8 AM IST
-RBI_CONTACT_END = 19    # 7 PM IST
+
+# Sourced from settings so the fence radius and RBI contact window are .env
+# changes, not code changes. The names are kept (visit_service imports them)
+# but now resolve to the configured values — override via GEO_FENCE_METRES /
+# CONTACT_HOUR_START / CONTACT_HOUR_END in .env (e.g. to widen the window for a
+# non-IST demo).
+GEO_FENCE_METRES = settings.GEO_FENCE_METRES
+RBI_CONTACT_START = settings.CONTACT_HOUR_START   # 8 AM IST by default
+RBI_CONTACT_END = settings.CONTACT_HOUR_END       # 7 PM IST by default
 
 
 def haversine_metres(lat1: float, lon1: float, lat2: float, lon2: float) -> float:

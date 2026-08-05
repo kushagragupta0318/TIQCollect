@@ -18,6 +18,15 @@
 # to. See changelog.md for full detail, verification, and open gaps
 # (payment-link has no equivalent guard yet — noted there, not silently
 # skipped).
+#
+# 2026-07-30 — collect_payment now accepts an optional verification_id (a
+# verified borrower OTP, held ephemerally in Redis — no DB table). When present
+# it is consumed via OtpService.consume_for_payment and the Payment is written
+# straight as VERIFIED (verified_at set, PAYMENT_VERIFIED audit row) — filling
+# the long-standing gap where nothing ever promoted a Payment out of the default
+# PENDING_VERIFICATION. When absent, behaviour is unchanged (offline/deferred
+# path: row stays PENDING_VERIFICATION for later borrower verification). See
+# otp_service.py, prototype_to_product/30.07.md, and /changelog.md.
 from __future__ import annotations
 
 import uuid
@@ -25,10 +34,11 @@ from datetime import datetime, timezone, timedelta
 
 from app.core.config import settings
 from app.core.errors import AppException, ErrorCode
+from app.models.audit_log import AuditLog, AuditAction
 from app.models.case import Case, CaseStatus
 from app.models.customer import Customer
 from app.models.loan import Loan
-from app.models.payment import Payment
+from app.models.payment import Payment, PaymentStatus
 from app.models.ptp import PTP, PTPStatus
 from app.services.notification_service import NotificationService
 
@@ -64,6 +74,20 @@ class PaymentService:
         if existing:
             return self._payment_response(existing, case)
 
+        # Borrower OTP gate: if a verification_id is supplied, confirm it is a
+        # verified (Redis-held, ephemeral) OTP authorising THIS exact amount/mode
+        # and not already spent — the Payment is then trusted (VERIFIED). No
+        # verification_id = the offline/deferred path, where the row stays
+        # PENDING_VERIFICATION until the borrower confirms later. Validate BEFORE
+        # writing anything.
+        verified = False
+        verification_id = getattr(req, "verification_id", None)
+        if verification_id:
+            from app.services.otp_service import OtpService
+            verified = OtpService(self.db).consume_for_payment(
+                verification_id, case.id, req.amount,
+            )
+
         now_utc = datetime.now(timezone.utc)
         payment = Payment(
             case_id=case.id,
@@ -77,8 +101,23 @@ class PaymentService:
             bank_reference=req.bank_reference,
             receipt_photo_key=req.receipt_photo_key,
             payment_date=now_utc,
+            status=PaymentStatus.VERIFIED if verified else PaymentStatus.PENDING_VERIFICATION,
+            verified_at=now_utc if verified else None,
         )
         self.db.add(payment)
+        self.db.flush()   # assign payment.id for the audit row below
+
+        if verified:
+            self.db.add(AuditLog(
+                id=str(uuid.uuid4()),
+                created_at=now_utc,
+                user_id=agent.user_id,
+                action=AuditAction.PAYMENT_VERIFIED,
+                entity_type="Payment",
+                entity_id=payment.id,
+                details={"amount": req.amount, "mode": str(req.mode), "channel": "OTP", "deferred": False},
+                success=True,
+            ))
 
         remaining = round(case.target_amount - case.collected_amount, 2)
         if req.amount > remaining:

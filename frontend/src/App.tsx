@@ -1,4 +1,4 @@
-import { BrowserRouter, HashRouter, Routes, Route, Navigate } from "react-router";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router";
 import { Toaster } from "react-hot-toast";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
@@ -23,12 +23,6 @@ import ManagerAnalyticsPage from "@/pages/manager/ManagerAnalyticsPage";
 import ManagerCompliancePage from "@/pages/manager/ManagerCompliancePage";
 
 import { useAuthStore } from "@/store/authStore";
-import { IS_OFFLINE_BUILD } from "@/api/axios";
-
-// The offline build is served as plain static files out of another app's public
-// folder, so it routes on the hash — deep links then need no server rewrites and
-// work under any sub-path. Dev and normal builds keep BrowserRouter unchanged.
-const Router = IS_OFFLINE_BUILD ? HashRouter : BrowserRouter;
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -46,7 +40,7 @@ function RootRedirect() {
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <Router>
+      <BrowserRouter>
         <Routes>
           <Route path="/" element={<RootRedirect />} />
           <Route path="/login" element={<LoginPage />} />
@@ -54,12 +48,15 @@ export default function App() {
           <Route path="/quick-login" element={<QuickLoginPage />} />
           {/* collection_dashboard: always force a Manager 1 session, then land on analytics */}
           <Route path="/manager-bridge" element={<ManagerBridgePage />} />
-          {/* Record Visit — constrained to max-w-md to match mobile PWA shell */}
+
+          {/* Record Visit — follows the same width ladder as AgentLayout:
+              phone shell below md, wider column at md, full width at lg where
+              the page itself splits into two columns. */}
           <Route
             path="/agent/visit/:caseId"
             element={
               <ProtectedRoute allowedRoles={["FIELD_AGENT"]}>
-                <div className="min-h-screen bg-slate-50 flex flex-col max-w-md mx-auto relative">
+                <div className="min-h-svh bg-slate-50 flex flex-col max-w-md md:max-w-none mx-auto relative">
                   <RecordVisitPage />
                 </div>
               </ProtectedRoute>
@@ -102,7 +99,7 @@ export default function App() {
 
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
-      </Router>
+      </BrowserRouter>
 
       <Toaster
         position="top-center"

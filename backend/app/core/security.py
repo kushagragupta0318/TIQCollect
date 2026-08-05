@@ -75,6 +75,17 @@ def create_quick_login_token(user_id: str, agency_code: str, minutes_valid: int 
     )
 
 
+def create_agent_verify_token(agent_id: str, days_valid: int = 365) -> str:
+    """Signed token embedded in the agent's QR ID. A borrower scans it and the
+    public /verify-agent endpoint validates the signature — so a fraudster can't
+    forge a genuine-looking card without SECRET_KEY. Long-lived (card lifetime)."""
+    return _make_token(
+        subject=agent_id,
+        token_type="agent_verify",
+        expires_delta=timedelta(days=days_valid),
+    )
+
+
 def decode_token(token: str) -> dict[str, Any]:
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])

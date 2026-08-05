@@ -88,6 +88,14 @@
 #   file for that. Nothing about any of these endpoints' JSON output
 #   changed — same keys, same values, same nesting, just documented and
 #   validated now instead of implicit. Full detail: /changelog.md
+# 2026-07-30 — Added two borrower-OTP endpoints next to the payment routes:
+#   POST .../payment/otp/send (OtpSendResponse) and .../payment/otp/verify
+#   (OtpVerifyResponse), both thin delegates to the new OtpService. These gate
+#   payment verification — the borrower confirms the amount from their
+#   registered phone before a Payment is trusted. collect_payment's contract
+#   also gained an optional verification_id (handled entirely in
+#   PaymentService). See otp_service.py, prototype_to_product/30.07.md,
+#   /changelog.md.
 # ───────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 
@@ -117,6 +125,7 @@ from app.models.user import User
 from app.services.notification_service import NotificationService
 from app.services.media_service import MediaService
 from app.services.payment_service import PaymentService
+from app.services.otp_service import OtpService
 from app.schemas.agent import (
     AvailabilityCalendarResponse,
     BeatResponse,
@@ -132,6 +141,10 @@ from app.schemas.agent import (
     HomeSummaryResponse,
     LogCallRequest,
     LogCallResponse,
+    OtpSendRequest,
+    OtpSendResponse,
+    OtpVerifyRequest,
+    OtpVerifyResponse,
     PaymentLinkResponse,
     PaymentResponse,
     ProfileResponse,
@@ -403,6 +416,29 @@ def record_visit(case_id: str, req: RecordVisitRequest, current_user: AgentOnly,
 def collect_payment(case_id: str, req: CollectPaymentRequest, current_user: AgentOnly, db: DbSession):
     agent = _get_agent_or_404(current_user, db)
     return PaymentService(db).collect_payment(agent, case_id, req)
+
+
+# ---------------------------------------------------------------------------
+# POST /agent/cases/{case_id}/payment/otp/send    (borrower OTP verification)
+# POST /agent/cases/{case_id}/payment/otp/verify
+# ---------------------------------------------------------------------------
+
+@router.post("/cases/{case_id}/payment/otp/send", response_model=OtpSendResponse)
+def send_payment_otp(case_id: str, req: OtpSendRequest, current_user: AgentOnly, db: DbSession):
+    """Send a 4-digit OTP to the borrower's REGISTERED phone to confirm a
+    collection amount. `payment_id` present = re-verify an existing pending
+    (offline) payment; absent = verify before collecting. See OtpService."""
+    agent = _get_agent_or_404(current_user, db)
+    return OtpService(db).generate_and_send(agent, case_id, req.amount, req.mode, req.payment_id)
+
+
+@router.post("/cases/{case_id}/payment/otp/verify", response_model=OtpVerifyResponse)
+def verify_payment_otp(case_id: str, req: OtpVerifyRequest, current_user: AgentOnly, db: DbSession):
+    """Verify the borrower's OTP. For a deferred (payment-bound) OTP this
+    promotes the pending Payment to VERIFIED and sends the e-receipt; for the
+    pre-collection flow it marks the OTP used so collect_payment can consume it."""
+    agent = _get_agent_or_404(current_user, db)
+    return OtpService(db).verify(agent, case_id, req.otp_id, req.code)
 
 
 # ---------------------------------------------------------------------------
@@ -989,16 +1025,18 @@ def get_voice_token(current_user: AgentOnly, db: DbSession):
 # ---------------------------------------------------------------------------
 
 @router.post("/voice/outbound")
-def voice_outbound(To: str = Form(default="")):
+def voice_outbound(PhoneTo: str = Form(default="")):
+    # The frontend Voice SDK sends the destination as the custom param `PhoneTo`
+    # (Twilio's own `To` param is the client identity, not the dialed number).
     try:
         from twilio.twiml.voice_response import VoiceResponse, Dial
     except ImportError:
         return FastAPIResponse(content="<Response><Say>Service unavailable</Say></Response>",
                                media_type="application/xml")
     resp = VoiceResponse()
-    if To:
+    if PhoneTo:
         dial = Dial(caller_id=settings.TWILIO_PHONE_NUMBER)
-        dial.number(To)
+        dial.number(PhoneTo)
         resp.append(dial)
     else:
         resp.say("No destination number provided.")

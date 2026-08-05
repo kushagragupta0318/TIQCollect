@@ -29,9 +29,33 @@ logger = structlog.get_logger()
 limiter = Limiter(key_func=get_remote_address, default_limits=[f"{settings.RATE_LIMIT_PER_MINUTE}/minute"])
 
 
+def _sync_demo_contact() -> None:
+    """DEMO_MODE only: on startup, force the showcase customer (DEMO0003)
+    name/phone to match DEMO_CONTACT_NAME / DEMO_CONTACT_PHONE in .env. Lets you
+    swap the demo number (CEO / manager / teammate) with a .env edit + restart —
+    no reseed, no SQL. No-op if the customer isn't present."""
+    from sqlalchemy.orm import Session
+    from app.models.customer import Customer
+
+    with Session(engine) as db:
+        cust = db.query(Customer).filter(Customer.customer_ref == settings.DEMO_CONTACT_REF).first()
+        if cust is None:
+            return
+        cust.full_name = settings.DEMO_CONTACT_NAME
+        cust.phone_primary = settings.DEMO_CONTACT_PHONE
+        db.commit()
+        logger.info("demo_contact_synced", name=settings.DEMO_CONTACT_NAME,
+                    phone=settings.DEMO_CONTACT_PHONE)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("startup", service=settings.APP_NAME, env=settings.APP_ENV)
+    if settings.DEMO_MODE:
+        try:
+            _sync_demo_contact()
+        except Exception as exc:  # never block startup on a demo convenience
+            logger.warning("demo_contact_sync_failed", error=str(exc))
     yield
     logger.info("shutdown", service=settings.APP_NAME)
     engine.dispose()

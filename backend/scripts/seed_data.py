@@ -45,6 +45,7 @@ from sqlalchemy import text, func
 from app.core.database import SessionLocal, engine
 engine.echo = False  # force off regardless of settings.DEBUG
 from app.core.database import Base
+from app.core.config import settings
 from app.core.security import hash_password
 import app.models  # noqa: register all models
 from app.models.user import User, UserRole
@@ -546,6 +547,56 @@ def _visit_outcomes_for_dpd(dpd: int):
              VisitOutcome.REVISIT, VisitOutcome.DECEASED],
             [40, 30, 22, 8],
         )
+def curate_demo_agent_ptps(db, agent, today):
+    """Give one agent a realistic current-month PTP book for the demo:
+    several kept (HONORED), one missed (BROKEN), and a handful still due TODAY.
+    Idempotent — clears this agent's current-month PTPs first, so it can run in
+    the seed AND against a live DB to keep the two in sync. Returns a summary.
+
+    Realistic shape (deterministic): 7 honored + 1 broken + 5 due-today.
+    -> PTP conversion ≈ 54% (7/13), and 5 PTPs due today on the home screen.
+    """
+    month_start = date(today.year, today.month, 1)
+    cases = db.query(Case).filter(Case.agent_id == agent.id).all()
+    if not cases:
+        return {"honored": 0, "set": 0, "due_today": 0}
+
+    # Wipe existing current-month PTPs for this agent so re-runs are stable.
+    db.query(PTP).filter(
+        PTP.agent_id == agent.id,
+        PTP.committed_date >= month_start,
+    ).delete(synchronize_session=False)
+    db.flush()
+
+    # (days_ago, status) — negatives are earlier this month, 0 = due today.
+    plan = (
+        [(d, PTPStatus.HONORED) for d in (3, 6, 9, 12, 15, 18, 21)]  # 7 kept
+        + [(7, PTPStatus.BROKEN)]                                    # 1 missed
+        + [(0, PTPStatus.ACTIVE)] * 5                                # 5 due today
+    )
+    honored = broken = due_today = 0
+    for i, (days_ago, status) in enumerate(plan):
+        case = cases[i % len(cases)]
+        # keep the date inside the current month even early in the month
+        committed = max(month_start, today - timedelta(days=days_ago))
+        amount = round(float(case.target_amount or 5000.0), 2)
+        paid = amount if status == PTPStatus.HONORED else 0.0
+        db.add(PTP(
+            id=_uid(), case_id=case.id, agent_id=agent.id,
+            committed_amount=amount, committed_date=committed,
+            actual_paid_amount=paid, status=status,
+            agent_notes="Demo PTP" ,
+        ))
+        if status == PTPStatus.HONORED:
+            honored += 1
+        elif status == PTPStatus.BROKEN:
+            broken += 1
+        elif status == PTPStatus.ACTIVE and committed == today:
+            due_today += 1
+    db.flush()
+    return {"honored": honored, "broken": broken, "due_today": due_today, "set": len(plan)}
+
+
 def seed():
     print("Resetting DB schema...")
     # Drop stale tables not tracked by current metadata (removed models) before drop_all
@@ -607,7 +658,7 @@ def seed():
     AGENT_ROSTER = [
         # (full_name,               dob,          phone)
         ("Arjun Singh Chauhan",    "1994-04-12", "9770000001"),  # 001
-        ("Piyush Sharma Verma",    "1997-09-05", "9770000002"),  # 002 — demo agent (Gurugram)
+        ("Piyush Sharma",          "1997-09-05", "9770000002"),  # 002 — demo agent (Gurugram)
         ("Rajesh Kumar Yadav",     "1990-11-23", "9770000003"),  # 003
         ("Nitesh Gupta Agarwal",   "1995-03-18", "9770000004"),  # 004
         ("Mohammed Zafar Khan",    "1992-07-30", "9770000005"),  # 005
@@ -1174,7 +1225,10 @@ def seed():
          "lat": 28.455551, "lon": 77.071923, "addr1": "House 12, Sector 44",        "pin": "122003",
          "dpd": 62,  "outstanding": 94500.0,  "loan_type": LoanType.HOME,      "priority": CasePriority.HIGH,     "risk": RiskCategory.HIGH},
         # 2 — Sector 44 (~38m — GEO-FENCE DEMO: dispute pending, unlocks visit)
-        {"name": "Mohammed Irfan Khan",   "phone": "9876541003", "gender": "MALE",
+        #   Showcase customer (DEMO0003). Name/phone come from .env
+        #   (DEMO_CONTACT_NAME / DEMO_CONTACT_PHONE) so the demo number is a
+        #   config swap, not a reseed — defaults to Balraj Singh / 8015935790.
+        {"name": settings.DEMO_CONTACT_NAME, "phone": settings.DEMO_CONTACT_PHONE, "gender": "MALE",
          "lat": 28.455400, "lon": 77.071900, "addr1": "Plot 8, Sector 44",          "pin": "122003",
          "dpd": 45,  "outstanding": 62000.0,  "loan_type": LoanType.AUTO,      "priority": CasePriority.HIGH,     "risk": RiskCategory.HIGH},
         # 3 — Sector 44 (~50m — GEO-FENCE DEMO: partially paid, unlocks visit)
@@ -2365,6 +2419,10 @@ def seed():
             is_ml_generated=True, ml_model_version="vrp_ortools_v1",
         ))
     db.commit()
+    # ── Realistic PTP book for the demo agent (agent002) ──────────────────────
+    _demo = curate_demo_agent_ptps(db, agents[1], today)
+    db.commit()
+    print(f"  agent002 PTPs: {_demo['honored']} honored, {_demo['broken']} broken, {_demo['due_today']} due today")
     # ── Reconcile current-month agent counters ────────────────────────────────
     # current_month_* fields must reflect the FULL current calendar month,
     # including both historical month-0 data and today's [10d] activity.
@@ -2384,9 +2442,17 @@ def seed():
             PTP.agent_id == ag.id,
             PTP.committed_date >= month_start_date,
         ).scalar() or 0
+        # honored count drives the PTP-conversion rate on the profile; without
+        # this it stayed 0 (previously hardcoded), showing an unrealistic 0%.
+        mo_hon = db.query(func.count(PTP.id)).filter(
+            PTP.agent_id == ag.id,
+            PTP.committed_date >= month_start_date,
+            PTP.status.in_([PTPStatus.HONORED, PTPStatus.PARTIALLY_HONORED]),
+        ).scalar() or 0
         ag.current_month_collections = round(float(mo_col), 2)
         ag.current_month_visits = mo_vis
         ag.current_month_ptps_set = mo_ptps
+        ag.current_month_ptps_honored = mo_hon
     db.commit()
     db.close()
     # ── Summary ───────────────────────────────────────────────────────────────

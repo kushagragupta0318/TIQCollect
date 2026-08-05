@@ -18,6 +18,7 @@ celery_app = Celery(
         "app.workers.tasks.beat_generation",
         "app.workers.tasks.performance_snapshot",
         "app.workers.tasks.transcription",
+        "app.workers.tasks.demo_daily_feed",
     ],
 )
 
@@ -35,6 +36,13 @@ celery_app.conf.update(
         "nightly-ml-allocation": {
             "task": "app.workers.tasks.allocation.run_nightly_allocation",
             "schedule": crontab(hour=20, minute=0),
+        },
+        # DEMO_MODE only: fresh "bank" pool cases at 5:30 AM IST (before the beat
+        # push) so opening the app on a new day shows new cases flowing in.
+        # No-op when DEMO_MODE is off (guarded inside the task).
+        "demo-daily-feed": {
+            "task": "app.workers.tasks.demo_daily_feed.run_demo_daily_feed_task",
+            "schedule": crontab(hour=5, minute=30),
         },
         # Beat plans pushed to agents at 6 AM IST
         "morning-beat-push": {
