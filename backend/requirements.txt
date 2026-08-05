@@ -1,0 +1,42 @@
+# One file for both backends in this folder:
+#   stub_main.py  (:8300, always needed) uses only the first two lines below.
+#   app/          (:8400, the full TIQCollect app) uses everything.
+# Installing this pulls the whole set — see step 5 of the README if you only
+# ever run the stub and want to skip the ML/audio packages.
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+
+sqlalchemy==2.0.36
+alembic==1.14.0
+psycopg2-binary==2.9.10
+redis==5.2.1
+celery==5.4.0
+pydantic==2.10.3
+pydantic-settings==2.7.0
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+bcrypt==3.2.2
+python-multipart==0.0.19
+minio==7.2.11
+openai==1.57.4
+httpx==0.28.1
+faker==33.1.0
+pandas==2.2.3
+numpy==2.2.0
+scikit-learn==1.6.0
+xgboost==2.1.3
+pyotp==2.9.0
+pillow==11.0.0
+python-dateutil==2.9.0
+geopy==2.4.1
+email-validator==2.2.0
+slowapi==0.1.9
+structlog==24.4.0
+orjson==3.10.12
+ortools==9.15.6755
+# Self-hosted Whisper (free, TRANSCRIPTION_PROVIDER=local) — pulls in PyAV
+# for audio decoding, so no system ffmpeg binary is needed. Imported lazily
+# so the app runs fine without this installed as long as
+# TRANSCRIPTION_PROVIDER stays "openai".
+faster-whisper==1.0.3
+pytest==8.3.4

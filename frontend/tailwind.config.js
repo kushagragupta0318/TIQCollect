@@ -1,0 +1,207 @@
+/** @type {import('tailwindcss').Config} */
+export default {
+  content: ["./index.html", "./src/**/*.{js,ts,jsx,tsx}"],
+  theme: {
+    container: {
+      center: true,
+      padding: "1rem",
+      screens: { "2xl": "1400px" },
+    },
+    extend: {
+      colors: {
+        border:     "hsl(var(--border))",
+        input:      "hsl(var(--input))",
+        ring:       "hsl(var(--ring))",
+        background: "hsl(var(--background))",
+        foreground: "hsl(var(--foreground))",
+        primary: {
+          DEFAULT:    "hsl(var(--primary))",
+          foreground: "hsl(var(--primary-foreground))",
+          dark:       "hsl(var(--primary-dark))",
+        },
+        secondary: {
+          DEFAULT:    "hsl(var(--secondary))",
+          foreground: "hsl(var(--secondary-foreground))",
+        },
+        destructive: {
+          DEFAULT:    "hsl(var(--destructive))",
+          foreground: "hsl(var(--destructive-foreground))",
+        },
+        muted: {
+          DEFAULT:    "hsl(var(--muted))",
+          foreground: "hsl(var(--muted-foreground))",
+        },
+        accent: {
+          DEFAULT:    "hsl(var(--accent))",
+          foreground: "hsl(var(--accent-foreground))",
+        },
+        popover: {
+          DEFAULT:    "hsl(var(--popover))",
+          foreground: "hsl(var(--popover-foreground))",
+        },
+        card: {
+          DEFAULT:    "hsl(var(--card))",
+          foreground: "hsl(var(--card-foreground))",
+        },
+        brand: {
+          50:  "#EBF3FF",
+          100: "#D1E6FF",
+          200: "#A3CFFF",
+          500: "#4090FF",
+          600: "#1677FF",
+          700: "#0C4DB3",
+          900: "#0B1A3E",
+        },
+        success: {
+          DEFAULT:    "hsl(var(--success))",
+          foreground: "hsl(var(--success-foreground))",
+          50:  "#f0fdf4",
+          100: "#dcfce7",
+          200: "#bbf7d0",
+          400: "#4ade80",
+          500: "#22c55e",
+          600: "#16a34a",
+          700: "#15803d",
+        },
+        warning: {
+          DEFAULT:    "hsl(var(--warning))",
+          foreground: "hsl(var(--warning-foreground))",
+          50:  "#fffbeb",
+          100: "#fef3c7",
+          200: "#fde68a",
+          500: "#f59e0b",
+          600: "#d97706",
+          700: "#b45309",
+        },
+        danger: {
+          50:  "#fef2f2",
+          100: "#fee2e2",
+          200: "#fecaca",
+          500: "#ef4444",
+          600: "#dc2626",
+          700: "#b91c1c",
+        },
+        bucket: {
+          current: "#22c55e",
+          b1: "#f59e0b",
+          b2: "#f97316",
+          b3: "#ef4444",
+          npa: "#7c3aed",
+        },
+      },
+      borderRadius: {
+        card:    "1.375rem",
+        control: "0.75rem",
+        modal:   "1.625rem",
+        pill:    "9999px",
+        lg: "var(--radius)",
+        md: "0.75rem",
+        sm: "0.5rem",
+      },
+      fontFamily: {
+        sans: [
+          "-apple-system",
+          "BlinkMacSystemFont",
+          '"SF Pro Text"',
+          '"Segoe UI"',
+          "Roboto",
+          "Helvetica",
+          "Arial",
+          "sans-serif",
+        ],
+        display: [
+          "-apple-system",
+          "BlinkMacSystemFont",
+          '"SF Pro Display"',
+          '"Segoe UI"',
+          "Roboto",
+          "Helvetica",
+          "Arial",
+          "sans-serif",
+        ],
+        mono: [
+          "ui-monospace",
+          '"SF Mono"',
+          "SFMono-Regular",
+          "Menlo",
+          "Consolas",
+          "monospace",
+        ],
+      },
+      fontSize: {
+        "2xs": ["0.625rem", { lineHeight: "0.875rem" }],
+      },
+      boxShadow: {
+        resting:              "0 1px 2px rgba(17,24,39,0.03), 0 1px 3px rgba(17,24,39,0.04)",
+        hover:                "0 4px 16px rgba(22,119,255,0.12), 0 1px 3px rgba(17,24,39,0.05)",
+        premium:              "0 4px 12px var(--tw-shadow-color, rgba(0,0,0,0.08))",
+        glow:                 "0 0 0 3px rgba(22,119,255,0.1)",
+        card:                 "0 1px 2px rgba(17,24,39,0.04), 0 1px 3px rgba(17,24,39,0.06)",
+        "tint-primary":       "0 2px 8px rgba(22,119,255,0.08), 0 1px 3px rgba(22,119,255,0.04)",
+        "tint-primary-hover": "0 8px 24px rgba(22,119,255,0.18), 0 2px 6px rgba(22,119,255,0.08)",
+        "tint-warning":       "0 2px 8px rgba(217,119,6,0.08), 0 1px 3px rgba(217,119,6,0.04)",
+        "tint-destructive":   "0 2px 8px rgba(220,38,38,0.08), 0 1px 3px rgba(220,38,38,0.04)",
+        "tint-success":       "0 2px 8px rgba(22,163,74,0.08), 0 1px 3px rgba(22,163,74,0.04)",
+      },
+      spacing: {
+        "4.5": "1.125rem",
+      },
+      transitionTimingFunction: {
+        spring: "cubic-bezier(0.16, 1, 0.3, 1)",
+      },
+      screens: {
+        xs: "375px",
+      },
+      keyframes: {
+        slideInRight: {
+          "0%":   { transform: "translateX(100%)" },
+          "100%": { transform: "translateX(0)" },
+        },
+        enter: {
+          "0%":   { opacity: "0", transform: "translateY(16px)" },
+          "100%": { opacity: "1", transform: "translateY(0)" },
+        },
+        "card-enter": {
+          from: { opacity: "0", transform: "translateY(18px)" },
+          to:   { opacity: "1", transform: "translateY(0)" },
+        },
+        "fade-in": {
+          from: { opacity: "0" },
+          to:   { opacity: "1" },
+        },
+        "scale-in": {
+          from: { opacity: "0", transform: "scale(0.95) translateY(8px)" },
+          to:   { opacity: "1", transform: "scale(1) translateY(0)" },
+        },
+        "slide-in": {
+          from: { opacity: "0", transform: "translateY(8px)" },
+          to:   { opacity: "1", transform: "translateY(0)" },
+        },
+        "zoom-in-95": {
+          from: { opacity: "0", transform: "scale(0.95)" },
+          to:   { opacity: "1", transform: "scale(1)" },
+        },
+        "accordion-down": {
+          from: { height: "0" },
+          to:   { height: "var(--radix-accordion-content-height)" },
+        },
+        "accordion-up": {
+          from: { height: "var(--radix-accordion-content-height)" },
+          to:   { height: "0" },
+        },
+      },
+      animation: {
+        slideInRight:     "slideInRight 0.22s ease-out",
+        enter:            "enter 0.4s cubic-bezier(0.16,1,0.3,1) both",
+        "card-enter":     "card-enter 400ms cubic-bezier(0.16,1,0.3,1) both",
+        "fade-in":        "fade-in 200ms cubic-bezier(0.16,1,0.3,1) both",
+        "scale-in":       "scale-in 280ms cubic-bezier(0.16,1,0.3,1) both",
+        "slide-in":       "slide-in 300ms cubic-bezier(0.16,1,0.3,1) both",
+        "zoom-in-95":     "zoom-in-95 200ms cubic-bezier(0.16,1,0.3,1) both",
+        "accordion-down": "accordion-down 200ms cubic-bezier(0.16,1,0.3,1)",
+        "accordion-up":   "accordion-up 200ms cubic-bezier(0.16,1,0.3,1)",
+      },
+    },
+  },
+  plugins: [],
+};
