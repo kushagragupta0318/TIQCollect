@@ -57,6 +57,34 @@ class Settings(BaseSettings):
     MINIO_BUCKET_DOCUMENTS: str = "tiq-documents"
     MINIO_SECURE: bool = False
 
+    # Host the BROWSER uses for pre-signed upload/download URLs.
+    #
+    # A pre-signed URL is handed to the browser, which uploads to MinIO
+    # directly, so it must carry a host the browser can actually resolve.
+    # MINIO_ENDPOINT above is how the API reaches MinIO, which behind Docker is
+    # an internal name like "minio:9000" — useless to a browser.
+    #
+    # Left blank these fall back to MINIO_ENDPOINT, which is correct for local
+    # dev where both are localhost. Point it at a public media host (and set
+    # MINIO_PUBLIC_SECURE=true behind TLS) and uploads work from anywhere, with
+    # no code change.
+    MINIO_PUBLIC_ENDPOINT: str = ""
+    # Typed str, not bool — docker compose renders an unset ${VAR:-} as the
+    # empty string, and pydantic rejects "" for a bool outright rather than
+    # treating it as absent. Coerced in the property below instead.
+    MINIO_PUBLIC_SECURE: str = ""
+
+    @property
+    def minio_public_endpoint(self) -> str:
+        return self.MINIO_PUBLIC_ENDPOINT.strip() or self.MINIO_ENDPOINT
+
+    @property
+    def minio_public_secure(self) -> bool:
+        raw = self.MINIO_PUBLIC_SECURE.strip().lower()
+        if not raw:
+            return self.MINIO_SECURE
+        return raw in ("1", "true", "yes", "on")
+
     # Google Maps
     GOOGLE_MAPS_API_KEY: str = ""
 

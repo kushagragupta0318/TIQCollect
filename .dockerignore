@@ -1,7 +1,19 @@
+# Build context hygiene — keep secrets, virtualenvs and node_modules out of the
+# image. node_modules especially: the frontend stage runs its own npm ci, and a
+# host-built tree can carry platform-specific binaries.
 __pycache__/
 *.pyc
 *.pyo
 .venv/
 venv/
-*.env
 .env
+.env.*
+!.env.example
+node_modules/
+frontend/node_modules/
+frontend/dist/
+backend/static/
+certs/
+data/incoming/
+.pytest_cache/
+*.log

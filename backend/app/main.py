@@ -8,8 +8,9 @@
 # It hangs off the app directly rather than off api_router because the
 # integration contract fixes its paths at /api/field-ops/*, outside our
 # /api/v1 namespace. See api/v1/endpoints/field_ops.py for the mapping.
+import os
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
@@ -117,3 +118,42 @@ app.include_router(api_router)
 # Command Centre integration contract — paths are fixed at /api/field-ops/*,
 # so this cannot sit under api_router's /api/v1 prefix.
 app.include_router(field_ops.router)
+
+
+# ── Serve the built React SPA (production / Docker only) ────────────────────
+# The frontend build is copied to ./static in the image; in local development
+# that directory does not exist and this whole block is skipped, leaving the
+# Vite dev server and its /api proxy in charge exactly as before.
+#
+# Mounted AFTER every router: the catch-all below matches any path, so anything
+# registered after it would be unreachable.
+#
+# axios already uses a relative "/api/v1" base with no environment override, so
+# serving the SPA from this same origin needs no frontend change and no CORS
+# entry — the browser only ever talks to one host.
+_STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
+
+if os.path.isdir(_STATIC_DIR):
+    from fastapi.responses import FileResponse
+    from fastapi.staticfiles import StaticFiles
+
+    _assets = os.path.join(_STATIC_DIR, "assets")
+    if os.path.isdir(_assets):
+        app.mount("/assets", StaticFiles(directory=_assets), name="assets")
+
+    @app.get("/{full_path:path}")
+    def spa(full_path: str):
+        """Serve a real file when one exists, otherwise index.html.
+
+        The fallback is what makes client-side routes like /agent/cases work on
+        a hard refresh or a pasted link — the server has no such route, so
+        without it every deep link would 404.
+        """
+        # Never let an unmatched API path fall through to index.html: a caller
+        # would get 200 and a page of HTML instead of an honest 404.
+        if full_path.startswith(("api/", "ws/")):
+            raise HTTPException(status_code=404, detail="Not Found")
+        candidate = os.path.join(_STATIC_DIR, full_path)
+        if full_path and os.path.isfile(candidate):
+            return FileResponse(candidate)
+        return FileResponse(os.path.join(_STATIC_DIR, "index.html"))

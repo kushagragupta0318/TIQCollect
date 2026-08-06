@@ -14,11 +14,29 @@ BUCKET = settings.MINIO_BUCKET_DOCUMENTS
 
 @lru_cache(maxsize=1)
 def _client() -> Minio:
+    """Server-side client: bucket creation, stats, anything the API does itself."""
     return Minio(
         settings.MINIO_ENDPOINT,
         access_key=settings.MINIO_ACCESS_KEY,
         secret_key=settings.MINIO_SECRET_KEY,
         secure=settings.MINIO_SECURE,
+    )
+
+
+@lru_cache(maxsize=1)
+def _signing_client() -> Minio:
+    """Client used ONLY to mint pre-signed URLs.
+
+    The host is baked into the signature, so a URL signed against the internal
+    address ("minio:9000" in Docker) is unusable by a browser and cannot be
+    rewritten afterwards without breaking the signature. Identical to _client()
+    unless MINIO_PUBLIC_ENDPOINT is set, so local dev is unaffected.
+    """
+    return Minio(
+        settings.minio_public_endpoint,
+        access_key=settings.MINIO_ACCESS_KEY,
+        secret_key=settings.MINIO_SECRET_KEY,
+        secure=settings.minio_public_secure,
     )
 
 
@@ -55,7 +73,7 @@ def download_bytes(key: str) -> bytes:
 def presigned_upload_url(key: str, content_type: str = "video/mp4", expires_minutes: int = 30) -> str:
     """Pre-signed PUT URL — client uploads directly to MinIO."""
     ensure_bucket()
-    return _client().presigned_put_object(
+    return _signing_client().presigned_put_object(
         bucket_name=BUCKET,
         object_name=key,
         expires=timedelta(minutes=expires_minutes),
@@ -64,7 +82,7 @@ def presigned_upload_url(key: str, content_type: str = "video/mp4", expires_minu
 
 def presigned_download_url(key: str, expires_minutes: int = 60) -> str:
     """Pre-signed GET URL — for streaming/playback."""
-    return _client().presigned_get_object(
+    return _signing_client().presigned_get_object(
         bucket_name=BUCKET,
         object_name=key,
         expires=timedelta(minutes=expires_minutes),

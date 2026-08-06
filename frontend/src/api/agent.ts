@@ -84,8 +84,13 @@ export async function getCaseDetail(caseId: string) {
   return data;
 }
 
+// Path and parameter style both have to match the backend exactly: it serves
+// POST /cases/{id}/photo-upload-url with `subject` as a QUERY parameter
+// (endpoints/agent.py). This used to post to /photos/upload-url with a JSON
+// body, which 404'd on every call — and because the caller swallows the error,
+// photos, signatures and the customer signature silently never reached MinIO.
 export async function getPhotoUploadUrl(caseId: string, subject: "agent" | "borrower" | "object" | "signature"): Promise<{ upload_url: string; key: string }> {
-  const { data } = await api.post(`/agent/cases/${caseId}/photos/upload-url`, { subject });
+  const { data } = await api.post(`/agent/cases/${caseId}/photo-upload-url`, null, { params: { subject } });
   return data;
 }
 
@@ -100,8 +105,10 @@ export async function getCasePhotos(caseId: string): Promise<Array<{
   return data;
 }
 
+// Same fix as getPhotoUploadUrl: the backend route is
+// POST /cases/{id}/recording-upload-url with `recorder` as a query parameter.
 export async function getRecordingUploadUrl(caseId: string, recorder: "agent" | "borrower"): Promise<{ upload_url: string; key: string }> {
-  const { data } = await api.post(`/agent/cases/${caseId}/recordings/upload-url`, { recorder });
+  const { data } = await api.post(`/agent/cases/${caseId}/recording-upload-url`, null, { params: { recorder } });
   return data;
 }
 
