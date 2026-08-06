@@ -40,3 +40,15 @@ ortools==9.15.6755
 # TRANSCRIPTION_PROVIDER stays "openai".
 faster-whisper==1.0.3
 pytest==8.3.4
+
+# Imported inside functions in notification_service.py and endpoints/agent.py,
+# so the app starts without them and only fails when SMS/WhatsApp, the in-app
+# dialler or a payment link is actually invoked. Absent from the image before
+# this, which made those features raise ModuleNotFoundError at the worst moment.
+twilio==9.4.1
+# 2.0.1, not 1.4.2: the older release imports pkg_resources at module load, and
+# python:3.12-slim no longer ships setuptools, so `import razorpay` died with
+# ModuleNotFoundError inside the image while working fine on a dev machine that
+# happened to have setuptools. 2.0.1 drops that import; client.qrcode.create,
+# the only call the code makes, is unchanged.
+razorpay==2.0.1
