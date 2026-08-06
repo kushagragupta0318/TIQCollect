@@ -6,9 +6,13 @@ __pycache__/
 *.pyo
 .venv/
 venv/
-.env
-.env.*
-!.env.example
+# **/ so these match at ANY depth. A bare ".env" is matched against the path
+# from the context root, so it excludes only a root-level .env and happily
+# copies backend/.env into the image — baking in secrets, and worse, making the
+# image work on a machine that has one and fail on a machine that does not.
+**/.env
+**/.env.*
+!**/.env.example
 node_modules/
 frontend/node_modules/
 frontend/dist/
