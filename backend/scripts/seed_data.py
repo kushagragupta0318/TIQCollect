@@ -1,4 +1,4 @@
-﻿﻿"""
+﻿"""
 TIQCollect — NPA Recovery Seed Data
 =====================================
 Data  architecture
