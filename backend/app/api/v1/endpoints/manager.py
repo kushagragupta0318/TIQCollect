@@ -400,13 +400,30 @@ def list_cases(
         )
         agent_name_map = {r[0]: r[1] for r in rows}
 
-    # Compute which cases on this page were visited today
-    today = date.today()
-    day_start = datetime.combine(today, datetime.min.time()).replace(tzinfo=timezone.utc)
-    day_end   = datetime.combine(today, datetime.max.time()).replace(tzinfo=timezone.utc)
+    # Compute which cases on this page carry the "Visited" chip.
     page_case_ids = {c.id for c in cases}
     visited_today_ids: set[str] = set()
-    if page_case_ids:
+    if page_case_ids and settings.DEMO_VISITED_BY_ALLOCATION_DATE:
+        # Demo seam: match each visit against its own case's allocation_date —
+        # the value the list shows in its Date column — instead of the wall
+        # clock. Seeded activity is stamped with the day the seed ran, so by
+        # the day of the demo nothing matches "today" and every chip vanishes.
+        #
+        # Compared in Python rather than SQL: allocation_date is a plain
+        # "YYYY-MM-DD" string column, so a date_trunc/cast comparison would be
+        # dialect-specific for no gain over a page's worth of rows.
+        allocation_of = {c.id: c.allocation_date for c in cases}
+        visited_today_ids = {
+            case_id for case_id, check_in in
+            db.query(Visit.case_id, Visit.check_in_time)
+            .filter(Visit.case_id.in_(page_case_ids))
+            .all()
+            if check_in and allocation_of.get(case_id) == check_in.date().isoformat()
+        }
+    elif page_case_ids:
+        today = date.today()
+        day_start = datetime.combine(today, datetime.min.time()).replace(tzinfo=timezone.utc)
+        day_end   = datetime.combine(today, datetime.max.time()).replace(tzinfo=timezone.utc)
         visited_today_ids = {
             row[0] for row in
             db.query(Visit.case_id)

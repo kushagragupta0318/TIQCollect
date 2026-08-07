@@ -245,8 +245,15 @@ class VisitService:
             case.is_escalated = True
             case.escalation_reason = EscalationReason.DISPUTED_AMOUNT
             case.escalated_at = now_utc
-            if req.agent_recording_transcript:
-                case.escalation_notes = req.agent_recording_transcript
+            # `agent_recording_transcript` lives on CaseVisitHistoryItem (a
+            # response schema), never on RecordVisitRequest — reading it here
+            # raised AttributeError and turned every DISPUTE visit into a 500.
+            # getattr keeps the original intent if the request ever gains the
+            # field; notes is what the client actually sends today, and
+            # RecordVisitPage already folds the customer statement into it.
+            escalation_detail = getattr(req, "agent_recording_transcript", None) or req.notes
+            if escalation_detail:
+                case.escalation_notes = escalation_detail
 
         elif outcome in (VisitOutcome.RTP,):
             case.status = CaseStatus.ESCALATED

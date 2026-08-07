@@ -163,6 +163,35 @@ class Settings(BaseSettings):
     # Max spread (metres) of that cluster around the agent's live GPS.
     DEMO_ANCHOR_RADIUS_M: int = 80
 
+    # How the manager's case list decides a case shows its "Visited" chip.
+    #
+    #   false (default) — a visit whose check_in_time falls on the wall-clock
+    #                     day. Correct for a live deployment.
+    #   true            — a visit whose check_in_time falls on the case's OWN
+    #                     allocation_date, i.e. the value in the list's Date
+    #                     column.
+    #
+    # The seed is run once and its activity is stamped with that day's date, so
+    # by the day of the demo nothing matches "today" any more and every row
+    # loses its chip. Matching the row's own date keeps the seeded story intact
+    # however long after seeding it is shown. It reads the same on screen —
+    # "this case was visited on the day it was allocated" — but it is a demo
+    # seam, not the real rule, so it stays off unless asked for.
+    DEMO_VISITED_BY_ALLOCATION_DATE: bool = False
+
+    # Rehearsal mode. The demo is one case, and showing it records a visit that
+    # moves it to Done — so the next audience finds nothing to demonstrate.
+    # When true, the agent's check-in first rewinds that case to a stored
+    # baseline, which makes the same run-through repeatable without reseeding.
+    #
+    # The visit still writes normally: submitting is several requests (visit →
+    # payment carrying its id → PTP → transcription), so suppressing the writes
+    # would break the receipt, the Done list and the beat counters. It is undone
+    # afterwards instead. Nothing outside the one demo case is touched.
+    #
+    # Needs a baseline: python -m scripts.demo_reset --save
+    DEMO_REHEARSAL_MODE: bool = False
+
     @property
     def demo_anchor_refs_list(self) -> List[str]:
         """Anchor refs with the showcase customer guaranteed first.

@@ -48,6 +48,15 @@ if [ "${RUN_SEED:-false}" = "true" ]; then
     echo "[entrypoint] empty database — seeding (this is destructive, and runs once)"
     python -m scripts.seed_data
     echo "[entrypoint] seed complete"
+    # Snapshot the showcase case while it is provably clean — straight off the
+    # seed is the only moment that is guaranteed. DEMO_REHEARSAL_MODE rewinds to
+    # this on every check-in. Never fatal: a box that is not running the demo has
+    # no baseline to take and should still start.
+    if python -m scripts.demo_reset --save; then
+      echo "[entrypoint] demo baseline captured"
+    else
+      echo "[entrypoint] demo baseline not captured (fine unless you are running the demo)"
+    fi
   fi
   unset PGPASSWORD
 fi

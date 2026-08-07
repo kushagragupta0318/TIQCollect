@@ -456,8 +456,11 @@ export default function AgentCaseDetailPage() {
               </div>
             )}
 
-            {/* Quick actions */}
-            <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
+            {/* Quick actions — four buttons, so the column count has to divide
+                four or the last one is left stranded on its own row. lg:3 did
+                exactly that: 3 + 1. 2 on a phone, 4 in a row once there is
+                width for it; both are symmetric. */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               <ActionBtn icon={<Phone className="w-4 h-4" />} label="Call" color="bg-success-50 text-success-700 border-success-100" onClick={() => startCall(c.customer.phone_primary, c.customer.full_name)} />
               <ActionBtn icon={<Navigation className="w-4 h-4" />} label="Navigate" color="bg-brand-50 text-brand-700 border-brand-100" onClick={() => window.open(`https://www.google.com/maps/dir/?api=1&destination=${c.customer.latitude},${c.customer.longitude}&travelmode=driving`, "_blank")} />
               <ActionBtn icon={<MessageCircle className="w-4 h-4" />} label="WhatsApp" color="bg-green-50 text-green-700 border-green-100" onClick={() => openWhatsApp("reminder")} />

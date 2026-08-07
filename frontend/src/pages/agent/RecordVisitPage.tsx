@@ -89,6 +89,7 @@ import { Input } from "@/components/ui/Input";
 import SignaturePad from "@/components/ui/SignaturePad";
 import OtpInput from "@/components/ui/OtpInput";
 import PaymentReceiptModal from "@/components/ui/PaymentReceiptModal";
+import VisitRecordedModal from "@/components/ui/VisitRecordedModal";
 import { SOSButton } from "@/components/ui/SOSButton";
 import { useBeat } from "@/contexts/BeatContext";
 import type { VisitOutcome, PersonMet, DefaultReason } from "@/types";
@@ -367,6 +368,9 @@ export default function RecordVisitPage() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [receipt, setReceipt] = useState<any>(null);
+  // Success confirmation for the no-payment path. A collection ends in
+  // PaymentReceiptModal, which is confirmation enough on its own.
+  const [visitDone, setVisitDone] = useState<{ outcomeLabel?: string } | null>(null);
   const [showQR, setShowQR] = useState(false);
   // Demo: after the QR is shown, auto-reveal a "Payment received ✓" tick (a
   // static UPI QR has no callback, so the received-moment is simulated on a
@@ -935,8 +939,10 @@ export default function RecordVisitPage() {
       if (receiptData) {
         setReceipt(receiptData);
       } else {
-        toast.success("Visit recorded!");
-        navigate(`/agent/cases/${caseId}`, { replace: true });
+        // Centred confirmation rather than a toast: on a phone the toast sat at
+        // the edge of the screen while the page was already navigating away,
+        // so the agent could not tell whether the visit had saved.
+        setVisitDone({ outcomeLabel: sel?.label });
       }
     } catch (err: any) {
       const detail = err?.response?.data?.detail;
@@ -960,6 +966,15 @@ export default function RecordVisitPage() {
     <>
       {receipt && (
         <PaymentReceiptModal receipt={receipt} onClose={() => navigate(`/agent/cases/${caseId}`, { replace: true })} />
+      )}
+
+      {visitDone && (
+        <VisitRecordedModal
+          caseNumber={caseData?.case_number}
+          customerName={customer?.full_name}
+          outcomeLabel={visitDone.outcomeLabel}
+          onClose={() => navigate(`/agent/cases/${caseId}`, { replace: true })}
+        />
       )}
 
       {/* ── Camera modal ───────────────────────────────────────────────────── */}

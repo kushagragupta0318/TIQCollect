@@ -112,6 +112,11 @@ class AgentService:
     # POST /agent/checkin
     # -----------------------------------------------------------------
     def checkin(self, agent: Agent, req) -> dict:
+        # A demo always begins with a check-in, which makes this the one moment
+        # it is safe to rewind the showcase case: never mid-flow, and never
+        # after a visit the audience is still looking at.
+        if settings.DEMO_REHEARSAL_MODE:
+            self._rewind_demo_case()
         agent.status = AgentStatus.ON_DUTY
         agent.last_known_latitude = req.latitude
         agent.last_known_longitude = req.longitude
@@ -120,6 +125,33 @@ class AgentService:
             self._anchor_demo_customers(req.latitude, req.longitude)
         self.db.commit()
         return {"status": "ON_DUTY", "message": "Check-in successful. Have a safe day!"}
+
+    def _rewind_demo_case(self) -> None:
+        """DEMO_REHEARSAL_MODE only: undo the last run-through of the demo case.
+
+        Best-effort by design. A missing baseline or a renamed ref must never
+        stop an agent checking in — the worst outcome is a demo that still shows
+        yesterday's completed visit, which is what happens today anyway.
+        """
+        from app.services import demo_service
+        try:
+            result = demo_service.rewind(self.db, settings.DEMO_CONTACT_REF)
+            if not result["clean"]:
+                logger.info(
+                    "demo.rewound_on_checkin",
+                    case_number=result["case_number"],
+                    deleted=result["deleted"],
+                    fields_restored=len(result["changed"]),
+                )
+        except demo_service.DemoBaselineMissing:
+            logger.warning(
+                "demo.no_baseline",
+                ref=settings.DEMO_CONTACT_REF,
+                hint="take one with: python -m scripts.demo_reset --save",
+            )
+        except Exception:
+            logger.exception("demo rewind on check-in failed; continuing with check-in")
+            self.db.rollback()
 
     def _anchor_demo_customers(self, lat: float, lon: float) -> None:
         """DEMO_MODE only: re-place the configured demo 'anchor' customers a few

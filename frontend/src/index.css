@@ -512,6 +512,11 @@
   /* Legacy .animate-enter shorthand kept for existing markup */
   .animate-enter { animation: enter 420ms cubic-bezier(0.16,1,0.3,1) both; }
 
+  /* Success tick — overshoots then settles, the way a payment confirmation
+     does. The global reduced-motion block above already collapses it. */
+  .animate-tick-pop  { animation: tickPop 520ms cubic-bezier(0.34,1.56,0.64,1) both; }
+  .animate-tick-ring { animation: tickRing 900ms ease-out 120ms both; }
+
   /* ── Glow helpers ────────────────────────────────────────────────────────── */
   .hero-glow-primary     { box-shadow: 0 0 80px -20px rgba(22, 119, 255, 0.25); }
   .hero-glow-destructive { box-shadow: 0 0 80px -20px rgba(220, 38, 38, 0.20); }
@@ -659,6 +664,16 @@
 @keyframes growUp {
   from { transform: scaleY(0); transform-origin: bottom; }
   to   { transform: scaleY(1); transform-origin: bottom; }
+}
+
+@keyframes tickPop {
+  0%   { opacity: 0; transform: scale(0.4); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes tickRing {
+  0%   { opacity: 0.55; transform: scale(0.8); }
+  100% { opacity: 0;    transform: scale(1.9); }
 }
 
 @keyframes dotPop {
