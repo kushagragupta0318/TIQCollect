@@ -1,4 +1,4 @@
-﻿"""
+﻿﻿"""
 TIQCollect — NPA Recovery Seed Data
 =====================================
 Data  architecture
@@ -547,7 +547,57 @@ def _visit_outcomes_for_dpd(dpd: int):
              VisitOutcome.REVISIT, VisitOutcome.DECEASED],
             [40, 30, 22, 8],
         )
-def curate_demo_agent_ptps(db, agent, today):
+# A field agent collects cash / UPI at the door. Anything above this in one
+# visit would be a bank transfer, not a doorstep recovery — without the cap,
+# a PAID_FULL on a ₹30L NPA case books ₹30L against a single visit and the
+# day's collection total stops being believable.
+FIELD_PAYMENT_CAP = 120_000.0
+
+
+# What the agency asks an agent to recover on a case THIS cycle — the arrears
+# it is chasing now, not the whole outstanding balance. Billing the full
+# overdue made a 12-stop day carry a ₹26L+ target, when a field agent's day is
+# worth ₹2-4L; it also made every "collection rate" on screen read near zero.
+CYCLE_TARGET_CAP = 70_000.0
+
+
+def _cycle_target(overdue: float) -> float:
+    if not overdue or overdue <= 0:
+        return 5000.0
+    return round(min(overdue * random.uniform(0.18, 0.35), CYCLE_TARGET_CAP), 2)
+
+
+def _field_payment(outcome, remaining: float, r: random.Random) -> float:
+    """Amount a doorstep visit can plausibly collect against `remaining`."""
+    if remaining <= 0:
+        return 0.0
+    if outcome == VisitOutcome.PAID_FULL:
+        amount = remaining
+    else:
+        amount = round(remaining * r.uniform(0.75, 1.0), 2)
+    amount = min(amount, remaining, FIELD_PAYMENT_CAP)
+    return round(max(amount, min(500.0, remaining)), 2)
+
+
+def _stable_rng(*parts) -> random.Random:
+    """RNG keyed off business identifiers (employee_code, case_number, dates) —
+    never off row ids, which are fresh UUIDs on every seed run. This is what
+    makes a re-run reproduce the same numbers on the same anchor date."""
+    return random.Random("|".join(str(p) for p in parts))
+
+
+# Reasons attached to the 5 due-today PTPs, in beat order. Kept as a fixed list
+# (not random) so a re-seed produces the same PTP rows.
+DUE_TODAY_PTP_REASONS = [
+    "Salary credited today — will pay the committed amount before evening.",
+    "Shop collections come in by afternoon. Asked agent to visit after 5 PM.",
+    "Client payment cleared this morning. Funds are in the business account.",
+    "Family arranged the amount. Borrower confirmed cash is ready at home.",
+    "Pension credited on schedule. Will hand over the amount on today's visit.",
+]
+
+
+def curate_demo_agent_ptps(db, agent, today, due_today_case_ids=None):
     """Give one agent a realistic current-month PTP book for the demo:
     several kept (HONORED), one missed (BROKEN), and a handful still due TODAY.
     Idempotent — clears this agent's current-month PTPs first, so it can run in
@@ -555,11 +605,20 @@ def curate_demo_agent_ptps(db, agent, today):
 
     Realistic shape (deterministic): 7 honored + 1 broken + 5 due-today.
     -> PTP conversion ≈ 54% (7/13), and 5 PTPs due today on the home screen.
+
+    The 5 due-today PTPs MUST sit on cases that are in the agent's current beat,
+    otherwise the home screen counts 5 but "PTPs Due Today" on the cases page
+    (which filters the beat) opens empty. Beat cases are picked in route order,
+    skipping the ones already visited today and the DEMO_CONTACT_NAME showcase
+    case (kept clean so the live record-visit demo can set its own PTP).
+    The honored/broken history goes on the agent's older, off-beat cases so
+    today's beat cards aren't polluted with stale promises.
     """
     month_start = date(today.year, today.month, 1)
     cases = db.query(Case).filter(Case.agent_id == agent.id).all()
     if not cases:
         return {"honored": 0, "set": 0, "due_today": 0}
+    by_id = {c.id: c for c in cases}
 
     # Wipe existing current-month PTPs for this agent so re-runs are stable.
     db.query(PTP).filter(
@@ -568,33 +627,504 @@ def curate_demo_agent_ptps(db, agent, today):
     ).delete(synchronize_session=False)
     db.flush()
 
-    # (days_ago, status) — negatives are earlier this month, 0 = due today.
-    plan = (
+    # ── Which cases carry the 5 due-today PTPs ────────────────────────────────
+    beat = (
+        db.query(Beat)
+        .filter(Beat.agent_id == agent.id)
+        .order_by(Beat.beat_date.desc())
+        .first()
+    )
+    beat_ids = [cid for cid in (beat.ordered_case_ids or []) if cid in by_id] if beat else []
+    if due_today_case_ids:
+        due_ids = [cid for cid in due_today_case_ids if cid in by_id][:5]
+    else:
+        beat_day = beat.beat_date if beat else today
+        day_start = datetime.combine(beat_day, datetime.min.time()).replace(tzinfo=timezone.utc)
+        day_end = datetime.combine(beat_day, datetime.max.time()).replace(tzinfo=timezone.utc)
+        visited_today = {
+            row[0] for row in db.query(Visit.case_id).filter(
+                Visit.agent_id == agent.id,
+                Visit.check_in_time >= day_start,
+                Visit.check_in_time <= day_end,
+            ).all()
+        }
+        showcase_ids = {
+            row[0] for row in db.query(Case.id)
+            .join(Customer, Customer.id == Case.customer_id)
+            .filter(Case.agent_id == agent.id, Customer.full_name == settings.DEMO_CONTACT_NAME)
+            .all()
+        }
+        eligible = [
+            cid for cid in beat_ids
+            if cid not in visited_today and cid not in showcase_ids
+            and by_id[cid].status not in (CaseStatus.PAID, CaseStatus.CLOSED, CaseStatus.WRITTEN_OFF)
+        ]
+        # Cases already carrying a PTP_SET badge come first — a due-today promise
+        # fits their story, and picking them avoids rewriting other case statuses.
+        due_ids = (
+            [cid for cid in eligible if by_id[cid].status == CaseStatus.PTP_SET]
+            + [cid for cid in eligible if by_id[cid].status != CaseStatus.PTP_SET]
+        )[:5]
+    due_set = set(due_ids)
+    # History lands on off-beat cases first; fall back to any case if the agent
+    # has too few, so a small dataset still produces the full 13-PTP book.
+    history_pool = [c for c in cases if c.id not in due_set and c.id not in set(beat_ids)] \
+        or [c for c in cases if c.id not in due_set] or cases
+
+    # (days_ago, status) — 0 = due today.
+    history_plan = (
         [(d, PTPStatus.HONORED) for d in (3, 6, 9, 12, 15, 18, 21)]  # 7 kept
         + [(7, PTPStatus.BROKEN)]                                    # 1 missed
-        + [(0, PTPStatus.ACTIVE)] * 5                                # 5 due today
     )
+    # Working days already elapsed this month, today excluded — that's where a
+    # promise can have fallen due and been settled. Early in the month the
+    # natural date (today − N) lands before the 1st; clamping it to month_start
+    # stacked 6 of the 8 history PTPs on the same day, and left the profile's
+    # PTP rate reading 1/6. Spreading them over the elapsed days is also the
+    # truthful story: a PTP taken in late July with an early-August due date
+    # settles in August.
+    elapsed_days = []
+    _d = month_start
+    while _d < today:
+        if _d.weekday() < 6:       # Mon–Sat, same working week as the beats
+            elapsed_days.append(_d)
+        _d += timedelta(days=1)
+
     honored = broken = due_today = 0
-    for i, (days_ago, status) in enumerate(plan):
-        case = cases[i % len(cases)]
-        # keep the date inside the current month even early in the month
-        committed = max(month_start, today - timedelta(days=days_ago))
+    for i, (days_ago, status) in enumerate(history_plan):
+        case = history_pool[i % len(history_pool)]
+        natural = today - timedelta(days=days_ago)
+        if natural >= month_start:
+            committed = natural           # full month elapsed — use the real date
+        elif elapsed_days:
+            committed = elapsed_days[-(1 + (i % len(elapsed_days)))]
+        else:
+            committed = month_start       # seeded on the 1st: nothing else to use
         amount = round(float(case.target_amount or 5000.0), 2)
         paid = amount if status == PTPStatus.HONORED else 0.0
         db.add(PTP(
             id=_uid(), case_id=case.id, agent_id=agent.id,
             committed_amount=amount, committed_date=committed,
             actual_paid_amount=paid, status=status,
-            agent_notes="Demo PTP" ,
+            agent_notes="Demo PTP",
         ))
         if status == PTPStatus.HONORED:
             honored += 1
-        elif status == PTPStatus.BROKEN:
+        else:
             broken += 1
-        elif status == PTPStatus.ACTIVE and committed == today:
-            due_today += 1
+
+    for i, cid in enumerate(due_ids):
+        case = by_id[cid]
+        amount = round(float(case.target_amount or 5000.0), 2)
+        db.add(PTP(
+            id=_uid(), case_id=cid, agent_id=agent.id,
+            committed_amount=amount, committed_date=today,
+            actual_paid_amount=0.0, status=PTPStatus.ACTIVE,
+            customer_reason=DUE_TODAY_PTP_REASONS[i % len(DUE_TODAY_PTP_REASONS)],
+            agent_notes="PTP falls due today — follow up before 7 PM.",
+            follow_up_date=today,
+        ))
+        # Badge on the case card must agree with the PTP that's now due on it.
+        if case.status not in (CaseStatus.PAID, CaseStatus.CLOSED, CaseStatus.WRITTEN_OFF):
+            case.status = CaseStatus.PTP_SET
+        due_today += 1
     db.flush()
-    return {"honored": honored, "broken": broken, "due_today": due_today, "set": len(plan)}
+    return {
+        "honored": honored, "broken": broken, "due_today": due_today,
+        "set": len(history_plan) + len(due_ids),
+    }
+
+
+def seed_recent_daily_activity(db, agents, today: date, days_back: int = 30) -> dict:
+    """Put real visit / payment / PTP rows behind every recent working day.
+
+    The beat history carries per-day totals, but only *today* had actual rows
+    behind it — so filtering the manager's case list to 3 or 4 August returned
+    nothing, and the days on the duty calendar were unsupported numbers. Every
+    working day in the window now gets its own allocation of cases, its own
+    beat, and the visits and receipts that justify the day's figures.
+
+    Cases are dealt out so a day's allocation is exclusive: allocation_date is
+    a single field, so a case can only belong to one day's list.
+
+    Deterministic per (agent, day) and idempotent — a day that already has real
+    visits is left untouched. Caller commits.
+    """
+    from collections import defaultdict
+    made = defaultdict(int)
+    DAY_OUTCOMES = [VisitOutcome.PAID_FULL, VisitOutcome.PART_PAID, VisitOutcome.PART_PAID_PTP,
+                    VisitOutcome.PTP, VisitOutcome.NOT_AVAILABLE, VisitOutcome.RTP,
+                    VisitOutcome.REVISIT, VisitOutcome.DISPUTE]
+    DAY_WEIGHTS = [25, 28, 12, 14, 9, 4, 5, 3]   # ~45% of visits recover money:
+    # at ~34% the day's recovery could never reach a believable share of
+    # the day's target (it was landing at 4-22%).
+    MONEY = (VisitOutcome.PAID_FULL, VisitOutcome.PART_PAID, VisitOutcome.PART_PAID_PTP)
+
+    # Working days so far this month, oldest first, today excluded (already
+    # populated by the scripted demo day and the today's-activity block).
+    #
+    # Scoped to the month, not the full `days_back` window: a case may only be
+    # worked once in the window (see below), so spreading a full day's load
+    # across 26 days would need ~280 cases per agent and they hold 30-60. The
+    # month to date is also exactly what the profile counts and what the
+    # manager's recent date filters reach for.
+    start = max(date(today.year, today.month, 1), today - timedelta(days=days_back))
+    days = []
+    d = start
+    while d < today:
+        if d.weekday() < 6:
+            days.append(d)
+        d += timedelta(days=1)
+    if not days:
+        return {}
+
+    for ag in agents:
+        cust = {}
+        my_cases = db.query(Case).filter(Case.agent_id == ag.id).all()
+        if not my_cases:
+            continue
+        for c in my_cases:
+            if c.customer_id not in cust:
+                cust[c.customer_id] = db.query(Customer).filter(
+                    Customer.id == c.customer_id).first()
+        beats = {b.beat_date: b for b in db.query(Beat).filter(
+            Beat.agent_id == ag.id, Beat.beat_date.in_(days)).all()}
+        visited_on = defaultdict(set)
+        for v in db.query(Visit).filter(Visit.agent_id == ag.id).all():
+            visited_on[v.check_in_time.date()].add(v.case_id)
+
+        # Today's list is already fixed; everything else is dealt across the
+        # window, newest day first so recent days get the fullest beats.
+        #
+        # A case may only be worked on ONE day in the window. allocation_date is
+        # a single field, so a case worked twice can only be listed under one of
+        # those dates — and the other day ends up with visits but no cases in
+        # the manager's list. Anything already visited in the window is out.
+        reserved = {c.id for c in my_cases if c.allocation_date == today.strftime("%Y-%m-%d")}
+        window_start = today - timedelta(days=days_back)
+        for d, cids in visited_on.items():
+            if window_start <= d <= today:
+                reserved |= cids
+        pool = sorted((c for c in my_cases if c.id not in reserved),
+                      key=lambda c: c.case_number)
+        _stable_rng("pool", ag.employee_code).shuffle(pool)
+        cursor = 0
+
+        for day in reversed(days):
+            beat = beats.get(day)
+            if beat is None or beat.is_leave_day:
+                continue
+            r = _stable_rng("day", ag.employee_code, day.isoformat())
+            # A day's real load, not the synthetic count the attendance history
+            # carried (4-16, often far too low): sizing off that left the demo
+            # agent with 18 visits for four elapsed days.
+            want = min(r.randint(10, 12), max(1, (ag.max_cases_per_day or 12)))
+            # Top the day up rather than skipping it. Historical visits land on
+            # some of these dates by chance, and skipping any day that already
+            # had one left barely half the agent-days populated.
+            want -= len(visited_on.get(day, ()))
+            if want <= 0:
+                continue
+            take = pool[cursor:cursor + want]
+            cursor += len(take)
+            if not take:
+                # Agent has no unworked cases left to deal. The day can't claim
+                # completed stops it has no visits for, so stand it down.
+                beat.ordered_case_ids = []
+                beat.total_cases = 0
+                beat.cases_completed = 0
+                beat.amount_collected = 0.0
+                beat.total_target_amount = 0.0
+                made["days_stood_down"] += 1
+                continue
+            day_cash = 0.0
+            ordered = []
+            for i, c in enumerate(take):
+                cu = cust.get(c.customer_id)
+                if not cu:
+                    continue
+                ordered.append(c.id)
+                c.allocation_date = day.strftime("%Y-%m-%d")
+                outcome = r.choices(DAY_OUTCOMES, weights=DAY_WEIGHTS)[0]
+                remaining = round((c.target_amount or 0) - (c.collected_amount or 0), 2)
+                if outcome in MONEY and remaining <= 0:
+                    outcome = VisitOutcome.PTP      # nothing left to collect
+                met = outcome != VisitOutcome.NOT_AVAILABLE
+                cin = datetime.combine(day, datetime.min.time()).replace(
+                    hour=min(8 + i, 17), minute=r.randint(5, 55), tzinfo=timezone.utc)
+                v = Visit(
+                    id=_uid(), case_id=c.id, agent_id=ag.id,
+                    check_in_latitude=cu.latitude, check_in_longitude=cu.longitude,
+                    check_in_time=cin,
+                    check_out_time=cin + timedelta(minutes=r.randint(18, 45)),
+                    distance_from_customer_metres=round(r.uniform(15, 90), 1),
+                    geo_verified=True, within_contact_hours=True,
+                    customer_met=met, outcome=outcome,
+                    person_met=PersonMet.BORROWER if met else None,
+                    agent_recording_transcript=r.choice(
+                        AGENT_TRANSCRIPTS.get(outcome.value, AGENT_TRANSCRIPTS["REVISIT"])),
+                    ai_visit_note=r.choice(
+                        AI_VISIT_NOTES.get(outcome.value, AI_VISIT_NOTES["REVISIT"])),
+                    visit_number=(c.visit_count or 0) + 1,
+                )
+                db.add(v); db.flush()
+                c.visit_count = (c.visit_count or 0) + 1
+                made["visits"] += 1
+                if outcome in MONEY:
+                    amt = _field_payment(outcome, remaining, r)
+                    if outcome == VisitOutcome.PAID_FULL and amt < remaining - 0.01:
+                        # Capped below the balance, so it isn't a full recovery.
+                        outcome = VisitOutcome.PART_PAID
+                        v.outcome = outcome
+                    db.add(Payment(
+                        id=_uid(), case_id=c.id, visit_id=v.id, agent_id=ag.id,
+                        amount=amt, mode=r.choice(PAYMENT_MODES),
+                        status=PaymentStatus.VERIFIED,
+                        receipt_number=f"RCP{r.randint(10000000, 99999999)}",
+                        payment_date=cin + timedelta(minutes=10), receipt_sms_sent=True))
+                    c.collected_amount = round((c.collected_amount or 0) + amt, 2)
+                    day_cash += amt
+                    made["payments"] += 1
+                if outcome in (VisitOutcome.PTP, VisitOutcome.PART_PAID_PTP):
+                    due = day + timedelta(days=r.randint(3, 20))
+                    if due == today:
+                        # "Due today" is the scripted demo set (exactly 5 on the
+                        # demo agent's home screen) — back-filled days must not
+                        # add to it.
+                        due = today + timedelta(days=1)
+                    st = (PTPStatus.ACTIVE if due > today
+                          else PTPStatus.HONORED if r.random() < 0.6 else PTPStatus.BROKEN)
+                    db.add(PTP(
+                        id=_uid(), case_id=c.id, visit_id=v.id, agent_id=ag.id,
+                        committed_amount=round(float(c.target_amount or 5000.0), 2),
+                        committed_date=due,
+                        actual_paid_amount=(round(float(c.target_amount or 0) * 0.85, 2)
+                                            if st == PTPStatus.HONORED else 0.0),
+                        status=st))
+                    made["ptps"] += 1
+            beat.ordered_case_ids = ordered
+            beat.total_cases = len(ordered)
+            beat.cases_completed = len(ordered)
+            beat.amount_collected = round(day_cash, 2)
+            beat.total_target_amount = round(
+                sum(float(c.target_amount or 0) for c in take), 2)
+            made["days"] += 1
+        db.flush()
+    return dict(made)
+
+
+def reconcile_integrity(db, today: date) -> dict:
+    """Repair contradictions between visits, payments, PTPs, case status and beats.
+
+    Every screen in the app reads a different one of these tables, so a row that
+    disagrees with its neighbours shows up as a visible lie: a case badged
+    "part paid" with no receipt, a PTP_SET card with no live promise on it, a
+    beat claiming 3 stops done while 8 cases carry today's visited tick.
+
+    Deterministic (all randomness keyed off row ids) and idempotent, so the seed
+    and an already-populated DB converge on the same answer. Caller commits.
+    """
+    from collections import defaultdict
+    MONEY = (VisitOutcome.PAID_FULL, VisitOutcome.PART_PAID, VisitOutcome.PART_PAID_PTP)
+    fixed = defaultdict(int)
+
+    cases = {c.id: c for c in db.query(Case).all()}
+    visits = db.query(Visit).all()
+    pays = db.query(Payment).all()
+    ptps = db.query(PTP).all()
+    paid_total = defaultdict(float)
+    for p in pays:
+        paid_total[p.case_id] += p.amount or 0.0
+    visits_by_id = {v.id: v for v in visits}
+
+    # 1. A money outcome with no payment row — pay it, or stop claiming it.
+    have_payment = {p.visit_id for p in pays if p.visit_id}
+    for v in visits:
+        if v.outcome not in MONEY or v.id in have_payment:
+            continue
+        c = cases.get(v.case_id)
+        if not c:
+            continue
+        r = _stable_rng("pay", c.case_number, v.check_in_time.date().isoformat())
+        remaining = round((c.target_amount or 0) - paid_total[c.id], 2)
+        if remaining <= 0:
+            v.outcome = (VisitOutcome.PTP if v.outcome == VisitOutcome.PART_PAID_PTP
+                         else VisitOutcome.REVISIT)
+            fixed["visit_outcome_downgraded"] += 1
+            continue
+        amount = _field_payment(v.outcome, remaining, r)
+        if v.outcome == VisitOutcome.PAID_FULL and amount < remaining - 0.01:
+            v.outcome = VisitOutcome.PART_PAID
+        db.add(Payment(
+            id=_uid(), case_id=c.id, visit_id=v.id, agent_id=v.agent_id,
+            amount=amount, mode=r.choice(PAYMENT_MODES), status=PaymentStatus.VERIFIED,
+            receipt_number=f"RCP{r.randint(10000000, 99999999)}",
+            payment_date=v.check_in_time + timedelta(minutes=r.randint(5, 30)),
+            receipt_sms_sent=True,
+        ))
+        paid_total[c.id] += amount
+        fixed["payments_created"] += 1
+
+    # 2. A PTP outcome with no promise recorded — record it.
+    have_ptp = {p.visit_id for p in ptps if p.visit_id}
+    for v in visits:
+        if v.outcome not in (VisitOutcome.PTP, VisitOutcome.PART_PAID_PTP) or v.id in have_ptp:
+            continue
+        c = cases.get(v.case_id)
+        if not c:
+            continue
+        r = _stable_rng("ptp", c.case_number, v.check_in_time.date().isoformat())
+        vday = v.check_in_time.date()
+        # Never lands on today: a back-filled promise must not join the
+        # scripted "due today" set the demo screens are built around.
+        committed = vday + timedelta(days=r.randint(3, 15))
+        if committed >= today:
+            committed = today + timedelta(days=r.randint(2, 12))
+            status, paid_amt = PTPStatus.ACTIVE, 0.0
+        elif r.random() < 0.62:
+            status, paid_amt = PTPStatus.HONORED, round((c.target_amount or 5000) * 0.85, 2)
+        else:
+            status, paid_amt = PTPStatus.BROKEN, 0.0
+        db.add(PTP(
+            id=_uid(), case_id=c.id, visit_id=v.id, agent_id=v.agent_id,
+            committed_amount=round(float(c.target_amount or 5000.0), 2),
+            committed_date=committed, actual_paid_amount=paid_amt, status=status,
+        ))
+        fixed["ptps_created"] += 1
+    db.flush()
+
+    # 3. A promise dated before the visit that took it.
+    for p in ptps:
+        v = visits_by_id.get(p.visit_id) if p.visit_id else None
+        if v and p.committed_date < v.check_in_time.date():
+            c = cases.get(p.case_id)
+            r = _stable_rng("ptpdate", c.case_number if c else p.case_id,
+                            v.check_in_time.date().isoformat())
+            p.committed_date = v.check_in_time.date() + timedelta(days=r.randint(3, 15))
+            fixed["ptp_dates_moved"] += 1
+
+    # 3b. Nobody collects on a Sunday — the app states so on its own compliance
+    #     panel. Anything that landed there moves back to the Saturday.
+    for v in visits:
+        if v.check_in_time.date().weekday() == 6:
+            v.check_in_time = v.check_in_time - timedelta(days=1)
+            if v.check_out_time:
+                v.check_out_time = v.check_out_time - timedelta(days=1)
+            fixed["sunday_visits_moved"] += 1
+    for p in pays:
+        if p.payment_date.date().weekday() == 6:
+            p.payment_date = p.payment_date - timedelta(days=1)
+            fixed["sunday_payments_moved"] += 1
+    db.flush()
+
+    # 4. A promise still ACTIVE after its due date has passed. Left alone these
+    #    accumulate forever and inflate the "due" counts on every screen.
+    for p in ptps:
+        if p.status == PTPStatus.ACTIVE and p.committed_date < today:
+            p.status = PTPStatus.BROKEN
+            fixed["stale_ptps_broken"] += 1
+    db.flush()
+
+    # 5. Case status has to match what the case actually holds.
+    live_ptp_cases = {
+        p.case_id for p in db.query(PTP).filter(PTP.status == PTPStatus.ACTIVE).all()
+    }
+    visited_cases = {v.case_id for v in visits}
+    for c in cases.values():
+        collected = round(paid_total[c.id], 2)
+        if c.status in (CaseStatus.CLOSED, CaseStatus.WRITTEN_OFF, CaseStatus.ESCALATED):
+            continue
+        if c.status == CaseStatus.PTP_SET and c.id not in live_ptp_cases:
+            c.status = (CaseStatus.PAID if collected >= (c.target_amount or 0) - 0.01 and collected > 0
+                        else CaseStatus.PARTIALLY_PAID if collected > 0
+                        else CaseStatus.IN_PROGRESS)
+            fixed["ptp_set_without_promise"] += 1
+        elif c.status == CaseStatus.ASSIGNED and c.id in visited_cases:
+            c.status = (CaseStatus.PARTIALLY_PAID if 0 < collected < (c.target_amount or 0)
+                        else CaseStatus.PAID if collected > 0 else CaseStatus.IN_PROGRESS)
+            fixed["assigned_but_visited"] += 1
+        if abs((c.collected_amount or 0) - collected) > 0.01:
+            c.collected_amount = collected
+            fixed["collected_amount_resynced"] += 1
+    db.flush()
+
+    # 6. Today's beat must agree with today's visits. A case worked today belongs
+    #    on today's route — otherwise the manager sees it ticked "visited" while
+    #    it sits outside the beat, and the beat's own counter disagrees.
+    day_visits = defaultdict(set)
+    day_money = defaultdict(float)
+    for v in db.query(Visit).all():
+        day_visits[(v.agent_id, v.check_in_time.date())].add(v.case_id)
+    for p in db.query(Payment).all():
+        day_money[(p.agent_id, p.payment_date.date())] += p.amount or 0.0
+    # Inside the recent window every working day is backed by real rows, so a
+    # beat there with no visits behind it cannot claim completed stops.
+    recent = today - timedelta(days=30)
+    for b in db.query(Beat).filter(Beat.beat_date >= recent, Beat.beat_date <= today).all():
+        if not day_visits.get((b.agent_id, b.beat_date)) and (b.cases_completed or 0) > 0:
+            b.cases_completed = 0
+            b.amount_collected = 0.0
+            fixed["empty_days_stood_down"] += 1
+
+    # Any day that has real visit rows must have a beat that agrees with them.
+    real_days = {d for (_, d) in day_visits}
+    for b in db.query(Beat).filter(Beat.beat_date.in_(real_days)).all():
+        key = (b.agent_id, b.beat_date)
+        worked = day_visits.get(key, set())
+        if not worked:
+            continue
+        ids = list(b.ordered_case_ids or [])
+        for cid in worked:
+            if cid not in ids:
+                ids.append(cid)
+                fixed["visited_cases_added_to_beat"] += 1
+        b.ordered_case_ids = ids
+        b.total_cases = len(ids)
+        if b.is_leave_day:                 # worked, so it was not a leave day
+            b.is_leave_day = False
+            b.leave_type = None
+            b.leave_remarks = None
+            fixed["leave_days_with_visits"] += 1
+        if (b.cases_completed or 0) != len(worked):
+            b.cases_completed = len(worked)
+            fixed["beat_completed_resynced"] += 1
+        money = round(day_money.get(key, 0.0), 2)
+        if abs((b.amount_collected or 0) - money) > 0.01:
+            b.amount_collected = money
+            fixed["beat_collected_resynced"] += 1
+        b.total_target_amount = round(
+            sum(float(cases[cid].target_amount or 0) for cid in ids if cid in cases), 2)
+    db.flush()
+
+    # 7. allocation_date has to place each case on exactly one recent day.
+    #    The manager's case list filters on it, so if every case that was worked
+    #    today is stamped with today — including ones first worked on the 3rd —
+    #    the earlier days end up with visits but no cases, and filtering to the
+    #    3rd returns nothing. Today's route is reserved first (it drives the
+    #    "today's cases" views); every other case goes to the earliest day in
+    #    the window on which it was actually worked.
+    window_start = today - timedelta(days=30)
+    todays_beats = db.query(Beat).filter(Beat.beat_date == today).all()
+    claimed: set[str] = set()
+    for b in todays_beats:
+        for cid in (b.ordered_case_ids or []):
+            if cid in cases:
+                claimed.add(cid)
+                if cases[cid].allocation_date != today.strftime("%Y-%m-%d"):
+                    cases[cid].allocation_date = today.strftime("%Y-%m-%d")
+                    fixed["allocation_dates_set"] += 1
+    older = sorted({d for (_, d) in day_visits if window_start <= d < today})
+    for day in older:                      # oldest first — first worked wins
+        for b in db.query(Beat).filter(Beat.beat_date == day).all():
+            for cid in (b.ordered_case_ids or []):
+                if cid in claimed or cid not in cases:
+                    continue
+                claimed.add(cid)
+                if cases[cid].allocation_date != day.strftime("%Y-%m-%d"):
+                    cases[cid].allocation_date = day.strftime("%Y-%m-%d")
+                    fixed["allocation_dates_set"] += 1
+    db.flush()
+    return dict(fixed)
 
 
 def seed():
@@ -973,7 +1503,7 @@ def seed():
                 agent_id=agent.id,
                 status=CaseStatus.ASSIGNED,   # will be updated below
                 priority=_priority_from_score(score),
-                target_amount=loan.overdue_amount,
+                target_amount=_cycle_target(loan.overdue_amount),
                 collected_amount=0.0,          # updated from payments
                 allocation_date=alloc_date.strftime("%Y-%m-%d"),
                 allocation_score=score,
@@ -1039,6 +1569,15 @@ def seed():
                     not_met_reason = random.choice(list(NotMetReason))
                     person = None
                     def_reason = None
+                # A visit must not report money it never records. Once the case
+                # target is fully collected there is nothing left to pay, and
+                # the payment block below would skip it — leaving a PAID_FULL
+                # visit with no receipt behind it. Log the real thing instead.
+                if (outcome in (VisitOutcome.PAID_FULL, VisitOutcome.PART_PAID,
+                                VisitOutcome.PART_PAID_PTP)
+                        and round(c.target_amount - case_total_collected, 2) <= 0):
+                    outcome = (VisitOutcome.PTP if outcome == VisitOutcome.PART_PAID_PTP
+                               else VisitOutcome.REVISIT)
                 jlat, jlon = _jitter_coords(customer.latitude, customer.longitude, 0.08)
                 dist = abs(jlat - customer.latitude) * 111000 + abs(jlon - customer.longitude) * 111000
                 # ~25% of non-last visits on older cases were done by a prior agent (re-allocation)
@@ -1078,11 +1617,11 @@ def seed():
                 if outcome in [VisitOutcome.PAID_FULL, VisitOutcome.PART_PAID, VisitOutcome.PART_PAID_PTP]:
                     remaining = round(c.target_amount - case_total_collected, 2)
                     if remaining > 0:
-                        if outcome == VisitOutcome.PAID_FULL:
-                            amount = remaining
-                        else:
-                            amount = min(round(loan.overdue_amount * random.uniform(0.10, 0.55), 2), remaining)
-                        amount = max(amount, min(500.0, remaining))
+                        amount = _field_payment(outcome, remaining, random)
+                        if outcome == VisitOutcome.PAID_FULL and amount < remaining - 0.01:
+                            outcome = VisitOutcome.PART_PAID   # capped, not a full recovery
+                            v.outcome = outcome
+                            last_outcome = outcome
                         case_total_collected += amount
                         db.add(Payment(
                             id=_uid(),
@@ -1337,7 +1876,7 @@ def seed():
             agent_id=agent002.id,
             status=CaseStatus.ASSIGNED,
             priority=d["priority"],
-            target_amount=round(d["outstanding"] * 0.30, 2),
+            target_amount=round(min(d["outstanding"] * 0.30, CYCLE_TARGET_CAP), 2),
             collected_amount=0.0,
             allocation_date=today.strftime("%Y-%m-%d"),
             allocation_score=float({"CRITICAL": 95, "HIGH": 75, "MEDIUM": 45, "LOW": 20}[d["priority"].value]),
@@ -2037,7 +2576,7 @@ def seed():
             agent_id=assigned_agent.id,
             status=CaseStatus.ASSIGNED,
             priority=CasePriority.HIGH if d["dpd"] > 90 else CasePriority.MEDIUM,
-            target_amount=round(d["outstanding"] * 0.35, 2),
+            target_amount=round(min(d["outstanding"] * 0.35, CYCLE_TARGET_CAP), 2),
             collected_amount=0.0,
             allocation_date=today.strftime("%Y-%m-%d"),
             allocation_score=round(d["dpd"] / 120 * 100, 1),
@@ -2068,12 +2607,18 @@ def seed():
         VisitOutcome.REVISIT,       # 10%
         VisitOutcome.DISPUTE,       # 6%
     ]
-    _DAY_WEIGHTS = [12, 14, 8, 22, 20, 8, 10, 6]
+    _DAY_WEIGHTS = [25, 28, 12, 14, 9, 4, 5, 3]   # ~45% of visits recover money:
+    # at ~34% the day's recovery could never reach a believable share of
+    # the day's target (it was landing at 4-22%).
     _REVISITABLE = {
         CaseStatus.ASSIGNED, CaseStatus.IN_PROGRESS,
         CaseStatus.PTP_SET, CaseStatus.PARTIALLY_PAID, CaseStatus.ESCALATED,
     }
-    active_today = [a for a in agents if a.id not in off_duty_ids and a.employee_code != "EMP0002"]
+    # Every agent works today, including the OFF_DUTY ones — that status means
+    # "not currently checked in" (shift over, or not started), not "did nothing
+    # today". Excluding them left 3 of 18 agents with no visits and no payments
+    # at all on the manager's day view, which reads as missing data.
+    active_today = [a for a in agents if a.employee_code != "EMP0002"]
     for act_agent in active_today:
         pool = [c for c in cases
                 if c.agent_id == act_agent.id and c.status in _REVISITABLE]
@@ -2113,13 +2658,13 @@ def seed():
             already = act_case.collected_amount or 0.0
             remaining_target = round(act_case.target_amount - already, 2)
             if outcome in (VisitOutcome.PAID_FULL, VisitOutcome.PART_PAID, VisitOutcome.PART_PAID_PTP) and remaining_target > 0:
-                if outcome == VisitOutcome.PAID_FULL:
-                    cash = remaining_target
-                elif outcome == VisitOutcome.PART_PAID:
-                    cash = min(round(act_case.target_amount * random.uniform(0.28, 0.55), 2), remaining_target)
-                else:  # PART_PAID_PTP
-                    cash = min(round(act_case.target_amount * random.uniform(0.20, 0.45), 2), remaining_target)
-                cash = max(cash, min(500.0, remaining_target))
+                # Same doorstep ceiling as everywhere else — uncapped, a
+                # PAID_FULL on a ₹30L NPA case booked ₹30L against one visit and
+                # pushed the team's day total past ₹1 crore.
+                cash = _field_payment(outcome, remaining_target, random)
+                if outcome == VisitOutcome.PAID_FULL and cash < remaining_target - 0.01:
+                    outcome = VisitOutcome.PART_PAID
+                    v.outcome = outcome
                 rcpt_num += 1
                 db.add(Payment(
                     id=_uid(), case_id=act_case.id,
@@ -2360,6 +2905,36 @@ def seed():
         _routing_available = False
         print("  [warn] routing module unavailable — using unordered IDs")
     today_str = today.strftime("%Y-%m-%d")
+    # ── Top up today's allocation so EVERY agent has a day's work ─────────────
+    # The month-0 loop scatters allocation dates across the month, so only ~1
+    # case per agent happened to land on today — agent002 looked fully loaded
+    # (its 15 demo cases are pinned to today) while everyone else had an empty
+    # beat and an empty "today's cases" drill-down in the manager views.
+    # Open cases are rolled forward onto today, which is what daily allocation
+    # does in production: an unresolved case rolls onto a later beat, carrying
+    # its visit history with it.
+    _ROLLABLE = (CaseStatus.ASSIGNED, CaseStatus.IN_PROGRESS, CaseStatus.PTP_SET,
+                 CaseStatus.PARTIALLY_PAID, CaseStatus.ESCALATED)
+    _rolled = 0
+    for agent in agents[:N_AGENTS]:
+        if agent.employee_code == "EMP0002":
+            continue    # demo beat is scripted case-by-case — never touch it
+        _mine = [c for c in cases if c.agent_id == agent.id]
+        _have = [c for c in _mine if c.allocation_date == today_str]
+        _want = min(agent.max_cases_per_day, random.randint(9, 14))
+        # Oldest open cases first — ageing debt is what a real allocator pushes
+        # to the top of today's route. Ordinary tickets are preferred over the
+        # ₹3L+ tail: taking those purely by age handed one agent a ₹60L day,
+        # which no allocator would build.
+        _open = [c for c in _mine if c.allocation_date != today_str and c.status in _ROLLABLE]
+        _by_age = lambda c: c.allocation_date or ""
+        _pool = (sorted((c for c in _open if (c.target_amount or 0) <= 300_000), key=_by_age)
+                 + sorted((c for c in _open if (c.target_amount or 0) > 300_000), key=_by_age))
+        for c in _pool[:max(0, _want - len(_have))]:
+            c.allocation_date = today_str
+            _rolled += 1
+    db.flush()
+    print(f"  Rolled {_rolled} open cases onto today's allocation across {N_AGENTS - 1} agents.")
     for agent in agents[:N_AGENTS]:
         # Beat = only today's allocated cases so beat, home, and my-cases all show the same count
         agent_cases = [
@@ -2420,33 +2995,67 @@ def seed():
         ))
     db.commit()
     # ── Realistic PTP book for the demo agent (agent002) ──────────────────────
-    _demo = curate_demo_agent_ptps(db, agents[1], today)
+    # The 5 due-today PTPs are pinned to fixed demo cases so the same 5 cards
+    # show up under "PTPs Due Today" on every re-seed: Priya (3), Anita (5),
+    # Suresh (6), Vikas (9), Arun (11). Deliberately excluded — demo_cases 0/1/4
+    # (already visited today) and demo_cases[2], the DEMO_CONTACT_NAME showcase
+    # case that the live record-visit demo runs on.
+    _demo = curate_demo_agent_ptps(
+        db, agents[1], today,
+        due_today_case_ids=[demo_cases[i].id for i in (3, 5, 6, 9, 11)],
+    )
     db.commit()
     print(f"  agent002 PTPs: {_demo['honored']} honored, {_demo['broken']} broken, {_demo['due_today']} due today")
+    # ── Real rows behind every recent working day ─────────────────────────────
+    print("[11a] Seeding daily field activity for the last 30 days...")
+    _daily = seed_recent_daily_activity(db, agents[:N_AGENTS], today, days_back=30)
+    db.commit()
+    print(f"       {_daily.get('days', 0)} agent-days: {_daily.get('visits', 0)} visits, "
+          f"{_daily.get('payments', 0)} payments, {_daily.get('ptps', 0)} PTPs")
+    # ── Integrity pass ────────────────────────────────────────────────────────
+    # Runs last, so it also catches anything the demo blocks and the PTP
+    # curation left inconsistent with each other.
+    print("[11b] Cross-checking visits / payments / PTPs / statuses / beats...")
+    _fx = reconcile_integrity(db, today)
+    db.commit()
+    if _fx:
+        for k, v in sorted(_fx.items()):
+            print(f"       {k:34} {v}")
+    else:
+        print("       nothing to repair.")
     # ── Reconcile current-month agent counters ────────────────────────────────
-    # current_month_* fields must reflect the FULL current calendar month,
-    # including both historical month-0 data and today's [10d] activity.
+    # Strictly the calendar month to date — the tile is labelled "This Month",
+    # so it has to mean the month. Seeded early in a month that means a small
+    # number (the 5th = 4 working days), and that is the honest reading: the
+    # figure must stay in proportion to the days actually worked.
     print("[12/12] Reconciling current-month agent counters...")
-    month_start_dt = datetime.combine(date(today.year, today.month, 1), datetime.min.time()).replace(tzinfo=timezone.utc)
-    month_start_date = date(today.year, today.month, 1)
+    window_start = date(today.year, today.month, 1)
     for ag in agents:
-        mo_col = db.query(func.coalesce(func.sum(Payment.amount), 0.0)).filter(
-            Payment.agent_id == ag.id,
-            Payment.payment_date >= month_start_dt,
-        ).scalar() or 0.0
-        mo_vis = db.query(func.count(Visit.id)).filter(
-            Visit.agent_id == ag.id,
-            Visit.check_in_time >= month_start_dt,
-        ).scalar() or 0
+        # Visits and collections come from the agent's Beat rows — the daily
+        # record of work that also draws the duty calendar. The Visit and
+        # Payment tables only ever hold the scripted demo activity, so counting
+        # those made a whole month read like a single day: 13 visits and ₹1.5L
+        # against a ₹1.37L one-day target.
+        mo_beats = (
+            db.query(Beat)
+            .filter(Beat.agent_id == ag.id,
+                    Beat.beat_date >= window_start,
+                    Beat.beat_date <= today)
+            .all()
+        )
+        mo_vis = sum(int(b.cases_completed or 0) for b in mo_beats)
+        mo_col = round(sum(float(b.amount_collected or 0.0) for b in mo_beats), 2)
         mo_ptps = db.query(func.count(PTP.id)).filter(
             PTP.agent_id == ag.id,
-            PTP.committed_date >= month_start_date,
+            PTP.committed_date >= window_start,
+            PTP.committed_date <= today,
         ).scalar() or 0
         # honored count drives the PTP-conversion rate on the profile; without
         # this it stayed 0 (previously hardcoded), showing an unrealistic 0%.
         mo_hon = db.query(func.count(PTP.id)).filter(
             PTP.agent_id == ag.id,
-            PTP.committed_date >= month_start_date,
+            PTP.committed_date >= window_start,
+            PTP.committed_date <= today,
             PTP.status.in_([PTPStatus.HONORED, PTPStatus.PARTIALLY_HONORED]),
         ).scalar() or 0
         ag.current_month_collections = round(float(mo_col), 2)
