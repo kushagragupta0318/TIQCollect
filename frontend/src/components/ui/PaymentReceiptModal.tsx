@@ -45,11 +45,11 @@ export default function PaymentReceiptModal({ receipt: r, onClose }: Props) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
-      <div className="bg-white w-full max-w-sm rounded-2xl overflow-hidden shadow-2xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="w-full max-w-sm overflow-hidden rounded-card border border-border bg-white shadow-premium">
         {/* Header */}
-        <div className={`${verified ? "bg-success-600" : "bg-amber-500"} text-white p-5 text-center relative`}>
-          <button onClick={onClose} className="absolute top-3 right-3 text-white/70 hover:text-white">
+        <div className={`${verified ? "bg-success-100 text-success-700" : "bg-warning-100 text-warning-700"} relative p-5 text-center`}>
+          <button onClick={onClose} aria-label="Close receipt" className="absolute right-3 top-3 flex size-9 items-center justify-center rounded-control text-foreground/60 hover:bg-white/60 hover:text-foreground">
             <X className="w-5 h-5" />
           </button>
           {verified ? <CheckCircle className="w-10 h-10 mx-auto mb-2" /> : <Clock className="w-10 h-10 mx-auto mb-2" />}
@@ -82,7 +82,7 @@ export default function PaymentReceiptModal({ receipt: r, onClose }: Props) {
           <button onClick={handleCopy} className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl border border-slate-200 text-sm font-medium text-slate-600 hover:bg-slate-50 transition-colors">
             <Copy className="w-4 h-4" /> Copy
           </button>
-          <button onClick={handleShare} className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-success-600 text-white text-sm font-medium hover:bg-success-700 transition-colors">
+          <button onClick={handleShare} className="flex min-h-10 flex-1 items-center justify-center gap-2 rounded-control border border-success-500 bg-white py-2.5 text-sm font-medium text-success-700 transition-colors hover:bg-success-100">
             <Share2 className="w-4 h-4" /> Share
           </button>
         </div>

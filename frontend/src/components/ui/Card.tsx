@@ -11,7 +11,7 @@ interface CardProps {
 export function Card({ children, className, onClick, hover }: CardProps) {
   return (
     <div
-      className={clsx("card", hover && "cursor-pointer hover:shadow-md hover:border-slate-200 transition-shadow", className)}
+      className={clsx("card", hover && "cursor-pointer hover:bg-[#F7F8FA] transition-colors", className)}
       onClick={onClick}
     >
       {children}
@@ -29,7 +29,7 @@ export function StatCard({ label, value, subtext, icon, colorClass = "text-brand
 }) {
   return (
     <div
-      className={clsx("card", onClick && "cursor-pointer active:scale-[0.97] transition-transform")}
+      className={clsx("card", onClick && "cursor-pointer hover:bg-[#F7F8FA] transition-colors")}
       onClick={onClick}
       role={onClick ? "button" : undefined}
       tabIndex={onClick ? 0 : undefined}
@@ -42,16 +42,16 @@ export function StatCard({ label, value, subtext, icon, colorClass = "text-brand
           {/* Wraps rather than truncates. At 360px a 2-col tile gives the label
               ~100px and "AGENTS ON DUTY" needs ~105px, so truncating clipped it
               to "AGENTS O…" — losing information the desktop layout shows. */}
-          <p className="text-[11px] sm:text-xs font-medium text-slate-500 uppercase tracking-wide leading-snug">{label}</p>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-[#98A2B3] leading-snug">{label}</p>
           <p
             className={clsx("font-bold mt-1 leading-tight", colorClass)}
             style={{ fontSize: "var(--kpi-value)" }}
           >
             {value}
           </p>
-          {subtext && <p className="text-xs text-slate-400 mt-0.5 truncate">{subtext}</p>}
+          {subtext && <p className="mt-1 truncate text-[13px] text-[#667085]">{subtext}</p>}
         </div>
-        {icon && <div className={clsx("p-2 rounded-lg bg-slate-50 flex-shrink-0", colorClass)}>{icon}</div>}
+        {icon && <div className={clsx("flex-shrink-0 rounded-control bg-brand-50 p-2 text-primary", colorClass)}>{icon}</div>}
       </div>
     </div>
   );

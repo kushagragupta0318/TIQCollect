@@ -1,8 +1,8 @@
 import { useNavigate } from "react-router";
 import {
   ShieldCheck, Map, Zap, Brain, BarChart3, FileCheck, CheckCircle,
-  ArrowRight, Phone, Navigation, Bell, Lock, Star, Users, IndianRupee, TrendingUp,
-  ChevronRight, Globe, Clock, AlertTriangle
+  ArrowRight, Phone, Navigation, Bell, Star, IndianRupee, TrendingUp,
+  Globe, AlertTriangle
 } from "lucide-react";
 
 export default function LandingPage() {
@@ -20,13 +20,13 @@ export default function LandingPage() {
   }
 
   return (
-    <div className="min-h-screen bg-white font-sans">
+    <div className="min-h-screen bg-background p-4 font-sans text-foreground">
       {/* ─── Navbar ─── */}
-      <nav className="sticky top-0 z-50 bg-white/95 backdrop-blur border-b border-slate-100 shadow-sm">
+      <nav className="sticky top-4 z-50 rounded-card border border-border bg-white shadow-resting">
         <div className="max-w-7xl mx-auto px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 bg-brand-600 rounded-lg flex items-center justify-center">
-              <ShieldCheck className="w-5 h-5 text-white" />
+            <div className="flex size-8 items-center justify-center rounded-control bg-brand-100">
+              <ShieldCheck className="w-5 h-5 text-primary" />
             </div>
             <span className="text-xl font-bold text-slate-900 tracking-tight">TIQCollect</span>
             <span className="hidden sm:inline-block text-xs font-medium bg-brand-50 text-brand-600 border border-brand-100 px-2 py-0.5 rounded-full ml-1">Enterprise</span>
@@ -43,7 +43,7 @@ export default function LandingPage() {
             <button onClick={() => goLogin()} className="text-sm font-medium text-slate-600 hover:text-slate-900 transition-colors px-3 py-2">
               Log In
             </button>
-            <button onClick={() => goLogin("manager")} className="hidden sm:flex items-center gap-1.5 bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold px-4 py-2 rounded-lg transition-colors shadow-sm">
+            <button onClick={() => goLogin("manager")} className="hidden min-h-10 items-center gap-1.5 rounded-control border border-primary bg-white px-4 text-sm font-medium text-primary transition-colors hover:bg-brand-100 sm:flex">
               Get Started <ArrowRight className="w-3.5 h-3.5" />
             </button>
           </div>
@@ -51,9 +51,7 @@ export default function LandingPage() {
       </nav>
 
       {/* ─── Hero ─── */}
-      <section className="relative overflow-hidden bg-gradient-to-br from-slate-900 via-brand-900 to-brand-800 text-white">
-        {/* Background grid */}
-        <div className="absolute inset-0 opacity-10" style={{ backgroundImage: "radial-gradient(circle at 1px 1px, rgba(255,255,255,0.15) 1px, transparent 0)", backgroundSize: "32px 32px" }} />
+      <section className="relative mt-4 overflow-hidden rounded-card bg-primary text-white">
 
         <div className="max-w-7xl mx-auto px-6 lg:px-8 py-20 lg:py-28">
           <div className="grid lg:grid-cols-2 gap-12 items-center">
@@ -64,7 +62,7 @@ export default function LandingPage() {
               </div>
               <h1 className="text-4xl lg:text-5xl xl:text-6xl font-extrabold leading-tight tracking-tight text-white mb-6">
                 Collections that
-                <span className="block text-transparent bg-clip-text bg-gradient-to-r from-brand-300 to-cyan-300">
+                <span className="block text-white">
                   actually collect.
                 </span>
               </h1>
@@ -90,7 +88,7 @@ export default function LandingPage() {
 
             {/* Right — dashboard preview card */}
             <div className="relative hidden lg:block">
-              <div className="bg-white/10 backdrop-blur border border-white/20 rounded-2xl p-4 shadow-2xl">
+              <div className="rounded-card border border-white/20 bg-white/10 p-4">
                 {/* Mock dashboard header */}
                 <div className="flex items-center justify-between mb-4">
                   <div>
@@ -124,7 +122,7 @@ export default function LandingPage() {
                     <span className="font-semibold text-green-300">52.8%</span>
                   </div>
                   <div className="w-full bg-white/20 rounded-full h-2">
-                    <div className="h-2 rounded-full bg-gradient-to-r from-green-400 to-emerald-500" style={{ width: "52.8%" }} />
+                    <div className="h-2 rounded-full bg-success-500" style={{ width: "52.8%" }} />
                   </div>
                   <p className="text-xs text-white/50 mt-1.5">₹28.5L of ₹54L target · ₹25.5L remaining</p>
                 </div>
@@ -160,18 +158,18 @@ export default function LandingPage() {
       </section>
 
       {/* ─── Stats bar ─── */}
-      <section className="bg-brand-600 text-white">
+      <section className="py-4">
         <div className="max-w-7xl mx-auto px-6 lg:px-8 py-10">
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-8 text-center">
+          <div className="grid grid-cols-1 gap-4 text-center sm:grid-cols-2 lg:grid-cols-4">
             {[
               { value: "3.2×", label: "Higher collection rate vs manual" },
               { value: "₹2.8L", label: "Avg daily collection per agency" },
               { value: "94%", label: "RBI compliance score" },
               { value: "18min", label: "Avg case resolution time" },
             ].map((s) => (
-              <div key={s.label}>
-                <p className="text-3xl lg:text-4xl font-extrabold text-white">{s.value}</p>
-                <p className="text-sm text-brand-200 mt-1">{s.label}</p>
+              <div key={s.label} className="rounded-card border border-border bg-white p-6 shadow-resting">
+                <p className="text-3xl font-bold text-foreground lg:text-4xl">{s.value}</p>
+                <p className="mt-1 text-sm text-muted-foreground">{s.label}</p>
               </div>
             ))}
           </div>
@@ -205,7 +203,7 @@ export default function LandingPage() {
 
           <div className="grid lg:grid-cols-3 gap-8 relative">
             {/* Connector line */}
-            <div className="hidden lg:block absolute top-10 left-1/3 right-1/3 h-0.5 bg-gradient-to-r from-brand-200 via-brand-400 to-brand-200" />
+            <div className="absolute left-1/3 right-1/3 top-10 hidden h-px bg-border lg:block" />
 
             {HOW_IT_WORKS.map((step, i) => (
               <div key={step.title} className="relative">
@@ -238,58 +236,58 @@ export default function LandingPage() {
       </section>
 
       {/* ─── Two views side by side ─── */}
-      <section className="py-20 lg:py-28 bg-slate-900 text-white overflow-hidden">
+      <section className="overflow-hidden bg-background py-20 lg:py-28">
         <div className="max-w-7xl mx-auto px-6 lg:px-8">
           <div className="text-center mb-14">
-            <span className="text-sm font-semibold text-brand-300 uppercase tracking-wider">Two Interfaces</span>
-            <h2 className="text-3xl lg:text-4xl font-bold text-white mt-2">Built for both the field and the office</h2>
+            <span className="text-sm font-semibold text-primary uppercase tracking-wider">Two Interfaces</span>
+            <h2 className="mt-2 text-3xl font-bold text-foreground lg:text-4xl">Built for both the field and the office</h2>
           </div>
 
           <div className="grid lg:grid-cols-2 gap-8">
             {/* Agent card */}
-            <div className="bg-white/5 border border-white/10 rounded-2xl p-8 hover:bg-white/8 transition-colors">
+            <div className="rounded-card border border-border bg-white p-8 shadow-resting">
               <div className="flex items-center gap-3 mb-5">
                 <div className="w-10 h-10 bg-brand-500/20 rounded-xl flex items-center justify-center">
                   <Phone className="w-5 h-5 text-brand-300" />
                 </div>
                 <div>
-                  <h3 className="font-bold text-white">Field Agent App</h3>
-                  <p className="text-xs text-white/50">Mobile PWA · Works offline</p>
+                  <h3 className="font-bold text-foreground">Field Agent App</h3>
+                  <p className="text-xs text-muted-foreground">Mobile PWA · Works offline</p>
                 </div>
               </div>
               <ul className="space-y-3">
                 {AGENT_FEATURES.map((f) => (
-                  <li key={f} className="flex items-start gap-2.5 text-sm text-white/70">
+                  <li key={f} className="flex items-start gap-2.5 text-sm text-muted-foreground">
                     <CheckCircle className="w-4 h-4 text-brand-400 flex-shrink-0 mt-0.5" />
                     {f}
                   </li>
                 ))}
               </ul>
-              <button onClick={() => goLogin("agent")} className="mt-6 w-full flex items-center justify-center gap-2 bg-brand-500 hover:bg-brand-600 text-white font-semibold py-3 rounded-xl transition-colors text-sm">
+              <button onClick={() => goLogin("agent")} className="mt-6 flex min-h-10 w-full items-center justify-center gap-2 rounded-control border border-primary bg-white px-4 text-sm font-medium text-primary transition-colors hover:bg-brand-100">
                 Try Agent Demo <ArrowRight className="w-4 h-4" />
               </button>
             </div>
 
             {/* Manager card */}
-            <div className="bg-white/5 border border-white/10 rounded-2xl p-8 hover:bg-white/8 transition-colors">
+            <div className="rounded-card border border-border bg-white p-8 shadow-resting">
               <div className="flex items-center gap-3 mb-5">
                 <div className="w-10 h-10 bg-purple-500/20 rounded-xl flex items-center justify-center">
                   <BarChart3 className="w-5 h-5 text-purple-300" />
                 </div>
                 <div>
-                  <h3 className="font-bold text-white">Agency Manager Dashboard</h3>
-                  <p className="text-xs text-white/50">Desktop · Real-time insights</p>
+                  <h3 className="font-bold text-foreground">Agency Manager Dashboard</h3>
+                  <p className="text-xs text-muted-foreground">Desktop · Real-time insights</p>
                 </div>
               </div>
               <ul className="space-y-3">
                 {MANAGER_FEATURES.map((f) => (
-                  <li key={f} className="flex items-start gap-2.5 text-sm text-white/70">
+                  <li key={f} className="flex items-start gap-2.5 text-sm text-muted-foreground">
                     <CheckCircle className="w-4 h-4 text-purple-400 flex-shrink-0 mt-0.5" />
                     {f}
                   </li>
                 ))}
               </ul>
-              <button onClick={() => goLogin("manager")} className="mt-6 w-full flex items-center justify-center gap-2 bg-purple-500 hover:bg-purple-600 text-white font-semibold py-3 rounded-xl transition-colors text-sm">
+              <button onClick={() => goLogin("manager")} className="mt-6 flex min-h-10 w-full items-center justify-center gap-2 rounded-control border border-primary bg-white px-4 text-sm font-medium text-primary transition-colors hover:bg-brand-100">
                 Try Manager Demo <ArrowRight className="w-4 h-4" />
               </button>
             </div>
@@ -366,7 +364,7 @@ export default function LandingPage() {
           </div>
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
             {IMPACT.map((item) => (
-              <div key={item.stat} className="bg-white rounded-2xl border border-slate-100 p-7 shadow-sm hover:shadow-md transition-shadow">
+              <div key={item.stat} className="rounded-card border border-border bg-white p-7 shadow-resting">
                 <div className="text-3xl mb-3">{item.icon}</div>
                 <p className="text-3xl font-extrabold text-slate-900 mb-1">{item.stat}</p>
                 <p className="text-sm font-semibold text-slate-700 mb-2">{item.label}</p>
@@ -378,7 +376,7 @@ export default function LandingPage() {
       </section>
 
       {/* ─── CTA ─── */}
-      <section className="py-20 bg-gradient-to-br from-brand-600 to-brand-800 text-white">
+      <section className="rounded-card bg-primary py-20 text-white">
         <div className="max-w-4xl mx-auto px-6 lg:px-8 text-center">
           <h2 className="text-3xl lg:text-4xl font-bold mb-4">Ready to transform your collections?</h2>
           <p className="text-brand-100 text-lg mb-8 max-w-xl mx-auto">
@@ -397,7 +395,7 @@ export default function LandingPage() {
       </section>
 
       {/* ─── Footer ─── */}
-      <footer className="bg-slate-900 text-white py-12">
+      <footer className="mt-4 rounded-card border border-border bg-white py-12 text-foreground">
         <div className="max-w-7xl mx-auto px-6 lg:px-8">
           <div className="grid md:grid-cols-4 gap-8 mb-8">
             <div className="md:col-span-2">
@@ -415,7 +413,7 @@ export default function LandingPage() {
               <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Platform</p>
               <ul className="space-y-2 text-sm text-slate-400">
                 {["Manager Dashboard", "Field Agent App", "Beat Map", "ML Allocation", "RBI Compliance"].map((l) => (
-                  <li key={l}><a href="#" className="hover:text-white transition-colors">{l}</a></li>
+                  <li key={l}><a href="#" className="transition-colors hover:text-primary">{l}</a></li>
                 ))}
               </ul>
             </div>
@@ -423,12 +421,12 @@ export default function LandingPage() {
               <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Company</p>
               <ul className="space-y-2 text-sm text-slate-400">
                 {["About", "Privacy Policy", "Terms of Service", "RBI Guidelines", "Contact"].map((l) => (
-                  <li key={l}><a href="#" className="hover:text-white transition-colors">{l}</a></li>
+                  <li key={l}><a href="#" className="transition-colors hover:text-primary">{l}</a></li>
                 ))}
               </ul>
             </div>
           </div>
-          <div className="pt-8 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-500">
+          <div className="flex flex-col items-center justify-between gap-4 border-t border-border pt-8 text-xs text-slate-500 sm:flex-row">
             <p>© 2025 TIQCollect. All rights reserved. Compliant with RBI/2008 Recovery Agent Guidelines.</p>
             <div className="flex items-center gap-1.5">
               <Globe className="w-3.5 h-3.5" />
@@ -567,7 +565,7 @@ const IMPACT = [
 
 function FeatureCard({ icon: Icon, color, title, desc }: { icon: React.ElementType; color: string; title: string; desc: string }) {
   return (
-    <div className="bg-white rounded-2xl border border-slate-100 p-7 shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all duration-200">
+    <div className="rounded-card border border-border bg-white p-7 shadow-resting transition-colors duration-200 hover:bg-muted">
       <div className={`inline-flex w-12 h-12 rounded-xl border items-center justify-center mb-5 ${color}`}>
         <Icon className="w-6 h-6" />
       </div>

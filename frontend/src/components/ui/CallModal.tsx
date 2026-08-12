@@ -16,27 +16,27 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 const STATUS_COLOR: Record<string, string> = {
-  connecting: "bg-slate-700",
-  ringing:    "bg-blue-700",
-  "in-call":  "bg-success-600",
-  ended:      "bg-slate-500",
-  error:      "bg-danger-600",
+  connecting: "bg-slate-100 text-slate-700",
+  ringing:    "bg-brand-100 text-primary",
+  "in-call":  "bg-success-100 text-success-700",
+  ended:      "bg-slate-100 text-slate-600",
+  error:      "bg-danger-100 text-danger-700",
 };
 
 export default function CallModal({ call, onHangUp }: { call: ActiveCall; onHangUp: () => void }) {
   const isActive = call.status === "connecting" || call.status === "ringing" || call.status === "in-call";
-  const bg = STATUS_COLOR[call.status] ?? "bg-slate-700";
+  const statusTone = STATUS_COLOR[call.status] ?? "bg-slate-100 text-slate-700";
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center p-4 bg-black/60">
-      <div className={`w-full max-w-sm rounded-2xl overflow-hidden shadow-2xl text-white ${bg} transition-colors duration-500`}>
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center">
+      <div className="w-full max-w-sm overflow-hidden rounded-card border border-border bg-white text-foreground shadow-premium">
         <div className="px-6 pt-8 pb-6 text-center">
-          <div className="w-16 h-16 rounded-full bg-white/20 flex items-center justify-center mx-auto mb-4">
+          <div className="mx-auto mb-4 flex size-16 items-center justify-center rounded-full bg-brand-100 text-primary">
             <Phone className="w-7 h-7" />
           </div>
           <p className="text-xl font-bold">{call.customerName}</p>
-          <p className="text-sm text-white/70 mt-1">{call.phone}</p>
-          <p className="text-sm font-medium mt-3 tracking-wide">{STATUS_LABEL[call.status]}</p>
+          <p className="mt-1 text-sm text-muted-foreground">{call.phone}</p>
+          <p className={`mx-auto mt-3 inline-flex rounded-pill px-3 py-1 text-sm font-medium ${statusTone}`}>{STATUS_LABEL[call.status]}</p>
           {call.status === "in-call" && (
             <p className="text-2xl font-mono font-bold mt-1">{fmt(call.duration)}</p>
           )}
@@ -46,12 +46,13 @@ export default function CallModal({ call, onHangUp }: { call: ActiveCall; onHang
           {isActive ? (
             <button
               onClick={onHangUp}
-              className="w-16 h-16 rounded-full bg-red-500 hover:bg-red-600 flex items-center justify-center shadow-lg transition-colors"
+              className="flex size-16 items-center justify-center rounded-full border border-danger-500 bg-white text-danger-700 transition-colors hover:bg-danger-100"
+              aria-label="End call"
             >
               <PhoneOff className="w-7 h-7" />
             </button>
           ) : (
-            <p className="text-white/50 text-sm pb-2">{call.status === "error" ? "Check Twilio Voice configuration" : ""}</p>
+            <p className="pb-2 text-sm text-muted-foreground">{call.status === "error" ? "Check Twilio Voice configuration" : ""}</p>
           )}
         </div>
       </div>

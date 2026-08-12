@@ -111,9 +111,9 @@ function CaseDetailModal({ caseId, onClose }: { caseId: string; onClose: () => v
         tabIndex={-1}
         // max-h leaves backdrop visible above and below, so it reads as a
         // floating dialog. The body below scrolls inside it.
-        className="w-full sm:max-w-2xl bg-white flex flex-col overflow-hidden rounded-[22px] sm:rounded-[26px] max-h-[88svh] sm:max-h-[90svh] outline-none"
+        className="w-full sm:max-w-2xl bg-white flex flex-col overflow-hidden rounded-card max-h-[88svh] sm:max-h-[90svh] outline-none border border-slate-200"
         style={{
-          boxShadow: "0 24px 80px rgba(0,0,0,0.22), 0 4px 16px rgba(0,0,0,0.10)",
+          boxShadow: "0 16px 40px rgba(15,23,42,0.12)",
           animation: `modalIn 240ms ${EASE} both`,
         }}
       >

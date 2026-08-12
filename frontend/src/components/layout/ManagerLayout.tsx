@@ -25,9 +25,8 @@ import { AccountMenu } from "@/components/layout/AccountMenu";
 import type { Agent } from "@/types";
 
 const SIDEBAR_KEY   = "tiq:sidebar";
-const SIDEBAR_W     = 240;   // expanded width  (px)
-const SIDEBAR_ICON  = 64;    // collapsed width (px)
-const BRAND         = "#0C66E4";
+const SIDEBAR_W     = 252;
+const SIDEBAR_ICON  = 72;
 
 const NAV_ITEMS = [
   { to: "/manager/overview",   icon: LayoutDashboard, label: "Overview" },
@@ -42,34 +41,36 @@ const NAV_ITEMS = [
 // classes, so an inline value cannot win over the breakpoint.
 const sidebarStyle = (open: boolean): React.CSSProperties => ({
   position:   "fixed",
-  top:         0,
-  left:        0,
-  height:      "100svh",
+  top:         16,
+  left:        16,
+  height:      "calc(100svh - 32px)",
   zIndex:      50,
   width:       open ? `${SIDEBAR_W}px` : `${SIDEBAR_ICON}px`,
-  transition:  "width 300ms ease-in-out",
-  background:  BRAND,
-  borderRight: "1px solid rgba(255,255,255,0.12)",
+  transition:  "width 200ms cubic-bezier(0.2,0,0,1)",
+  background:  "#FFFFFF",
+  border:      "1px solid #ECEDF1",
+  borderRadius: 16,
   overflow:    "hidden",
   flexDirection: "column",
-  boxShadow:   "2px 0 24px rgba(0,0,0,0.18)",
+  boxShadow:   "0 1px 2px rgba(16,24,40,0.04)",
 });
 
-const navItemStyle = (isActive: boolean): React.CSSProperties => ({
+const navItemStyle = (isActive: boolean, open: boolean): React.CSSProperties => ({
   display:        "flex",
   alignItems:     "center",
-  gap:            12,
-  padding:        "0 8px",
-  height:         36,
-  borderRadius:   8,
+  justifyContent: open ? "flex-start" : "center",
+  gap:            open ? 12 : 0,
+  padding:        open ? "0 8px" : 0,
+  height:         44,
+  borderRadius:   12,
   marginBottom:   2,
-  background:     isActive ? "rgba(255,255,255,0.20)" : "transparent",
+  background:     isActive ? "#EFF6FF" : "transparent",
   cursor:         "pointer",
   whiteSpace:     "nowrap",
   overflow:       "hidden",
-  color:          isActive ? "#fff" : "rgba(255,255,255,0.78)",
+  color:          isActive ? "#2563EB" : "#667085",
   textDecoration: "none",
-  transition:     "background 150ms ease",
+  transition:     "background 120ms cubic-bezier(0.2,0,0,1), color 120ms cubic-bezier(0.2,0,0,1)",
 });
 
 export default function ManagerLayout() {
@@ -127,12 +128,6 @@ export default function ManagerLayout() {
       style={{ background: "hsl(var(--background))", display: "flex", minHeight: "100svh", width: "100%" }}
     >
 
-      {/* Ambient background blobs */}
-      <div aria-hidden="true" style={{ position: "fixed", inset: 0, zIndex: -1, pointerEvents: "none", overflow: "hidden" }}>
-        <div style={{ position: "absolute", top: "-10%", right: "-5%", width: "55%", height: "65%", background: "hsl(213 100% 54% / 0.13)", filter: "blur(80px)", borderRadius: "9999px" }} />
-        <div style={{ position: "absolute", bottom: "-10%", left: "-5%", width: "45%", height: "55%", background: "hsl(258 90% 66% / 0.10)", filter: "blur(80px)", borderRadius: "9999px" }} />
-      </div>
-
       {/* ── Fixed sidebar — desktop only; hover to expand ── */}
       <aside
         className="hidden lg:flex"
@@ -141,13 +136,13 @@ export default function ManagerLayout() {
         onMouseLeave={() => setOpen(false)}
       >
         {/* Logo row */}
-        <div style={{ height: 64, display: "flex", alignItems: "center", padding: "0 12px 0 16px", gap: 16, borderBottom: "1px solid rgba(255,255,255,0.10)", flexShrink: 0 }}>
-          <div style={{ width: 32, height: 32, borderRadius: 10, background: "rgba(255,255,255,0.20)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-            <ShieldCheck size={16} color="white" />
+        <div style={{ height: 64, display: "flex", alignItems: "center", padding: "0 12px 0 18px", gap: 18, borderBottom: "1px solid #ECEDF1", flexShrink: 0 }}>
+          <div style={{ width: 34, height: 34, borderRadius: 10, background: "#EFF6FF", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+            <ShieldCheck size={16} color="#2563EB" />
           </div>
           <div style={{ whiteSpace: "nowrap", overflow: "hidden", opacity: open ? 1 : 0, transition: "opacity 150ms" }}>
-            <p style={{ color: "white", fontWeight: 700, fontSize: 13, lineHeight: "1" }}>TIQCollect</p>
-            <p style={{ color: "rgba(255,255,255,0.65)", fontWeight: 500, fontSize: 10, marginTop: 3 }}>Manager Portal</p>
+            <p style={{ color: "#101828", fontWeight: 700, fontSize: 14, lineHeight: "1" }}>TIQCollect</p>
+            <p style={{ color: "#667085", fontWeight: 400, fontSize: 11, marginTop: 4 }}>Manager Portal</p>
           </div>
         </div>
 
@@ -160,12 +155,9 @@ export default function ManagerLayout() {
               title={!open ? label : undefined}
             >
               {({ isActive }) => (
-                <div style={navItemStyle(isActive)}>
-                  <Icon size={16} style={{ flexShrink: 0, color: isActive ? "#fff" : "rgba(255,255,255,0.70)" }} />
-                  <span style={{ fontSize: 11.5, fontWeight: isActive ? 600 : 500, opacity: open ? 1 : 0, transition: "opacity 150ms" }}>{label}</span>
-                  {isActive && (
-                    <span style={{ marginLeft: "auto", width: 6, height: 6, borderRadius: "50%", background: "white", flexShrink: 0, opacity: open ? 1 : 0 }} />
-                  )}
+                <div style={navItemStyle(isActive, open)}>
+                  <Icon size={17} style={{ flexShrink: 0, color: isActive ? "#2563EB" : "#98A2B3" }} />
+                  <span style={{ fontSize: 11.5, fontWeight: isActive ? 600 : 500, opacity: open ? 1 : 0, maxWidth: open ? 160 : 0, overflow: "hidden", transition: "opacity 150ms, max-width 200ms" }}>{label}</span>
                 </div>
               )}
             </NavLink>
@@ -175,14 +167,14 @@ export default function ManagerLayout() {
         {/* User identity only — Sign Out lives solely in the top-right account
             menu, matching the agent console, so there is one place to log out
             rather than two. */}
-        <div style={{ borderTop: "1px solid rgba(255,255,255,0.10)", padding: 8, flexShrink: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 8px", borderRadius: 8, whiteSpace: "nowrap", overflow: "hidden" }}>
-            <div style={{ width: 28, height: 28, borderRadius: "50%", background: "rgba(255,255,255,0.22)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, color: "white", flexShrink: 0 }}>
+        <div style={{ borderTop: "1px solid #ECEDF1", padding: 8, flexShrink: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: open ? "flex-start" : "center", gap: open ? 10 : 0, padding: open ? "6px 8px" : "6px 0", borderRadius: 8, whiteSpace: "nowrap", overflow: "hidden" }}>
+            <div style={{ width: 32, height: 32, borderRadius: "50%", background: "#EFF6FF", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, color: "#2563EB", flexShrink: 0 }}>
               {user?.full_name.charAt(0)}
             </div>
-            <div style={{ overflow: "hidden", minWidth: 0, opacity: open ? 1 : 0, transition: "opacity 150ms" }}>
-              <p style={{ color: "white", fontSize: 11.5, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", lineHeight: "1.3" }}>{user?.full_name}</p>
-              <p style={{ color: "rgba(255,255,255,0.55)", fontSize: 10, whiteSpace: "nowrap" }}>{user?.role.replace("_", " ")}</p>
+            <div style={{ overflow: "hidden", minWidth: 0, maxWidth: open ? 160 : 0, opacity: open ? 1 : 0, transition: "opacity 150ms, max-width 200ms" }}>
+              <p style={{ color: "#101828", fontSize: 12, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", lineHeight: "1.3" }}>{user?.full_name}</p>
+              <p style={{ color: "#667085", fontSize: 10.5, whiteSpace: "nowrap" }}>{user?.role.replace("_", " ")}</p>
             </div>
           </div>
         </div>
@@ -194,7 +186,7 @@ export default function ManagerLayout() {
         <div
           aria-hidden="true"
           className="hidden lg:block"
-          style={{ position: "fixed", inset: 0, zIndex: 40, background: "rgba(0,0,0,0.08)", backdropFilter: "blur(2px)", WebkitBackdropFilter: "blur(2px)" }}
+          style={{ position: "fixed", inset: 0, zIndex: 40, background: "rgba(16,24,40,0.04)" }}
           onMouseEnter={() => setOpen(false)}
           onClick={() => setOpen(false)}
         />
@@ -208,12 +200,11 @@ export default function ManagerLayout() {
 
         {/* Top bar */}
         <header
-          className="flex items-center justify-between gap-3 px-4 lg:px-6 py-3 lg:py-3.5 sticky top-0 z-30"
+          className="sticky top-2 z-30 mx-2 mt-2 flex items-center justify-between gap-3 rounded-card border px-4 py-3 lg:top-4 lg:mx-4 lg:mt-4 lg:px-5"
           style={{
-            background:           "rgba(255,255,255,0.82)",
-            backdropFilter:       "blur(20px)",
-            WebkitBackdropFilter: "blur(20px)",
-            borderBottom:         "1px solid hsl(var(--border) / 0.5)",
+            background: "#FFFFFF",
+            borderColor: "#ECEDF1",
+            boxShadow: "0 1px 2px rgba(16,24,40,0.04)",
           }}
         >
           <div className="min-w-0">
@@ -248,8 +239,8 @@ export default function ManagerLayout() {
       {/* ── Bottom tab bar — below lg, where the hover sidebar cannot work.
              Same visual language as AgentLayout so the two flows match. ── */}
       <nav
-        className="lg:hidden fixed bottom-0 left-0 right-0 z-40 safe-bottom"
-        style={{ background: BRAND, boxShadow: "0 -2px 24px rgba(12,102,228,0.28)", borderTop: "1px solid rgba(255,255,255,0.12)" }}
+        className="safe-bottom fixed bottom-2 left-2 right-2 z-40 rounded-card border lg:hidden"
+        style={{ background: "#FFFFFF", boxShadow: "0 8px 24px rgba(16,24,40,0.10)", borderColor: "#ECEDF1" }}
       >
         <div className="flex items-stretch px-1 py-1.5">
           {NAV_ITEMS.map(({ to, icon: Icon, label }) => (
@@ -265,23 +256,20 @@ export default function ManagerLayout() {
                     gap:            3,
                     padding:        "6px 2px",
                     borderRadius:   10,
-                    background:     isActive ? "rgba(255,255,255,0.20)" : "transparent",
-                    transition:     "background 150ms ease",
+                    background:     isActive ? "#EFF6FF" : "transparent",
+                    transition:     "background 120ms cubic-bezier(0.2,0,0,1)",
                   }}
                 >
                   <Icon
                     size={19}
-                    style={{ color: "white", opacity: isActive ? 1 : 0.65, strokeWidth: isActive ? 2.2 : 1.8, flexShrink: 0 }}
+                    style={{ color: isActive ? "#2563EB" : "#98A2B3", strokeWidth: isActive ? 2.2 : 1.8, flexShrink: 0 }}
                   />
                   <span
                     className="w-full truncate text-center"
-                    style={{ fontSize: 10, fontWeight: isActive ? 700 : 500, color: "white", opacity: isActive ? 1 : 0.65, lineHeight: 1 }}
+                    style={{ fontSize: 10, fontWeight: isActive ? 700 : 500, color: isActive ? "#2563EB" : "#667085", lineHeight: 1 }}
                   >
                     {label}
                   </span>
-                  {isActive && (
-                    <span style={{ width: 4, height: 4, borderRadius: "50%", background: "white", marginTop: 1, flexShrink: 0 }} />
-                  )}
                 </div>
               )}
             </NavLink>
@@ -311,8 +299,8 @@ function NotificationBell({ sosCount, sosAgents }: { sosCount: number; sosAgents
         onClick={() => setOpen((v) => !v)}
         aria-label={sosCount > 0 ? `Notifications, ${sosCount} active` : "Notifications"}
         aria-expanded={open}
-        className="tap-target relative flex items-center justify-center hover:-translate-y-0.5 transition-transform duration-150 flex-shrink-0"
-        style={{ width: 36, height: 36, borderRadius: 12, background: "#fff", border: "1px solid hsl(var(--border) / 0.7)", color: "hsl(var(--foreground))" }}
+        className="tap-target relative flex flex-shrink-0 items-center justify-center transition-colors duration-150 hover:bg-muted"
+        style={{ width: 40, height: 40, borderRadius: 10, background: "#fff", border: "1px solid #E1E3E9", color: "#667085" }}
       >
         <Bell className="w-4 h-4" />
         {sosCount > 0 && (
@@ -322,8 +310,8 @@ function NotificationBell({ sosCount, sosAgents }: { sosCount: number; sosAgents
 
       {open && (
         <div
-          className="absolute right-0 mt-2 rounded-2xl shadow-xl overflow-hidden"
-          style={{ width: "min(280px, calc(100vw - 32px))", zIndex: 100, background: "#fff", border: "1px solid hsl(var(--border) / 0.6)", top: "100%" }}
+          className="absolute right-0 mt-2 overflow-hidden rounded-card shadow-premium"
+          style={{ width: "min(280px, calc(100vw - 32px))", zIndex: 100, background: "#fff", border: "1px solid #ECEDF1", top: "100%" }}
         >
           <div className="px-4 py-3 border-b" style={{ borderColor: "hsl(var(--border) / 0.5)" }}>
             <p className="text-sm font-bold" style={{ color: "#1C1C1F" }}>Notifications</p>

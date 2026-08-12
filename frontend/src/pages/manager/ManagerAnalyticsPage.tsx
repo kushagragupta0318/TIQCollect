@@ -234,11 +234,11 @@ function AgentSpotlight({ entry, months, color, animate, onClose, selMonth, onMo
   return (
     <div
       style={{
-        borderRadius: 18,
+        borderRadius: 16,
         padding: "20px 20px 16px",
-        background: "linear-gradient(135deg, #F0F6FF 0%, #F8FAFF 60%, #FFF 100%)",
-        border: `1.5px solid ${color}33`,
-        boxShadow: `0 8px 32px ${color}1A, 0 2px 8px rgba(0,0,0,0.06), 0 0 0 1px ${color}15`,
+        background: "#FFFFFF",
+        border: "1px solid #ECEDF1",
+        boxShadow: "0 1px 2px rgba(16,24,40,0.04)",
         animation: `enter 340ms ${EASE} both`,
         position: "relative" as const,
       }}
@@ -1213,8 +1213,8 @@ function MonthlyReportSection({ months, selectedAgent, preSelectedMonth }: { mon
     <div className="card p-4 sm:p-6" style={{ animation: `enter 420ms ${EASE} 360ms both` }}>
       <div className="flex flex-wrap items-center gap-3 mb-4">
         <div className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0"
-          style={{ background: "linear-gradient(135deg, #7c3aed, #a855f7)" }}>
-          <Brain className="w-4 h-4 text-white" />
+          style={{ background: "#EFF6FF" }}>
+          <Brain className="w-4 h-4 text-primary" />
         </div>
         <div className="flex-1 min-w-0">
           <h2 className="text-base font-bold" style={{ color: "#1C1C1F" }}>AI Monthly Performance Report</h2>
@@ -1240,8 +1240,8 @@ function MonthlyReportSection({ months, selectedAgent, preSelectedMonth }: { mon
           <button
             onClick={generate}
             disabled={loading}
-            className="tap-target text-xs px-4 py-1.5 rounded-xl font-semibold flex items-center justify-center gap-1.5 transition-opacity flex-shrink-0"
-            style={{ background: "linear-gradient(135deg, #7c3aed, #a855f7)", color: "white", opacity: loading ? 0.7 : 1 }}
+            className="tap-target flex flex-shrink-0 items-center justify-center gap-1.5 rounded-control border border-primary bg-white px-4 py-1.5 text-xs font-semibold text-primary transition-opacity hover:bg-brand-100"
+            style={{ opacity: loading ? 0.7 : 1 }}
           >
             {loading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Brain className="w-3 h-3" />}
             Generate Report
@@ -1258,14 +1258,14 @@ function MonthlyReportSection({ months, selectedAgent, preSelectedMonth }: { mon
 
       {loading && (
         <div className="rounded-xl py-10 text-center"
-          style={{ background: "linear-gradient(135deg, #faf5ff, #fff)", border: "1px solid rgba(124,58,237,0.15)" }}>
+          style={{ background: "#F7F8FA", border: "1px solid #ECEDF1" }}>
           <Loader2 className="w-5 h-5 mx-auto mb-2 animate-spin" style={{ color: "#7c3aed" }} />
           <p className="text-sm font-medium" style={{ color: "#7c3aed" }}>Analysing performance data…</p>
         </div>
       )}
 
       {report && !loading && (
-        <div className="rounded-xl p-5" style={{ background: "linear-gradient(135deg, #faf5ff 0%, #fff 70%)", border: "1px solid rgba(124,58,237,0.15)" }}>
+        <div className="rounded-xl p-5" style={{ background: "#F7F8FA", border: "1px solid #ECEDF1" }}>
           <div className="flex items-center gap-2 mb-3 flex-wrap">
             <span className="text-xs px-2 py-0.5 rounded-full font-semibold"
               style={{ background: "rgba(124,58,237,0.10)", color: "#7c3aed" }}>

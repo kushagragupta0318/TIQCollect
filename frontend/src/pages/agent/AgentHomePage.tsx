@@ -166,7 +166,7 @@ export default function AgentHomePage() {
       {/* Selfie check-in modal */}
       {selfieModal && (
         <div className="fixed inset-0 z-50 bg-black/80 flex flex-col items-center justify-center p-4">
-          <div className="w-full max-w-sm bg-white rounded-2xl overflow-hidden">
+          <div className="w-full max-w-sm bg-white rounded-card border border-slate-200 shadow-pop overflow-hidden">
             <div className="flex items-center justify-between p-4 border-b border-slate-100">
               <h3 className="font-semibold text-slate-900">Selfie Check-In</h3>
               <button onClick={closeSelfie} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
@@ -255,7 +255,7 @@ function CollectionProgressBar({ collected, totalTarget, pct }: { collected: num
         <span className="font-bold text-brand-600">{animatedPct}%</span>
       </div>
       <div className="w-full bg-slate-100 rounded-full h-3">
-        <div className="h-3 rounded-full bg-gradient-to-r from-brand-500 to-brand-600 transition-all duration-700" style={{ width: `${animatedPct}%` }} />
+        <div className="h-3 rounded-full bg-primary transition-all duration-700" style={{ width: `${animatedPct}%` }} />
       </div>
       <div className="flex justify-between text-xs text-slate-400 mt-1.5">
         <span>₹{(collected / 1000).toFixed(1)}K collected</span>

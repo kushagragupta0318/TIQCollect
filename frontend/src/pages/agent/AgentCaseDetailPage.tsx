@@ -384,7 +384,7 @@ export default function AgentCaseDetailPage() {
                 <span className="font-bold text-brand-600">{animatedProgressPct}%</span>
               </div>
               <div className="w-full bg-slate-100 rounded-full h-3">
-                <div className="h-3 rounded-full bg-gradient-to-r from-brand-500 to-brand-600 transition-all duration-700" style={{ width: `${animatedProgressPct}%` }} />
+                <div className="h-3 rounded-full bg-primary transition-all duration-700" style={{ width: `${animatedProgressPct}%` }} />
               </div>
               <div className="flex justify-between text-xs text-slate-500 mt-1.5">
                 <span>Target: <span className="font-semibold text-slate-700">₹{c.target_amount.toLocaleString("en-IN")}</span></span>
@@ -805,7 +805,7 @@ export default function AgentCaseDetailPage() {
           <div
             ref={callModalRef}
             tabIndex={-1}
-            className="w-full sm:max-w-md bg-white rounded-[22px] max-h-[88svh] overflow-y-auto outline-none"
+            className="w-full sm:max-w-md bg-white rounded-card max-h-[88svh] overflow-y-auto outline-none border border-slate-200 shadow-pop"
           >
             {/* Modal header */}
             <div className="flex items-center justify-between p-4 border-b border-slate-100 sticky top-0 bg-white z-10">

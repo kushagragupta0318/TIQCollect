@@ -47,8 +47,8 @@ export default function ManagerBridgePage() {
   }, []);
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-brand-900 via-brand-700 to-brand-500">
-      <p className="text-white text-sm">Opening ABC Collections…</p>
+    <div className="flex min-h-screen items-center justify-center bg-background p-4">
+      <div className="rounded-card border border-border bg-white px-6 py-5 text-sm font-medium text-foreground shadow-resting">Opening ABC Collections…</div>
     </div>
   );
 }

@@ -36,17 +36,17 @@ export default function VisitRecordedModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
       role="alertdialog"
       aria-live="assertive"
       aria-label="Visit recorded"
       onClick={onClose}
     >
       <div
-        className="bg-white w-full max-w-sm rounded-2xl overflow-hidden shadow-2xl animate-enter"
+        className="w-full max-w-sm overflow-hidden rounded-card border border-border bg-white shadow-premium animate-enter"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="bg-success-600 text-white px-5 pt-7 pb-6 text-center">
+        <div className="bg-success-100 px-5 pb-6 pt-7 text-center text-success-700">
           {/* Tick, with a ring that expands out of it once */}
           <div className="relative w-16 h-16 mx-auto mb-3">
             <span className="absolute inset-0 rounded-full bg-white/40 animate-tick-ring" />

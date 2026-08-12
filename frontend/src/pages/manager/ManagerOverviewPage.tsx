@@ -179,9 +179,7 @@ export default function ManagerOverviewPage() {
         className="card p-4 sm:p-6"
         style={{
           animation: `enter 420ms ${EASE} 240ms both`,
-          // backgroundImage, not background — .card supplies bg-white and the
-          // wash has to sit on top of it rather than replace it.
-          backgroundImage: "linear-gradient(160deg, rgba(22,119,255,0.055) 0%, rgba(22,119,255,0) 58%)",
+          backgroundImage: "none",
         }}
       >
         {/* Title and figure sit side by side once there is room; below sm the
@@ -234,8 +232,8 @@ export default function ManagerOverviewPage() {
             className="h-full rounded-full relative"
             style={{
               width: barReady ? `${Math.min(collectionPct, 100)}%` : "0%",
-              background: "linear-gradient(90deg, #22c55e, #16a34a)",
-              boxShadow: "0 2px 8px rgba(22,163,74,0.35)",
+              background: "#12B76A",
+              boxShadow: "none",
               transition: `width 900ms ${EASE}`,
             }}
           >
@@ -244,7 +242,7 @@ export default function ManagerOverviewPage() {
               className="absolute inset-x-0 top-0 rounded-full pointer-events-none"
               style={{
                 height: "52%",
-                background: "linear-gradient(180deg, rgba(255,255,255,0.38) 0%, rgba(255,255,255,0) 100%)",
+                background: "transparent",
               }}
             />
           </div>
@@ -548,14 +546,10 @@ function AgentRow({ agent, rank, animated, delay, filterDate }: { agent: Agent; 
   // One blue for every row. Rank is conveyed by position and the rank chip
   // alone — tinting by rank as well made the list read as five categories.
   const rowVars = {
-    "--lift-wash": agent.sos_active
-      ? "linear-gradient(135deg, rgba(220,38,38,0.09) 0%, rgba(220,38,38,0.03) 100%)"
-      : "linear-gradient(135deg, rgba(22,119,255,0.07) 0%, rgba(22,119,255,0.02) 100%)",
-    "--lift-border":       agent.sos_active ? "rgba(220,38,38,0.22)" : "rgba(22,119,255,0.14)",
-    "--lift-border-hover": agent.sos_active ? "rgba(220,38,38,0.38)" : "rgba(22,119,255,0.30)",
-    "--lift-shadow":       agent.sos_active
-      ? "0 4px 14px rgba(220,38,38,0.18)"
-      : "0 4px 14px rgba(22,119,255,0.16)",
+    "--lift-wash": agent.sos_active ? "#FDE7E6" : "#F7F8FA",
+    "--lift-border":       "#ECEDF1",
+    "--lift-border-hover": "#E1E3E9",
+    "--lift-shadow":       "none",
     animation: `enter 380ms cubic-bezier(0.16,1,0.3,1) ${delay}ms both`,
   } as CSSProperties;
 
@@ -654,14 +648,14 @@ function AiBriefingCard({ briefing, onRefresh }: { briefing: BriefingData; onRef
     : "#dc2626";
 
   return (
-    <div className="card p-5" style={{ border: "1px solid rgba(124,58,237,0.15)", background: "linear-gradient(160deg, #faf5ff 0%, #fff 60%)" }}>
+    <div className="card p-5" style={{ border: "1px solid #ECEDF1", background: "#FFFFFF" }}>
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <div
             className="flex items-center justify-center rounded-xl"
-            style={{ width: 28, height: 28, background: "linear-gradient(135deg, #7c3aed, #a855f7)" }}
+            style={{ width: 28, height: 28, background: "#EFF6FF", color: "#2563EB" }}
           >
-            <Sparkles className="w-3.5 h-3.5 text-white" />
+            <Sparkles className="w-3.5 h-3.5 text-primary" />
           </div>
           <span className="text-sm font-bold" style={{ color: "#1C1C1F" }}>AI Ops Briefing</span>
         </div>

@@ -56,7 +56,7 @@ export default function App() {
             path="/agent/visit/:caseId"
             element={
               <ProtectedRoute allowedRoles={["FIELD_AGENT"]}>
-                <div className="min-h-svh bg-slate-50 flex flex-col max-w-md md:max-w-none mx-auto relative">
+                <div className="relative mx-auto flex min-h-svh max-w-md flex-col overflow-x-clip bg-background md:max-w-none">
                   <RecordVisitPage />
                 </div>
               </ProtectedRoute>
@@ -105,7 +105,7 @@ export default function App() {
         position="top-center"
         toastOptions={{
           duration: 4000,
-          style: { borderRadius: "12px", fontSize: "14px", fontWeight: 500 },
+          style: { borderRadius: "12px", border: "1px solid #ECEDF1", boxShadow: "0 8px 24px rgba(16,24,40,0.10)", color: "#101828", fontSize: "14px", fontWeight: 500 },
         }}
       />
     </QueryClientProvider>

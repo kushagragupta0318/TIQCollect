@@ -56,7 +56,7 @@ export default function AgentProfilePage() {
       {/* ── Identity: the single source for name, role, territory, status ── */}
       <div className="card">
         <div className="flex items-center gap-4">
-          <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center text-white text-2xl font-bold shadow-lg shrink-0">
+          <div className="flex size-16 shrink-0 items-center justify-center rounded-card bg-brand-100 text-2xl font-bold text-primary">
             {user?.full_name.charAt(0)}
           </div>
           <div className="flex-1 min-w-0">

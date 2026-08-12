@@ -152,7 +152,7 @@ export default function BeatMapPage() {
             <span className="text-sm font-bold text-brand-600">{animatedProgressPct}%</span>
           </div>
           <div className="w-full bg-slate-100 rounded-full h-2.5 mb-3">
-            <div className="h-2.5 rounded-full bg-gradient-to-r from-brand-500 to-brand-600 transition-all duration-700" style={{ width: `${animatedProgressPct}%` }} />
+            <div className="h-2.5 rounded-full bg-primary transition-all duration-700" style={{ width: `${animatedProgressPct}%` }} />
           </div>
           <div className="grid grid-cols-4 gap-2 text-center">
             <Tile label="Pending" value={String(_pending.length)} />

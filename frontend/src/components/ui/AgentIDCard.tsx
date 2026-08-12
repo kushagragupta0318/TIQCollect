@@ -68,13 +68,6 @@ function MiniQR({ value, size = 18 }: { value: string; size?: number }) {
 export default function AgentIDCard({ agentId, name, idCardNumber, territory, tier, employeeCode, validUntil }: Props) {
   const [flipped, setFlipped] = useState(false);
 
-  const tierColor: Record<string, string> = {
-    TIER_1: "from-yellow-400 to-yellow-600",
-    TIER_2: "from-slate-400 to-slate-600",
-    TIER_3: "from-orange-400 to-orange-600",
-  };
-  const gradientClass = tierColor[tier] ?? "from-brand-500 to-brand-700";
-
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
@@ -93,7 +86,7 @@ export default function AgentIDCard({ agentId, name, idCardNumber, territory, ti
 
       {!flipped ? (
         /* Front face */
-        <div className={`rounded-2xl bg-gradient-to-br ${gradientClass} text-white p-4 shadow-lg relative overflow-hidden`}>
+        <div className="relative overflow-hidden rounded-card bg-primary p-4 text-white">
           {/* Background pattern */}
           <div className="absolute inset-0 opacity-5">
             <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="w-full h-full">

@@ -1,0 +1,38 @@
+# Backend-only image for local development.
+#
+# The production Dockerfile builds the React SPA and bakes it in, which is the
+# right thing for a deployment and the wrong thing for a dev loop: every backend
+# change would re-run npm run build. Here the frontend is a separate container
+# running Vite, and this image carries only Python.
+#
+# Application code is NOT copied in — docker-compose.yml bind-mounts ./backend
+# over /app so uvicorn --reload sees edits immediately. Only the dependency
+# layers live in the image, so a rebuild is needed just for requirements.txt.
+FROM python:3.12-slim
+
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1
+
+# libgomp1: ortools. libpq-dev/gcc: psycopg2 build. postgresql-client: the
+# entrypoint's pg_isready and psql. curl: healthcheck.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      libpq-dev gcc libgomp1 postgresql-client curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY backend/requirements.txt ./
+# faster-whisper and its PyAV dependency are by far the heaviest thing in the
+# file and are only reached when TRANSCRIPTION_PROVIDER=local. Left out to keep
+# the dev image quick to build; add it back if you need local transcription.
+RUN grep -v '^faster-whisper' requirements.txt > /tmp/req.txt && pip install -r /tmp/req.txt
+
+# Lives outside /app so the bind mount does not hide it.
+COPY docker-entrypoint.sh /usr/local/bin/entrypoint.sh
+# Windows checkouts can leave the script with CRLF even when .gitattributes is
+# added after the file was first checked out. Normalise it inside the image so
+# the shebang always resolves to `bash`, never the invalid `bash\r`.
+RUN sed -i 's/\r$//' /usr/local/bin/entrypoint.sh \
+    && chmod +x /usr/local/bin/entrypoint.sh
+
+EXPOSE 8000
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

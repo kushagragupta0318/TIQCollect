@@ -1,0 +1,54 @@
+# Line endings.
+#
+# Everything here runs inside a Linux container: the entrypoint is a shell
+# script, Compose parses the .env files, and the source tree is bind-mounted
+# straight in. A CRLF checkout breaks all three, and none of them fail in a way
+# that looks like a line-ending problem:
+#
+#   * docker-entrypoint.sh — the shebang becomes #!/usr/bin/env bash\r, so the
+#     container exits with "no such file or directory" while the file is plainly
+#     sitting there. Reads as a broken image.
+#
+#   * .env — Compose keeps the \r as part of the value, so POSTGRES_PASSWORD
+#     gains a trailing carriage return and authentication fails against a
+#     password that looks character-for-character correct on screen.
+#
+#   * anything run with docker compose exec.
+#
+# Windows git defaults to core.autocrlf=true, which produces exactly this unless
+# a file like this one says otherwise. So: normalise to LF in the repository and
+# in the working tree. Editors on Windows have handled LF for many years; the
+# alternative is the three bugs above, each costing someone an afternoon.
+text=auto eol=lf
+
+# Stated explicitly for the files that fail loudest, so the intent survives
+# someone editing the blanket rule above.
+*.sh            text eol=lf
+*.py            text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+Dockerfile      text eol=lf
+Dockerfile.*    text eol=lf
+.env            text eol=lf
+.env.*          text eol=lf
+Caddyfile       text eol=lf
+
+# Binary — never normalise, never diff as text.
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.ico    binary
+*.webp   binary
+*.pdf    binary
+*.woff   binary
+*.woff2  binary
+*.ttf    binary
+*.otf    binary
+*.zip    binary
+*.gz     binary
+*.parquet binary
+*.pyc    binary
+
+# Generated: keep them out of diffs and out of language statistics.
+package-lock.json  linguist-generated=true

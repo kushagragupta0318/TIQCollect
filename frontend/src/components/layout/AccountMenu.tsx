@@ -51,12 +51,12 @@ export function AccountMenu({
       {open && (
         <div
           role="menu"
-          className="absolute right-0 mt-2 rounded-2xl shadow-xl overflow-hidden"
+          className="absolute right-0 mt-2 rounded-card shadow-pop overflow-hidden"
           style={{
             width: "min(220px, calc(100vw - 32px))",
             zIndex: 100,
             background: "#fff",
-            border: "1px solid hsl(var(--border) / 0.6)",
+            border: "1px solid hsl(var(--border))",
             top: "100%",
           }}
         >

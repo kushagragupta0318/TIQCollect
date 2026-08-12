@@ -10,7 +10,7 @@ interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
 export function Input({ label, error, leftIcon, className, ...props }: InputProps) {
   return (
     <div className="w-full">
-      {label && <label className="block text-sm font-medium text-slate-700 mb-1">{label}</label>}
+      {label && <label className="mb-1.5 block text-[13px] font-normal text-[#98A2B3]">{label}</label>}
       <div className="relative">
         {leftIcon && (
           <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">{leftIcon}</span>

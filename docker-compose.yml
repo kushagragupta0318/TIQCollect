@@ -1,134 +1,250 @@
-version: "3.9"
+# Field Ops (TIQCollect) — LOCAL DEVELOPMENT stack.
+#
+#     docker compose up -d --build
+#
+# Then open http://localhost:5473. Edit anything under frontend/src and the
+# browser updates on save; edit anything under backend/app and uvicorn reloads.
+# Neither needs a rebuild — the source directories are bind-mounted, not copied.
+#
+#     http://localhost:5473   the app (Vite dev server, hot module reload)
+#     http://localhost:8400   the API on its own, and /docs
+#     http://localhost:19001  MinIO console
+#     localhost:15432         Postgres    localhost:16379  Redis
+#
+# Log in as agent002@tiqcollect.in / Agent@123, or manager1@tiqcollect.in /
+# Manager@123. The database is created and seeded automatically on first start.
+#
+# This is NOT how the app is deployed. In production one container serves the
+# built SPA and the API on a single origin — see ../docker-compose.yml and
+# ../DEPLOYMENT.md. Here they are two containers so each can hot-reload, and the
+# browser only ever talks to Vite, which proxies /api and /ws through to the
+# backend. That keeps requests same-origin, so CORS never enters into it.
+#
+# Every value below has a working default: a fresh clone runs with no .env at
+# all. Copy .env.example to .env to override any of them, or backend/.env.example
+# to backend/.env to add API keys (OpenAI, Twilio, Razorpay…).
+#
+# Ports are in a 1xxxx block and 5473/8400 so this cannot collide with anything
+# you already run — but it WILL collide with the full platform stack in ../,
+# which publishes the same infrastructure ports. Run one or the other.
 
 services:
   # ─── PostgreSQL ───────────────────────────────────────────────────────────
   postgres:
-    image: postgres:15-alpine
-    container_name: tiqcollect_postgres
+    image: postgres:16
+    container_name: fieldops_dev_postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-tiqcollect}
-      POSTGRES_USER: ${POSTGRES_USER:-tiqcollect}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tiqcollect_pass}
+      # This and the database named in DATABASE_URL below have to agree —
+      # Postgres only ever creates the one named here.
+      POSTGRES_DB: ${POSTGRES_DB:-fieldops}
+      POSTGRES_USER: ${POSTGRES_USER:-fieldops}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fieldops_dev_pass}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-    # Host ports are shifted into a 1xxxx block so they cannot clash with a
-    # Postgres/Redis/MinIO you already run locally. Container-internal ports are
-    # unchanged, so the service-to-service URLs below (postgres:5432, redis:6379,
-    # minio:9000) still work as-is.
+      - pgdata16:/var/lib/postgresql/data
     ports:
-      - "15432:5432"
+      - "${POSTGRES_HOST_PORT:-15432}:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-tiqcollect}"]
-      interval: 10s
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-fieldops}"]
+      interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 12
 
-  # ─── Redis ────────────────────────────────────────────────────────────────
+  # ─── Redis (OTP store + Celery broker) ────────────────────────────────────
   redis:
     image: redis:7-alpine
-    container_name: tiqcollect_redis
+    container_name: fieldops_dev_redis
     restart: unless-stopped
-    command: redis-server --requirepass tiqcollect_redis_pass --maxmemory 256mb --maxmemory-policy allkeys-lru
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
     volumes:
       - redis_data:/data
     ports:
-      - "16379:6379"
+      - "${REDIS_HOST_PORT:-16379}:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "tiqcollect_redis_pass", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
 
-  # ─── MinIO (document storage) ─────────────────────────────────────────────
+  # ─── MinIO (visit photos, signatures, recordings) ─────────────────────────
   minio:
     image: minio/minio:latest
-    container_name: tiqcollect_minio
+    container_name: fieldops_dev_minio
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-tiqcollect_minio}
-      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-tiqcollect_minio_secret}
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-fieldops_minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-fieldops_minio_secret}
     volumes:
       - minio_data:/data
     ports:
-      - "19000:9000"   # API
-      - "19001:9001"   # Console
+      - "${MINIO_HOST_PORT:-19000}:9000"
+      - "${MINIO_CONSOLE_PORT:-19001}:9001"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      # mc ready, not curl: recent MinIO images ship no curl, and a check that
+      # can never pass leaves everything waiting on it stuck in "starting".
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
-  # ─── FastAPI Backend ──────────────────────────────────────────────────────
-  api:
+  # ─── API (hot reload) ─────────────────────────────────────────────────────
+  api: &app
     build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: tiqcollect_api
+      context: .
+      dockerfile: Dockerfile.dev
+    image: fieldops-dev:latest
+    container_name: fieldops_dev_api
     restart: unless-stopped
-    env_file: ./backend/.env
-    environment:
-      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-tiqcollect}:${POSTGRES_PASSWORD:-tiqcollect_pass}@postgres:5432/${POSTGRES_DB:-tiqcollect}
-      REDIS_URL: redis://:tiqcollect_redis_pass@redis:6379/0
-      CELERY_BROKER_URL: redis://:tiqcollect_redis_pass@redis:6379/1
-      CELERY_RESULT_BACKEND: redis://:tiqcollect_redis_pass@redis:6379/2
+    # Optional. Supply backend/.env to add API keys; the defaults below are
+    # enough to run without it. Note that backend/.env is written for the
+    # platform and refers to shared values as ${VAR}, which resolve out of the
+    # platform's .env — running standalone those come through empty, which is
+    # why everything the app cannot start without is set explicitly below.
+    env_file:
+      - path: ./backend/.env
+        required: false
+    environment: &app-env
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-fieldops}:${POSTGRES_PASSWORD:-fieldops_dev_pass}@postgres:5432/${POSTGRES_DB:-fieldops}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
       MINIO_ENDPOINT: minio:9000
-    # Published on 8400, not 8000: inside the collections platform 8000 belongs
-    # to Command Center. The container still listens on 8000 internally.
-    ports:
-      - "8400:8000"
+      # No defaults in core/config.py — the app refuses to start without them.
+      SECRET_KEY: ${SECRET_KEY:-dev_only_secret_change_me_openssl_rand_hex_32}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-fieldops_minio}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-fieldops_minio_secret}
+      COMMAND_CENTRE_API_KEY: ${COMMAND_CENTRE_API_KEY:-dev_only_command_centre_key}
+      # Pre-signed upload URLs carry this host in the signature, so it has to be
+      # one the BROWSER can reach — minio:9000 only resolves inside the compose
+      # network. Set explicitly because backend/.env may still point at the
+      # deployed media host, which would send your local uploads to the server.
+      MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT:-localhost:19000}
+      MINIO_PUBLIC_SECURE: "false"
+      # Without this the 100m geo-fence blocks every visit unless you are
+      # physically at a seeded Gurugram address. DEMO_MODE re-anchors the demo
+      # customers to the agent's live GPS on check-in.
+      DEMO_MODE: ${DEMO_MODE:-true}
+      # RBI contact hours are enforced with a real 403. Left open so the app
+      # works outside 08:00-19:00 IST; set 8 and 19 for true behaviour.
+      CONTACT_HOUR_START: ${CONTACT_HOUR_START:-0}
+      CONTACT_HOUR_END: ${CONTACT_HOUR_END:-24}
+      # Avoid the generic host-level DEBUG variable: developer shells and
+      # tooling commonly set it to strings such as "release", which Pydantic
+      # correctly rejects for this boolean setting.
+      DEBUG: ${FIELDOPS_DEBUG:-true}
+      APP_ENV: development
+      # The browser only ever talks to Vite, which proxies /api server-side, so
+      # requests are same-origin and this is only needed if you call :8400
+      # directly.
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:5473,http://localhost:8400}
+      RUN_SEED: "false"
+    volumes:
+      # The whole point: edits on the host are what the reloader sees.
+      - ./backend:/app
+      # Anonymous volume so host __pycache__ never shadows the container's.
+      - /app/__pycache__
     depends_on:
-      postgres:
-        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       minio:
         condition: service_healthy
-    volumes:
-      - ./backend:/app
-    command: >
-      sh -c "alembic upgrade head &&
-             uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    ports:
+      - "${API_HOST_PORT:-8400}:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/api/v1/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
 
-  # ─── Celery Worker ────────────────────────────────────────────────────────
+  # ─── Frontend (Vite dev server, hot module reload) ────────────────────────
+  web:
+    image: node:22-alpine
+    container_name: fieldops_dev_web
+    restart: unless-stopped
+    working_dir: /app
+    environment:
+      # Vite proxies /api and /ws to this. Inside the network the backend is
+      # api:8000; the config's default of localhost:8400 would resolve to this
+      # container.
+      VITE_API_TARGET: http://api:8000
+    volumes:
+      - ./frontend:/app
+      # Named volume so the container's node_modules (built for Alpine) is not
+      # replaced by whatever the host has — a host install carries binaries for
+      # the host's libc and rollup/esbuild will fail to load.
+      - web_node_modules:/app/node_modules
+    ports:
+      - "${WEB_HOST_PORT:-5473}:5473"
+    # npm install on every start is near-instant once the volume is populated,
+    # and means adding a dependency needs only a restart, not a rebuild.
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    depends_on:
+      api:
+        condition: service_started
+
+  # ─── Celery worker + beat ─────────────────────────────────────────────────
+  # Same image and environment as the API; neither seeds. --reload is not passed
+  # here because Celery has no equivalent; restart them after changing a task.
   celery_worker:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: tiqcollect_celery_worker
-    restart: unless-stopped
-    env_file: ./backend/.env
-    environment:
-      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-tiqcollect}:${POSTGRES_PASSWORD:-tiqcollect_pass}@postgres:5432/${POSTGRES_DB:-tiqcollect}
-      REDIS_URL: redis://:tiqcollect_redis_pass@redis:6379/0
-      CELERY_BROKER_URL: redis://:tiqcollect_redis_pass@redis:6379/1
-      CELERY_RESULT_BACKEND: redis://:tiqcollect_redis_pass@redis:6379/2
+    <<: *app
+    container_name: fieldops_dev_celery_worker
+    ports: []
+    healthcheck:
+      disable: true
     depends_on:
-      - api
-    volumes:
-      - ./backend:/app
-    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=4
+      api:
+        condition: service_healthy
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
 
-  # ─── Celery Beat (scheduler) ──────────────────────────────────────────────
   celery_beat:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: tiqcollect_celery_beat
-    restart: unless-stopped
-    env_file: ./backend/.env
-    environment:
-      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-tiqcollect}:${POSTGRES_PASSWORD:-tiqcollect_pass}@postgres:5432/${POSTGRES_DB:-tiqcollect}
-      CELERY_BROKER_URL: redis://:tiqcollect_redis_pass@redis:6379/1
-      CELERY_RESULT_BACKEND: redis://:tiqcollect_redis_pass@redis:6379/2
+    <<: *app
+    container_name: fieldops_dev_celery_beat
+    ports: []
+    healthcheck:
+      disable: true
     depends_on:
-      - celery_worker
-    volumes:
-      - ./backend:/app
-    command: celery -A app.workers.celery_app beat --loglevel=info
+      api:
+        condition: service_healthy
+    # -s writes the schedule database to /tmp rather than the working directory,
+    # which is bind-mounted — otherwise beat drops a celerybeat-schedule file
+    # into your source tree on every run.
+    command: celery -A app.workers.celery_app beat --loglevel=info -s /tmp/celerybeat-schedule
+
+  # ─── One-shot: schema + demo data ─────────────────────────────────────────
+  # Separate from the API because scripts/seed_data.py is destructive — it drops
+  # every table and every enum in the public schema, then rebuilds. The
+  # entrypoint runs it only when the database is empty, so this is a no-op on
+  # every start after the first, and the API waits for it to exit 0 rather than
+  # briefly serving an empty database.
+  #
+  # Note that re-running THIS service will not reseed a populated database —
+  # the same emptiness gate applies, and it will just print "already seeded".
+  # To force a reseed:  docker compose exec api python -m scripts.seed_data
+  seed:
+    <<: *app
+    container_name: fieldops_dev_seed
+    restart: "no"
+    ports: []
+    healthcheck:
+      disable: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *app-env
+      RUN_SEED: "true"
+    command: ["true"]
 
 volumes:
-  postgres_data:
+  # Named pgdata16, not postgres_data: an older revision of this file ran
+  # postgres:15-alpine, and a v15 data directory makes the v16 server refuse to
+  # start. A distinct name gives a clean initialisation without destroying the
+  # old volume. Reclaim it with:  docker volume rm field-ops-stub_postgres_data
+  pgdata16:
   redis_data:
   minio_data:
+  web_node_modules:

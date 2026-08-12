@@ -99,7 +99,7 @@ export default function ManagerAgentsPage() {
       {/* SOS agents banner */}
       {sosAgents.length > 0 && (
         <div
-          className="rounded-[22px] p-4 space-y-2"
+          className="rounded-card p-4 space-y-2"
           style={{ background: "rgba(220,38,38,0.06)", border: "1px solid rgba(220,38,38,0.18)" }}
         >
           {sosAgents.map((a) => (
@@ -479,7 +479,7 @@ function AgentRow({
                 navigate(`/manager/cases?agent_id=${agent.id}&agent_name=${encodeURIComponent(agent.full_name)}&date_from=${dateFrom}&date_to=${dateTo}`);
               }}
               className="tap-target text-xs px-3 py-1.5 rounded-xl font-semibold transition hover:brightness-95 inline-flex items-center justify-center"
-              style={{ background: "#0C66E4", color: "white" }}
+              style={{ background: "#FFFFFF", color: "#2563EB", border: "1px solid #2563EB" }}
             >
               View Cases →
             </button>
@@ -502,7 +502,7 @@ function AgentRow({
               <button
                 onClick={fetchInsight}
                 className="tap-target text-xs px-3 py-1.5 rounded-xl font-semibold transition hover:brightness-95 flex items-center justify-center gap-1.5"
-                style={{ background: "linear-gradient(135deg, #7c3aed, #a855f7)", color: "white" }}
+                style={{ background: "#FFFFFF", color: "#2563EB", border: "1px solid #2563EB" }}
               >
                 <Brain className="w-3 h-3" /> AI Insight
               </button>
@@ -532,8 +532,8 @@ function AgentRow({
               <button
                 onClick={acknowledgeSos}
                 disabled={sosAcking}
-                className="text-xs text-white px-3 py-1.5 rounded-xl font-semibold animate-pulse transition hover:brightness-95 flex items-center gap-1.5"
-                style={{ background: "#DC2626" }}
+                className="flex items-center gap-1.5 rounded-control border px-3 py-1.5 text-xs font-semibold text-danger-700 transition hover:bg-danger-100"
+                style={{ background: "#FFFFFF", borderColor: "#F04438" }}
               >
                 {sosAcking ? <Loader2 className="w-3 h-3 animate-spin" /> : "🆘"} Emergency Response
               </button>
@@ -577,14 +577,14 @@ function AgentInsightStrip({ insight }: { insight: AgentInsight }) {
   return (
     <div
       className="mt-3 rounded-xl p-3"
-      style={{ background: "linear-gradient(160deg, #faf5ff 0%, #fff 70%)", border: "1px solid rgba(124,58,237,0.15)" }}
+      style={{ background: "#FFFFFF", border: "1px solid #ECEDF1" }}
     >
       <div className="flex items-center gap-2 mb-2">
         <div
           className="flex items-center justify-center rounded-lg flex-shrink-0"
-          style={{ width: 24, height: 24, background: "linear-gradient(135deg, #7c3aed, #a855f7)" }}
+          style={{ width: 24, height: 24, background: "#EFF6FF" }}
         >
-          <Brain className="w-3 h-3 text-white" />
+          <Brain className="w-3 h-3 text-primary" />
         </div>
         <span className="text-xs font-bold" style={{ color: "#1C1C1F" }}>AI Performance Analysis</span>
         <span
@@ -668,7 +668,7 @@ function ReallocationModal({ plan, onClose }: { plan: ReallocationPlan; onClose:
       <div
         ref={panelRef}
         tabIndex={-1}
-        className="w-full sm:max-w-2xl max-h-[92svh] sm:max-h-[85svh] flex flex-col rounded-t-[22px] sm:rounded-[22px] overflow-hidden outline-none"
+        className="w-full sm:max-w-2xl max-h-[92svh] sm:max-h-[85svh] flex flex-col rounded-t-card sm:rounded-card overflow-hidden outline-none border border-slate-200 shadow-pop"
         style={{ background: "#fff" }}
       >
         {/* Grab handle — sheet affordance, phone only */}
