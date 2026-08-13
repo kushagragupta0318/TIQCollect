@@ -141,7 +141,7 @@ export default function ManagerLayout() {
             <ShieldCheck size={16} color="#2563EB" />
           </div>
           <div style={{ whiteSpace: "nowrap", overflow: "hidden", opacity: open ? 1 : 0, transition: "opacity 150ms" }}>
-            <p style={{ color: "#101828", fontWeight: 700, fontSize: 14, lineHeight: "1" }}>TIQCollect</p>
+            <p style={{ color: "#101828", fontWeight: 600, fontSize: 14, lineHeight: "1" }}>TIQCollect</p>
             <p style={{ color: "#667085", fontWeight: 400, fontSize: 11, marginTop: 4 }}>Manager Portal</p>
           </div>
         </div>
@@ -169,7 +169,7 @@ export default function ManagerLayout() {
             rather than two. */}
         <div style={{ borderTop: "1px solid #ECEDF1", padding: 8, flexShrink: 0 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: open ? "flex-start" : "center", gap: open ? 10 : 0, padding: open ? "6px 8px" : "6px 0", borderRadius: 8, whiteSpace: "nowrap", overflow: "hidden" }}>
-            <div style={{ width: 32, height: 32, borderRadius: "50%", background: "#EFF6FF", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, color: "#2563EB", flexShrink: 0 }}>
+            <div style={{ width: 32, height: 32, borderRadius: "50%", background: "#EFF6FF", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 600, color: "#2563EB", flexShrink: 0 }}>
               {user?.full_name.charAt(0)}
             </div>
             <div style={{ overflow: "hidden", minWidth: 0, maxWidth: open ? 160 : 0, opacity: open ? 1 : 0, transition: "opacity 150ms, max-width 200ms" }}>

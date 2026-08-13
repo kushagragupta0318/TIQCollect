@@ -1008,3 +1008,15 @@ textarea:focus-visible {
     animation: none !important;
   }
 }
+
+/* Match Command Center typography across the service. */
+.font-mono,
+.font-display {
+  font-family: inherit !important;
+}
+
+.font-bold,
+.font-extrabold,
+.font-black {
+  font-weight: 600 !important;
+}

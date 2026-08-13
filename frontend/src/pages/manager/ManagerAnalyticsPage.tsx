@@ -263,7 +263,7 @@ function AgentSpotlight({ entry, months, color, animate, onClose, selMonth, onMo
           width: 40, height: 40, borderRadius: 12, flexShrink: 0,
           background: `${color}18`, border: `1.5px solid ${color}33`,
           display: "flex", alignItems: "center", justifyContent: "center",
-          fontSize: 16, fontWeight: 700, color,
+          fontSize: 16, fontWeight: 600, color,
         }}>
           {entry.agent_name.charAt(0)}
         </div>
@@ -876,7 +876,7 @@ function DutyCalendarCard({ cal, loading, jumpToMonth }: { cal: AgentAvailabilit
                 color: canPrev ? "#1C1C1F" : "#D1D5DB",
                 cursor: canPrev ? "pointer" : "default",
                 fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center",
-                fontWeight: 700,
+                fontWeight: 600,
               }}
             >‹</button>
             <p className="text-sm font-semibold" style={{ color: "#1C1C1F" }}>{visibleLabel}</p>
@@ -889,7 +889,7 @@ function DutyCalendarCard({ cal, loading, jumpToMonth }: { cal: AgentAvailabilit
                 color: canNext ? "#1C1C1F" : "#D1D5DB",
                 cursor: canNext ? "pointer" : "default",
                 fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center",
-                fontWeight: 700,
+                fontWeight: 600,
               }}
             >›</button>
           </div>
@@ -934,7 +934,7 @@ function DutyCalendarCard({ cal, loading, jumpToMonth }: { cal: AgentAvailabilit
               { label: "Upcoming", color: "#CBD5E1" },
             ].map(({ label, color: c }) => (
               <div key={label} className="flex items-center gap-1">
-                <span style={{ fontSize: 11, fontWeight: 700, color: c }}>●</span>
+                <span style={{ fontSize: 11, fontWeight: 600, color: c }}>●</span>
                 <span className="text-xs" style={{ color: "#94a3b8" }}>{label}</span>
               </div>
             ))}
@@ -1013,10 +1013,10 @@ function AgencyDutyOverview({ months }: { months: string[] }) {
       {/* Month nav */}
       <div className="flex items-center justify-between mb-3">
         <button onClick={() => canPrev && setVisibleMonth(months[monthIdx - 1])} disabled={!canPrev}
-          style={{ opacity: canPrev ? 1 : 0.25, cursor: canPrev ? "pointer" : "default", fontSize: 16, fontWeight: 700, color: "#6B6D76", lineHeight: 1, background: "none", border: "none", padding: "0 10px" }} className="tap-target">‹</button>
+          style={{ opacity: canPrev ? 1 : 0.25, cursor: canPrev ? "pointer" : "default", fontSize: 16, fontWeight: 600, color: "#6B6D76", lineHeight: 1, background: "none", border: "none", padding: "0 10px" }} className="tap-target">‹</button>
         <p className="text-xs font-semibold" style={{ color: "#6B6D76" }}>{hdr} · {total} agents</p>
         <button onClick={() => canNext && setVisibleMonth(months[monthIdx + 1])} disabled={!canNext}
-          style={{ opacity: canNext ? 1 : 0.25, cursor: canNext ? "pointer" : "default", fontSize: 16, fontWeight: 700, color: "#6B6D76", lineHeight: 1, background: "none", border: "none", padding: "0 10px" }} className="tap-target">›</button>
+          style={{ opacity: canNext ? 1 : 0.25, cursor: canNext ? "pointer" : "default", fontSize: 16, fontWeight: 600, color: "#6B6D76", lineHeight: 1, background: "none", border: "none", padding: "0 10px" }} className="tap-target">›</button>
       </div>
 
       {/* Calendar */}
@@ -1032,7 +1032,7 @@ function AgencyDutyOverview({ months }: { months: string[] }) {
               <div key={`${ri}-${ci}`}
                 title={cell.isFuture ? cell.dateStr : `${cell.dateStr} · ${cell.count}/${total} on duty`}
                 style={{ textAlign: "center", height: "var(--cal-cell-team)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
-                <p style={{ fontSize: 10, fontWeight: 700, color: col, lineHeight: 1 }}>{cell.dayNum}</p>
+                <p style={{ fontSize: 10, fontWeight: 600, color: col, lineHeight: 1 }}>{cell.dayNum}</p>
                 {!cell.isFuture && total > 0 && (
                   <p style={{ fontSize: 8, color: col, lineHeight: 1, marginTop: 1, opacity: 0.85 }}>{cell.count}/{total}</p>
                 )}
@@ -1051,7 +1051,7 @@ function AgencyDutyOverview({ months }: { months: string[] }) {
           { label: "Future", color: "#CBD5E1" },
         ].map(({ label, color: c }) => (
           <div key={label} className="flex items-center gap-1">
-            <span style={{ fontSize: 11, fontWeight: 700, color: c }}>●</span>
+            <span style={{ fontSize: 11, fontWeight: 600, color: c }}>●</span>
             <span className="text-xs" style={{ color: "#94a3b8" }}>{label}</span>
           </div>
         ))}

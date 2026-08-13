@@ -28,7 +28,7 @@ export default function LandingPage() {
             <div className="flex size-8 items-center justify-center rounded-control bg-brand-100">
               <ShieldCheck className="w-5 h-5 text-primary" />
             </div>
-            <span className="text-xl font-bold text-slate-900 tracking-tight">TIQCollect</span>
+            <span className="text-xl font-semibold text-slate-900 tracking-tight">TIQCollect</span>
             <span className="hidden sm:inline-block text-xs font-medium bg-brand-50 text-brand-600 border border-brand-100 px-2 py-0.5 rounded-full ml-1">Enterprise</span>
           </div>
 
@@ -51,49 +51,47 @@ export default function LandingPage() {
       </nav>
 
       {/* ─── Hero ─── */}
-      <section className="relative mt-4 overflow-hidden rounded-card bg-primary text-white">
+      <section className="relative mt-4 overflow-hidden rounded-card border border-[#D7E5F8] bg-[#EEF5FC] text-foreground">
 
         <div className="max-w-7xl mx-auto px-6 lg:px-8 py-20 lg:py-28">
           <div className="grid lg:grid-cols-2 gap-12 items-center">
             {/* Left — copy */}
             <div>
-              <div className="inline-flex items-center gap-2 bg-brand-500/20 border border-brand-400/30 rounded-full px-4 py-1.5 text-sm font-medium text-brand-200 mb-6">
+              <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-[#C7DAF2] bg-white px-4 py-1.5 text-sm font-medium text-primary">
                 <Zap className="w-3.5 h-3.5" /> AI-Powered Collections Platform
               </div>
-              <h1 className="text-4xl lg:text-5xl xl:text-6xl font-extrabold leading-tight tracking-tight text-white mb-6">
-                Collections that
-                <span className="block text-white">
-                  actually collect.
-                </span>
+              <h1 className="mb-6 text-4xl font-semibold leading-tight tracking-tight text-foreground lg:text-5xl xl:text-6xl">
+                Collections that<br />
+                actually collect.
               </h1>
-              <p className="text-lg text-brand-100 leading-relaxed mb-8 max-w-lg">
+              <p className="mb-8 max-w-lg text-lg leading-relaxed text-muted-foreground">
                 Enterprise-grade field collections management for Indian NBFCs & banks. ML-optimised case allocation, real-time agent tracking, RBI-compliant workflows — all in one platform.
               </p>
 
               <div className="flex flex-wrap gap-3 mb-10">
-                <button onClick={() => goLogin("manager")} className="flex items-center gap-2 bg-white text-brand-700 font-bold px-6 py-3 rounded-xl hover:bg-brand-50 transition-colors shadow-lg text-sm">
+                <button onClick={() => goLogin("manager")} className="flex items-center gap-2 rounded-control border border-primary bg-primary px-6 py-3 text-sm font-medium text-white transition-colors hover:bg-brand-700">
                   <BarChart3 className="w-4 h-4" /> Manager Dashboard
                 </button>
-                <button onClick={() => goLogin("agent")} className="flex items-center gap-2 bg-brand-500/30 border border-brand-400/50 text-white font-semibold px-6 py-3 rounded-xl hover:bg-brand-500/40 transition-colors text-sm">
+                <button onClick={() => goLogin("agent")} className="flex items-center gap-2 rounded-control border border-[#C7DAF2] bg-white px-6 py-3 text-sm font-medium text-primary transition-colors hover:bg-[#E3EEF9]">
                   <Phone className="w-4 h-4" /> Field Agent App
                 </button>
               </div>
 
-              <div className="flex flex-wrap gap-5 text-sm text-brand-200">
+              <div className="flex flex-wrap gap-5 text-sm text-muted-foreground">
                 {["No setup required", "RBI Compliant", "Works offline"].map((t) => (
-                  <span key={t} className="flex items-center gap-1.5"><CheckCircle className="w-4 h-4 text-brand-300" />{t}</span>
+                  <span key={t} className="flex items-center gap-1.5"><CheckCircle className="w-4 h-4 text-primary" />{t}</span>
                 ))}
               </div>
             </div>
 
             {/* Right — dashboard preview card */}
             <div className="relative hidden lg:block">
-              <div className="rounded-card border border-white/20 bg-white/10 p-4">
+              <div className="rounded-card border border-[#D7E5F8] bg-white p-4 shadow-resting">
                 {/* Mock dashboard header */}
                 <div className="flex items-center justify-between mb-4">
                   <div>
-                    <p className="text-xs text-brand-200">Agency Dashboard</p>
-                    <p className="font-bold text-white">Today's Overview</p>
+                    <p className="text-xs text-muted-foreground">Agency Dashboard</p>
+                    <p className="font-semibold text-foreground">Today's Overview</p>
                   </div>
                   <div className="flex items-center gap-1.5 text-xs bg-success-500/20 text-success-300 px-2.5 py-1 rounded-full border border-success-400/30">
                     <span className="w-1.5 h-1.5 rounded-full bg-success-400 animate-pulse" />
@@ -108,23 +106,23 @@ export default function LandingPage() {
                     { label: "Cases Resolved", value: "87", icon: "✅", color: "text-green-300" },
                     { label: "Collection Rate", value: "52.8%", icon: "📈", color: "text-yellow-300" },
                   ].map((k) => (
-                    <div key={k.label} className="bg-white/10 rounded-xl p-3 border border-white/10">
+                    <div key={k.label} className="rounded-inner border border-border bg-[#F7F9FC] p-3">
                       <p className="text-lg">{k.icon}</p>
                       <p className={`text-base font-bold ${k.color}`}>{k.value}</p>
-                      <p className="text-xs text-white/60 mt-0.5">{k.label}</p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">{k.label}</p>
                     </div>
                   ))}
                 </div>
                 {/* Progress bar */}
-                <div className="bg-white/10 rounded-xl p-3 border border-white/10">
-                  <div className="flex justify-between text-xs text-white/70 mb-1.5">
+                <div className="rounded-inner border border-border bg-[#F7F9FC] p-3">
+                  <div className="mb-1.5 flex justify-between text-xs text-muted-foreground">
                     <span>Collection Target Progress</span>
                     <span className="font-semibold text-green-300">52.8%</span>
                   </div>
-                  <div className="w-full bg-white/20 rounded-full h-2">
+                  <div className="h-2 w-full rounded-full bg-[#DDE8F5]">
                     <div className="h-2 rounded-full bg-success-500" style={{ width: "52.8%" }} />
                   </div>
-                  <p className="text-xs text-white/50 mt-1.5">₹28.5L of ₹54L target · ₹25.5L remaining</p>
+                  <p className="mt-1.5 text-xs text-muted-foreground">₹28.5L of ₹54L target · ₹25.5L remaining</p>
                 </div>
               </div>
 
@@ -376,21 +374,21 @@ export default function LandingPage() {
       </section>
 
       {/* ─── CTA ─── */}
-      <section className="rounded-card bg-primary py-20 text-white">
+      <section className="rounded-card border border-[#D7E5F8] bg-[#EEF5FC] py-20 text-foreground">
         <div className="max-w-4xl mx-auto px-6 lg:px-8 text-center">
           <h2 className="text-3xl lg:text-4xl font-bold mb-4">Ready to transform your collections?</h2>
-          <p className="text-brand-100 text-lg mb-8 max-w-xl mx-auto">
+          <p className="mx-auto mb-8 max-w-xl text-lg text-muted-foreground">
             See how TIQCollect turns manual, inefficient field collections into a data-driven, RBI-compliant operation.
           </p>
           <div className="flex flex-wrap justify-center gap-4">
-            <button onClick={() => goLogin("manager")} className="flex items-center gap-2 bg-white text-brand-700 font-bold px-8 py-3.5 rounded-xl hover:bg-brand-50 transition-colors shadow-lg text-sm">
+            <button onClick={() => goLogin("manager")} className="flex items-center gap-2 rounded-control border border-primary bg-primary px-8 py-3.5 text-sm font-medium text-white transition-colors hover:bg-brand-700">
               <BarChart3 className="w-4 h-4" /> Open Manager Dashboard
             </button>
-            <button onClick={() => goLogin("agent")} className="flex items-center gap-2 bg-brand-500/30 border border-brand-300/40 text-white font-semibold px-8 py-3.5 rounded-xl hover:bg-brand-500/40 transition-colors text-sm">
+            <button onClick={() => goLogin("agent")} className="flex items-center gap-2 rounded-control border border-[#C7DAF2] bg-white px-8 py-3.5 text-sm font-medium text-primary transition-colors hover:bg-[#E3EEF9]">
               <Phone className="w-4 h-4" /> Try Agent Mobile App
             </button>
           </div>
-          <p className="text-brand-200 text-xs mt-6">No account needed · Demo data loaded · Instant access</p>
+          <p className="mt-6 text-xs text-muted-foreground">No account needed · Demo data loaded · Instant access</p>
         </div>
       </section>
 
