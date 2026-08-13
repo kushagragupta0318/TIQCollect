@@ -1,4 +1,5 @@
-import { BrowserRouter, Routes, Route, Navigate } from "react-router";
+import { useEffect, useLayoutEffect } from "react";
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router";
 import { Toaster } from "react-hot-toast";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
@@ -37,10 +38,36 @@ function RootRedirect() {
   return <Navigate to="/manager/overview" replace />;
 }
 
+/**
+ * React Router keeps the document's scroll position between client-side route
+ * changes. Reset it before the next route paints so every page opens from its
+ * top instead of briefly rendering at the previous page's scroll position.
+ */
+function ScrollToTop() {
+  const location = useLocation();
+
+  useEffect(() => {
+    const previous = window.history.scrollRestoration;
+    window.history.scrollRestoration = "manual";
+    return () => {
+      window.history.scrollRestoration = previous;
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  }, [location.key]);
+
+  return null;
+}
+
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
+        <ScrollToTop />
         <Routes>
           <Route path="/" element={<RootRedirect />} />
           <Route path="/login" element={<LoginPage />} />
