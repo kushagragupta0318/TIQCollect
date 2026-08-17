@@ -283,7 +283,11 @@ function CaseCard({ case_: c, rank, rankBadge, rankBadgeColor, rankReason, onNav
   const sla = getSLAInfo(c.allocation_date);
   const isBlocked = rankBadge?.startsWith("BLOCKED") || rankBadge === "DO NOT VISIT";
   return (
-    <div onClick={onOpen} className={`bg-white p-4 active:bg-slate-50 cursor-pointer lg:rounded-2xl lg:border lg:border-slate-100 lg:h-full lg:flex lg:flex-col ${isDone || isBlocked ? "opacity-60" : ""}`}>
+    // .tap-card carries the white background and the hover: a tint while this
+    // is a flat list row, the card lift once lg turns it into one. It cannot be
+    // a bg-white utility — utilities outrank the components layer, so the hover
+    // background would never paint over it.
+    <div onClick={onOpen} className={`tap-card p-4 active:bg-slate-50 cursor-pointer lg:rounded-2xl lg:border lg:border-slate-100 lg:h-full lg:flex lg:flex-col ${isDone || isBlocked ? "opacity-60" : ""}`}>
       <div className="flex items-start justify-between mb-2">
         <div className="flex items-start gap-2.5 flex-1 min-w-0">
           {/* Rank number OR done tick */}

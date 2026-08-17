@@ -149,10 +149,22 @@
                 border-color 200ms cubic-bezier(0.16,1,0.3,1);
   }
   @media (hover: hover) and (pointer: fine) {
+    /* Deliberately stronger than the 3px/0.12 it started at. Every KPI surface
+       in the app is a .card — StatCard, KPICard, MetricTile — and at that
+       weight the lift read as nothing on a bright dashboard. 5px of travel, a
+       blue-tinted shadow at 0.20, and a 1px brand ring so the card separates
+       from the page even on a light background. */
     .card:hover {
-      transform: translateY(-3px);
-      box-shadow: 0 6px 20px rgba(22,119,255,0.12), 0 2px 6px rgba(17,24,39,0.06);
-      border-color: hsl(var(--border) / 0.9);
+      transform: translateY(-5px);
+      box-shadow: 0 12px 28px rgba(22,119,255,0.20), 0 4px 10px rgba(17,24,39,0.08);
+      border-color: rgba(22,119,255,0.42);
+    }
+    /* Loading skeletons are .card too. They already null out the border and
+       shadow inline, and a placeholder that rises under the cursor reads as
+       something you can click before there is anything there to click. */
+    .card.animate-pulse:hover {
+      transform: none;
+      box-shadow: none;
     }
   }
 
@@ -291,19 +303,114 @@
      it belongs inline, while the :hover rule that consumes it cannot be
      expressed inline at all.
 
-     No transform here: the `enter` entrance animation uses fill-mode both and
-     animates transform, so it keeps ownership of that property after it
-     finishes and a hover translateY would silently never apply. */
+     The lift is a real transform again. It was left out while `enter` animated
+     transform under fill-mode both, which swallowed it; `enter` now animates
+     `translate` instead, so the two no longer collide. Kept to -2px — a
+     leaderboard row is a list item, not a card, and should move less. */
   .row-lift {
     background: var(--lift-wash, transparent);
     border: 1px solid var(--lift-border, transparent);
     transition: box-shadow 160ms cubic-bezier(0.16, 1, 0.3, 1),
-                border-color 160ms cubic-bezier(0.16, 1, 0.3, 1);
+                border-color 160ms cubic-bezier(0.16, 1, 0.3, 1),
+                transform 160ms cubic-bezier(0.16, 1, 0.3, 1);
   }
   @media (hover: hover) and (pointer: fine) {
     .row-lift:hover {
       box-shadow: var(--lift-shadow, none);
       border-color: var(--lift-border-hover, transparent);
+      transform: translateY(-2px);
+    }
+  }
+
+  /* ── KPI Chip ───────────────────────────────────────────────────────────
+     The compact figure tiles in the Analytics drill-downs (rate · collected ·
+     visits · PTP conv.). Smaller than a .card and not clickable, so they get a
+     lighter version of the same gesture: a 2px rise and a blue-tinted shadow.
+
+     The border lives here rather than inline. It used to be an inline style,
+     which outranks any class rule — the hover border-color could never have
+     painted while it did. */
+  .kpi-chip {
+    border: 1px solid #EAEBEF;
+    transition: transform 160ms cubic-bezier(0.16, 1, 0.3, 1),
+                box-shadow 160ms cubic-bezier(0.16, 1, 0.3, 1),
+                border-color 160ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  @media (hover: hover) and (pointer: fine) {
+    .kpi-chip:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 8px 20px rgba(22,119,255,0.20), 0 2px 5px rgba(17,24,39,0.07);
+      border-color: rgba(22,119,255,0.50);
+    }
+  }
+
+  /* ── Tile Hover ─────────────────────────────────────────────────────────
+     Clickable figure tiles that sit inside a card (the Overview collection
+     breakdown: Per Case · Per Agent Avg · Cases/Agent).
+
+     CSS :hover, not the onMouseEnter/onMouseLeave pair this replaced. The
+     handlers wrote background straight onto the node, so a tile that scrolled
+     out from under a stationary cursor never received mouseleave and stayed
+     lit — the same failure .row-accent was moved off JS to avoid. */
+  .tile-hover {
+    transition: background-color 150ms cubic-bezier(0.16, 1, 0.3, 1),
+                transform 150ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  @media (hover: hover) and (pointer: fine) {
+    .tile-hover:hover {
+      background-color: rgba(22, 119, 255, 0.06);
+      transform: translateY(-1px);
+    }
+  }
+
+  /* ── Tap Card ───────────────────────────────────────────────────────────
+     The agent case list. Phone-first, so it changes shape at lg: below that
+     each case is a flat full-bleed row, and at lg they become a bordered card
+     grid. The hover follows — a tint while it is a list row, the full card
+     lift once it is actually a card.
+
+     `background` lives here rather than as a bg-white utility on the element.
+     Tailwind orders utilities after components, so a utility background wins
+     the cascade outright and a :hover background-color declared in this layer
+     could never paint over it. Same reason .kpi-chip owns its border.
+
+     Border colour is deliberately left to the element's lg:border-slate-100
+     utility and not animated, for that same precedence reason — the lift and
+     the shadow carry the gesture. `active:` on the element already handles the
+     touch press; this is the pointer half. */
+  .tap-card {
+    background: #fff;
+    transition: background-color 150ms cubic-bezier(0.16, 1, 0.3, 1),
+                transform 200ms cubic-bezier(0.16, 1, 0.3, 1),
+                box-shadow 200ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  @media (hover: hover) and (pointer: fine) {
+    .tap-card:hover {
+      background-color: #F9FAFB;
+    }
+  }
+  @media (hover: hover) and (pointer: fine) and (min-width: 1024px) {
+    .tap-card:hover {
+      background-color: #fff;
+      transform: translateY(-3px);
+      box-shadow: 0 6px 20px rgba(22,119,255,0.12), 0 2px 6px rgba(17,24,39,0.06);
+    }
+  }
+
+  /* ── Stat Row ───────────────────────────────────────────────────────────
+     Figure-plus-progress-bar rows that are read, not clicked: the Analytics
+     DPD bucket breakdown and the leave-type summary. No cursor change and no
+     lift — a tint and an inset stripe only, so the row answers the pointer
+     without implying it opens something. Matches .row-accent's stripe so the
+     two read as one family. */
+  .row-stat {
+    transition: background-color 150ms cubic-bezier(0.16, 1, 0.3, 1),
+                box-shadow 150ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  @media (hover: hover) and (pointer: fine) {
+    .row-stat:hover {
+      background-color: rgba(22, 119, 255, 0.05);
+      box-shadow: inset 3px 0 0 0 rgba(22, 119, 255, 0.55);
     }
   }
 
@@ -616,10 +723,23 @@
 
 /* ── Keyframes ────────────────────────────────────────────────────────────── */
 
-/* Original TIQCollect entrance — kept for all inline animation: `enter` usage */
+/* Original TIQCollect entrance — kept for all inline animation: `enter` usage
+
+   Animates `translate`, not `transform`, and the difference is load-bearing.
+   Every caller runs this with fill-mode `both`, so after the animation ends it
+   keeps ownership of whatever property it animated — and an animation outranks
+   a :hover rule in the cascade. While this moved `transform`, any element that
+   was both a `.card` and carried an inline `animation: enter` silently lost
+   `.card:hover`'s lift: the hover shadow painted, the card never rose. That hit
+   roughly two dozen cards across the manager pages, and was also why .row-lift
+   below had to leave its hover transform out.
+
+   `translate` is an independent longhand that composes with `transform` rather
+   than competing for it, so the entrance and the hover lift can both hold their
+   own property. Visually identical to the translateY it replaces. */
 @keyframes enter {
-  from { opacity: 0; transform: translateY(16px); }
-  to   { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; translate: 0 16px; }
+  to   { opacity: 1; translate: 0 0; }
 }
 
 /* Page-level entrance. No transform — see .page-fade-in. */
@@ -780,10 +900,25 @@ input[type="range"]::-webkit-slider-thumb:active { transform: scale(0.95); }
   .card:hover,
   .card-base:hover,
   .agentic-panel:hover {
-    transform: none;
+    transform: translateY(-2px);
     border-color: var(--border-strong);
-    background: var(--surface-sunk);
-    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+    background: #FFFFFF;
+    box-shadow: 0 6px 18px rgba(16, 24, 40, 0.08), 0 1px 3px rgba(16, 24, 40, 0.06);
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .manager-overview-page .card:not(.animate-pulse):hover {
+    transform: translateY(-3px);
+    border-color: rgba(37, 99, 235, 0.24) !important;
+    background: #FFFFFF !important;
+    box-shadow: 0 10px 24px rgba(16, 24, 40, 0.10), 0 3px 8px rgba(37, 99, 235, 0.08) !important;
+  }
+
+  .manager-overview-page .overview-kpi-grid .card:hover {
+    transform: translateY(-6px);
+    border-color: rgba(37, 99, 235, 0.34) !important;
+    box-shadow: 0 16px 32px rgba(16, 24, 40, 0.14), 0 5px 14px rgba(37, 99, 235, 0.12) !important;
   }
 }
 

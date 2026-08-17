@@ -1236,7 +1236,7 @@ export default function RecordVisitPage() {
                     key={v}
                     onClick={() => upd({ borrowerTone: form.borrowerTone === v ? null : v })}
                     className={`flex flex-col items-center gap-1 py-3 rounded-xl border text-xs font-medium transition-colors ${
-                      form.borrowerTone === v ? selCls : "border-slate-200 bg-white text-slate-600"
+                      form.borrowerTone === v ? selCls : "border-slate-200 bg-white text-slate-600 transition-colors hover:border-brand-200 hover:bg-brand-50/50"
                     }`}
                   >
                     <span className="text-2xl">{emoji}</span>{l}
@@ -1257,7 +1257,7 @@ export default function RecordVisitPage() {
                     <button
                       key={p.value}
                       onClick={() => upd({ personMet: p.value })}
-                      className={`py-2.5 px-3 rounded-xl border text-sm font-medium text-left transition-colors ${form.personMet === p.value ? "border-warning-400 bg-warning-50 text-warning-800" : "border-slate-200 bg-white text-slate-600"}`}
+                      className={`py-2.5 px-3 rounded-xl border text-sm font-medium text-left transition-colors ${form.personMet === p.value ? "border-warning-400 bg-warning-50 text-warning-800" : "border-slate-200 bg-white text-slate-600 transition-colors hover:border-brand-200 hover:bg-brand-50/50"}`}
                     >
                       {p.label}
                       {form.personMet === p.value && <CheckCircle className="w-3.5 h-3.5 text-warning-500 float-right mt-0.5" />}
@@ -1286,7 +1286,7 @@ export default function RecordVisitPage() {
                     <button
                       key={o.value}
                       onClick={() => upd({ outcome: o.value })}
-                      className={`py-3 px-3 rounded-xl border text-sm font-medium text-left transition-colors ${form.outcome === o.value ? "border-brand-400 bg-brand-50 text-brand-800" : "border-slate-200 bg-white text-slate-600"}`}
+                      className={`py-3 px-3 rounded-xl border text-sm font-medium text-left transition-colors ${form.outcome === o.value ? "border-brand-400 bg-brand-50 text-brand-800" : "border-slate-200 bg-white text-slate-600 transition-colors hover:border-brand-200 hover:bg-brand-50/50"}`}
                     >
                       <p className="font-semibold">{o.label}</p>
                       <p className="text-xs text-slate-400 mt-0.5 font-normal">{o.desc}</p>
@@ -1314,7 +1314,7 @@ export default function RecordVisitPage() {
               <Section title="Reason Not Met">
                 <div className="grid grid-cols-2 gap-1.5">
                   {NOT_MET_REASONS.map((r) => (
-                    <button key={r.value} onClick={() => upd({ notMetReason: r.value })} className={`text-xs px-2.5 py-2 rounded-lg border text-left ${form.notMetReason === r.value ? "border-brand-400 bg-brand-50 text-brand-700" : "border-slate-200 bg-white text-slate-600"}`}>
+                    <button key={r.value} onClick={() => upd({ notMetReason: r.value })} className={`text-xs px-2.5 py-2 rounded-lg border text-left ${form.notMetReason === r.value ? "border-brand-400 bg-brand-50 text-brand-700" : "border-slate-200 bg-white text-slate-600 transition-colors hover:border-brand-200 hover:bg-brand-50/50"}`}>
                       {r.label}
                     </button>
                   ))}
@@ -1327,7 +1327,7 @@ export default function RecordVisitPage() {
                     <button
                       key={o.value}
                       onClick={() => upd({ outcome: o.value })}
-                      className={`w-full py-3 px-4 rounded-xl border text-sm font-medium text-left transition-colors ${form.outcome === o.value ? "border-brand-400 bg-brand-50 text-brand-800" : "border-slate-200 bg-white text-slate-600"}`}
+                      className={`w-full py-3 px-4 rounded-xl border text-sm font-medium text-left transition-colors ${form.outcome === o.value ? "border-brand-400 bg-brand-50 text-brand-800" : "border-slate-200 bg-white text-slate-600 transition-colors hover:border-brand-200 hover:bg-brand-50/50"}`}
                     >
                       <p className="font-semibold">{o.label}</p>
                       <p className="text-xs text-slate-400 mt-0.5 font-normal">{o.desc}</p>
@@ -1364,7 +1364,7 @@ export default function RecordVisitPage() {
                             key={r}
                             onClick={() => upd({ informantRelation: form.informantRelation === r ? "" : r })}
                             className={`py-2 rounded-lg text-xs font-medium border transition-colors ${
-                              form.informantRelation === r ? "border-brand-400 bg-brand-50 text-brand-700" : "border-slate-200 bg-white text-slate-600"
+                              form.informantRelation === r ? "border-brand-400 bg-brand-50 text-brand-700" : "border-slate-200 bg-white text-slate-600 transition-colors hover:border-brand-200 hover:bg-brand-50/50"
                             }`}
                           >
                             {r}
@@ -1436,7 +1436,7 @@ export default function RecordVisitPage() {
                 <Section title="Reason for Default" badge="Recommended">
                   <div className="space-y-1.5">
                     {DEFAULT_REASONS.map((r) => (
-                      <button key={r.value} onClick={() => upd({ defaultReason: form.defaultReason === r.value ? null : r.value })} className={`w-full text-sm px-3 py-2.5 rounded-xl border text-left transition-colors ${form.defaultReason === r.value ? "border-brand-400 bg-brand-50 text-brand-700 font-medium" : "border-slate-200 bg-white text-slate-600"}`}>
+                      <button key={r.value} onClick={() => upd({ defaultReason: form.defaultReason === r.value ? null : r.value })} className={`w-full text-sm px-3 py-2.5 rounded-xl border text-left transition-colors ${form.defaultReason === r.value ? "border-brand-400 bg-brand-50 text-brand-700 font-medium" : "border-slate-200 bg-white text-slate-600 transition-colors hover:border-brand-200 hover:bg-brand-50/50"}`}>
                         {r.label}
                         {form.defaultReason === r.value && <CheckCircle className="w-4 h-4 text-brand-500 float-right mt-0.5" />}
                       </button>
@@ -1527,7 +1527,7 @@ export default function RecordVisitPage() {
                     <p className="text-sm font-medium text-slate-700 mb-2">Payment Mode</p>
                     <div className="grid grid-cols-3 gap-2">
                       {PAYMENT_MODES.map((m) => (
-                        <button key={m.value} onClick={() => upd({ paymentMode: m.value, cashCounted: false, upiRef: "", chequeNumber: "", chequeDate: "", chequeBank: "", neftRef: "" })} className={`flex flex-col items-center gap-1 py-2.5 rounded-xl border text-xs font-medium ${form.paymentMode === m.value ? "border-brand-400 bg-brand-50 text-brand-700" : "border-slate-200 bg-white text-slate-600"}`}>
+                        <button key={m.value} onClick={() => upd({ paymentMode: m.value, cashCounted: false, upiRef: "", chequeNumber: "", chequeDate: "", chequeBank: "", neftRef: "" })} className={`flex flex-col items-center gap-1 py-2.5 rounded-xl border text-xs font-medium ${form.paymentMode === m.value ? "border-brand-400 bg-brand-50 text-brand-700" : "border-slate-200 bg-white text-slate-600 transition-colors hover:border-brand-200 hover:bg-brand-50/50"}`}>
                           <span className="text-lg">{m.icon}</span>{m.label}
                         </button>
                       ))}
@@ -1707,7 +1707,7 @@ export default function RecordVisitPage() {
                     <p className="text-sm font-medium text-slate-700 mb-2">Witness present?</p>
                     <div className="flex gap-2">
                       {[true, false].map((v) => (
-                        <button key={String(v)} onClick={() => upd({ witnessPresent: v })} className={`flex-1 py-2 rounded-lg text-sm font-medium border ${form.witnessPresent === v ? "border-brand-400 bg-brand-50 text-brand-700" : "border-slate-200 bg-white text-slate-600"}`}>{v ? "Yes" : "No"}</button>
+                        <button key={String(v)} onClick={() => upd({ witnessPresent: v })} className={`flex-1 py-2 rounded-lg text-sm font-medium border ${form.witnessPresent === v ? "border-brand-400 bg-brand-50 text-brand-700" : "border-slate-200 bg-white text-slate-600 transition-colors hover:border-brand-200 hover:bg-brand-50/50"}`}>{v ? "Yes" : "No"}</button>
                       ))}
                     </div>
                     {form.witnessPresent && (
@@ -1839,7 +1839,7 @@ export default function RecordVisitPage() {
                     {DOC_CATEGORIES.map((cat) => {
                       const uploaded = form.documents.find((d) => d.category === cat.id);
                       return (
-                        <button key={cat.id} onClick={() => fileRefs.current[cat.id]?.click()} className={`flex items-center gap-2 p-2.5 rounded-xl border text-xs font-medium text-left ${uploaded ? "border-success-400 bg-success-50 text-success-700" : "border-slate-200 bg-white text-slate-600"}`}>
+                        <button key={cat.id} onClick={() => fileRefs.current[cat.id]?.click()} className={`flex items-center gap-2 p-2.5 rounded-xl border text-xs font-medium text-left ${uploaded ? "border-success-400 bg-success-50 text-success-700" : "border-slate-200 bg-white text-slate-600 transition-colors hover:border-brand-200 hover:bg-brand-50/50"}`}>
                           <span className="text-base flex-shrink-0">{cat.icon}</span>
                           <span className="truncate">{cat.label}</span>
                           {uploaded && <CheckCircle className="w-3.5 h-3.5 text-success-500 ml-auto flex-shrink-0" />}

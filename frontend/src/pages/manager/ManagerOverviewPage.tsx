@@ -120,7 +120,7 @@ export default function ManagerOverviewPage() {
   const effectiveDate = s.effective_date ?? new Date().toISOString().slice(0, 10);
 
   return (
-    <div className="space-y-5">
+    <div className="manager-overview-page space-y-5">
       {/* SOS Alert */}
       {sosCount > 0 && (
         <div
@@ -151,7 +151,7 @@ export default function ManagerOverviewPage() {
       )}
 
       {/* KPI Grid — staggered entrance */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+      <div className="overview-kpi-grid grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         {[
           { label: "Agents On Duty",  value: `${s.agents_on_duty}/${s.total_agents}`, icon: <Users className="w-5 h-5" />,       colorClass: "text-brand-600",   subtext: "active today" },
           // "cases visited", not "allocated": the backend derives cases_today
@@ -514,6 +514,10 @@ function BreakdownTile({ label, title, onOpen, children }: {
   onOpen: () => void;
   children: ReactNode;
 }) {
+  // Hover is .tile-hover in index.css. The onMouseEnter/onMouseLeave pair it
+  // replaced wrote background straight onto the node, so a tile that scrolled
+  // out from under a stationary cursor never received its mouseleave and stayed
+  // lit — the same failure .row-accent was moved off JS to avoid.
   return (
     <div
       role="button"
@@ -521,9 +525,7 @@ function BreakdownTile({ label, title, onOpen, children }: {
       title={title}
       onClick={onOpen}
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(); } }}
-      className="text-center rounded-xl py-1.5 cursor-pointer transition-colors"
-      onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(22,119,255,0.06)"; }}
-      onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+      className="tile-hover text-center rounded-xl py-1.5 cursor-pointer"
     >
       <div>{children}</div>
       <p className="text-xs" style={{ color: "#6B6D76" }}>{label}</p>

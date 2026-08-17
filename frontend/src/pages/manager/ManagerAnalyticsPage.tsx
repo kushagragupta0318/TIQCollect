@@ -284,8 +284,10 @@ function AgentSpotlight({ entry, months, color, animate, onClose, selMonth, onMo
           { label: "visits",    value: String(visits),           colorVal: "#1C1C1F",        delta: visitsDelta  },
           { label: "PTP conv.", value: `${ptpRate}%`,            colorVal: rateCol(ptpRate), delta: ptpDelta     },
         ] as { label: string; value: string; colorVal: string; delta: number | null }[]).map(({ label, value, colorVal, delta }) => (
-          <div key={label} className="flex flex-col items-center rounded-xl px-2.5 sm:px-3 py-1.5 flex-1 sm:flex-none"
-            style={{ background: "#fff", border: "1px solid #EAEBEF", minWidth: 60 }}>
+          // Border moved out of the inline style into .kpi-chip: inline wins
+          // over class rules, so the hover border-color could never paint.
+          <div key={label} className="kpi-chip flex flex-col items-center rounded-xl px-2.5 sm:px-3 py-1.5 flex-1 sm:flex-none"
+            style={{ background: "#fff", minWidth: 60 }}>
             <p className="text-sm font-bold leading-none whitespace-nowrap" style={{ color: colorVal }}>{value}</p>
             {delta !== null ? (
               <p className="text-xs mt-0.5 font-semibold" style={{ color: delta >= 0 ? "#16a34a" : "#dc2626" }}>
@@ -761,7 +763,13 @@ function DPDBreakdownCard({ rows, loading, barReady, agentName, selMonth }: {
           {sorted.map((d, di) => {
             const barCol = d.collection_rate_pct >= 60 ? "#16a34a" : d.collection_rate_pct >= 35 ? "#d97706" : "#dc2626";
             return (
-              <div key={d.bucket} style={{ animation: `enter 380ms ${EASE} ${di * 80}ms both` }}>
+              // The negative margin pays for the hover padding, so the bar
+              // spans the same width it did before the row became hoverable.
+              <div
+                key={d.bucket}
+                className="row-stat -mx-2 px-2 py-1.5 rounded-xl"
+                style={{ animation: `enter 380ms ${EASE} ${di * 80}ms both` }}
+              >
                 <div className="flex justify-between text-sm mb-1.5">
                   <span className="font-semibold" style={{ color: "#1C1C1F" }}>{BUCKET_LABELS[d.bucket] ?? d.bucket}</span>
                   <div className="flex gap-3 text-right">
@@ -1164,7 +1172,7 @@ function TeamLeaveSummaryCard({ months, selTeamMonth, todayOnDuty, totalAgents }
             const meta = LEAVE_LABELS[type] ?? { label: type, color: "#6B6D76" };
             const pct = total > 0 ? Math.round(count / total * 100) : 0;
             return (
-              <div key={type}>
+              <div key={type} className="row-stat -mx-2 px-2 py-1 rounded-xl">
                 <div className="flex justify-between text-xs mb-1">
                   <span className="font-semibold" style={{ color: "#1C1C1F" }}>{meta.label}</span>
                   <span style={{ color: "#6B6D76" }}>{count} days · {pct}%</span>

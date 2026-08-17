@@ -177,7 +177,10 @@ export default function BeatMapPage() {
           {/* Open in Google Maps — uses current server-optimized order */}
           <button
             onClick={() => openOptimizedRoute(cases)}
-            className="flex-1 card flex items-center gap-3 bg-brand-600 border-brand-600 text-white hover:bg-brand-700 transition-colors"
+            // Explicit property list, not transition-colors: that utility
+            // outranks .card and would narrow the transition to colour alone,
+            // leaving the hover lift to snap with nothing to ease it.
+            className="flex-1 card flex items-center gap-3 bg-brand-600 border-brand-600 text-white hover:bg-brand-700 transition-[background-color,border-color,box-shadow,transform]"
           >
             <div className="w-9 h-9 rounded-xl bg-brand-500 flex items-center justify-center flex-shrink-0">
               <Route className="w-4 h-4" />
@@ -192,7 +195,7 @@ export default function BeatMapPage() {
           <button
             onClick={handleReoptimize}
             disabled={reoptimizing}
-            className="flex-1 card flex items-center gap-3 bg-white border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors disabled:opacity-60"
+            className="flex-1 card flex items-center gap-3 bg-white border-slate-200 text-slate-700 hover:bg-slate-50 transition-[background-color,border-color,box-shadow,transform] disabled:opacity-60"
           >
             <div className="w-9 h-9 rounded-xl bg-slate-100 flex items-center justify-center flex-shrink-0">
               <RefreshCw className={`w-4 h-4 text-brand-600 ${reoptimizing ? "animate-spin" : ""}`} />

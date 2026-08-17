@@ -235,7 +235,11 @@ function StatGrid({ beat, navigate }: { beat: BeatData; navigate: NavigateFuncti
 
 function QuickAction({ icon, label, sub, onClick, color }: { icon: React.ReactNode; label: string; sub: string; onClick: () => void; color: string }) {
   return (
-    <button onClick={onClick} className={`w-full card flex items-center gap-3 hover:shadow-md transition-shadow cursor-pointer text-left ${color} border-0`}>
+    // No transition-shadow here. It is a utility, so it outranks .card and
+    // narrows transition-property to box-shadow alone — which left .card:hover's
+    // lift with nothing to ease and made it snap. .card already transitions
+    // transform, shadow and border together.
+    <button onClick={onClick} className={`w-full card flex items-center gap-3 cursor-pointer text-left ${color} border-0`}>
       <div className="w-10 h-10 rounded-xl bg-white flex items-center justify-center flex-shrink-0 shadow-sm">{icon}</div>
       <div className="flex-1 min-w-0">
         <p className="text-sm font-semibold text-slate-900">{label}</p>
