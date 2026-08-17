@@ -26,6 +26,10 @@ That third copy is stale but not worthless: `.github/workflows/ci.yml` and
 `backend/scripts/add_recovery_potential.py` came from it. Anything else needed from
 it must be copied by hand — the histories cannot be merged.
 
+**Remotes: none, deliberately.** This repo is local-only. Do **not** push it to
+`transorg-engineering` — the owner ruled that out on 2026-08-17. If a remote is
+wanted it goes to a personal account, and only on explicit instruction.
+
 Command Center (in the platform monorepo) consumes this service's
 `/api/v1/manager/*` endpoints through a per-agency service login. Its
 `FieldAnalytics.jsx` / `FieldCases.jsx` are **hand-maintained ports** of
