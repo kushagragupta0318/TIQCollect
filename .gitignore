@@ -1,20 +1,32 @@
-# Field Ops (TIQCollect) — rules specific to this app.
+# TIQCollect — ignore rules.
 #
-# The platform-wide basics (.env, .venv/, node_modules/, __pycache__/, dist/)
-# are already covered by ../.gitignore; this file only adds what TIQCollect
-# needs on top, and re-includes two files that the root rules would swallow.
+# 2026-08-17: this file used to say the platform-wide basics (.env, .venv/,
+# node_modules/, __pycache__/, dist/) "are already covered by ../.gitignore".
+# That was true while this lived inside the Collections monorepo as
+# field-ops-stub/. It is now a standalone repo, so ../.gitignore is gone and
+# nothing was ignoring any of them — backend/.env, holding live Postgres/MinIO/
+# Twilio credentials, was showing up as a stageable untracked file. Those rules
+# are therefore inlined below.
 
-# ── Secrets ─────────────────────────────────────────────────────────────────
+# ── Env / secrets (NEVER commit real keys) ──────────────────────────────────
+# Anything ending .env at any depth is local-only; only .example templates ship.
+.env
+.env.*
+**/*.env
 firebase-credentials.json
 *.pem
 *.key
 *.p12
 *.pfx
 
-# ── Not a secret: the offline-build flag file, only VITE_OFFLINE_SNAPSHOTS=1.
-#    Needed by `vite build --mode offline`, but the root's `.env.*` rule would
-#    otherwise ignore it.
-!frontend/.env.offline
+# ── Python ──────────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
 
 # ── Python tooling caches ───────────────────────────────────────────────────
 .pytest_cache/
@@ -24,8 +36,29 @@ htmlcov/
 .coverage
 coverage.xml
 
+# ── Node ────────────────────────────────────────────────────────────────────
+node_modules/
+dist/
+.vite/
+*.local
+
 # ── Data & uploads ──────────────────────────────────────────────────────────
 backend/data/incoming/
 
+# ── Logs / temp ─────────────────────────────────────────────────────────────
+*.log
+logs/
+tmp/
+
 # ── Docker ──────────────────────────────────────────────────────────────────
 docker-compose.override.yml
+
+# ── OS ──────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Re-includes ─────────────────────────────────────────────────────────────
+# Negations must come AFTER the rules they override — gitignore takes the last
+# matching rule, so these would be dead if they sat above the .env block.
+!*.example
+!**/*.example
