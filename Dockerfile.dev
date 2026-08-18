@@ -21,9 +21,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY backend/requirements.txt ./
 # faster-whisper and its PyAV dependency are by far the heaviest thing in the
-# file and are only reached when TRANSCRIPTION_PROVIDER=local. Left out to keep
-# the dev image quick to build; add it back if you need local transcription.
-RUN grep -v '^faster-whisper' requirements.txt > /tmp/req.txt && pip install -r /tmp/req.txt
+# file and are only reached when TRANSCRIPTION_PROVIDER=local.
+#
+# 2026-08-18 — now installed by default. It used to be stripped out to keep the
+# dev image quick to build, but the effect was that voice transcription was dead
+# in every direction: the hosted path needs OPENAI_API_KEY (unset), and the
+# local path ImportError'd on a package the image did not have, so
+# POST /agent/transcribe-audio simply returned 503. A fast build is not worth a
+# feature that cannot run at all.
+#
+# Set --build-arg WITH_LOCAL_STT=false to get the old, lighter image back; the
+# hosted provider still works there as long as a key is configured.
+ARG WITH_LOCAL_STT=true
+RUN if [ "$WITH_LOCAL_STT" = "true" ]; then \
+      pip install -r requirements.txt; \
+    else \
+      grep -v '^faster-whisper' requirements.txt > /tmp/req.txt && pip install -r /tmp/req.txt; \
+    fi
 
 # Lives outside /app so the bind mount does not hide it.
 COPY docker-entrypoint.sh /usr/local/bin/entrypoint.sh

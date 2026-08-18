@@ -129,6 +129,15 @@ services:
       # works outside 08:00-19:00 IST; set 8 and 19 for true behaviour.
       CONTACT_HOUR_START: ${CONTACT_HOUR_START:-0}
       CONTACT_HOUR_END: ${CONTACT_HOUR_END:-24}
+      # Speech-to-text. Defaults to "local" (self-hosted faster-whisper, free,
+      # no key) rather than config.py's "openai", because the hosted path needs
+      # OPENAI_API_KEY and returns 503 without one — which is what every voice
+      # note hit here. Set to "openai" once a key with audio-model access is
+      # configured. This anchor is shared with celery_worker, which is where
+      # the async /visits/{id}/transcribe job actually runs.
+      TRANSCRIPTION_PROVIDER: ${TRANSCRIPTION_PROVIDER:-local}
+      WHISPER_MODEL_SIZE: ${WHISPER_MODEL_SIZE:-small}
+      WHISPER_DEVICE: ${WHISPER_DEVICE:-cpu}
       # Avoid the generic host-level DEBUG variable: developer shells and
       # tooling commonly set it to strings such as "release", which Pydantic
       # correctly rejects for this boolean setting.
@@ -144,6 +153,12 @@ services:
       - ./backend:/app
       # Anonymous volume so host __pycache__ never shadows the container's.
       - /app/__pycache__
+      # faster-whisper downloads its model (~464MB for "small") on first use.
+      # On the container filesystem that download is repeated after every
+      # rebuild or recreate — a 70s stall on the next voice note — and
+      # celery_worker, being a separate container, would fetch its own second
+      # copy. A shared named volume makes it one download for all three.
+      - whisper_cache:/root/.cache/huggingface
     depends_on:
       seed:
         condition: service_completed_successfully
@@ -248,3 +263,5 @@ volumes:
   redis_data:
   minio_data:
   web_node_modules:
+  # Whisper model cache, shared by api / celery_worker / celery_beat.
+  whisper_cache:
