@@ -19,6 +19,17 @@
 //   was not in this file: .page-fade-in on the layout's <main> retained a
 //   transform, which makes it the containing block for fixed descendants.
 //   Fixed in index.css; no change needed here.
+// 2026-08-17 — Overview tab: the Collection Target progress bar and the badge
+//   row below it are now one card — CollectionDonut (bottom of file) on the
+//   left, the DPD/priority/loan-type/language/SLA chips on the right. Two
+//   stacked full-width rows became one glance.
+//   The donut is deliberately a METER (one arc over a recessive track), not a
+//   two-slice pie: the data is a single ratio against a limit, and slicing it
+//   into collected-vs-remaining would present them as peer categories to be
+//   compared by area. That is why the rupee figures stay as text rather than
+//   becoming a second segment. Arc #2563EB validated for contrast against the
+//   card surface; the ring geometry is copied from RankingRing on the profile
+//   page so both agent-side rings match.
 // ──────────────────────────────────────────────────────────────────────────
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useAnimatedValue } from "@/hooks/useAnimatedValue";
@@ -377,35 +388,42 @@ export default function AgentCaseDetailPage() {
               </div>
             )}
 
-            {/* Progress */}
+            {/* Collection target + case metadata — one card: meter on the left,
+                the chips that qualify it on the right. Previously a full-width
+                progress bar with the badges as a separate un-carded row below,
+                which split "how far along" from the context that explains it
+                (bucket, priority, SLA) across two glances instead of one. */}
             <div className="card">
-              <div className="flex justify-between text-sm mb-2">
-                <span className="font-semibold text-slate-700">Collection Target</span>
-                <span className="font-bold text-brand-600">{animatedProgressPct}%</span>
-              </div>
-              <div className="w-full bg-slate-100 rounded-full h-3">
-                <div className="h-3 rounded-full bg-primary transition-all duration-700" style={{ width: `${animatedProgressPct}%` }} />
-              </div>
-              <div className="flex justify-between text-xs text-slate-500 mt-1.5">
-                <span>Target: <span className="font-semibold text-slate-700">₹{c.target_amount.toLocaleString("en-IN")}</span></span>
-                <span>Collected: <span className="font-semibold text-success-600">₹{c.collected_amount.toLocaleString("en-IN")}</span></span>
-              </div>
-            </div>
+              <p className="text-sm font-semibold text-slate-700 mb-3">Collection Target</p>
+              <div className="flex items-center gap-4">
+                <CollectionDonut pct={animatedProgressPct} />
 
-            {/* Badges + language */}
-            <div className="flex flex-wrap gap-2 items-center">
-              <DPDBadge bucket={c.loan.dpd_bucket as any} />
-              <PriorityBadge priority={c.priority as any} />
-              <span className="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded-full">{c.loan.dpd} DPD</span>
-              <span className="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded-full">{c.loan.loan_type}</span>
-              <span className="text-xs bg-purple-50 text-purple-700 border border-purple-100 px-2 py-1 rounded-full font-medium">
-                {LANGUAGE_FLAGS[c.customer.language_preference] ?? "🌐"} {c.customer.language_preference}
-              </span>
-              {slaInfo && (
-                <span className={`text-xs px-2 py-1 rounded-full border font-medium ${slaInfo.cls}`} title={slaInfo.desc}>
-                  ⏱ {slaInfo.label}
-                </span>
-              )}
+                <div className="min-w-0 flex-1 space-y-2.5">
+                  <div className="flex flex-wrap gap-2 items-center">
+                    <DPDBadge bucket={c.loan.dpd_bucket as any} />
+                    <PriorityBadge priority={c.priority as any} />
+                    <span className="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded-full">{c.loan.dpd} DPD</span>
+                    <span className="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded-full">{c.loan.loan_type}</span>
+                    <span className="text-xs bg-purple-50 text-purple-700 border border-purple-100 px-2 py-1 rounded-full font-medium">
+                      {LANGUAGE_FLAGS[c.customer.language_preference] ?? "🌐"} {c.customer.language_preference}
+                    </span>
+                    {slaInfo && (
+                      <span className={`text-xs px-2 py-1 rounded-full border font-medium ${slaInfo.cls}`} title={slaInfo.desc}>
+                        ⏱ {slaInfo.label}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* The arc carries the ratio; these carry the two rupee
+                      figures behind it. Kept as text on purpose — the meter is
+                      deliberately one series, so the amounts are not a second
+                      encoding competing with it. */}
+                  <div className="flex flex-wrap gap-x-4 text-xs text-slate-500 border-t border-slate-100 pt-2">
+                    <span>Target: <span className="font-semibold text-slate-700">₹{c.target_amount.toLocaleString("en-IN")}</span></span>
+                    <span>Collected: <span className="font-semibold text-success-600">₹{c.collected_amount.toLocaleString("en-IN")}</span></span>
+                  </div>
+                </div>
+              </div>
             </div>
 
             {/* Handover Notes — shown when max visits reached */}
@@ -1093,6 +1111,43 @@ function AlertBanner({ icon, color, message }: { icon: string; color: "danger" |
     <div className={`card flex items-center gap-2 ${cls}`}>
       <span>{icon}</span>
       <p className="text-sm font-medium">{message}</p>
+    </div>
+  );
+}
+
+/** Collection progress as a radial meter.
+ *
+ * A meter, not a two-slice pie. The data here is a single ratio against a
+ * limit, so it is one arc over a recessive track — "how far to target" — and
+ * not two coloured slices competing for area, which would invite the reader to
+ * compare collected against remaining as if they were peer categories. One
+ * series also means no legend is needed: the card title names it.
+ *
+ * Same construction as RankingRing on the profile page (circumference +
+ * dashoffset, rotated -90° so the arc starts at twelve o'clock), so the two
+ * rings on the agent side stay visually consistent.
+ */
+function CollectionDonut({ pct }: { pct: number }) {
+  const SIZE = 104, R = 40, STROKE = 9;
+  const circ = 2 * Math.PI * R;
+  const safe = Math.max(0, Math.min(100, pct));
+  const offset = circ - (safe / 100) * circ;
+  return (
+    <div className="relative shrink-0" style={{ width: SIZE, height: SIZE }}>
+      <svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`} role="img"
+           aria-label={`Collection target ${safe}% collected`}>
+        <circle cx={SIZE / 2} cy={SIZE / 2} r={R} fill="none" stroke="#F1F5F9" strokeWidth={STROKE} />
+        <circle
+          cx={SIZE / 2} cy={SIZE / 2} r={R} fill="none" stroke="#2563EB" strokeWidth={STROKE}
+          strokeLinecap="round" strokeDasharray={circ} strokeDashoffset={offset}
+          transform={`rotate(-90 ${SIZE / 2} ${SIZE / 2})`}
+          style={{ transition: "stroke-dashoffset 0.7s ease" }}
+        />
+      </svg>
+      <div className="absolute inset-0 flex flex-col items-center justify-center">
+        <span className="text-2xl font-bold text-slate-900 leading-none">{safe}%</span>
+        <span className="text-[10px] text-slate-400 mt-1">collected</span>
+      </div>
     </div>
   );
 }
