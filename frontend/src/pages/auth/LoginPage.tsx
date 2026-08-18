@@ -1,7 +1,8 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { Eye, EyeOff, ShieldCheck } from "lucide-react";
+import { Eye, EyeOff } from "lucide-react";
 import { toast } from "react-hot-toast";
+import { BrandLogo } from "@/components/ui/BrandLogo";
 import { login as apiLogin } from "@/api/auth";
 import { useAuthStore } from "@/store/authStore";
 import { Button } from "@/components/ui/Button";
@@ -56,9 +57,7 @@ export default function LoginPage() {
             className="inline-flex min-h-10 w-fit items-center gap-3 rounded-control text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25 focus-visible:ring-offset-2"
             aria-label="Go to TIQCollect homepage"
           >
-            <span className="flex size-9 items-center justify-center rounded-control bg-brand-50 text-brand-600">
-              <ShieldCheck className="size-5" />
-            </span>
+            <BrandLogo size={36} />
             <span className="text-lg font-bold tracking-[-0.02em] text-[#101828]">TIQCollect</span>
           </button>
 

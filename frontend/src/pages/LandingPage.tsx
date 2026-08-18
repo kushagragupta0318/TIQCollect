@@ -4,6 +4,7 @@ import {
   ArrowRight, Phone, Navigation, Bell, Star, IndianRupee, TrendingUp,
   Globe, AlertTriangle
 } from "lucide-react";
+import { BrandLogo } from "@/components/ui/BrandLogo";
 
 export default function LandingPage() {
   const navigate = useNavigate();
@@ -25,9 +26,7 @@ export default function LandingPage() {
       <nav className="sticky top-4 z-50 rounded-card border border-border bg-white shadow-resting">
         <div className="max-w-7xl mx-auto px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className="flex size-8 items-center justify-center rounded-control bg-brand-100">
-              <ShieldCheck className="w-5 h-5 text-primary" />
-            </div>
+            <BrandLogo size={32} />
             <span className="text-xl font-semibold text-slate-900 tracking-tight">TIQCollect</span>
             <span className="hidden sm:inline-block text-xs font-medium bg-brand-50 text-brand-600 border border-brand-100 px-2 py-0.5 rounded-full ml-1">Enterprise</span>
           </div>

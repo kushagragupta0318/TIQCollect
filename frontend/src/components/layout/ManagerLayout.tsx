@@ -17,7 +17,8 @@
 //   any more since its build script was deleted upstream.
 // ─────────────────────────────────────────────────────────────────────────
 import { NavLink, Outlet, useNavigate, useLocation } from "react-router";
-import { LayoutDashboard, Users, Briefcase, BarChart2, Shield, ShieldCheck, Bell, AlertTriangle } from "lucide-react";
+import { LayoutDashboard, Users, Briefcase, BarChart2, Shield, Bell, AlertTriangle } from "lucide-react";
+import { BrandLogo } from "@/components/ui/BrandLogo";
 import { useState, useEffect, useCallback, useRef } from "react";
 import api from "@/api/axios";
 import { useAuthStore } from "@/store/authStore";
@@ -137,9 +138,7 @@ export default function ManagerLayout() {
       >
         {/* Logo row */}
         <div style={{ height: 64, display: "flex", alignItems: "center", padding: "0 12px 0 18px", gap: 18, borderBottom: "1px solid #ECEDF1", flexShrink: 0 }}>
-          <div style={{ width: 34, height: 34, borderRadius: 10, background: "#EFF6FF", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-            <ShieldCheck size={16} color="#2563EB" />
-          </div>
+          <BrandLogo size={34} />
           <div style={{ whiteSpace: "nowrap", overflow: "hidden", opacity: open ? 1 : 0, transition: "opacity 150ms" }}>
             <p style={{ color: "#101828", fontWeight: 600, fontSize: 14, lineHeight: "1" }}>TIQCollect</p>
             <p style={{ color: "#667085", fontWeight: 400, fontSize: 11, marginTop: 4 }}>Manager Portal</p>

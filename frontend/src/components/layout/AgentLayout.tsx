@@ -11,7 +11,8 @@
 //   the agent's live address.
 // ─────────────────────────────────────────────────────────────────────────
 import { NavLink, Outlet, useNavigate, useLocation } from "react-router";
-import { Home, Briefcase, User, Map, LogOut, WifiOff, ShieldCheck, MapPin, LocateFixed } from "lucide-react";
+import { Home, Briefcase, User, Map, LogOut, WifiOff, MapPin, LocateFixed } from "lucide-react";
+import { BrandLogo } from "@/components/ui/BrandLogo";
 import { useEffect, useState, useCallback } from "react";
 import { toast } from "react-hot-toast";
 import { useAuthStore } from "@/store/authStore";
@@ -165,9 +166,7 @@ function AgentLayoutInner() {
       >
         {/* Logo row */}
         <div style={{ height: 64, display: "flex", alignItems: "center", padding: "0 12px 0 18px", gap: 18, borderBottom: "1px solid #ECEDF1", flexShrink: 0 }}>
-          <div style={{ width: 34, height: 34, borderRadius: 10, background: "#EFF6FF", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-            <ShieldCheck size={16} color="#2563EB" />
-          </div>
+          <BrandLogo size={34} />
           <div style={{ whiteSpace: "nowrap", overflow: "hidden", opacity: open ? 1 : 0, transition: "opacity 150ms" }}>
             <p style={{ color: "#101828", fontWeight: 600, fontSize: 14, lineHeight: "1" }}>TIQCollect</p>
             <p style={{ color: "#667085", fontWeight: 400, fontSize: 11, marginTop: 4 }}>Field Agent</p>
@@ -234,12 +233,7 @@ function AgentLayoutInner() {
             style={{ borderColor: "#ECEDF1", boxShadow: "0 1px 2px rgba(16,24,40,0.04)" }}
           >
             <div className="flex items-center gap-2.5 min-w-0">
-              <div
-                className="flex items-center justify-center flex-shrink-0"
-                style={{ width: 32, height: 32, borderRadius: 10, background: "#EFF6FF" }}
-              >
-                <ShieldCheck size={15} color="#2563EB" />
-              </div>
+              <BrandLogo size={32} />
               <div className="min-w-0">
                 {/* Upstream swapped the static "TIQCollect · Field Agent" label
                     for the agent's live GPS address — kept. */}
