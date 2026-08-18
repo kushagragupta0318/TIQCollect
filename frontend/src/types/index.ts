@@ -72,6 +72,12 @@ export interface Agent {
   today_target: number;
   ptp_rate_pct: number;
   collection_rate_pct: number;
+  /** Complete months only, oldest first — the in-progress month is excluded so
+   *  the trend is not dragged down by a part-month. rate_pct is null for a
+   *  month with no snapshot, which renders as a break in the line. */
+  collection_rate_trend: { month: string; rate_pct: number | null }[];
+  /** Change in points between the two most recent complete months. */
+  collection_rate_delta_pts: number | null;
 }
 
 export interface Customer {
