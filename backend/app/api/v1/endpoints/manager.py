@@ -16,11 +16,17 @@
 # ───────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 
+from calendar import monthrange
+from collections import defaultdict
 from datetime import datetime, date, timezone, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import func
+# Aliased: `Case` in this module is the SQLAlchemy model for a collections
+# case, so importing the SQL CASE construct under its own name would read as
+# the model with a typo.
+from sqlalchemy import case as sa_case
 from sqlalchemy.orm import joinedload
 
 from app.core.dependencies import DbSession, ManagerOnly
@@ -30,7 +36,7 @@ from app.core import storage
 from app.models.beat import Beat
 from app.models.case import Case, CaseStatus
 from app.models.loan import DPDBucket, Loan
-from app.models.payment import Payment
+from app.models.payment import Payment, PaymentStatus
 from app.models.ptp import PTP, PTPStatus
 from app.models.user import User
 from app.models.visit import Visit
@@ -238,6 +244,152 @@ def dashboard(current_user: ManagerOnly, db: DbSession):
 # GET /manager/agents
 # ---------------------------------------------------------------------------
 
+# How many complete months the collection-rate sparkline covers. Five keeps the
+# mark readable at ~60px wide; the seed carries six months of history, of which
+# the newest is the in-progress month and is deliberately excluded.
+_TREND_MONTHS = 5
+
+
+def _complete_months_before(anchor: date, count: int) -> list[str]:
+    """The `count` complete months immediately before `anchor`'s own month.
+
+    Oldest first, as "YYYY-MM" to match AgentPerformance.month. `anchor`'s month
+    is excluded because it is still accruing — see the call site.
+    """
+    months: list[str] = []
+    year, month = anchor.year, anchor.month
+    for _ in range(count):
+        month -= 1
+        if month == 0:
+            year, month = year - 1, 12
+        months.append(f"{year:04d}-{month:02d}")
+    return list(reversed(months))
+
+
+def _live_monthly_metrics(db, agent_ids: list[str], months: list[str]) -> dict[str, dict[str, dict]]:
+    """Per-agent, per-month performance computed from the transactional tables.
+
+    AgentPerformance is deliberately NOT read here. That table is written by one
+    job — take_monthly_snapshot, `crontab(day_of_month=1)` — and it writes the
+    row for the month that just ENDED, so the current month's row is never
+    updated while the month is running. On a seeded box the current row exists
+    only because seed_data.py created it, with
+    `coll_rate = random.uniform(0.10, 0.55) * ...` — a random number. The Agents
+    page was reading that number and overwriting the live counters with it, so
+    an agent with 24 real visits displayed 152 and a rate that never moved no
+    matter how much they collected.
+
+    One definition, applied identically to every month including the current
+    one, so the gauge, the delta chip and the sparkline are the same
+    measurement rather than three:
+
+      collected     VERIFIED payments dated in the month. PENDING_VERIFICATION
+                    is money the borrower has not yet confirmed by OTP, so it
+                    is not collected yet.
+      target        target_amount summed over the DISTINCT cases the agent
+                    VISITED that month — the same notion of "target" the
+                    today_target figure in this endpoint already uses, extended
+                    from a day to a month.
+      rate          collected / target, 0 when the agent visited nothing.
+      ptps_honored  PTPs RAISED in that month that are now honoured. Scoping to
+                    the month matters: the snapshot task counts every honoured
+                    PTP the agent has ever set against a single month's total,
+                    which climbs forever and can exceed ptps_set.
+
+    Four grouped queries for the whole team, not four per agent — this endpoint
+    already runs four per-agent queries in its main loop and does not need more.
+    """
+    if not agent_ids or not months:
+        return {}
+
+    wanted = set(months)
+    oldest = min(months)
+    window_start = datetime(int(oldest[:4]), int(oldest[5:7]), 1, tzinfo=timezone.utc)
+
+    out: dict[str, dict[str, dict]] = {
+        aid: {mo: {"visits": 0, "collected": 0.0, "target": 0.0,
+                   "ptps_set": 0, "ptps_honored": 0} for mo in months}
+        for aid in agent_ids
+    }
+
+    def _month_of(col):
+        # Postgres-only, like the enum types and psycopg2 driver this app
+        # already depends on. Matches AgentPerformance.month's "YYYY-MM" form.
+        return func.to_char(col, "YYYY-MM")
+
+    # 1. Collected
+    pay_month = _month_of(Payment.payment_date)
+    for aid, mo, total in (
+        db.query(Payment.agent_id, pay_month, func.coalesce(func.sum(Payment.amount), 0.0))
+        .filter(Payment.agent_id.in_(agent_ids),
+                Payment.payment_date >= window_start,
+                Payment.status == PaymentStatus.VERIFIED)
+        .group_by(Payment.agent_id, pay_month)
+        .all()
+    ):
+        if mo in wanted and aid in out:
+            out[aid][mo]["collected"] = float(total or 0.0)
+
+    # 2. Visit count
+    visit_month = _month_of(Visit.check_in_time)
+    for aid, mo, n in (
+        db.query(Visit.agent_id, visit_month, func.count(Visit.id))
+        .filter(Visit.agent_id.in_(agent_ids), Visit.check_in_time >= window_start)
+        .group_by(Visit.agent_id, visit_month)
+        .all()
+    ):
+        if mo in wanted and aid in out:
+            out[aid][mo]["visits"] = int(n or 0)
+
+    # 3. Target — distinct cases visited, then summed. Two visits to the same
+    #    case in a month must not count its target twice.
+    visited = (
+        db.query(
+            Visit.agent_id.label("agent_id"),
+            visit_month.label("mo"),
+            Visit.case_id.label("case_id"),
+            Case.target_amount.label("target_amount"),
+        )
+        .join(Case, Case.id == Visit.case_id)
+        .filter(Visit.agent_id.in_(agent_ids), Visit.check_in_time >= window_start)
+        .distinct()
+        .subquery()
+    )
+    for aid, mo, total in (
+        db.query(visited.c.agent_id, visited.c.mo, func.coalesce(func.sum(visited.c.target_amount), 0.0))
+        .group_by(visited.c.agent_id, visited.c.mo)
+        .all()
+    ):
+        if mo in wanted and aid in out:
+            out[aid][mo]["target"] = float(total or 0.0)
+
+    # 4. PTPs raised in the month, and how many of those are now honoured.
+    ptp_month = _month_of(PTP.created_at)
+    for aid, mo, n_set, n_hon in (
+        db.query(
+            PTP.agent_id,
+            ptp_month,
+            func.count(PTP.id),
+            func.count(sa_case((PTP.status == PTPStatus.HONORED, PTP.id))),
+        )
+        .filter(PTP.agent_id.in_(agent_ids), PTP.created_at >= window_start)
+        .group_by(PTP.agent_id, ptp_month)
+        .all()
+    ):
+        if mo in wanted and aid in out:
+            out[aid][mo]["ptps_set"] = int(n_set or 0)
+            out[aid][mo]["ptps_honored"] = int(n_hon or 0)
+
+    # Derive the rate once, here, so no caller can reinvent it differently.
+    for per_month in out.values():
+        for stats in per_month.values():
+            stats["rate_pct"] = (
+                round(stats["collected"] / stats["target"] * 100, 1)
+                if stats["target"] > 0 else 0.0
+            )
+    return out
+
+
 @router.get("/agents")
 def list_agents(current_user: ManagerOnly, db: DbSession):
     agents = (db.query(Agent)
@@ -256,9 +408,15 @@ def list_agents(current_user: ManagerOnly, db: DbSession):
             .filter(Case.agent_id == agent.id, Case.allocation_date == eff_date_str)
             .scalar() or 0
         )
+        # VERIFIED only, matching the monthly figures below. Without the filter
+        # this counted PENDING_VERIFICATION too — money the borrower has not yet
+        # confirmed by OTP — so "collected today" could exceed the month's
+        # collected total, which is drawn from verified payments alone.
         today_collected = (
             db.query(func.coalesce(func.sum(Payment.amount), 0.0))
-            .filter(Payment.agent_id == agent.id, Payment.payment_date >= start_of_day)
+            .filter(Payment.agent_id == agent.id,
+                    Payment.payment_date >= start_of_day,
+                    Payment.status == PaymentStatus.VERIFIED)
             .scalar() or 0.0
         )
         agent_visited_ids = [
@@ -301,26 +459,50 @@ def list_agents(current_user: ManagerOnly, db: DbSession):
             "today_target": round(float(today_target), 2),
         })
 
-    # Enrich with real PTP rate + collection rate from AgentPerformance (source of truth)
+    # ── Current month + trend, both from live data ───────────────────────────
+    # One call, one definition (see _live_monthly_metrics). The current month
+    # feeds the headline figures; the COMPLETE months behind it feed the
+    # sparkline and the delta.
+    #
+    # The current month is deliberately kept out of the trend: on any day but
+    # the last it is a part-month and always reads low, so trending it would
+    # show every agent declining every month as an artifact of the calendar.
     current_month_str = eff_date.strftime("%Y-%m")
-    perf_snap = (
-        db.query(AgentPerformance)
-        .filter(AgentPerformance.agent_id.in_(agent_ids), AgentPerformance.month == current_month_str)
-        .all()
-    )
-    perf_by_agent = {p.agent_id: p for p in perf_snap}
+    trend_months = _complete_months_before(eff_date, _TREND_MONTHS)
+    metrics = _live_monthly_metrics(db, agent_ids, [*trend_months, current_month_str])
+
     for item in result:
-        p = perf_by_agent.get(item["id"])
-        ptps_set = p.ptps_set or 0 if p else 0
-        ptps_honored = p.ptps_honored or 0 if p else 0
-        item["ptp_rate_pct"] = round(ptps_honored / max(ptps_set, 1) * 100, 1) if ptps_set > 0 else 0.0
-        item["collection_rate_pct"] = round(float(p.collection_rate or 0) * 100, 1) if p else 0.0
-        # Overwrite monthly visits/collections/ptps with the snapshot (more reliable than Agent model counters)
-        if p:
-            item["current_month_visits"] = p.total_visits or 0
-            item["current_month_collections"] = float(p.total_collected or 0)
-            item["current_month_ptps_set"] = p.ptps_set or 0
-            item["current_month_ptps_honored"] = p.ptps_honored or 0
+        per_month = metrics.get(item["id"], {})
+        now = per_month.get(current_month_str)
+
+        if now:
+            item["current_month_visits"] = now["visits"]
+            item["current_month_collections"] = round(now["collected"], 2)
+            item["current_month_ptps_set"] = now["ptps_set"]
+            item["current_month_ptps_honored"] = now["ptps_honored"]
+            item["collection_rate_pct"] = now["rate_pct"]
+            item["ptp_rate_pct"] = (
+                round(now["ptps_honored"] / now["ptps_set"] * 100, 1)
+                if now["ptps_set"] > 0 else 0.0
+            )
+        else:
+            item["collection_rate_pct"] = 0.0
+            item["ptp_rate_pct"] = 0.0
+
+        # A month the agent visited nothing in has no rate to plot — that is a
+        # gap, not a zero, and the client draws it as a break in the line
+        # rather than as a collapse to the axis.
+        series = [
+            per_month[mo]["rate_pct"] if per_month.get(mo, {}).get("target", 0) > 0 else None
+            for mo in trend_months
+        ]
+        item["collection_rate_trend"] = [
+            {"month": mo, "rate_pct": val} for mo, val in zip(trend_months, series)
+        ]
+        observed = [v for v in series if v is not None]
+        item["collection_rate_delta_pts"] = (
+            round(observed[-1] - observed[-2], 1) if len(observed) >= 2 else None
+        )
 
     return result
 
@@ -798,37 +980,35 @@ def analytics(current_user: ManagerOnly, db: DbSession):
             months_ordered.append(m)
     months_ordered.sort()
 
-    # Monthly collection trend from AgentPerformance snapshots
-    perf_rows = (
-        db.query(
-            AgentPerformance.month,
-            func.sum(AgentPerformance.total_collected).label("collected"),
-            func.sum(AgentPerformance.total_visits).label("visits"),
-            func.avg(AgentPerformance.collection_rate).label("avg_rate"),
-        )
-        .filter(
-            AgentPerformance.agent_id.in_(my_agent_ids),
-            AgentPerformance.month.in_(months_ordered),
-        )
-        .group_by(AgentPerformance.month)
-        .order_by(AgentPerformance.month)
-        .all()
-    )
-    perf_by_month = {r.month: r for r in perf_rows}
+    # Monthly collection trend — live, from the transactional tables.
+    #
+    # Was read from AgentPerformance, whose total_collected the seed fills with
+    # `sim_visits * random.uniform(8000, 45000) * tier_mult`. The target line was
+    # worse: `target = collected / avg_rate`, i.e. one random number divided by
+    # another, with `collected * 1.4` as the fallback when the divisor was zero.
+    #
+    # That is also why this page used to disagree with itself: the header KPI
+    # summed these figures to ~₹1370L while the DPD card below it, which reads
+    # real Case rows, showed ~₹106L — a 13x gap on one screen.
+    #
+    # Same helper, same definitions as GET /manager/agents, so the two pages now
+    # agree by construction.
+    team_metrics = _live_monthly_metrics(db, my_agent_ids, months_ordered)
 
     monthly_trend = []
     for m in months_ordered:
-        r = perf_by_month.get(m)
-        # Estimate target as collected / avg_rate (or collected * 1.4 as fallback)
-        collected = float(r.collected or 0) if r else 0.0
-        avg_rate = float(r.avg_rate or 0) if r else 0.0
-        target = round(collected / avg_rate, 2) if avg_rate > 0 else round(collected * 1.4, 2)
+        collected = sum((team_metrics.get(a, {}).get(m, {}) or {}).get("collected", 0.0) for a in my_agent_ids)
+        target = sum((team_metrics.get(a, {}).get(m, {}) or {}).get("target", 0.0) for a in my_agent_ids)
+        visits = sum((team_metrics.get(a, {}).get(m, {}) or {}).get("visits", 0) for a in my_agent_ids)
         monthly_trend.append({
             "month": m,
             "collected_lakhs": round(collected / 100000, 2),
             "target_lakhs": round(target / 100000, 2),
-            "total_visits": int(r.visits or 0) if r else 0,
-            "collection_rate_pct": round(avg_rate * 100, 1) if r else 0.0,
+            "total_visits": int(visits),
+            # Team rate is collected/target over the whole team, not the mean of
+            # per-agent rates: an agent who visited one small case must not swing
+            # the team line as hard as one who worked forty.
+            "collection_rate_pct": round(collected / target * 100, 1) if target > 0 else 0.0,
         })
 
     # DPD bucket breakdown — cases for manager's agents
@@ -869,53 +1049,53 @@ def analytics(current_user: ManagerOnly, db: DbSession):
             "collection_rate_pct": rate,
         })
 
-    # Agent leaderboard for current month
+    # Agent leaderboard for current month — live figures, ranked by what the
+    # agent actually collected this month rather than by AgentPerformance's
+    # ranking_score. That score is written only by take_monthly_snapshot
+    # (crontab day_of_month=1) and the seed derives it from the same random
+    # collection_rate, so ranking by it put Tier-1-by-random above genuinely
+    # better performers — the Field Agents page and this one disagreed on who
+    # the top agent was.
+    #
+    # ranking_score and tier are still REPORTED (both are in the response shape
+    # this page and Command Center read) but they are no longer what the list is
+    # sorted by. They remain stale until the snapshot job runs; that is a
+    # separate fix on the Agent model, not something this endpoint can do.
     current_month = today.strftime("%Y-%m")
-    leaderboard_rows = (
-        db.query(
-            AgentPerformance.agent_id,
-            AgentPerformance.total_collected,
-            AgentPerformance.total_visits,
-            AgentPerformance.ptps_set,
-            AgentPerformance.ptps_honored,
-            AgentPerformance.collection_rate,
-            AgentPerformance.ranking_score,
-            AgentPerformance.tier,
-        )
-        .filter(
-            AgentPerformance.agent_id.in_(my_agent_ids),
-            AgentPerformance.month == current_month,
-        )
-        .order_by(AgentPerformance.ranking_score.desc())
-        .limit(10)
-        .all()
-    )
-    # Get agent names for leaderboard
-    lb_agent_ids = [r.agent_id for r in leaderboard_rows]
     lb_name_map: dict[str, str] = {}
-    if lb_agent_ids:
-        name_rows = (
-            db.query(Agent.id, User.full_name)
+    if my_agent_ids:
+        lb_name_map = {
+            r[0]: r[1]
+            for r in db.query(Agent.id, User.full_name)
             .join(User, Agent.user_id == User.id)
-            .filter(Agent.id.in_(lb_agent_ids))
+            .filter(Agent.id.in_(my_agent_ids))
             .all()
-        )
-        lb_name_map = {r[0]: r[1] for r in name_rows}
-
-    leaderboard = [
-        {
-            "agent_id": r.agent_id,
-            "agent_name": lb_name_map.get(r.agent_id, "Unknown"),
-            "total_collected": float(r.total_collected or 0),
-            "total_visits": r.total_visits or 0,
-            "ptps_set": r.ptps_set or 0,
-            "ptps_honored": r.ptps_honored or 0,
-            "collection_rate_pct": round(float(r.collection_rate or 0) * 100, 1),
-            "ranking_score": round(float(r.ranking_score or 0), 1),
-            "tier": r.tier,
         }
-        for r in leaderboard_rows
-    ]
+    agent_meta = {
+        a.id: a for a in db.query(Agent).filter(Agent.id.in_(my_agent_ids)).all()
+    } if my_agent_ids else {}
+
+    leaderboard_all = []
+    for aid in my_agent_ids:
+        m = (team_metrics.get(aid, {}).get(current_month) or
+             {"visits": 0, "collected": 0.0, "target": 0.0, "ptps_set": 0,
+              "ptps_honored": 0, "rate_pct": 0.0})
+        a = agent_meta.get(aid)
+        leaderboard_all.append({
+            "agent_id": aid,
+            "agent_name": lb_name_map.get(aid, "Unknown"),
+            "total_collected": round(m["collected"], 2),
+            "total_visits": int(m["visits"]),
+            "ptps_set": int(m["ptps_set"]),
+            "ptps_honored": int(m["ptps_honored"]),
+            "collection_rate_pct": m["rate_pct"],
+            "ranking_score": round(float(a.ranking_score or 0), 1) if a else 0.0,
+            "tier": a.tier if a else "TIER_3",
+        })
+    # Collected first, rate as the tie-break: two agents on the same rupees are
+    # not equal if one needed twice the target to get there.
+    leaderboard_all.sort(key=lambda r: (-r["total_collected"], -r["collection_rate_pct"]))
+    leaderboard = leaderboard_all[:10]
 
     # Off-duty summary derived from Agent.status (no new table)
     off_duty_count = (
@@ -938,30 +1118,26 @@ def analytics(current_user: ManagerOnly, db: DbSession):
         .filter(Case.agent_id.in_(my_agent_ids))
         .scalar() or 0.0
     )
-    total_ptps = (
-        db.query(func.count(AgentPerformance.id))
-        .filter(AgentPerformance.agent_id.in_(my_agent_ids))
-        .scalar() or 0
-    )
+    # PTP conversion, counted off the PTP table rather than summed out of
+    # AgentPerformance. The snapshot columns are seeded
+    # (`sim_ptps_set = sim_visits * random.uniform(0.10, 0.30)`), and summing
+    # every archived month also double-counts an agent's PTPs once per month row.
     total_ptps_set = (
-        db.query(func.sum(AgentPerformance.ptps_set))
-        .filter(AgentPerformance.agent_id.in_(my_agent_ids))
+        db.query(func.count(PTP.id))
+        .filter(PTP.agent_id.in_(my_agent_ids))
         .scalar() or 0
-    )
+    ) if my_agent_ids else 0
     total_ptps_honored = (
-        db.query(func.sum(AgentPerformance.ptps_honored))
-        .filter(AgentPerformance.agent_id.in_(my_agent_ids))
+        db.query(func.count(PTP.id))
+        .filter(PTP.agent_id.in_(my_agent_ids), PTP.status == PTPStatus.HONORED)
         .scalar() or 0
-    )
+    ) if my_agent_ids else 0
 
-    # Current month visits per agent (avg)
-    cm_visits = (
-        db.query(func.sum(AgentPerformance.total_visits))
-        .filter(
-            AgentPerformance.agent_id.in_(my_agent_ids),
-            AgentPerformance.month == current_month,
-        )
-        .scalar() or 0
+    # Current month visits per agent (avg) — from the live month already
+    # computed above, so it cannot drift from the trend chart's last point.
+    cm_visits = sum(
+        (team_metrics.get(a, {}).get(current_month, {}) or {}).get("visits", 0)
+        for a in my_agent_ids
     )
     n_agents = len(my_agent_ids) or 1
 
@@ -1430,36 +1606,49 @@ def agent_ai_insight(agent_id: str, current_user: ManagerOnly, db: DbSession):
     agent = db.query(Agent).join(User, Agent.user_id == User.id).filter(Agent.id == agent_id).first()
     start_of_day, _, eff_date = _effective_today(my_agent_ids, db)
 
-    # Last 3 months of performance for this agent
-    months_3: list[str] = []
-    for i in range(2, -1, -1):
-        m = eff_date.replace(day=1) - timedelta(days=30 * i)
-        months_3.append(m.strftime("%Y-%m"))
-    seen_m: set[str] = set()
-    months_3 = [m for m in months_3 if not (m in seen_m or seen_m.add(m))]  # type: ignore[func-returns-value]
+    # Last 3 COMPLETE months of performance for this agent.
+    #
+    # Was `eff_date.replace(day=1) - timedelta(days=30 * i)`, which had two
+    # faults. First, 30 days is not a month: from 15 March it produced
+    # ['2025-12', '2026-01', '2026-03'] — February dropped and December pulled
+    # in — and the de-dup below hid the collision by collapsing the list to two
+    # entries, which still satisfied the `>= 2` check further down.
+    # Second, the window ENDED on the current month, so the trend compared a
+    # part-month against a whole one and read DECLINING for nearly every agent
+    # for nearly every day of the month, snapping back only at month end.
+    # Current-month figures are still reported below — they are just no longer
+    # what the trend is measured from.
+    months_3 = _complete_months_before(eff_date, 3)
 
-    perf_rows = (
-        db.query(AgentPerformance)
-        .filter(AgentPerformance.agent_id == agent_id, AgentPerformance.month.in_(months_3))
-        .order_by(AgentPerformance.month)
-        .all()
-    )
-
-    # Team averages for current month
     current_month = eff_date.strftime("%Y-%m")
-    team_avg = (
-        db.query(
-            func.avg(AgentPerformance.collection_rate),
-            func.avg(AgentPerformance.total_visits),
-            func.avg(AgentPerformance.ptps_honored),
-            func.avg(AgentPerformance.ptps_set),
-        )
-        .filter(AgentPerformance.agent_id.in_(my_agent_ids), AgentPerformance.month == current_month)
-        .first()
-    )
-    team_collection_rate = round(float(team_avg[0] or 0) * 100, 1) if team_avg else 0.0
-    team_avg_visits = round(float(team_avg[1] or 0), 1) if team_avg else 0.0
-    team_ptp_rate = round(float(team_avg[2] or 0) / max(float(team_avg[3] or 1), 1) * 100, 1) if team_avg else 0.0
+
+    # Live, not AgentPerformance — the same source and the same definitions the
+    # Agents page uses. This panel renders directly beneath that page's
+    # collection-rate sparkline for the same agent, so reading a different table
+    # here is how the badge and the chart end up disagreeing on screen.
+    #
+    # The whole team is fetched, not just this agent: the panel states the
+    # agent's figures "vs team", and an average taken from a different source
+    # than the value it is compared against is not a comparison.
+    window = [*months_3, current_month]
+    team_metrics = _live_monthly_metrics(db, my_agent_ids, window)
+    agent_metrics = team_metrics.get(agent_id, {})
+
+    def _blank() -> dict:
+        return {"visits": 0, "collected": 0.0, "target": 0.0,
+                "ptps_set": 0, "ptps_honored": 0, "rate_pct": 0.0}
+
+    # Team averages for the current month. Mean of each agent's rate, which is
+    # what the previous func.avg(collection_rate) computed — kept deliberately,
+    # so the number a manager has been reading does not silently change meaning
+    # from "average agent" to "team total".
+    team_now = [team_metrics.get(aid, {}).get(current_month) or _blank() for aid in my_agent_ids]
+    n_team = max(len(team_now), 1)
+    team_collection_rate = round(sum(m["rate_pct"] for m in team_now) / n_team, 1)
+    team_avg_visits = round(sum(m["visits"] for m in team_now) / n_team, 1)
+    _team_set = sum(m["ptps_set"] for m in team_now)
+    _team_hon = sum(m["ptps_honored"] for m in team_now)
+    team_ptp_rate = round(_team_hon / _team_set * 100, 1) if _team_set > 0 else 0.0
 
     # Case mix by DPD bucket
     case_mix = (
@@ -1480,41 +1669,41 @@ def agent_ai_insight(agent_id: str, current_user: ManagerOnly, db: DbSession):
     # Build monthly trend
     monthly_data = []
     for m in months_3:
-        p = next((r for r in perf_rows if r.month == m), None)
-        ptp_rate = round(float(p.ptps_honored or 0) / max(float(p.ptps_set or 1), 1) * 100, 1) if p else 0.0
+        p = agent_metrics.get(m) or _blank()
+        ptp_rate = round(p["ptps_honored"] / p["ptps_set"] * 100, 1) if p["ptps_set"] > 0 else 0.0
         monthly_data.append({
             "month": m,
-            "collection_rate_pct": round(float(p.collection_rate or 0) * 100, 1) if p else 0.0,
-            "visits": p.total_visits or 0 if p else 0,
+            "collection_rate_pct": p["rate_pct"],
+            "visits": p["visits"],
             "ptp_rate_pct": ptp_rate,
-            "collected": float(p.total_collected or 0) if p else 0.0,
+            "collected": round(p["collected"], 2),
         })
 
-    if len(monthly_data) >= 2:
-        delta = monthly_data[-1]["collection_rate_pct"] - monthly_data[0]["collection_rate_pct"]
+    # Oldest complete month → newest complete month. Both endpoints now read the
+    # same live figures over complete months, so this agrees with
+    # collection_rate_delta_pts on GET /manager/agents by construction rather
+    # than by coincidence. A month the agent visited nothing in has no rate to
+    # compare, so it is skipped rather than treated as a 0% collapse.
+    observed = [m for m, src in zip(monthly_data, months_3)
+                if (agent_metrics.get(src) or _blank())["target"] > 0]
+    if len(observed) >= 2:
+        delta = observed[-1]["collection_rate_pct"] - observed[0]["collection_rate_pct"]
         trend = "IMPROVING" if delta > 5 else ("DECLINING" if delta < -5 else "STABLE")
     else:
         trend = "STABLE"
 
-    current_p = next((r for r in perf_rows if r.month == current_month), None)
-    agent_rate = round(float(current_p.collection_rate or 0) * 100, 1) if current_p else 0.0
-    agent_ptp_rate = round(float(current_p.ptps_honored or 0) / max(float(current_p.ptps_set or 1), 1) * 100, 1) if current_p else 0.0
-    agent_visits = current_p.total_visits or 0 if current_p else 0
+    now_m = agent_metrics.get(current_month) or _blank()
+    agent_rate = now_m["rate_pct"]
+    agent_ptp_rate = round(now_m["ptps_honored"] / now_m["ptps_set"] * 100, 1) if now_m["ptps_set"] > 0 else 0.0
+    agent_visits = now_m["visits"]
 
     # Additional signal: visit-to-collection conversion (collections / visits = per-visit yield)
-    current_collected = float(current_p.total_collected or 0) if current_p else 0.0
+    current_collected = now_m["collected"]
     per_visit_yield = round(current_collected / max(agent_visits, 1), 0) if agent_visits > 0 else 0.0
-    # Team per-visit yield
-    team_total_collected = (
-        db.query(func.sum(AgentPerformance.total_collected))
-        .filter(AgentPerformance.agent_id.in_(my_agent_ids), AgentPerformance.month == current_month)
-        .scalar() or 0.0
-    )
-    team_total_visits_cm = (
-        db.query(func.sum(AgentPerformance.total_visits))
-        .filter(AgentPerformance.agent_id.in_(my_agent_ids), AgentPerformance.month == current_month)
-        .scalar() or 0
-    )
+    # Team per-visit yield — totals, not a mean of per-agent yields, so a
+    # low-volume agent cannot swing it. Same live source as everything above.
+    team_total_collected = sum(m["collected"] for m in team_now)
+    team_total_visits_cm = sum(m["visits"] for m in team_now)
     team_per_visit_yield = round(float(team_total_collected) / max(team_total_visits_cm, 1), 0)
 
     # Active vs closed case ratio (portfolio health)
@@ -1546,9 +1735,18 @@ def agent_ai_insight(agent_id: str, current_user: ManagerOnly, db: DbSession):
             "tier": agent.tier if agent else "TIER_2",
             "territory": agent.territory if agent else "",
             "specialization": agent.specialization if agent else "",
-            "monthly_trend_last_3_months": monthly_data,
+            "trend_last_3_COMPLETE_months": monthly_data,
             "performance_trend_direction": trend,
-            "current_month": {
+            # Flagged explicitly: the model is handed both this and the complete
+            # months above, and without the warning it reads the part-month as a
+            # collapse and overrides performance_signal to DECLINING — the same
+            # error the computed trend just stopped making.
+            "current_month_INCOMPLETE": {
+                "note": (
+                    f"Month in progress — {eff_date.day} of "
+                    f"{monthrange(eff_date.year, eff_date.month)[1]} days elapsed. "
+                    "Figures are month-to-date and will be low. Do NOT read them as a decline."
+                ),
                 "collection_rate_pct": agent_rate,
                 "ptp_honor_rate_pct": agent_ptp_rate,
                 "total_visits": agent_visits,
@@ -1575,7 +1773,11 @@ def agent_ai_insight(agent_id: str, current_user: ManagerOnly, db: DbSession):
                 {"role": "system", "content": (
                     "You are a collections operations analyst. Analyse a field agent's full performance profile. "
                     "Return JSON with exactly these keys: "
-                    "performance_signal (IMPROVING/DECLINING/STABLE based on 3-month trend), "
+                    "performance_signal (IMPROVING/DECLINING/STABLE). Base this ONLY on "
+                    "trend_last_3_COMPLETE_months. The current month is still in progress, so its "
+                    "month-to-date totals are always lower than a finished month — never treat that "
+                    "as a decline. Default to the supplied performance_trend_direction unless the "
+                    "complete months clearly contradict it. "
                     "insight_text (3 sentences covering: 1) collection rate & trend WHY, "
                     "2) visit productivity and per-visit yield vs team, "
                     "3) PTP discipline and case portfolio health — use specific numbers), "

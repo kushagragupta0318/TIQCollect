@@ -7,11 +7,13 @@ logger = structlog.get_logger()
 @celery_app.task(name="app.workers.tasks.performance_snapshot.take_monthly_snapshot", bind=True)
 def take_monthly_snapshot(self):
     from datetime import date, timedelta
+    from sqlalchemy import func
     from app.core.database import SessionLocal
     from app.models.agent import Agent, AgentPerformance, AgentTier
     from app.models.case import Case, CaseStatus
     from app.models.payment import Payment, PaymentStatus
     from app.models.ptp import PTP, PTPStatus
+    from app.models.visit import Visit
     import uuid
 
     db = SessionLocal()
@@ -42,13 +44,42 @@ def take_monthly_snapshot(self):
             ptps_set = db.query(PTP).filter(
                 PTP.agent_id == agent.id,
                 PTP.created_at >= month_start.isoformat(),
+                PTP.created_at < month_end.isoformat(),
             ).count()
+            # Bounded to PTPs RAISED in this month. Without the upper bound and
+            # the start filter this counted every honoured PTP the agent had
+            # ever set against one month's total — a number that only climbs,
+            # and can exceed ptps_set.
             ptps_honored = db.query(PTP).filter(
                 PTP.agent_id == agent.id,
+                PTP.created_at >= month_start.isoformat(),
+                PTP.created_at < month_end.isoformat(),
                 PTP.status == PTPStatus.HONORED,
             ).count()
 
-            collection_rate = (total_collected / agent.current_month_collections) if agent.current_month_collections > 0 else 0.0
+            # Target = target_amount over the DISTINCT cases the agent visited
+            # in the month — the same definition as _live_monthly_metrics() in
+            # endpoints/manager.py, so a month archived here is directly
+            # comparable to the live months the Agents page computes.
+            #
+            # This previously read total_collected / agent.current_month_collections
+            # — collected divided by collected, which is not a rate. It fed the
+            # collection-rate gauge, the sparkline, the ranking score and the
+            # tier assignment, and tier feeds case allocation.
+            visited_case_ids = [
+                r[0] for r in db.query(Visit.case_id).filter(
+                    Visit.agent_id == agent.id,
+                    Visit.check_in_time >= month_start.isoformat(),
+                    Visit.check_in_time < month_end.isoformat(),
+                ).distinct().all()
+            ]
+            total_target = float(
+                db.query(func.coalesce(func.sum(Case.target_amount), 0.0))
+                .filter(Case.id.in_(visited_case_ids))
+                .scalar() or 0.0
+            ) if visited_case_ids else 0.0
+
+            collection_rate = (total_collected / total_target) if total_target > 0 else 0.0
 
             # Compute ranking score (0–100)
             ranking = min(100.0, (collection_rate * 50) + (agent.current_month_visits / max(cases_assigned, 1) * 30) + (ptps_honored / max(ptps_set, 1) * 20))
