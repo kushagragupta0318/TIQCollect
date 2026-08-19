@@ -265,8 +265,50 @@ export async function getProfile() {
   return data;
 }
 
-export async function triggerSOS(latitude: number, longitude: number) {
-  const { data } = await api.post("/agent/sos", { latitude, longitude });
+// Batch upload of queued GPS fixes for the on-duty trail. See
+// lib/locationReporter.ts for the queueing and retry rules.
+export interface LocationPingPayload {
+  latitude: number;
+  longitude: number;
+  accuracy_metres: number | null;
+  recorded_at: string;
+  source: string;
+  battery_pct: number | null;
+}
+
+export async function sendLocationBatch(pings: LocationPingPayload[]) {
+  const { data } = await api.post<{ accepted: number; rejected: number; last_recorded_at: string | null }>(
+    "/agent/location", { pings },
+  );
+  return data;
+}
+
+export interface SOSResult {
+  sos_triggered: boolean;
+  triggered_at: string;
+  message: string;
+  // LIVE | LAST_KNOWN | NONE. The agent is shown which, so a failed GPS read
+  // is visible to them instead of being papered over with a fabricated
+  // position — see the 2026-08-18 rework in services/agent_service.py.
+  location_quality: "LIVE" | "LAST_KNOWN" | "NONE";
+  location_age_seconds: number | null;
+  manager_notified: boolean;
+}
+
+// Coordinates are optional: when GPS does not answer, we send nothing rather
+// than a made-up fallback, and the server resolves to the last tracked fix.
+export async function triggerSOS(
+  latitude?: number | null,
+  longitude?: number | null,
+  accuracyMetres?: number | null,
+) {
+  const body: Record<string, number> = {};
+  if (latitude != null && longitude != null) {
+    body.latitude = latitude;
+    body.longitude = longitude;
+    if (accuracyMetres != null) body.accuracy_metres = accuracyMetres;
+  }
+  const { data } = await api.post<SOSResult>("/agent/sos", body);
   return data;
 }
 

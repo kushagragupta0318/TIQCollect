@@ -10,6 +10,7 @@ from app.models.beat import Beat, BeatStatus
 from app.models.call_log import CallLog, CallOutcome
 from app.models.audit_log import AuditLog, AuditAction
 from app.models.quick_login_token import UsedQuickLoginToken
+from app.models.agent_location import AgentLocation, LocationSource
 
 __all__ = [
     "User", "UserRole",
@@ -24,4 +25,5 @@ __all__ = [
     "CallLog", "CallOutcome",
     "AuditLog", "AuditAction",
     "UsedQuickLoginToken",
+    "AgentLocation", "LocationSource",
 ]

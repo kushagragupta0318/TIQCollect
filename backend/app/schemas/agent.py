@@ -133,8 +133,16 @@ class SetPTPRequest(BaseModel):
 
 
 class SOSRequest(BaseModel):
-    latitude: float
-    longitude: float
+    # Optional since 2026-08-18. SOSButton.tsx used to guarantee these by
+    # substituting hardcoded Gurugram coordinates whenever the browser did
+    # not answer in 2.5s, which made every alert carry a plausible-looking
+    # position regardless of whether one was known. The client now sends
+    # nothing rather than something false, and the server falls back to the
+    # last tracked fix — labelled as such.
+    latitude: float | None = None
+    longitude: float | None = None
+    accuracy_metres: float | None = None
+    battery_pct: int | None = None
 
 
 class HandoverRequest(BaseModel):
@@ -276,6 +284,12 @@ class SOSResponse(BaseModel):
     sos_triggered: bool
     triggered_at: str
     message: str
+    # LIVE | LAST_KNOWN | NONE — the agent is told which, so a
+    # failed GPS read is visible to them rather than silently
+    # replaced with a fabricated position.
+    location_quality: str = "NONE"
+    location_age_seconds: int | None = None
+    manager_notified: bool = False
 
 
 class SOSCancelResponse(BaseModel):
@@ -540,3 +554,30 @@ class AvailabilityCalendarResponse(BaseModel):
     calendar: list[AvailabilityDay]
     summary: AvailabilitySummary
     monthly_summary: list[AvailabilityMonthlySummary]
+
+# ─── Location trail (2026-08-18) ──────────────────────────────────────────
+# Batch, not single-fix: a field phone loses signal constantly, so the client
+# queues fixes locally and flushes the queue on reconnect. See
+# services/location_service.py for the ingest rules.
+
+class LocationPing(BaseModel):
+    latitude: float
+    longitude: float
+    # Browser-reported horizontal accuracy in metres. Optional because a
+    # device without it should still be able to report a position.
+    accuracy_metres: float | None = None
+    # Device clock at capture. The server records its own receipt time
+    # separately; the gap between them is how long this fix sat queued.
+    recorded_at: datetime
+    source: str = "HEARTBEAT"
+    battery_pct: int | None = None
+
+
+class LocationBatchRequest(BaseModel):
+    pings: list[LocationPing]
+
+
+class LocationBatchResponse(BaseModel):
+    accepted: int
+    rejected: int
+    last_recorded_at: str | None = None

@@ -222,6 +222,17 @@ class Settings(BaseSettings):
     def sos_contacts_list(self) -> List[str]:
         return [c.strip() for c in self.SOS_EMERGENCY_CONTACTS.split(",") if c.strip()]
 
+    # Location trail (2026-08-18)
+    # How long a full-resolution trail is kept before the nightly sweep in
+    # workers/tasks/location_retention.py deletes it. Movement history is
+    # employee-monitoring data, so the retention window is a deliberate
+    # policy setting rather than an implicit "forever".
+    LOCATION_RETENTION_DAYS: int = 90
+    # Client tracking parameters, served to the app so the cadence can be
+    # tuned without shipping a new frontend build.
+    LOCATION_MIN_MOVE_METRES: int = 50
+    LOCATION_MAX_INTERVAL_SECONDS: int = 60
+
     # Rate limiting
     RATE_LIMIT_PER_MINUTE: int = 60
     AUTH_RATE_LIMIT_PER_MINUTE: int = 10

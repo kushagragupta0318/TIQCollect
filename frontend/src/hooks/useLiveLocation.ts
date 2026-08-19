@@ -113,8 +113,41 @@ const GEOCODE_MOVE_M = 40;
  * reassigned when something genuinely changed, so useSyncExternalStore hands
  * back a stable reference and downstream memos stay valid.
  */
+/**
+ * A raw fix, exactly as the device reported it — no movement gate applied.
+ *
+ * `useLiveLocation` deliberately suppresses sub-15m movement so the UI does not
+ * re-render on GPS jitter. The location TRAIL needs the unfiltered stream: it
+ * applies its own thinning (see lib/locationReporter.ts) and must be able to
+ * distinguish "the agent stood still" from "the UI chose not to update".
+ */
+export interface RawFix {
+  lat: number;
+  lon: number;
+  accuracy: number | null;
+  at: number;          // epoch ms, device clock
+}
+
 let snapshot: LiveLocation = { status: "locating", address: null, coords: null };
 const listeners = new Set<() => void>();
+
+// Separate from `listeners`: those drive React re-renders and are gated by the
+// movement threshold, these receive every fix. Kept on the SAME watchPosition
+// subscription on purpose — a second watcher would double GPS power draw on a
+// phone that has to last a full shift.
+const fixListeners = new Set<(fix: RawFix) => void>();
+
+/**
+ * Subscribe to every raw fix. Returns an unsubscribe function.
+ *
+ * Does not itself start the watcher — a subscriber here only receives fixes
+ * while something is also using `useLiveLocation()`. In the agent app
+ * AgentLayout always is, for the header address line.
+ */
+export function subscribeToFixes(cb: (fix: RawFix) => void): () => void {
+  fixListeners.add(cb);
+  return () => { fixListeners.delete(cb); };
+}
 
 let watchId: number | undefined;
 let subscriberCount = 0;
@@ -138,6 +171,17 @@ function publish(next: LiveLocation) {
 async function onPos(p: GeolocationPosition) {
   const lat = p.coords.latitude;
   const lon = p.coords.longitude;
+
+  // Emit the raw fix first, before any movement gate or geocoding — the trail
+  // must not inherit the UI's thresholds, and must not wait on Nominatim.
+  if (fixListeners.size > 0) {
+    const fix: RawFix = {
+      lat, lon,
+      accuracy: Number.isFinite(p.coords.accuracy) ? p.coords.accuracy : null,
+      at: p.timestamp || Date.now(),
+    };
+    fixListeners.forEach((cb) => { try { cb(fix); } catch { /* a bad subscriber must not kill the watcher */ } });
+  }
 
   // Only publish new coords when the agent has actually moved. Recovering from
   // an error also has to publish, or a transient failure would strand the UI.

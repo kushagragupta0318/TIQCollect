@@ -1590,6 +1590,66 @@ def ai_briefing(current_user: ManagerOnly, db: DbSession, refresh: bool = False)
 
 
 # ---------------------------------------------------------------------------
+# GET /manager/agents/live
+# ---------------------------------------------------------------------------
+# Latest position for every agent this manager owns, for the live map.
+#
+# Declared ABOVE the /agents/{agent_id}/... routes on purpose: FastAPI matches
+# in declaration order, so if this sat below them "live" would be swallowed as
+# an agent_id and this endpoint would be unreachable.
+
+@router.get("/agents/live")
+def agents_live(current_user: ManagerOnly, db: DbSession):
+    from app.services.location_service import LocationService
+
+    my_agent_ids = [
+        a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()
+    ]
+    positions = LocationService(db).live_positions(my_agent_ids)
+    return {
+        "agents": positions,
+        "sos_count": sum(1 for p in positions if p["sos_active"]),
+        "tracked_count": sum(1 for p in positions if p["latitude"] is not None),
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /manager/agents/{agent_id}/trail
+# ---------------------------------------------------------------------------
+# One agent's movement for one IST day. `sos_only=true` narrows it to the fixes
+# captured while an SOS was active, which is the incident replay.
+
+@router.get("/agents/{agent_id}/trail")
+def agent_trail(
+    agent_id: str,
+    current_user: ManagerOnly,
+    db: DbSession,
+    date: str | None = None,
+    sos_only: bool = False,
+):
+    from app.services.location_service import LocationService
+
+    # Ownership is checked before any location is read. An agent's movement
+    # history is the most sensitive data this API serves — see the unscoped
+    # PUT /agents/{agent_id}/status for the pattern this deliberately avoids.
+    agent = (
+        db.query(Agent)
+        .join(Agent.user)
+        .filter(Agent.id == agent_id, Agent.manager_user_id == current_user.id)
+        .options(joinedload(Agent.user))
+        .first()
+    )
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    result = LocationService(db).trail(agent_id, day=date, sos_only=sos_only)
+    result["employee_code"] = agent.employee_code
+    result["full_name"] = agent.user.full_name if agent.user else agent.employee_code
+    result["sos_active"] = agent.sos_active
+    return result
+
+
+# ---------------------------------------------------------------------------
 # GET /manager/agents/{agent_id}/ai-insight
 # ---------------------------------------------------------------------------
 

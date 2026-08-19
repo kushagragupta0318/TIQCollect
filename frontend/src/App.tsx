@@ -19,6 +19,7 @@ import RecordVisitPage from "@/pages/agent/RecordVisitPage";
 import BeatMapPage from "@/pages/agent/BeatMapPage";
 import ManagerOverviewPage from "@/pages/manager/ManagerOverviewPage";
 import ManagerAgentsPage from "@/pages/manager/ManagerAgentsPage";
+import ManagerLiveMapPage from "@/pages/manager/ManagerLiveMapPage";
 import ManagerCasesPage from "@/pages/manager/ManagerCasesPage";
 import ManagerAnalyticsPage from "@/pages/manager/ManagerAnalyticsPage";
 import ManagerCompliancePage from "@/pages/manager/ManagerCompliancePage";
@@ -119,6 +120,7 @@ export default function App() {
             <Route index element={<Navigate to="overview" replace />} />
             <Route path="overview" element={<ManagerOverviewPage />} />
             <Route path="agents" element={<ManagerAgentsPage />} />
+            <Route path="live-map" element={<ManagerLiveMapPage />} />
             <Route path="cases" element={<ManagerCasesPage />} />
             <Route path="analytics" element={<ManagerAnalyticsPage />} />
             <Route path="compliance" element={<ManagerCompliancePage />} />

@@ -153,6 +153,8 @@ from app.schemas.agent import (
     RecordVisitRequest,
     ReoptimizeBeatResponse,
     SetPTPRequest,
+    LocationBatchRequest,
+    LocationBatchResponse,
     SOSCancelResponse,
     SOSRequest,
     SOSResponse,
@@ -608,6 +610,21 @@ def set_ptp(case_id: str, req: SetPTPRequest, current_user: AgentOnly, db: DbSes
 def get_profile(current_user: AgentOnly, db: DbSession):
     from app.services.agent_service import AgentService
     return AgentService(db).get_profile(current_user)
+
+
+# ---------------------------------------------------------------------------
+# POST /agent/location
+# ---------------------------------------------------------------------------
+# Batch ingest for the on-duty location trail. Accepts a queue rather than a
+# single fix because the client buffers while out of signal — see
+# services/location_service.py. Deliberately cheap: no geo-fence check, no
+# contact-hours guard, nothing that could reject a safety-relevant position.
+
+@router.post("/location", response_model=LocationBatchResponse)
+def record_location(req: LocationBatchRequest, current_user: AgentOnly, db: DbSession):
+    from app.services.location_service import LocationService
+    agent = _get_agent_or_404(current_user, db)
+    return LocationService(db).record_batch(agent, req.pings)
 
 
 # ---------------------------------------------------------------------------

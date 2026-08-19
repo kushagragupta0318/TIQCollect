@@ -17,7 +17,7 @@
 //   any more since its build script was deleted upstream.
 // ─────────────────────────────────────────────────────────────────────────
 import { NavLink, Outlet, useNavigate, useLocation } from "react-router";
-import { LayoutDashboard, Users, Briefcase, BarChart2, Shield, Bell, AlertTriangle } from "lucide-react";
+import { AlertTriangle, BarChart2, Bell, Briefcase, LayoutDashboard, MapPin, Shield, Users } from "lucide-react";
 import { BrandLogo } from "@/components/ui/BrandLogo";
 import { useState, useEffect, useCallback, useRef } from "react";
 import api from "@/api/axios";
@@ -32,6 +32,7 @@ const SIDEBAR_ICON  = 72;
 const NAV_ITEMS = [
   { to: "/manager/overview",   icon: LayoutDashboard, label: "Overview" },
   { to: "/manager/agents",     icon: Users,           label: "Agents" },
+  { to: "/manager/live-map",   icon: MapPin,          label: "Live Map" },
   { to: "/manager/cases",      icon: Briefcase,       label: "Cases" },
   { to: "/manager/analytics",  icon: BarChart2,       label: "Analytics" },
   { to: "/manager/compliance", icon: Shield,          label: "Compliance" },

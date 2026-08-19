@@ -307,41 +307,112 @@ class AgentService:
     # POST /agent/sos
     # -----------------------------------------------------------------
     def trigger_sos(self, agent: Agent, req) -> dict:
+        """Raise an SOS for this agent and alert their manager.
+
+        2026-08-18 — reworked. The client no longer guarantees coordinates:
+        SOSButton.tsx previously substituted hardcoded Gurugram coordinates
+        whenever the browser did not answer within 2.5s, so an alert could
+        carry a confidently wrong position and send help to the wrong place.
+        Resolution order is now live fix -> last tracked fix -> none, and the
+        quality is reported to both the agent and the manager rather than
+        being flattened into a plain map link.
+        """
+        from app.models.agent_location import AgentLocation, LocationSource
+
         now_utc = datetime.now(timezone.utc)
         agent.sos_active = True
         agent.sos_triggered_at = now_utc.isoformat()
-        agent.last_known_latitude = req.latitude
-        agent.last_known_longitude = req.longitude
-        agent.last_location_update = now_utc.isoformat()
+
+        lat, lon = req.latitude, req.longitude
+        quality = "NONE"
+        age_seconds: int | None = None
+
+        if lat is not None and lon is not None:
+            quality = "LIVE"
+            age_seconds = 0
+            agent.last_known_latitude = lat
+            agent.last_known_longitude = lon
+            agent.last_location_update = now_utc.isoformat()
+            # Pin the SOS itself into the trail so an incident replay has a
+            # marked origin, independent of the sos_active flag that
+            # cancel_sos() later clears.
+            self.db.add(AgentLocation(
+                agent_id=agent.id, latitude=lat, longitude=lon,
+                accuracy_metres=getattr(req, "accuracy_metres", None),
+                recorded_at=now_utc, source=LocationSource.SOS, is_sos=True,
+                battery_pct=getattr(req, "battery_pct", None),
+            ))
+        else:
+            # No live fix. Fall back to the most recent tracked position and
+            # say how old it is — a stale location that is labelled stale is
+            # useful; one presented as current is dangerous.
+            last = (
+                self.db.query(AgentLocation)
+                .filter(AgentLocation.agent_id == agent.id)
+                .order_by(AgentLocation.recorded_at.desc())
+                .first()
+            )
+            if last:
+                lat, lon = last.latitude, last.longitude
+                recorded = last.recorded_at
+                if recorded.tzinfo is None:
+                    recorded = recorded.replace(tzinfo=timezone.utc)
+                age_seconds = int((now_utc - recorded).total_seconds())
+                quality = "LAST_KNOWN"
+
         self.db.commit()
 
         # SMS/WhatsApp the assigned manager immediately — the dashboard's red SOS
         # banner is poll-based (up to 30s, and only while the tab is open), so a
         # manager away from the screen would otherwise never find out.
         manager = self.db.query(User).filter(User.id == agent.manager_user_id).first() if agent.manager_user_id else None
+        notified = False
         if manager and manager.phone:
-            maps_link = f"https://www.google.com/maps?q={req.latitude},{req.longitude}"
             alert_time = now_utc.strftime("%d %b %Y, %I:%M %p")
-            e164 = "+" + NotificationService.normalize_phone(manager.phone)
+            if quality == "NONE":
+                where_sms = "Location UNAVAILABLE - agent's GPS did not respond."
+                where_wa = "📍 Location *UNAVAILABLE* - the agent's GPS did not respond."
+            else:
+                maps_link = f"https://www.google.com/maps?q={lat},{lon}"
+                if quality == "LIVE":
+                    where_sms = f"Location: {maps_link}"
+                    where_wa = f"📍 Location: {maps_link}"
+                else:
+                    mins = max(1, round((age_seconds or 0) / 60))
+                    where_sms = f"LAST KNOWN location ({mins} min old): {maps_link}"
+                    where_wa = f"📍 *Last known* location ({mins} min old): {maps_link}"
             sms_body = (
                 f"SOS ALERT: Field agent {agent.user.full_name} ({agent.employee_code}) "
-                f"triggered an emergency SOS at {alert_time} UTC. Location: {maps_link} - ABC Bank"
+                f"triggered an emergency SOS at {alert_time} UTC. {where_sms} - ABC Bank"
             )
             wa_body = (
                 f"\U0001f6a8 *SOS ALERT*\n\n"
                 f"Agent *{agent.user.full_name}* ({agent.employee_code}) triggered an emergency SOS.\n"
                 f"\U0001f550 {alert_time} UTC\n"
-                f"\U0001f4cd Location: {maps_link}\n\n"
+                f"{where_wa}\n\n"
                 f"Please respond immediately."
             )
-            NotificationService.send_twilio(e164, sms_body, wa_body)
+            NotificationService.send_twilio(e164 := "+" + NotificationService.normalize_phone(manager.phone), sms_body, wa_body)
+            notified = True
+            logger.info("sos.manager_alerted", agent_id=agent.id, quality=quality,
+                        age_seconds=age_seconds, to=e164[-4:])
         else:
             logger.warning("sos.no_manager_notified", agent_id=agent.id, manager_user_id=agent.manager_user_id)
+
+        if quality == "NONE":
+            message = "SOS triggered. Your manager has been alerted — but your location could NOT be sent."
+        elif quality == "LAST_KNOWN":
+            message = "SOS triggered. Your manager has been alerted with your last known location."
+        else:
+            message = "SOS triggered. Your manager has been alerted with your location."
 
         return {
             "sos_triggered": True,
             "triggered_at": now_utc.isoformat(),
-            "message": "SOS triggered. Your manager has been alerted.",
+            "message": message,
+            "location_quality": quality,
+            "location_age_seconds": age_seconds,
+            "manager_notified": notified,
         }
 
     # -----------------------------------------------------------------

@@ -19,6 +19,7 @@ celery_app = Celery(
         "app.workers.tasks.performance_snapshot",
         "app.workers.tasks.transcription",
         "app.workers.tasks.demo_daily_feed",
+        "app.workers.tasks.location_retention",
     ],
 )
 
@@ -53,6 +54,12 @@ celery_app.conf.update(
         "ptp-reminders": {
             "task": "app.workers.tasks.ptp_reminders.send_ptp_reminders",
             "schedule": crontab(hour=9, minute=0),
+        },
+        # Location trail retention sweep at 3 AM IST, off the back of the
+        # quiet window between the nightly allocation and the morning beat push.
+        "location-trail-retention": {
+            "task": "app.workers.tasks.location_retention.prune_location_trail",
+            "schedule": crontab(hour=3, minute=0),
         },
         # Monthly performance snapshot at midnight on 1st of each month
         "monthly-performance-snapshot": {

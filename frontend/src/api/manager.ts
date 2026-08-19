@@ -421,3 +421,59 @@ export interface AnalyticsData {
     avg_visits_per_agent_current_month: number;
   };
 }
+
+// ─── Live agent locations (2026-08-18) ──────────────────────────────────────
+
+export interface LiveAgentPosition {
+  agent_id: string;
+  employee_code: string;
+  full_name: string;
+  status: string;
+  sos_active: boolean;
+  sos_triggered_at: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  accuracy_metres: number | null;
+  battery_pct: number | null;
+  recorded_at: string | null;
+  /** Seconds since the fix was captured, computed server-side so every client
+   *  agrees on what counts as stale. */
+  age_seconds: number | null;
+}
+
+export interface TrailPoint {
+  latitude: number;
+  longitude: number;
+  accuracy_metres: number | null;
+  recorded_at: string;
+  source: "HEARTBEAT" | "CHECK_IN" | "VISIT" | "SOS";
+  is_sos: boolean;
+  battery_pct: number | null;
+}
+
+export interface AgentTrail {
+  agent_id: string;
+  employee_code: string;
+  full_name: string;
+  sos_active: boolean;
+  date: string;
+  point_count: number;
+  distance_metres: number;
+  points: TrailPoint[];
+}
+
+export async function getAgentsLive() {
+  const { data } = await api.get<{
+    agents: LiveAgentPosition[];
+    sos_count: number;
+    tracked_count: number;
+  }>("/manager/agents/live");
+  return data;
+}
+
+export async function getAgentTrail(agentId: string, date?: string, sosOnly = false) {
+  const { data } = await api.get<AgentTrail>(`/manager/agents/${agentId}/trail`, {
+    params: { ...(date ? { date } : {}), ...(sosOnly ? { sos_only: true } : {}) },
+  });
+  return data;
+}

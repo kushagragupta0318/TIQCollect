@@ -21,6 +21,7 @@ import { SOSButton } from "@/components/ui/SOSButton";
 import { AccountMenu } from "@/components/layout/AccountMenu";
 import { BeatProvider, useBeat } from "@/contexts/BeatContext";
 import { useLiveLocation } from "@/hooks/useLiveLocation";
+import { startLocationReporting, stopLocationReporting } from "@/lib/locationReporter";
 import api from "@/api/axios";
 
 const SIDEBAR_KEY  = "tiq:agent-sidebar";
@@ -116,6 +117,27 @@ function AgentLayoutInner() {
   useEffect(() => {
     if (beat != null) setSosActive(beat.sos_active);
   }, [beat?.sos_active, setSosActive]);
+
+  // Upload the location trail, but ONLY while the agent is checked in.
+  //
+  // Gated on duty status rather than merely on being logged in: continuously
+  // recording an employee's movements outside their working hours is
+  // employee monitoring we have no business doing, and the retention sweep in
+  // workers/tasks/location_retention.py cannot un-collect it afterwards.
+  // Checking in is the agent's own action, which makes it the consent
+  // boundary. Same test AgentHomePage uses for "checked in".
+  //
+  // Mounted in the layout rather than per-page so the trail does not develop
+  // holes every time the agent navigates between screens. It rides on the
+  // single watchPosition subscription LiveLocationLine below already holds —
+  // no second GPS watcher, which would double power draw on a phone that has
+  // to last a full shift.
+  const onDuty = beat?.check_in_status === "ON_DUTY";
+  useEffect(() => {
+    if (!onDuty) return;
+    startLocationReporting();
+    return () => stopLocationReporting();
+  }, [onDuty]);
 
   useEffect(() => {
     const onOnline  = () => { setIsOnline(true);  toast.success("Back online — syncing data"); };
