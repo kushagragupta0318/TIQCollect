@@ -31,6 +31,16 @@ class Agent(Base, UUIDPrimaryKey, TimestampMixin):
     id_card_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
     agency_id: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
 
+    # Gender of the agent. Added 2026-08-19 for allocation eligibility:
+    # Customer.requires_female_agent has existed since the schema was written and
+    # could never be honoured, because nothing anywhere recorded an agent's
+    # gender. Nullable on purpose — it is unknown for existing rows, and the
+    # eligibility check treats unknown as "cannot satisfy a female-only
+    # requirement" rather than assuming. Held here rather than on User because
+    # it is a field-workforce matching attribute; it has no meaning for a
+    # manager or admin account.
+    gender: Mapped[str | None] = mapped_column(String(10), nullable=True)
+
     # Geographic base
     base_latitude: Mapped[float] = mapped_column(Float, nullable=False)
     base_longitude: Mapped[float] = mapped_column(Float, nullable=False)
