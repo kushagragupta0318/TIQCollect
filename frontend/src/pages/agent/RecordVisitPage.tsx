@@ -573,6 +573,27 @@ export default function RecordVisitPage() {
     ? Math.round(haversineM(form.gpsLat, form.gpsLon, customer.latitude, customer.longitude))
     : null;
   const withinFence = distanceM !== null && distanceM <= 100;
+  const isLocalDemoCase =
+    typeof window !== "undefined" &&
+    window.location.hostname === "localhost" &&
+    typeof customer?.customer_ref === "string" &&
+    customer.customer_ref.startsWith("DEMO");
+
+  useEffect(() => {
+    if (!isLocalDemoCase || !customer) return;
+    const currentDistance =
+      form.gpsLat != null && form.gpsLon != null
+        ? haversineM(form.gpsLat, form.gpsLon, customer.latitude, customer.longitude)
+        : null;
+    if (currentDistance == null || currentDistance > 100) {
+      upd({
+        gpsLat: customer.latitude,
+        gpsLon: customer.longitude,
+        gpsAccuracy: 10,
+        gpsAltitude: null,
+      });
+    }
+  }, [isLocalDemoCase, customer?.customer_ref, customer?.latitude, customer?.longitude]);
 
   const sel = BORROWER_OUTCOMES.find((o) => o.value === form.outcome)
     ?? NOT_MET_OUTCOMES.find((o) => o.value === form.outcome);
