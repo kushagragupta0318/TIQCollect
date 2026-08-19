@@ -31,6 +31,7 @@ from sqlalchemy.orm import joinedload
 
 from app.core.dependencies import DbSession, ManagerOnly
 from app.core.config import settings
+from app.ml import eligibility as _elig
 from app.models.agent import Agent, AgentStatus, AgentPerformance
 from app.core import storage
 from app.models.beat import Beat
@@ -442,6 +443,10 @@ def list_agents(current_user: ManagerOnly, db: DbSession):
             "tier": agent.tier,
             "status": agent.status,
             "specialization": agent.specialization,
+            # Added 2026-08-19. Drives Customer.requires_female_agent in
+            # allocation; null until a manager sets it, and null is treated
+            # as "not female" — see ml/eligibility.py.
+            "gender": agent.gender,
             "languages_spoken": agent.languages_spoken,
             "ranking_score": agent.ranking_score,
             "max_cases_per_day": agent.max_cases_per_day,
@@ -630,6 +635,101 @@ def list_cases(
 # below it "date-range" would be taken as a case_id. That fails as a 500, not a
 # 404 — Postgres rejects the value as an invalid UUID before any lookup runs.
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# GET /manager/cases/unallocated
+# ---------------------------------------------------------------------------
+# Why a case has not been given to anybody. Added 2026-08-19 alongside the
+# allocation eligibility rules: those rules can now WITHHOLD a case, and a
+# control nobody can observe is one nobody can trust or audit. Reasons are
+# recomputed here from the same ml/eligibility functions the allocator uses,
+# rather than stored, so the two can never disagree.
+
+@router.get("/cases/unallocated")
+def unallocated_cases(current_user: ManagerOnly, db: DbSession):
+    from app.ml.eligibility import (
+        BLOCKED_DO_NOT_CONTACT, BLOCKED_NEEDS_FEMALE_AGENT,
+        agent_block_reason, case_block_reason,
+    )
+    from app.models.customer import Customer as CustomerModel
+
+    my_agents = (
+        db.query(Agent).join(Agent.user)
+        .filter(Agent.manager_user_id == current_user.id)
+        .options(joinedload(Agent.user)).all()
+    )
+    on_duty = [a for a in my_agents if a.status == AgentStatus.ON_DUTY]
+
+    cases = (
+        db.query(Case)
+        .filter(Case.status == CaseStatus.UNASSIGNED)
+        .options(joinedload(Case.customer))
+        .all()
+    )
+
+    rows: list[dict] = []
+    for case in cases:
+        customer = case.customer
+        blocked = case_block_reason(customer)
+        if blocked is not None:
+            reason, detail = blocked, "The bank has marked this customer do-not-contact."
+        elif not on_duty:
+            reason, detail = "NO_AGENT_ON_DUTY", "No agent in your team is on duty."
+        elif not any(agent_block_reason(a, customer) is None for a in on_duty):
+            reason = "NO_ELIGIBLE_AGENT"
+            detail = (
+                "This customer must be visited by a female agent, and none in your "
+                "team is recorded as female."
+                if customer is not None and customer.requires_female_agent
+                else "No agent in your team is permitted to take this case."
+            )
+        elif all(a.max_cases_per_day <= 0 for a in on_duty):
+            reason, detail = "NO_CAPACITY", "Every agent is at their daily case limit."
+        else:
+            reason, detail = "AWAITING_ALLOCATION", "Will be assigned by tonight's run."
+
+        rows.append({
+            "case_id": case.id,
+            "case_number": case.case_number,
+            "customer_name": customer.full_name if customer else None,
+            "city": customer.city if customer else None,
+            "priority": case.priority,
+            "target_amount": case.target_amount,
+            "reason": reason,
+            "detail": detail,
+        })
+
+    # How many customers the female-agent rule would strand right now. Counted
+    # across the whole book, not just unassigned cases, because it is a staffing
+    # question and it will not surface on its own until allocation night.
+    female_on_duty = sum(
+        1 for a in on_duty if (a.gender or "").strip().lower() in {"f", "female", "woman"}
+    )
+    needs_female = (
+        db.query(func.count(CustomerModel.id))
+        .filter(CustomerModel.requires_female_agent.is_(True)).scalar() or 0
+    )
+
+    counts: dict[str, int] = {}
+    for r in rows:
+        counts[r["reason"]] = counts.get(r["reason"], 0) + 1
+
+    return {
+        "cases": sorted(rows, key=lambda r: (r["reason"] != "AWAITING_ALLOCATION", r["case_number"]), reverse=True),
+        "counts": counts,
+        "total": len(rows),
+        "staffing": {
+            "female_agents_on_duty": female_on_duty,
+            "customers_requiring_female_agent": int(needs_female),
+            # True when the rule is currently unsatisfiable for anyone.
+            "female_coverage_gap": female_on_duty == 0 and needs_female > 0,
+        },
+        "blocked_reasons": {
+            "DO_NOT_CONTACT": BLOCKED_DO_NOT_CONTACT,
+            "REQUIRES_FEMALE_AGENT": BLOCKED_NEEDS_FEMALE_AGENT,
+        },
+    }
+
 
 @router.get("/cases/date-range")
 def cases_date_range(current_user: ManagerOnly, db: DbSession):
@@ -1955,10 +2055,29 @@ def reallocation_plan(agent_id: str, current_user: ManagerOnly, db: DbSession):
     for case in source_cases:
         loan = case.loan
         customer = case.customer
+
+        # A do-not-contact customer is not a capacity problem to be solved by
+        # moving the case to someone else — it must not be visited by anyone.
+        blocked = _elig.case_block_reason(customer)
+        if blocked is not None:
+            unallocatable.append({
+                "case_id": case.id,
+                "case_number": case.case_number,
+                "customer_name": customer.full_name if customer else None,
+                "reason": blocked,
+            })
+            continue
+
         best_id, best_score, best_reasons = None, -1, []
 
         for ag in other_agents:
             if remaining_capacity.get(ag.id, 0) <= 0:
+                continue
+            # Same hard rules the nightly allocator applies. Without this a
+            # manager covering an absence could hand a female-only customer to
+            # a male agent — the reallocation path used to score on territory,
+            # language, tier and capacity alone and never checked eligibility.
+            if _elig.agent_block_reason(ag, customer) is not None:
                 continue
             info = agent_info[ag.id]
             score, reasons = 0, []
@@ -2079,6 +2198,59 @@ def update_agent_status(
 # button, which previously just showed a toast claiming "emergency services
 # notified" with nothing actually sent (see changelog.md, 2026-07-15).
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# PUT /manager/agents/{agent_id}/gender
+# ---------------------------------------------------------------------------
+# Lets a manager record an agent's gender, which is what makes
+# Customer.requires_female_agent enforceable at all. Added 2026-08-19 with the
+# eligibility rules: the column existed but nothing could write to it, so the
+# rule was correct code that could never fire.
+#
+# Ownership IS checked here. The neighbouring PUT .../status does not check it
+# and lets any manager change any agent's duty state — a known defect scheduled
+# separately; this endpoint deliberately does not copy that shape.
+
+class _GenderBody(_BM):
+    gender: Optional[str] = None       # "M" | "F" | "OTHER" | null to clear
+
+
+_ALLOWED_GENDERS = {"M", "F", "OTHER"}
+
+
+@router.put("/agents/{agent_id}/gender")
+def update_agent_gender(
+    agent_id: str,
+    body: _GenderBody,
+    current_user: ManagerOnly,
+    db: DbSession,
+):
+    value = (body.gender or "").strip().upper() or None
+    if value is not None and value not in _ALLOWED_GENDERS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"gender must be one of {sorted(_ALLOWED_GENDERS)}, or null to clear",
+        )
+
+    agent = (
+        db.query(Agent)
+        .join(Agent.user)
+        .filter(Agent.id == agent_id, Agent.manager_user_id == current_user.id)
+        .options(joinedload(Agent.user))
+        .first()
+    )
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    agent.gender = value
+    db.commit()
+    return {
+        "agent_id": agent.id,
+        "employee_code": agent.employee_code,
+        "full_name": agent.user.full_name if agent.user else None,
+        "gender": agent.gender,
+    }
+
 
 @router.post("/agents/{agent_id}/sos/acknowledge")
 def acknowledge_agent_sos(

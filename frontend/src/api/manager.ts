@@ -477,3 +477,44 @@ export async function getAgentTrail(agentId: string, date?: string, sosOnly = fa
   });
   return data;
 }
+
+// ─── Allocation eligibility (2026-08-19) ────────────────────────────────────
+
+/** Records an agent's gender, which is what makes a customer's
+ *  "female agent only" requirement enforceable. Pass null to clear it. */
+export async function setAgentGender(agentId: string, gender: "M" | "F" | "OTHER" | null) {
+  const { data } = await api.put<{
+    agent_id: string; employee_code: string; full_name: string | null; gender: string | null;
+  }>(`/manager/agents/${agentId}/gender`, { gender });
+  return data;
+}
+
+export interface UnallocatedCase {
+  case_id: string;
+  case_number: string;
+  customer_name: string | null;
+  city: string | null;
+  priority: string;
+  target_amount: number;
+  /** DO_NOT_CONTACT | NO_ELIGIBLE_AGENT | NO_AGENT_ON_DUTY | NO_CAPACITY | AWAITING_ALLOCATION */
+  reason: string;
+  detail: string;
+}
+
+export interface UnallocatedReport {
+  cases: UnallocatedCase[];
+  counts: Record<string, number>;
+  total: number;
+  staffing: {
+    female_agents_on_duty: number;
+    customers_requiring_female_agent: number;
+    /** True when customers need a female agent and none is on duty — the rule
+     *  is currently unsatisfiable, and those cases will never be allocated. */
+    female_coverage_gap: boolean;
+  };
+}
+
+export async function getUnallocatedCases() {
+  const { data } = await api.get<UnallocatedReport>("/manager/cases/unallocated");
+  return data;
+}

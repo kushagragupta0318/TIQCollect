@@ -15,9 +15,9 @@
 import { useCallback, useEffect, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { useNavigate } from "react-router";
-import { Users, Briefcase, IndianRupee, MapPin, Clock, AlertTriangle, Sparkles, RefreshCw, TrendingUp, TrendingDown } from "lucide-react";
-import { getDashboard, getAgents, getBriefing } from "@/api/manager";
-import type { BriefingData } from "@/api/manager";
+import { Users, Briefcase, IndianRupee, MapPin, Clock, AlertTriangle, Sparkles, RefreshCw, TrendingUp, TrendingDown, ShieldAlert } from "lucide-react";
+import { getDashboard, getAgents, getBriefing, getUnallocatedCases } from "@/api/manager";
+import type { BriefingData, UnallocatedReport } from "@/api/manager";
 import { StatCard } from "@/components/ui/Card";
 import { TierBadge } from "@/components/ui/Badge";
 import type { DashboardSummary, Agent } from "@/types";
@@ -149,6 +149,11 @@ export default function ManagerOverviewPage() {
           </button>
         </div>
       )}
+
+      {/* Cases the allocation rules withheld. Added 2026-08-19: those rules can
+          now refuse to assign a case, and a control nobody can see is one
+          nobody can trust or audit. */}
+      <WithheldCases />
 
       {/* KPI Grid — staggered entrance */}
       <div className="overview-kpi-grid grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
@@ -749,6 +754,68 @@ function LoadingGrid() {
         ))}
       </div>
       <div className="card animate-pulse" style={{ height: 128, background: "#EFF0F4", border: "none", boxShadow: "none" }} />
+    </div>
+  );
+}
+
+/** Cases nobody has been given, and why.
+ *
+ *  Most sit here simply awaiting tonight's allocation run, which is normal and
+ *  shown quietly. The two that matter are a customer the bank has marked
+ *  do-not-contact, and a customer who needs a female agent when none is on
+ *  duty — the second is a staffing problem that would otherwise never surface,
+ *  because nothing fails, cases just silently never get visited.
+ */
+function WithheldCases() {
+  const [data, setData] = useState<UnallocatedReport | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    getUnallocatedCases()
+      .then((d) => { if (alive) setData(d); })
+      .catch(() => { /* non-critical panel — stay silent rather than alarm */ });
+    return () => { alive = false; };
+  }, []);
+
+  if (!data) return null;
+
+  const withheld = data.cases.filter((c) => c.reason !== "AWAITING_ALLOCATION");
+  const gap = data.staffing.female_coverage_gap;
+  if (withheld.length === 0 && !gap) return null;
+
+  return (
+    <div
+      className="rounded-card p-4 space-y-2.5"
+      style={{ background: "rgba(180,83,9,0.06)", border: "1px solid rgba(180,83,9,0.20)" }}
+    >
+      <div className="flex items-center gap-2">
+        <ShieldAlert className="w-4 h-4 flex-shrink-0" style={{ color: "#B45309" }} />
+        <p className="font-semibold text-sm" style={{ color: "#7C3E00" }}>
+          {withheld.length > 0
+            ? `${withheld.length} case${withheld.length > 1 ? "s" : ""} not assigned to anyone`
+            : "Allocation rule cannot be satisfied"}
+        </p>
+      </div>
+
+      {gap && (
+        <p className="text-[13px]" style={{ color: "#7C3E00" }}>
+          <b>{data.staffing.customers_requiring_female_agent} customers</b> must be visited by a
+          female agent, and none of your agents is recorded as female. Set this on the Agents
+          page, or those cases will never be allocated.
+        </p>
+      )}
+
+      {withheld.slice(0, 4).map((c) => (
+        <div key={c.case_id} className="text-[13px]" style={{ color: "#5C4A2E" }}>
+          <span className="font-semibold" style={{ color: "#7C3E00" }}>{c.case_number}</span>
+          {c.customer_name && <> · {c.customer_name}</>} — {c.detail}
+        </div>
+      ))}
+      {withheld.length > 4 && (
+        <p className="text-[12.5px]" style={{ color: "#8A6A3A" }}>
+          and {withheld.length - 4} more
+        </p>
+      )}
     </div>
   );
 }

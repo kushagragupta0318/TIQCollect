@@ -67,6 +67,9 @@ export interface Agent {
   sos_active: boolean;
   max_cases_per_day: number;
   specialization: string;
+  /** "M" | "F" | "OTHER", or null when unrecorded. Null counts as NOT female
+   *  for the female-agent allocation rule — see backend ml/eligibility.py. */
+  gender: string | null;
   languages_spoken: string[];
   today_collected: number;
   today_target: number;
