@@ -85,6 +85,9 @@ export interface Customer {
   customer_ref: string;
   full_name: string;
   phone_primary: string;
+  address_line1: string;
+  address_line2: string | null;
+  pincode: string;
   city: string;
   state: string;
   latitude: number;

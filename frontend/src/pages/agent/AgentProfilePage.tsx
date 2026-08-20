@@ -6,6 +6,7 @@ import { getProfile, getAvailabilityCalendar } from "@/api/agent";
 import type { AvailabilityCalendar } from "@/api/agent";
 import { useAuthStore } from "@/store/authStore";
 import { TierBadge } from "@/components/ui/Badge";
+import { checkOut as apiCheckOut } from "@/api/agent";
 import AgentIDCard from "@/components/ui/AgentIDCard";
 import type { Agent } from "@/types";
 import { useAnimatedValue } from "@/hooks/useAnimatedValue";
@@ -24,6 +25,24 @@ export default function AgentProfilePage() {
   const [agent, setAgent] = useState<Agent | null>(null);
   const [checkInStatus, setCheckInStatus] = useState<string>("OFF_DUTY");
   const [calendar, setCalendar] = useState<AvailabilityCalendar | null>(null);
+  const [checkingOut, setCheckingOut] = useState(false);
+
+  // Check-in has existed since the beginning with no counterpart: an agent went
+  // ON_DUTY and stayed there until a manager changed it. Location tracking is
+  // gated on duty status, so the person being tracked had no way to stop it.
+  async function handleCheckOut() {
+    if (checkingOut) return;
+    setCheckingOut(true);
+    try {
+      const res = await apiCheckOut();
+      setCheckInStatus(res.status);
+      toast.success(res.message);
+    } catch {
+      toast.error("Could not check out — try again");
+    } finally {
+      setCheckingOut(false);
+    }
+  }
 
   useEffect(() => {
     getProfile().then((data) => {
@@ -70,6 +89,20 @@ export default function AgentProfilePage() {
               </span>
             </div>
           </div>
+          {checkedIn && (
+            <button
+              onClick={handleCheckOut}
+              disabled={checkingOut}
+              className="tap-target shrink-0 self-start text-xs font-semibold px-3 py-2 rounded-xl transition-colors"
+              style={{
+                background: "#FFFFFF", color: "#B3261E",
+                border: "1px solid rgba(179,38,30,0.30)",
+                opacity: checkingOut ? 0.6 : 1,
+              }}
+            >
+              {checkingOut ? "Checking out…" : "Check Out"}
+            </button>
+          )}
         </div>
 
         {/* Specialization + languages — shown once, as quiet meta chips */}

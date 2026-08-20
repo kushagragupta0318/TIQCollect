@@ -217,9 +217,25 @@ export default function BeatMapPage() {
               <span className="text-xs font-semibold text-warning-700">NEXT STOP</span>
             </div>
             <div className="flex items-center justify-between">
-              <div>
+              {/* The street address, not just the city. Tapping Go hands raw
+                  coordinates to Google Maps, which relabels them with whatever
+                  business it finds nearest — an agent heading to a house in
+                  Sector 44 was being shown a corporate office name instead. The
+                  pin is right; the name is not. Showing the real address here
+                  means they leave the app already knowing where they are going. */}
+              <div className="min-w-0 pr-3">
                 <p className="font-semibold text-slate-900">{nextUnvisited.customer.full_name}</p>
-                <p className="text-xs text-slate-500">{nextUnvisited.customer.city} · DPD {nextUnvisited.loan.dpd}d</p>
+                {nextUnvisited.customer.address_line1 && (
+                  <p className="text-xs text-slate-600 mt-0.5 break-words">
+                    {nextUnvisited.customer.address_line1}
+                    {nextUnvisited.customer.address_line2 && `, ${nextUnvisited.customer.address_line2}`}
+                  </p>
+                )}
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {nextUnvisited.customer.city}
+                  {nextUnvisited.customer.pincode && ` ${nextUnvisited.customer.pincode}`}
+                  {" · "}DPD {nextUnvisited.loan.dpd}d
+                </p>
               </div>
               <button
                 onClick={() => navigateToStop(nextUnvisited)}

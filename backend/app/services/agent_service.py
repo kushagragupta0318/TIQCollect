@@ -126,6 +126,26 @@ class AgentService:
         self.db.commit()
         return {"status": "ON_DUTY", "message": "Check-in successful. Have a safe day!"}
 
+    # -----------------------------------------------------------------
+    # POST /agent/checkout
+    # -----------------------------------------------------------------
+    def checkout(self, agent: Agent) -> dict:
+        """End the working day.
+
+        2026-08-20 — added. Check-in has existed since the beginning with no
+        counterpart, so an agent went ON_DUTY and stayed there until a manager
+        changed it. That also meant location tracking, which is gated on duty
+        status, had no way to be stopped by the person being tracked.
+
+        Deliberately does NOT take coordinates. Check-in captures a position
+        because it starts the day's record and anchors the geo-fence; ending a
+        shift needs no such proof, and asking for GPS to clock off would be one
+        more reason to stay on duty.
+        """
+        agent.status = AgentStatus.OFF_DUTY
+        self.db.commit()
+        return {"status": "OFF_DUTY", "message": "Checked out. Location tracking has stopped."}
+
     def _rewind_demo_case(self) -> None:
         """DEMO_REHEARSAL_MODE only: undo the last run-through of the demo case.
 
