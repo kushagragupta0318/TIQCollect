@@ -222,6 +222,35 @@ class Settings(BaseSettings):
     def sos_contacts_list(self) -> List[str]:
         return [c.strip() for c in self.SOS_EMERGENCY_CONTACTS.split(",") if c.strip()]
 
+    # Fraud / anomaly detection (2026-08-19)
+    # Thresholds are deliberately conservative. A detector that cries wolf is
+    # worse than none: it teaches the manager to dismiss the panel, and then the
+    # real finding gets dismissed with the rest.
+    #
+    # 120 km/h is not "fast driving" — it is sustained motorway speed averaged
+    # across an entire door-to-door gap including parking and walking, which no
+    # NCR field round produces.
+    FRAUD_MAX_SPEED_KMH: int = 120
+    # A photo taken this far from the check-in point was not taken at the visit.
+    # Generous enough to absorb poor urban GPS and a large apartment block.
+    FRAUD_PHOTO_DRIFT_METRES: int = 250
+    # Below this, nothing that could be called a collections conversation
+    # happened at the door.
+    FRAUD_MIN_VISIT_SECONDS: int = 60
+    # Overlapping visits closer together than this are treated as a missed
+    # check-out at one address, not a claim to be in two places at once.
+    FRAUD_OVERLAP_MIN_METRES: int = 500
+    # Multiplier on GEO_FENCE_METRES before a recorded distance is treated as a
+    # fence breach rather than GPS scatter.
+    FRAUD_FENCE_TOLERANCE: float = 1.5
+    # Default look-back for a scan when no date range is given.
+    FRAUD_SCAN_DAYS: int = 30
+    # Trail checks. A visit is only contradicted when the agent was tracked
+    # this many times during it and was never within this distance. Absence
+    # of trail is never a finding — see fraud_service._trail_contradiction.
+    FRAUD_TRAIL_MIN_POINTS: int = 3
+    FRAUD_TRAIL_AWAY_METRES: int = 500
+
     # Location trail (2026-08-18)
     # How long a full-resolution trail is kept before the nightly sweep in
     # workers/tasks/location_retention.py deletes it. Movement history is

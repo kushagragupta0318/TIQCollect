@@ -134,6 +134,10 @@ export interface ManagerCaseDetail {
     cibil_score: number;
     is_hostile: boolean;
     do_not_contact: boolean;
+    /** Bank-set: this customer may only be visited by a female agent.
+     *  Enforced in allocation; shown here so a manager does not reassign
+     *  the case past the rule by hand. */
+    requires_female_agent: boolean;
   };
   loan: {
     id: string;
@@ -480,15 +484,6 @@ export async function getAgentTrail(agentId: string, date?: string, sosOnly = fa
 
 // ─── Allocation eligibility (2026-08-19) ────────────────────────────────────
 
-/** Records an agent's gender, which is what makes a customer's
- *  "female agent only" requirement enforceable. Pass null to clear it. */
-export async function setAgentGender(agentId: string, gender: "M" | "F" | "OTHER" | null) {
-  const { data } = await api.put<{
-    agent_id: string; employee_code: string; full_name: string | null; gender: string | null;
-  }>(`/manager/agents/${agentId}/gender`, { gender });
-  return data;
-}
-
 export interface UnallocatedCase {
   case_id: string;
   case_number: string;
@@ -505,16 +500,78 @@ export interface UnallocatedReport {
   cases: UnallocatedCase[];
   counts: Record<string, number>;
   total: number;
-  staffing: {
-    female_agents_on_duty: number;
-    customers_requiring_female_agent: number;
-    /** True when customers need a female agent and none is on duty — the rule
-     *  is currently unsatisfiable, and those cases will never be allocated. */
-    female_coverage_gap: boolean;
-  };
 }
 
 export async function getUnallocatedCases() {
   const { data } = await api.get<UnallocatedReport>("/manager/cases/unallocated");
+  return data;
+}
+
+// ─── Field-visit anomaly detection (2026-08-19) ─────────────────────────────
+
+export interface FraudFinding {
+  /** IMPOSSIBLE_TRAVEL | OVERLAPPING_VISITS | PHOTO_LOCATION_MISMATCH
+   *  | DUPLICATE_PHOTO | VISIT_TOO_SHORT | FAR_FROM_CUSTOMER */
+  type: string;
+  severity: "HIGH" | "MEDIUM" | "LOW";
+  occurred_at: string;
+  summary: string;
+  evidence: Record<string, unknown>;
+  agent_id: string;
+  agent_name: string | null;
+  employee_code: string | null;
+  visit_id: string;
+  case_id: string;
+  case_number: string | null;
+  /** A manager's standing verdict, or null if nobody has judged it yet. */
+  review: { verdict: "CONFIRMED" | "DISMISSED"; note: string | null; reviewed_at: string | null } | null;
+}
+
+export interface AgentAnomalyTally {
+  agent_id: string;
+  agent_name: string | null;
+  employee_code: string | null;
+  total: number;
+  high: number;
+  confirmed: number;
+}
+
+export interface FraudReport {
+  findings: FraudFinding[];
+  counts: Record<string, number>;
+  by_severity: Record<string, number>;
+  /** Which agents account for the findings — one agent with twelve is a very
+   *  different conversation from twelve agents with one each. */
+  by_agent: AgentAnomalyTally[];
+  /** Dismissed findings excluded from `findings`. Counted, never silently lost. */
+  dismissed_hidden: number;
+  visits_examined: number;
+  date_from: string;
+  date_to: string;
+}
+
+export async function getFraudAlerts(opts?: { dateFrom?: string; dateTo?: string; includeDismissed?: boolean }) {
+  const { data } = await api.get<FraudReport>("/manager/fraud-alerts", {
+    params: {
+      ...(opts?.dateFrom ? { date_from: opts.dateFrom } : {}),
+      ...(opts?.dateTo ? { date_to: opts.dateTo } : {}),
+      ...(opts?.includeDismissed ? { include_dismissed: true } : {}),
+    },
+  });
+  return data;
+}
+
+/** Record a verdict on one anomaly. Confirmed findings stay visible; dismissed
+ *  ones leave the default view but are never deleted. Writes an audit entry. */
+export async function reviewFraudAlert(
+  visitId: string, findingType: string,
+  verdict: "CONFIRMED" | "DISMISSED", note?: string,
+) {
+  const { data } = await api.post<{
+    visit_id: string; finding_type: string; verdict: string;
+    note: string | null; previous_verdict: string | null;
+  }>("/manager/fraud-alerts/review", {
+    visit_id: visitId, finding_type: findingType, verdict, note: note ?? null,
+  });
   return data;
 }

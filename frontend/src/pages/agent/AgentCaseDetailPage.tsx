@@ -374,6 +374,11 @@ export default function AgentCaseDetailPage() {
             {/* Alert banners */}
             {c.is_escalated && <AlertBanner icon="🔴" color="danger" message="Case escalated — Manager review pending" />}
             {c.customer.is_hostile && <AlertBanner icon="⚠️" color="warning" message="Customer marked hostile — exercise caution" />}
+            {/* The API has always sent requires_female_agent and nothing rendered
+                it. Allocation now respects the flag, but a case can still reach an
+                agent by handover or manual reassignment — so the person at the door
+                needs to see it, not just the scheduler. */}
+            {c.customer.requires_female_agent && <AlertBanner icon="🚫" color="danger" message="Female agent required — do not visit; hand this case back to your manager" />}
             {activePTP && (
               <div className="card border-brand-200 bg-brand-50 flex items-center justify-between">
                 <div className="flex items-center gap-2">

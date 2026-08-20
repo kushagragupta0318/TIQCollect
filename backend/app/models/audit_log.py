@@ -27,6 +27,8 @@ class AuditAction(str, enum.Enum):
     ROLE_VIOLATION_ATTEMPT = "ROLE_VIOLATION_ATTEMPT"
     DEVICE_MISMATCH = "DEVICE_MISMATCH"
     DATA_EXPORT = "DATA_EXPORT"
+    # 2026-08-19 — a manager confirming or dismissing a visit anomaly.
+    ANOMALY_REVIEWED = "ANOMALY_REVIEWED"
 
 
 class AuditLog(Base, UUIDPrimaryKey):

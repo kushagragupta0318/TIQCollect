@@ -762,9 +762,10 @@ function LoadingGrid() {
  *
  *  Most sit here simply awaiting tonight's allocation run, which is normal and
  *  shown quietly. The two that matter are a customer the bank has marked
- *  do-not-contact, and a customer who needs a female agent when none is on
- *  duty — the second is a staffing problem that would otherwise never surface,
- *  because nothing fails, cases just silently never get visited.
+ *  do-not-contact, and a case no agent is permitted to take. Deliberately does
+ *  NOT report why an agent is ineligible: agent gender is not a manager's to
+ *  see or set, and surfacing it here would have made the compliance rule
+ *  bypassable by the person whose workload it blocks.
  */
 function WithheldCases() {
   const [data, setData] = useState<UnallocatedReport | null>(null);
@@ -780,8 +781,7 @@ function WithheldCases() {
   if (!data) return null;
 
   const withheld = data.cases.filter((c) => c.reason !== "AWAITING_ALLOCATION");
-  const gap = data.staffing.female_coverage_gap;
-  if (withheld.length === 0 && !gap) return null;
+  if (withheld.length === 0) return null;
 
   return (
     <div
@@ -791,19 +791,9 @@ function WithheldCases() {
       <div className="flex items-center gap-2">
         <ShieldAlert className="w-4 h-4 flex-shrink-0" style={{ color: "#B45309" }} />
         <p className="font-semibold text-sm" style={{ color: "#7C3E00" }}>
-          {withheld.length > 0
-            ? `${withheld.length} case${withheld.length > 1 ? "s" : ""} not assigned to anyone`
-            : "Allocation rule cannot be satisfied"}
+          {withheld.length} case{withheld.length > 1 ? "s" : ""} not assigned to anyone
         </p>
       </div>
-
-      {gap && (
-        <p className="text-[13px]" style={{ color: "#7C3E00" }}>
-          <b>{data.staffing.customers_requiring_female_agent} customers</b> must be visited by a
-          female agent, and none of your agents is recorded as female. Set this on the Agents
-          page, or those cases will never be allocated.
-        </p>
-      )}
 
       {withheld.slice(0, 4).map((c) => (
         <div key={c.case_id} className="text-[13px]" style={{ color: "#5C4A2E" }}>

@@ -99,6 +99,9 @@ def _format_case(case: Case, agent_name_map: dict | None = None, visited_today_i
             "cibil_score": c.cibil_score,
             "is_hostile": c.is_hostile,
             "do_not_contact": c.do_not_contact,
+            # Was omitted while its two sibling flags were sent, so the manager
+            # case view could not show it even though allocation enforces it.
+            "requires_female_agent": c.requires_female_agent,
             "fraud_flag": c.fraud_flag,
             "customer_segment": c.customer_segment,
             "language_preference": c.language_preference,
@@ -443,10 +446,6 @@ def list_agents(current_user: ManagerOnly, db: DbSession):
             "tier": agent.tier,
             "status": agent.status,
             "specialization": agent.specialization,
-            # Added 2026-08-19. Drives Customer.requires_female_agent in
-            # allocation; null until a manager sets it, and null is treated
-            # as "not female" — see ml/eligibility.py.
-            "gender": agent.gender,
             "languages_spoken": agent.languages_spoken,
             "ranking_score": agent.ranking_score,
             "max_cases_per_day": agent.max_cases_per_day,
@@ -651,8 +650,6 @@ def unallocated_cases(current_user: ManagerOnly, db: DbSession):
         BLOCKED_DO_NOT_CONTACT, BLOCKED_NEEDS_FEMALE_AGENT,
         agent_block_reason, case_block_reason,
     )
-    from app.models.customer import Customer as CustomerModel
-
     my_agents = (
         db.query(Agent).join(Agent.user)
         .filter(Agent.manager_user_id == current_user.id)
@@ -677,12 +674,11 @@ def unallocated_cases(current_user: ManagerOnly, db: DbSession):
             reason, detail = "NO_AGENT_ON_DUTY", "No agent in your team is on duty."
         elif not any(agent_block_reason(a, customer) is None for a in on_duty):
             reason = "NO_ELIGIBLE_AGENT"
-            detail = (
-                "This customer must be visited by a female agent, and none in your "
-                "team is recorded as female."
-                if customer is not None and customer.requires_female_agent
-                else "No agent in your team is permitted to take this case."
-            )
+            # Deliberately does not say WHY an agent is ineligible. The only
+            # current reason is the customer's female-agent requirement, and
+            # agent gender is not a manager's to see — surfacing it here would
+            # let the person whose workload the rule blocks work around it.
+            detail = "No agent in your team can be assigned to this customer."
         elif all(a.max_cases_per_day <= 0 for a in on_duty):
             reason, detail = "NO_CAPACITY", "Every agent is at their daily case limit."
         else:
@@ -699,17 +695,6 @@ def unallocated_cases(current_user: ManagerOnly, db: DbSession):
             "detail": detail,
         })
 
-    # How many customers the female-agent rule would strand right now. Counted
-    # across the whole book, not just unassigned cases, because it is a staffing
-    # question and it will not surface on its own until allocation night.
-    female_on_duty = sum(
-        1 for a in on_duty if (a.gender or "").strip().lower() in {"f", "female", "woman"}
-    )
-    needs_female = (
-        db.query(func.count(CustomerModel.id))
-        .filter(CustomerModel.requires_female_agent.is_(True)).scalar() or 0
-    )
-
     counts: dict[str, int] = {}
     for r in rows:
         counts[r["reason"]] = counts.get(r["reason"], 0) + 1
@@ -718,12 +703,6 @@ def unallocated_cases(current_user: ManagerOnly, db: DbSession):
         "cases": sorted(rows, key=lambda r: (r["reason"] != "AWAITING_ALLOCATION", r["case_number"]), reverse=True),
         "counts": counts,
         "total": len(rows),
-        "staffing": {
-            "female_agents_on_duty": female_on_duty,
-            "customers_requiring_female_agent": int(needs_female),
-            # True when the rule is currently unsatisfiable for anyone.
-            "female_coverage_gap": female_on_duty == 0 and needs_female > 0,
-        },
         "blocked_reasons": {
             "DO_NOT_CONTACT": BLOCKED_DO_NOT_CONTACT,
             "REQUIRES_FEMALE_AGENT": BLOCKED_NEEDS_FEMALE_AGENT,
@@ -1015,6 +994,131 @@ def agents_performance(
     return {
         "months": month_list,
         "agents": result,
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /manager/fraud-alerts
+# ---------------------------------------------------------------------------
+# Anomalies in field-visit evidence the app already collects. See
+# services/fraud_service.py for what each check means and why the thresholds
+# are set where they are.
+
+@router.get("/fraud-alerts")
+def fraud_alerts(
+    current_user: ManagerOnly,
+    db: DbSession,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    include_dismissed: bool = False,
+):
+    from app.services.fraud_service import FraudService
+
+    my_agent_ids = [
+        a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()
+    ]
+
+    def _parse(raw: Optional[str], label: str):
+        if not raw:
+            return None
+        try:
+            return datetime.strptime(raw, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=422, detail=f"{label} must be YYYY-MM-DD")
+
+    return FraudService(db).scan(
+        my_agent_ids,
+        date_from=_parse(date_from, "date_from"),
+        date_to=_parse(date_to, "date_to"),
+        include_dismissed=include_dismissed,
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /manager/fraud-alerts/review
+# ---------------------------------------------------------------------------
+# A manager's verdict on one anomaly. Confirmed findings stay visible; dismissed
+# ones drop out of the default view but are never deleted — a dismissal is
+# itself a decision someone may need to answer for later.
+#
+# Writes an AuditLog row. This is the first place in the codebase that does:
+# AuditLog declares 21 action types and only three were ever emitted. A judgement
+# about an agent's conduct is exactly the kind of act the table exists for.
+
+# _BM is declared further down this file, next to the status endpoint; import
+# the base directly rather than move an existing definition.
+from pydantic import BaseModel as _ReviewBase
+
+
+class _ReviewBody(_ReviewBase):
+    visit_id: str
+    finding_type: str
+    verdict: str                       # CONFIRMED | DISMISSED
+    note: Optional[str] = None
+
+
+@router.post("/fraud-alerts/review")
+def review_fraud_alert(body: _ReviewBody, current_user: ManagerOnly, db: DbSession):
+    from app.models.audit_log import AuditAction, AuditLog
+    from app.models.fraud_review import FraudReview, ReviewVerdict
+    from app.models.visit import Visit as VisitModel
+
+    verdict = (body.verdict or "").strip().upper()
+    if verdict not in {v.value for v in ReviewVerdict}:
+        raise HTTPException(status_code=422, detail="verdict must be CONFIRMED or DISMISSED")
+
+    # Ownership is proved through the visit's agent, so a manager cannot record
+    # a verdict about someone else's team.
+    visit = (
+        db.query(VisitModel)
+        .join(Agent, Agent.id == VisitModel.agent_id)
+        .filter(VisitModel.id == body.visit_id, Agent.manager_user_id == current_user.id)
+        .first()
+    )
+    if not visit:
+        raise HTTPException(status_code=404, detail="Visit not found")
+
+    existing = (
+        db.query(FraudReview)
+        .filter(FraudReview.visit_id == body.visit_id,
+                FraudReview.finding_type == body.finding_type)
+        .first()
+    )
+    previous = existing.verdict.value if existing else None
+    if existing:
+        existing.verdict = ReviewVerdict(verdict)
+        existing.note = body.note
+        existing.reviewed_by_user_id = current_user.id
+        existing.reviewed_at = datetime.now(timezone.utc)
+        review = existing
+    else:
+        review = FraudReview(
+            visit_id=body.visit_id, finding_type=body.finding_type,
+            agent_id=visit.agent_id, verdict=ReviewVerdict(verdict),
+            note=body.note, reviewed_by_user_id=current_user.id,
+        )
+        db.add(review)
+
+    db.add(AuditLog(
+        created_at=datetime.now(timezone.utc),
+        user_id=current_user.id,
+        action=AuditAction.ANOMALY_REVIEWED,
+        entity_type="visit",
+        entity_id=body.visit_id,
+        details={"finding_type": body.finding_type, "agent_id": visit.agent_id,
+                 "note": body.note},
+        old_values={"verdict": previous} if previous else None,
+        new_values={"verdict": verdict},
+        success=True,
+    ))
+    db.commit()
+
+    return {
+        "visit_id": body.visit_id,
+        "finding_type": body.finding_type,
+        "verdict": verdict,
+        "note": review.note,
+        "previous_verdict": previous,
     }
 
 
@@ -2198,59 +2302,6 @@ def update_agent_status(
 # button, which previously just showed a toast claiming "emergency services
 # notified" with nothing actually sent (see changelog.md, 2026-07-15).
 # ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
-# PUT /manager/agents/{agent_id}/gender
-# ---------------------------------------------------------------------------
-# Lets a manager record an agent's gender, which is what makes
-# Customer.requires_female_agent enforceable at all. Added 2026-08-19 with the
-# eligibility rules: the column existed but nothing could write to it, so the
-# rule was correct code that could never fire.
-#
-# Ownership IS checked here. The neighbouring PUT .../status does not check it
-# and lets any manager change any agent's duty state — a known defect scheduled
-# separately; this endpoint deliberately does not copy that shape.
-
-class _GenderBody(_BM):
-    gender: Optional[str] = None       # "M" | "F" | "OTHER" | null to clear
-
-
-_ALLOWED_GENDERS = {"M", "F", "OTHER"}
-
-
-@router.put("/agents/{agent_id}/gender")
-def update_agent_gender(
-    agent_id: str,
-    body: _GenderBody,
-    current_user: ManagerOnly,
-    db: DbSession,
-):
-    value = (body.gender or "").strip().upper() or None
-    if value is not None and value not in _ALLOWED_GENDERS:
-        raise HTTPException(
-            status_code=422,
-            detail=f"gender must be one of {sorted(_ALLOWED_GENDERS)}, or null to clear",
-        )
-
-    agent = (
-        db.query(Agent)
-        .join(Agent.user)
-        .filter(Agent.id == agent_id, Agent.manager_user_id == current_user.id)
-        .options(joinedload(Agent.user))
-        .first()
-    )
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
-
-    agent.gender = value
-    db.commit()
-    return {
-        "agent_id": agent.id,
-        "employee_code": agent.employee_code,
-        "full_name": agent.user.full_name if agent.user else None,
-        "gender": agent.gender,
-    }
-
 
 @router.post("/agents/{agent_id}/sos/acknowledge")
 def acknowledge_agent_sos(

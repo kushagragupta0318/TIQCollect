@@ -33,7 +33,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { Search, MapPin, AlertTriangle, Phone, ChevronDown, ChevronUp, ChevronsUpDown, Brain, Shuffle, X, Loader2, TrendingUp, TrendingDown, Minus, IndianRupee } from "lucide-react";
 import { toast } from "react-hot-toast";
-import { getAgents, getAgentInsight, getReallocationPlan, updateAgentStatus, acknowledgeAgentSos, setAgentGender } from "@/api/manager";
+import { getAgents, getAgentInsight, getReallocationPlan, updateAgentStatus, acknowledgeAgentSos } from "@/api/manager";
 import type { AgentInsight, ReallocationPlan } from "@/api/manager";
 import { Input } from "@/components/ui/Input";
 import { TierBadge } from "@/components/ui/Badge";
@@ -620,7 +620,6 @@ function AgentRow({
             <span className="text-xs badge badge-gray px-2.5 py-1">{agent.specialization}</span>
             <span className="text-xs badge badge-gray px-2.5 py-1">Max {agent.max_cases_per_day} cases/day</span>
           </div>
-          <GenderControl agent={agent} />
           <div className="flex gap-2 mt-3 flex-wrap">
             <button
               onClick={() => {
@@ -1302,68 +1301,3 @@ function ReallocationModal({ plan, onClose }: { plan: ReallocationPlan; onClose:
     </div>
   );
 }
-
-/** Records an agent's gender.
- *
- *  Some customers may only be visited by a female agent — the bank tells us
- *  which. That requirement has been in the system since the beginning and could
- *  never be honoured, because nothing recorded whether an agent was female.
- *  This is the control that fills that gap.
- *
- *  Unrecorded is deliberately NOT treated as female by the allocator, so
- *  leaving this blank withholds those cases rather than risking a wrong visit.
- */
-function GenderControl({ agent }: { agent: Agent }) {
-  const [value, setValue] = useState<string | null>(agent.gender ?? null);
-  const [saving, setSaving] = useState(false);
-
-  async function choose(next: "M" | "F" | "OTHER" | null) {
-    if (saving || next === value) return;
-    const previous = value;
-    setValue(next);                       // optimistic
-    setSaving(true);
-    try {
-      await setAgentGender(agent.id, next);
-      toast.success(next ? `Recorded as ${LABELS[next]}` : "Gender cleared");
-    } catch {
-      setValue(previous);
-      toast.error("Could not save — try again");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <div className="mt-3">
-      <div className="flex items-center gap-2 flex-wrap">
-        <span className="text-[11px] font-semibold uppercase" style={{ color: "#8A8C94", letterSpacing: "0.04em" }}>
-          Gender
-        </span>
-        {(["F", "M", "OTHER"] as const).map((g) => (
-          <button
-            key={g}
-            onClick={() => choose(value === g ? null : g)}
-            disabled={saving}
-            aria-pressed={value === g}
-            className="tap-target text-xs px-3 py-1 rounded-xl font-semibold transition"
-            style={{
-              background: value === g ? "#2563EB" : "#FFFFFF",
-              color:      value === g ? "#FFFFFF" : "#3A3C44",
-              border:     `1px solid ${value === g ? "#2563EB" : "rgba(0,0,0,0.12)"}`,
-              opacity: saving ? 0.6 : 1,
-            }}
-          >
-            {LABELS[g]}
-          </button>
-        ))}
-      </div>
-      {value === null && (
-        <p className="text-[11.5px] mt-1.5" style={{ color: "#B45309" }}>
-          Not recorded — this agent cannot be sent to customers who require a female agent.
-        </p>
-      )}
-    </div>
-  );
-}
-
-const LABELS: Record<string, string> = { F: "Female", M: "Male", OTHER: "Other" };

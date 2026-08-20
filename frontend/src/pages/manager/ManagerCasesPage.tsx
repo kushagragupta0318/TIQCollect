@@ -161,6 +161,28 @@ function CaseDetailModal({ caseId, onClose }: { caseId: string; onClose: () => v
                 </InfoRow>
               </div>
 
+              {/* Visiting restrictions the bank set on this customer. Allocation
+                  already refuses to assign past these, but a manager can move a
+                  case by hand — so the constraint has to be visible here too. */}
+              {(detail.customer.requires_female_agent || detail.customer.do_not_contact) && (
+                <div className="flex flex-wrap gap-2 mt-3">
+                  {detail.customer.do_not_contact && (
+                    <span className="text-[11.5px] font-semibold px-2.5 py-1 rounded-lg"
+                          style={{ background: "rgba(220,38,38,0.10)", color: "#991B1B",
+                                   border: "1px solid rgba(220,38,38,0.25)" }}>
+                      Do not contact
+                    </span>
+                  )}
+                  {detail.customer.requires_female_agent && (
+                    <span className="text-[11.5px] font-semibold px-2.5 py-1 rounded-lg"
+                          style={{ background: "rgba(180,83,9,0.10)", color: "#7C3E00",
+                                   border: "1px solid rgba(180,83,9,0.25)" }}>
+                      Female agent required
+                    </span>
+                  )}
+                </div>
+              )}
+
               {/* Financial summary */}
               <div className="mt-4 grid grid-cols-3 gap-2 sm:gap-3">
                 <AmountCard label="Target" amount={detail.target_amount} color="text-slate-900" />
