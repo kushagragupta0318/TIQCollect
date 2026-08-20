@@ -36,6 +36,7 @@ import { useAnimatedValue } from "@/hooks/useAnimatedValue";
 import { useParams, useNavigate } from "react-router";
 import { ArrowLeft, Phone, Navigation, Calendar, MapPin, CheckCircle, MessageCircle, Lock, Unlock, Sparkles, RefreshCw, Clock, AlertTriangle, TrendingUp, Zap, PhoneCall, X, ShieldCheck, Send } from "lucide-react";
 import { toast } from "react-hot-toast";
+import { AiBadge } from "@/components/ui/AiBadge";
 import { getCaseDetail, flagCustomer, handoverCase, getVisitStrategy, logCall, notifyCase, reoptimizeBeat, sendPaymentOtp, verifyPaymentOtp, type VisitStrategyBrief, type LogCallPayload } from "@/api/agent";
 import { useVoiceCall } from "@/hooks/useVoiceCall";
 import CallModal from "@/components/ui/CallModal";
@@ -568,6 +569,7 @@ export default function AgentCaseDetailPage() {
               <div className="flex items-center gap-2">
                 <Sparkles className="w-4 h-4 text-brand-600" />
                 <h2 className="text-sm font-semibold text-slate-800">AI Visit Strategy</h2>
+                <AiBadge aiGenerated={strategy?.ai_generated} status={strategy?.ai_status} />
               </div>
               {strategy && !strategyLoading && (
                 <button

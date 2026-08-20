@@ -38,6 +38,14 @@ export async function getHomeSummary(): Promise<{
   return data;
 }
 
+/** Ends the working day. Takes no coordinates: check-in captures a position
+ *  because it starts the day's record and anchors the geo-fence, but clocking
+ *  off needs no such proof. */
+export async function checkOut(): Promise<{ status: string; message: string }> {
+  const { data } = await api.post("/agent/checkout");
+  return data;
+}
+
 export async function checkIn(latitude: number, longitude: number): Promise<{ status: string; message: string }> {
   const { data } = await api.post("/agent/checkin", { latitude, longitude });
   return data;
@@ -358,6 +366,11 @@ export interface VisitStrategyBrief {
   opening_line: string;
   generated_at: string;
   case_id: string;
+  /** False when the rule-based brief produced this rather than the model. An
+   *  agent deciding how to open a conversation should know which they hold. */
+  ai_generated?: boolean;
+  ai_status?: string;
+  ai_failure_reason?: string | null;
 }
 
 export async function getVisitStrategy(caseId: string): Promise<VisitStrategyBrief> {

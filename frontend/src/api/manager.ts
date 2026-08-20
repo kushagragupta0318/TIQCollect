@@ -225,6 +225,8 @@ export interface PTPRiskItem {
 }
 
 export interface BriefingData {
+  ai_generated?: boolean;
+  ai_status?: string;
   generated_at: string;
   headline: string;
   key_insight: string;
@@ -253,6 +255,9 @@ export interface BriefingData {
 }
 
 export interface AgentInsight {
+  /** False when the written-in fallback produced this rather than the model. */
+  ai_generated?: boolean;
+  ai_status?: string;
   agent_id: string;
   performance_signal: "IMPROVING" | "DECLINING" | "STABLE";
   insight_text: string;
@@ -403,6 +408,13 @@ export interface MonthlyReport {
   month: string;
   scope: string;
   report_text: string;
+  /** False when the computed fallback wrote this rather than the model. */
+  ai_generated?: boolean;
+  ai_status?: string;
+  /** The model that actually answered. Rendered instead of a hardcoded name —
+   *  the page displayed "GPT-4o-mini" long after that stopped being true. */
+  ai_model?: string | null;
+  ai_provider?: string | null;
 }
 
 export async function getMonthlyReport(month: string, agentId?: string): Promise<MonthlyReport> {

@@ -111,6 +111,7 @@ from sqlalchemy.orm import joinedload
 import structlog
 
 from app.core.dependencies import DbSession, AgentOnly
+from app.core import llm
 from app.core.config import settings
 from app.models.agent import Agent, AgentStatus
 from app.models.beat import Beat
@@ -310,6 +311,17 @@ def checkin(req: CheckInRequest, current_user: AgentOnly, db: DbSession):
     from app.services.agent_service import AgentService
     agent = _get_agent_or_404(current_user, db)
     return AgentService(db).checkin(agent, req)
+
+
+# ---------------------------------------------------------------------------
+# POST /agent/checkout
+# ---------------------------------------------------------------------------
+
+@router.post("/checkout", response_model=CheckInResponse)
+def checkout(current_user: AgentOnly, db: DbSession):
+    from app.services.agent_service import AgentService
+    agent = _get_agent_or_404(current_user, db)
+    return AgentService(db).checkout(agent)
 
 
 # ---------------------------------------------------------------------------
@@ -943,28 +955,21 @@ Based on all the above, generate a visit strategy brief. Respond ONLY with a val
   "opening_line": "a natural opening sentence the agent should say in Hindi or Hinglish to open the conversation warmly"
 }}"""
 
-    # ── Call OpenAI ───────────────────────────────────────────────────────────
+    # ── Ask the model ─────────────────────────────────────────────────────────
+    # 2026-08-19 — routed through core/llm.py. The rule-based fallback below is
+    # unchanged; what is new is that the agent is TOLD which one they are
+    # reading. Someone standing at a door deciding how to open a conversation
+    # should know whether their brief came from a model or from a rule.
     strategy: dict = {}
-
-    if settings.OPENAI_API_KEY:
-        try:
-            from openai import OpenAI
-            client = OpenAI(api_key=settings.OPENAI_API_KEY)
-            resp = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.4,
-                max_tokens=600,
-                response_format={"type": "json_object"},
-            )
-            raw = resp.choices[0].message.content or "{}"
-            strategy = _json.loads(raw)
-        except Exception as exc:
-            # Fall through to rule-based fallback
-            strategy = {"_llm_error": str(exc)}
+    _llm = llm.complete(
+        prompt, purpose="visit_strategy", json_mode=True,
+        temperature=0.4, max_tokens=1500,
+    )
+    if _llm.ai_generated:
+        strategy = _llm.data
 
     # ── Rule-based fallback ───────────────────────────────────────────────────
-    if not strategy or "_llm_error" in strategy:
+    if not strategy:
         # Derive best_time from most recent call log with timing intel
         best_time = "No timing intel — try morning 9–11 AM"
         for cl in call_logs:
@@ -992,6 +997,10 @@ Based on all the above, generate a visit strategy brief. Respond ONLY with a val
 
     strategy["generated_at"] = _dt.now(timezone.utc).isoformat()
     strategy["case_id"] = case_id
+    # Which of the two the agent is actually looking at.
+    strategy["ai_generated"] = _llm.ai_generated
+    strategy["ai_status"] = _llm.status
+    strategy["ai_failure_reason"] = _llm.failure_reason
     return strategy
 
 

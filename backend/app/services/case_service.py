@@ -30,6 +30,7 @@ from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
+from app.core import llm
 from app.core.config import settings
 from app.core.routing import optimize_route
 from app.models.agent import Agent
@@ -396,11 +397,12 @@ class CaseService:
         for i, row in enumerate(scored, 1):
             row["rank"] = i
 
-        # Single LLM call — one-line reason for top 8 non-blocked cases
-        if settings.OPENAI_API_KEY:
+        # Single LLM call — one-line reason for top 8 non-blocked cases.
+        # 2026-08-19 — routed through core/llm.py. These reasons are cosmetic, so
+        # a failure must never cost the agent their ranked list: the list is
+        # returned either way and the reasons are simply absent.
+        if True:
             try:
-                from openai import OpenAI
-                client = OpenAI(api_key=settings.OPENAI_API_KEY)
                 eligible = [r for r in scored if r["rank_score"] > -999][:8]
                 if eligible:
                     lines = []
@@ -424,20 +426,16 @@ class CaseService:
                         dpd = r.get("loan", {}).get("dpd", 0)
                         lines.append(f"{i}. {r['customer']['full_name']} | DPD {dpd} | {', '.join(signals) or 'standard follow-up'}")
 
-                    resp = client.chat.completions.create(
-                        model="gpt-4o-mini",
-                        messages=[{"role": "user", "content": (
-                            "Generate a one-line visit priority reason (max 10 words, specific, actionable) for each case. "
-                            "Return ONLY JSON mapping number to reason.\n\nCases:\n" + "\n".join(lines) +
-                            '\n\nFormat: {"1": "reason", "2": "reason", ...}'
-                        )}],
-                        response_format={"type": "json_object"},
-                        max_tokens=300,
-                        temperature=0.3,
+                    result = llm.complete(
+                        "Generate a one-line visit priority reason (max 10 words, specific, actionable) for each case. "
+                        "Return ONLY JSON mapping number to reason.\n\nCases:\n" + "\n".join(lines) +
+                        '\n\nFormat: {"1": "reason", "2": "reason", ...}',
+                        purpose="case_ranking", json_mode=True,
+                        max_tokens=900, temperature=0.3,
                     )
-                    reasons = _json.loads(resp.choices[0].message.content)
-                    for i, r in enumerate(eligible, 1):
-                        r["rank_reason"] = reasons.get(str(i), "")
+                    if result.ai_generated:
+                        for i, r in enumerate(eligible, 1):
+                            r["rank_reason"] = result.data.get(str(i), "")
             except Exception:
                 pass
 

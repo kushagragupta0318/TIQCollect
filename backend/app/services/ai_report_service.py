@@ -10,7 +10,7 @@ manager/command-centre), via OpenAI.
 """
 from __future__ import annotations
 
-from app.core.config import settings
+from app.core import llm
 from app.models.case import Case
 from app.models.visit import Visit
 
@@ -18,13 +18,13 @@ from app.models.visit import Visit
 class AIReportService:
     @staticmethod
     def generate_visit_report(visit: Visit, case: Case) -> str | None:
-        """Call OpenAI to generate a 100-150 word audit report for this visit."""
-        if not settings.OPENAI_API_KEY:
-            return None
-        try:
-            from openai import OpenAI
-            client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        """A 100-150 word audit report for this visit, or None.
 
+        2026-08-19 — routed through core/llm.py. Returning None on failure is
+        unchanged, but the failure is now classified and logged instead of being
+        swallowed by a bare except.
+        """
+        try:
             outcome_labels = {
                 "PAID_FULL": "Full payment collected",
                 "PART_PAID": "Partial payment collected",
@@ -99,12 +99,9 @@ class AIReportService:
                 f"Exclude irrelevant or redundant details. Do NOT use headings or bullet points — "
                 f"write a single continuous paragraph.\n\nData: {context}"
             )
-            resp = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=250,
-                temperature=0.4,
+            result = llm.complete(
+                prompt, purpose="visit_report", max_tokens=250, temperature=0.4,
             )
-            return resp.choices[0].message.content.strip()
+            return result.text if result.ai_generated and result.text else None
         except Exception:
             return None

@@ -17,6 +17,7 @@ import {
   getAnalytics, getAgentsPerformance,
   getManagerAgentCalendar, getAgentDPDBreakdown, getTeamDPDBreakdown, getTeamAttendance, getMonthlyReport,
 } from "@/api/manager";
+import { AiBadge } from "@/components/ui/AiBadge";
 import type {
   AnalyticsData, AgentsPerformanceData, AgentPerfEntry, AgentMonthlyPerf,
   AgentAvailabilityCalendar, AgentCalendarDay, AgentDPDRow, TeamAttendance,
@@ -1195,7 +1196,10 @@ function MonthlyReportSection({ months, selectedAgent, preSelectedMonth }: { mon
   const defaultMonth = months[months.length - 2] ?? months[months.length - 1] ?? "";
   const [month, setMonth] = useState(defaultMonth);
   const [loading, setLoading] = useState(false);
-  const [report, setReport] = useState<{ text: string; month: string; scope: string } | null>(null);
+  const [report, setReport] = useState<{
+    text: string; month: string; scope: string;
+    aiGenerated?: boolean; aiStatus?: string; model?: string | null;
+  } | null>(null);
 
   useEffect(() => { setReport(null); }, [selectedAgent?.agent_id]);
   useEffect(() => {
@@ -1209,7 +1213,10 @@ function MonthlyReportSection({ months, selectedAgent, preSelectedMonth }: { mon
     setLoading(true);
     try {
       const data = await getMonthlyReport(month, selectedAgent?.agent_id);
-      setReport({ text: data.report_text, month: data.month, scope: data.scope });
+      setReport({
+        text: data.report_text, month: data.month, scope: data.scope,
+        aiGenerated: data.ai_generated, aiStatus: data.ai_status, model: data.ai_model,
+      });
     } catch {
       toast.error("Could not generate report");
     } finally {
@@ -1283,9 +1290,16 @@ function MonthlyReportSection({ months, selectedAgent, preSelectedMonth }: { mon
               style={{ background: "#F5F6F9", color: "#6B6D76" }}>
               {report.scope}
             </span>
-            <span className="text-xs px-2 py-0.5 rounded-full font-semibold ml-auto"
-              style={{ background: "rgba(124,58,237,0.06)", color: "#9333ea" }}>
-              GPT-4o-mini
+            {/* The model that actually answered, not a name typed in once and
+                left to rot. Shows the fallback badge instead when no model did. */}
+            <span className="ml-auto flex items-center gap-2">
+              <AiBadge aiGenerated={report.aiGenerated} status={report.aiStatus} />
+              {report.aiGenerated !== false && report.model && (
+                <span className="text-xs px-2 py-0.5 rounded-full font-semibold"
+                  style={{ background: "rgba(124,58,237,0.06)", color: "#9333ea" }}>
+                  {report.model}
+                </span>
+              )}
             </span>
           </div>
           <p className="text-sm leading-loose" style={{ color: "#1f2937", whiteSpace: "pre-line" }}>

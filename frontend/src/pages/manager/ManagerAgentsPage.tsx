@@ -33,6 +33,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { Search, MapPin, AlertTriangle, Phone, ChevronDown, ChevronUp, ChevronsUpDown, Brain, Shuffle, X, Loader2, TrendingUp, TrendingDown, Minus, IndianRupee } from "lucide-react";
 import { toast } from "react-hot-toast";
+import { AiBadge } from "@/components/ui/AiBadge";
 import { getAgents, getAgentInsight, getReallocationPlan, updateAgentStatus, acknowledgeAgentSos } from "@/api/manager";
 import type { AgentInsight, ReallocationPlan } from "@/api/manager";
 import { Input } from "@/components/ui/Input";
@@ -1110,6 +1111,7 @@ function AgentInsightStrip({ insight }: { insight: AgentInsight }) {
           <Brain className="w-3 h-3 text-primary" />
         </div>
         <span className="text-xs font-bold" style={{ color: "#1C1C1F" }}>AI Performance Analysis</span>
+        <AiBadge aiGenerated={insight.ai_generated} status={insight.ai_status} />
         <span
           className="ml-auto flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded-full"
           style={{ background: signalConfig.bg, color: signalConfig.color, border: `1px solid ${signalConfig.border}` }}

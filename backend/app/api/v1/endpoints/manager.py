@@ -31,6 +31,7 @@ from sqlalchemy.orm import joinedload
 
 from app.core.dependencies import DbSession, ManagerOnly
 from app.core.config import settings
+from app.core import llm as _llm
 from app.ml import eligibility as _elig
 from app.models.agent import Agent, AgentStatus, AgentPerformance
 from app.core import storage
@@ -998,6 +999,21 @@ def agents_performance(
 
 
 # ---------------------------------------------------------------------------
+# GET /manager/ai/health
+# ---------------------------------------------------------------------------
+# Which provider and model are actually in use, whether a key is present, and a
+# rolling count of outcomes per feature. Added 2026-08-19 because six AI
+# features could fail four different ways and every one of them looked
+# identical from the outside: a written-in answer, served silently.
+#
+# Never returns the key itself, only whether one is set.
+
+@router.get("/ai/health")
+def ai_health(current_user: ManagerOnly):
+    return _llm.health()
+
+
+# ---------------------------------------------------------------------------
 # GET /manager/fraud-alerts
 # ---------------------------------------------------------------------------
 # Anomalies in field-visit evidence the app already collects. See
@@ -1713,9 +1729,8 @@ def ai_briefing(current_user: ManagerOnly, db: DbSession, refresh: bool = False)
     key_insight = f"{agents_on_duty}/{total_agents} agents on duty. {len(stalled_agents)} agent(s) yet to start field visits today."
     recommended_actions: list[dict] = []
 
+    _brief_llm = None
     try:
-        import openai as _oai, os as _os, json as _json
-        _client = _oai.OpenAI(api_key=_os.getenv("OPENAI_API_KEY"))
         _ctx = {
             "collection_pct_now": collection_pct_now,
             "projected_eod_pct": round(projected_eod_pct, 1),
@@ -1732,23 +1747,20 @@ def ai_briefing(current_user: ManagerOnly, db: DbSession, refresh: bool = False)
             "escalated_cases": escalated_count,
             "pending_first_visit": pending_first_visit,
         }
-        _resp = _client.chat.completions.create(
-            model="gpt-4o-mini",
-            response_format={"type": "json_object"},
-            temperature=0.25,
-            max_tokens=500,
-            messages=[
-                {"role": "system", "content": (
-                    "You are a collections agency AI operations analyst. Return JSON with: "
-                    "headline (1 sentence, data-specific numbers), "
-                    "key_insight (2 sentences identifying the most critical performance pattern with numbers), "
-                    "recommended_actions (array of up to 3 objects: {action, impact: HIGH|MEDIUM, urgency: NOW|TODAY}). "
-                    "Prioritise decisions that directly increase collection rate and prevent PTP failures. Be specific."
-                )},
-                {"role": "user", "content": f"Operational data: {_ctx}"},
-            ],
+        _brief_llm = _llm.complete(
+            f"Operational data: {_ctx}",
+            purpose="briefing", json_mode=True, temperature=0.25, max_tokens=1200,
+            system=(
+                "You are a collections agency AI operations analyst. Return JSON with: "
+                "headline (1 sentence, data-specific numbers), "
+                "key_insight (2 sentences identifying the most critical performance pattern with numbers), "
+                "recommended_actions (array of up to 3 objects: {action, impact: HIGH|MEDIUM, urgency: NOW|TODAY}). "
+                "Prioritise decisions that directly increase collection rate and prevent PTP failures. Be specific."
+            ),
         )
-        _parsed = _json.loads(_resp.choices[0].message.content)
+        if not _brief_llm.ai_generated:
+            raise RuntimeError(_brief_llm.status)   # take the fallback below
+        _parsed = _brief_llm.data
         headline = _parsed.get("headline", headline)
         key_insight = _parsed.get("key_insight", key_insight)
         recommended_actions = _parsed.get("recommended_actions", [])[:3]
@@ -1763,6 +1775,9 @@ def ai_briefing(current_user: ManagerOnly, db: DbSession, refresh: bool = False)
 
     data = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        # Whether the model wrote this or the computed fallback did.
+        "ai_generated": bool(_brief_llm and _brief_llm.ai_generated),
+        "ai_status": _brief_llm.status if _brief_llm else "NOT_CONFIGURED",
         "headline": headline,
         "key_insight": key_insight,
         "recommended_actions": recommended_actions,
@@ -1992,8 +2007,7 @@ def agent_ai_insight(agent_id: str, current_user: ManagerOnly, db: DbSession):
     performance_signal = trend
 
     try:
-        import openai as _oai, os as _os, json as _json
-        _client = _oai.OpenAI(api_key=_os.getenv("OPENAI_API_KEY"))
+        import json as _json  # noqa: F401  — still used further down
         _ctx = {
             "agent_name": agent_name,
             "tier": agent.tier if agent else "TIER_2",
@@ -2028,13 +2042,10 @@ def agent_ai_insight(agent_id: str, current_user: ManagerOnly, db: DbSession):
             },
             "case_portfolio_by_dpd": case_mix_dict,
         }
-        _resp = _client.chat.completions.create(
-            model="gpt-4o-mini",
-            response_format={"type": "json_object"},
-            temperature=0.25,
-            max_tokens=450,
-            messages=[
-                {"role": "system", "content": (
+        _insight_llm = _llm.complete(
+            f"Agent data: {_ctx}",
+            purpose="agent_insight", json_mode=True, temperature=0.25, max_tokens=1200,
+            system=(
                     "You are a collections operations analyst. Analyse a field agent's full performance profile. "
                     "Return JSON with exactly these keys: "
                     "performance_signal (IMPROVING/DECLINING/STABLE). Base this ONLY on "
@@ -2048,12 +2059,12 @@ def agent_ai_insight(agent_id: str, current_user: ManagerOnly, db: DbSession):
                     "recommended_action (1 concrete, specific action the manager should take THIS WEEK "
                     "to improve this agent's output — e.g. coaching, case reallocation, territory change, "
                     "shadowing a top performer, reducing NPA case load). "
-                    "Be analytically precise, not generic."
-                )},
-                {"role": "user", "content": f"Agent data: {_ctx}"},
-            ],
+                "Be analytically precise, not generic."
+            ),
         )
-        _parsed = _json.loads(_resp.choices[0].message.content)
+        if not _insight_llm.ai_generated:
+            raise RuntimeError(_insight_llm.status)
+        _parsed = _insight_llm.data
         performance_signal = _parsed.get("performance_signal", trend)
         insight_text = _parsed.get("insight_text", insight_text)
         recommended_action = _parsed.get("recommended_action", recommended_action)
@@ -2062,6 +2073,8 @@ def agent_ai_insight(agent_id: str, current_user: ManagerOnly, db: DbSession):
 
     return {
         "agent_id": agent_id,
+        "ai_generated": bool(locals().get("_insight_llm") and _insight_llm.ai_generated),
+        "ai_status": _insight_llm.status if locals().get("_insight_llm") else "NOT_CONFIGURED",
         "performance_signal": performance_signal,
         "insight_text": insight_text,
         "recommended_action": recommended_action,
@@ -2783,19 +2796,20 @@ def get_monthly_report(
                 + scope_stats
             )
 
-    _oai_key = settings.OPENAI_API_KEY
-    report_text = scope_stats  # rich fallback if no key
-    if _oai_key:
-        try:
-            client = _openai.OpenAI(api_key=_oai_key)
-            resp = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=200,
-                temperature=0.3,
-            )
-            report_text = (resp.choices[0].message.content or "").strip()
-        except Exception:
-            pass
+    report_text = scope_stats  # rich fallback when the model cannot answer
+    _report_llm = _llm.complete(
+        prompt, purpose="monthly_report", max_tokens=900, temperature=0.3,
+    )
+    if _report_llm.ai_generated and _report_llm.text:
+        report_text = _report_llm.text
 
-    return {"month": month, "scope": scope, "report_text": report_text}
+    return {
+        "month": month, "scope": scope, "report_text": report_text,
+        "ai_generated": _report_llm.ai_generated,
+        "ai_status": _report_llm.status,
+        "ai_failure_reason": _report_llm.failure_reason,
+        # Returned so the page stops printing a hardcoded model name. It had
+        # said "GPT-4o-mini" since long after that stopped being true.
+        "ai_model": _report_llm.model or None,
+        "ai_provider": _report_llm.provider or None,
+    }

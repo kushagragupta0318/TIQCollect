@@ -222,6 +222,46 @@ class Settings(BaseSettings):
     def sos_contacts_list(self) -> List[str]:
         return [c.strip() for c in self.SOS_EMERGENCY_CONTACTS.split(",") if c.strip()]
 
+    # ── LLM provider (2026-08-19) ────────────────────────────────────────
+    # Six product features call an LLM. They all hardcoded gpt-4o-mini and
+    # silently served a written-in answer when the key was missing, so a dead
+    # integration was indistinguishable from a working one. See core/llm.py.
+    #
+    # "groq" | "openai" | "none". Groq is OpenAI-compatible, so both run through
+    # the same SDK and differ only by base_url and model name.
+    LLM_PROVIDER: str = "groq"
+    GROQ_API_KEY: str = ""
+    GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
+
+    # Deliberately configuration, never a literal in the call sites. Groq retires
+    # models at short notice; a stale name must surface as MODEL_NOT_FOUND on the
+    # health endpoint rather than as a silent fallback nobody notices.
+    # Verified against the live key on 2026-08-19. The Llama models this was
+    # first pointed at return 404 on this account, and of the models actually
+    # served, gpt-oss-120b is the only one that honours JSON mode — which four
+    # of the six call sites depend on. gpt-oss-20b and qwen3.6-27b answer prose
+    # fine but error on response_format.
+    LLM_MODEL: str = "openai/gpt-oss-120b"
+    # Used when LLM_PROVIDER=openai, so switching provider does not also require
+    # remembering to change the model.
+    LLM_MODEL_OPENAI: str = "gpt-4o-mini"
+
+    # gpt-oss is a reasoning model: it spends output budget thinking before it
+    # answers, which truncated JSON mid-object and made Groq reject it with a
+    # 400 json_validate_failed. These are structured-extraction prompts, not
+    # problems needing deep reasoning, so "low" is both more reliable and
+    # measurably faster. Empty string omits the parameter entirely, for models
+    # and providers that do not accept it.
+    LLM_REASONING_EFFORT: str = "low"
+
+    LLM_TIMEOUT_SECONDS: float = 20.0
+    # Retries apply to rate limits and transient upstream errors only — never to
+    # an auth failure or an unknown model, which retrying cannot fix.
+    LLM_MAX_RETRIES: int = 2
+    # Answers are cached by (purpose, model, prompt). Not an optimisation: Groq's
+    # limits are tight, and the same question was previously billed every time.
+    LLM_CACHE_TTL_SECONDS: int = 3600
+
     # Fraud / anomaly detection (2026-08-19)
     # Thresholds are deliberately conservative. A detector that cries wolf is
     # worse than none: it teaches the manager to dismiss the panel, and then the
