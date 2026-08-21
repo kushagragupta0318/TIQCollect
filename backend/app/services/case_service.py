@@ -52,6 +52,12 @@ _PRIORITY_ORDER = {
     CasePriority.MEDIUM: 2, CasePriority.LOW: 3,
 }
 
+# Cases where the collection question is closed. No repayment score is shown
+# for these — see _repayment_block.
+_RESOLVED_STATUSES = frozenset({
+    CaseStatus.PAID, CaseStatus.CLOSED, CaseStatus.WRITTEN_OFF,
+})
+
 
 class CaseService:
     def __init__(self, db: Session):
@@ -456,6 +462,20 @@ class CaseService:
         """
         if case.loan is None:
             return None
+
+        # Nothing to decide about a case that is already settled. The score
+        # answers "how should I approach this visit"; on a PAID, CLOSED or
+        # WRITTEN_OFF case there is no visit, and showing "63/100 — Uncertain"
+        # beside "100% collected · Case resolved" reads as the product
+        # contradicting itself. The loan is still scored for the nightly
+        # snapshot — that is about the borrower, not this case — but the agent
+        # is not asked to act on it.
+        #
+        # ESCALATED is deliberately NOT here: it is still open, still visitable,
+        # and the manager reviewing it has more use for the reasoning, not less.
+        if case.status in _RESOLVED_STATUSES:
+            return None
+
         try:
             from datetime import date as _date
 

@@ -461,11 +461,50 @@ class CaseDetailPTPItem(BaseModel):
     customer_reason: Optional[str] = None
 
 
+class RepaymentFactorItem(BaseModel):
+    """One line of the score's reasoning — or a stated abstention.
+
+    A factor with no evidence carries `abstained` and a `reason` and NO points.
+    That distinction has to survive serialisation: rendering an abstention as a
+    contribution of zero puts a reason in front of an agent that the scorecard
+    never gave.
+    """
+    code: str
+    direction: Optional[str] = None
+    points: Optional[float] = None
+    summary: Optional[str] = None
+    evidence: Optional[dict] = None
+    abstained: Optional[bool] = None
+    reason: Optional[str] = None
+
+
+class RepaymentScoreItem(BaseModel):
+    likelihood: float
+    risk_score: float
+    band: str
+    risk_category: str
+    source: str
+    model_version: str
+    # False for a hand-weighted scorecard, true only for a trained model. Kept
+    # on the wire so the UI cannot present one as the other.
+    is_modelled: bool
+    # False when too little evidence spoke to justify showing a number.
+    is_confident: bool
+    evidence_coverage: float
+    as_of: str
+    factors: list[RepaymentFactorItem]
+
+
 class CaseDetailResponse(CaseSummaryResponse):
     visits: list[CaseVisitHistoryItem]
     photos: list[CasePhotoItem]
     payments: list[CaseDetailPaymentItem]
     ptps: list[CaseDetailPTPItem]
+    # Declared, or FastAPI silently drops it. The service computed this block
+    # correctly and response_model filtering discarded it before it reached the
+    # wire — no error, no log, just a missing key. Anything case_detail() adds
+    # from here on needs a field here too.
+    repayment: Optional[RepaymentScoreItem] = None
 
 
 class HomeSummaryResponse(BaseModel):
