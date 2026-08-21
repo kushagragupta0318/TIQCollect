@@ -918,66 +918,55 @@ def agents_performance(
         .all()
     )
 
-    perf_rows = (
-        db.query(
-            AgentPerformance.agent_id,
-            AgentPerformance.month,
-            AgentPerformance.total_collected,
-            AgentPerformance.total_visits,
-            AgentPerformance.ptps_set,
-            AgentPerformance.ptps_honored,
-            AgentPerformance.collection_rate,
-            AgentPerformance.ranking_score,
-            AgentPerformance.tier,
-        )
-        .filter(
-            AgentPerformance.agent_id.in_([a.Agent.id for a in my_agents]),
-            AgentPerformance.month.in_(month_list),
-        )
-        .all()
-    )
-
-    # Index by (agent_id, month)
-    perf_idx: dict[tuple, dict] = {}
-    for r in perf_rows:
-        perf_idx[(r.agent_id, r.month)] = {
-            "collected": float(r.total_collected or 0),
-            "visits": r.total_visits or 0,
-            "ptps_set": r.ptps_set or 0,
-            "ptps_honored": r.ptps_honored or 0,
-            "collection_rate": float(r.collection_rate or 0),
-            "ranking_score": float(r.ranking_score or 0),
-            "tier": r.tier,
-        }
-
-    # Total target per agent (all-time from cases)
-    target_rows = (
-        db.query(Case.agent_id, func.sum(Case.target_amount), func.sum(Case.collected_amount))
-        .filter(Case.agent_id.in_([a.Agent.id for a in my_agents]))
-        .group_by(Case.agent_id)
-        .all()
-    )
-    agent_totals = {r[0]: {"target": float(r[1] or 0), "collected": float(r[2] or 0)} for r in target_rows}
+    # 2026-08-21 — This endpoint used to read AgentPerformance for `monthly`,
+    # and it was showing FABRICATED numbers on the Analytics chart. That table
+    # is written once a month by take_monthly_snapshot; on a seeded box the rows
+    # exist only because seed_data.py invented them
+    # (`sim_visits * random.uniform(8000, 45000)`). For agent002 it claimed 538
+    # visits across six months against 127 real ones, and ₹102.7L collected
+    # against ₹6.7L actually received — while the headline tiles on the SAME
+    # response showed the real figures. One endpoint, two sources, a 13x gap.
+    #
+    # Worse, the per-month target was `collected / rate` — one invented number
+    # divided by another. That is the same "divide the figure by itself" defect
+    # already fixed on the trend line and the agent gauge; it survived here.
+    #
+    # Now uses _live_monthly_metrics, the same helper behind GET /manager/agents
+    # and GET /manager/analytics, so all three pages answer from one definition:
+    # collected = VERIFIED payments dated in the month, target = the target of
+    # the cases actually visited that month.
+    perf_idx = _live_monthly_metrics(db, [a.Agent.id for a in my_agents], month_list)
 
     result = []
     for agent, full_name in my_agents:
+        by_month = perf_idx.get(agent.id, {})
         monthly = []
         for m in month_list:
-            p = perf_idx.get((agent.id, m), {})
-            rate_val = p.get("collection_rate", 0)
-            collected_val = p.get("collected", 0.0)
-            target_val = round(collected_val / rate_val) if rate_val > 0 else 0
+            p = by_month.get(m) or {}
+            collected_val = float(p.get("collected", 0.0))
+            target_val = float(p.get("target", 0.0))
             monthly.append({
                 "month": m,
-                "collected": collected_val,
-                "target": target_val,
-                "visits": p.get("visits", 0),
-                "ptps_set": p.get("ptps_set", 0),
-                "ptps_honored": p.get("ptps_honored", 0),
-                "collection_rate_pct": round(rate_val * 100, 1),
+                "collected": round(collected_val, 2),
+                "target": round(target_val, 2),
+                "visits": int(p.get("visits", 0)),
+                "ptps_set": int(p.get("ptps_set", 0)),
+                "ptps_honored": int(p.get("ptps_honored", 0)),
+                # Rate comes from the helper, which computes it the one way the
+                # rest of the product does: collected / target, 0 when nothing
+                # was visited. Never collected / collected.
+                "collection_rate_pct": p.get("rate_pct", 0.0),
             })
 
-        totals = agent_totals.get(agent.id, {"target": 0.0, "collected": 0.0})
+        # Totals are the SUM OF THE MONTHS shown, not an all-time figure from
+        # a different source. The headline and the chart under it now describe
+        # the same window; previously they could not have agreed even in
+        # principle, because one was six months of live data and the other was
+        # every case ever, counting unverified money.
+        totals = {
+            "target": round(sum(r["target"] for r in monthly), 2),
+            "collected": round(sum(r["collected"] for r in monthly), 2),
+        }
         result.append({
             "agent_id": agent.id,
             "agent_name": full_name,

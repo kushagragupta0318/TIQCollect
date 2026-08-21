@@ -1646,10 +1646,21 @@ def seed():
                             agent_id=visit_agent_id,
                             amount=amount,
                             mode=random.choice(PAYMENT_MODES),
-                            status=random.choices(
-                                [PaymentStatus.VERIFIED, PaymentStatus.PENDING_VERIFICATION],
-                                weights=[75, 25]
-                            )[0],
+                            # HISTORICAL payments are VERIFIED. 2026-08-21: this
+                            # used to be a 75/25 coin flip, and it left money
+                            # permanently unverified in past months with nothing
+                            # to ever confirm it — the manager pages count
+                            # VERIFIED only, so agent002 showed 0% collection in
+                            # May and July despite collecting ₹10,092 and
+                            # ₹39,386 in those months. In production someone
+                            # chases an unconfirmed payment; in a seed it just
+                            # sits there making a real collection look like none.
+                            #
+                            # Unverified money is still demoed — deliberately,
+                            # on the bank-portal case — but as a chosen example
+                            # rather than a quarter of all history.
+                            status=PaymentStatus.VERIFIED,
+                            verified_at=visit_date,
                             receipt_number=f"RCP{random.randint(10000000, 99999999)}",
                             payment_date=visit_date,
                             receipt_sms_sent=True,
@@ -2695,7 +2706,21 @@ def seed():
                     visit_id=v.id, agent_id=act_agent.id,
                     amount=cash,
                     mode=random.choice([PaymentMode.CASH, PaymentMode.UPI, PaymentMode.NEFT]),
-                    status=PaymentStatus.PENDING_VERIFICATION,
+                    # VERIFIED, like every other seeded payment block.
+                    #
+                    # This line used to say PENDING_VERIFICATION, and it made a
+                    # freshly seeded box look broken: the manager Overview counts
+                    # VERIFIED payments only, so on day zero it showed 0% for
+                    # every agent except agent002 — whose ONE payment is
+                    # hand-written as VERIFIED further up. Sixteen agents had
+                    # collected money and the leaderboard read zero.
+                    #
+                    # Unverified money is a real state worth demoing, but it
+                    # belongs to a case or two chosen on purpose (there is
+                    # already one at the bank-portal block), not to every
+                    # payment the whole team took today.
+                    status=PaymentStatus.VERIFIED,
+                    verified_at=cin + timedelta(minutes=12),
                     receipt_number=f"RCPT-DAY-{rcpt_num:04d}",
                     payment_date=cin + timedelta(minutes=10),
                 ))
