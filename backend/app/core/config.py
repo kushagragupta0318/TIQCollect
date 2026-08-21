@@ -346,7 +346,17 @@ class Settings(BaseSettings):
     # Share of the scorecard's total weight that must have had evidence before
     # a NUMBER is shown rather than just a band. Silence is not evidence, and a
     # confident-looking figure resting on two factors is worse than no figure.
-    REPAYMENT_MIN_COVERAGE_TO_SHOW: float = 0.5
+    #
+    # 0.55 is DERIVED, not chosen for roundness. The six factors that are almost
+    # always available (delinquency 30 + arrears 10 + bureau 8 + security 6 +
+    # last-payment 5 + segment 4) total 63 of 124 = 0.5081 on their own, so the
+    # previous 0.5 floor could never catch a borrower about whom nothing
+    # BEHAVIOURAL was known — and on 2026-08-21, 17 of 18 such customers sailed
+    # through it into LOW. Adding the cheapest behavioural factor
+    # (contactability, 12) reaches 0.6048. Any floor in (0.5081, 0.6048] forces
+    # at least one behavioural signal; 0.55 sits mid-band so a small weight
+    # change cannot silently flip the property.
+    REPAYMENT_MIN_COVERAGE_TO_SHOW: float = 0.55
     # How long after a score we wait before deciding what the borrower did.
     # 30 days is one billing cycle — long enough for a promise to come due.
     REPAYMENT_OUTCOME_HORIZON_DAYS: int = 30

@@ -92,8 +92,17 @@ export interface Customer {
   state: string;
   latitude: number;
   longitude: number;
-  risk_category: RiskCategory;
-  risk_score: number;
+  // The agent API sends these with a LEADING UNDERSCORE. schemas/agent.py
+  // declares them under plain names with the underscore key as the alias, and
+  // FastAPI's response_model_by_alias=True default means the alias is what
+  // goes on the wire. Declaring them here without the underscore claimed a
+  // field that never arrives — `case.customer.risk_score` typechecked fine and
+  // was `undefined` at runtime. Fixed 2026-08-21 by correcting the TYPE, not
+  // the wire: changing the alias would break the agent response contract to
+  // fix a field nothing renders.
+  _risk_category?: RiskCategory;
+  _risk_score?: number;
+  _fraud_flag?: boolean;
   cibil_score: number | null;
   is_hostile: boolean;
   language_preference: string;

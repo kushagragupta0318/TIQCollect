@@ -26,9 +26,15 @@ That third copy is stale but not worthless: `.github/workflows/ci.yml` and
 `backend/scripts/add_recovery_potential.py` came from it. Anything else needed from
 it must be copied by hand — the histories cannot be merged.
 
-**Remotes: none, deliberately.** This repo is local-only. Do **not** push it to
-`transorg-engineering` — the owner ruled that out on 2026-08-17. If a remote is
-wanted it goes to a personal account, and only on explicit instruction.
+**Remote: one, personal.** `origin` is
+`github.com/sanyasirao-col/TIQCollect-product` — the owner's own account. Do
+**not** push to `transorg-engineering`; that was ruled out on 2026-08-17 and
+still is. Pushing to the personal remote is fine on explicit instruction, which
+is how `TIQCollect-v1` came to exist (2026-08-21).
+
+*(This block used to read "Remotes: none, deliberately — this repo is
+local-only." That stopped being true some time before 2026-08-21 and misled
+anyone reading it; corrected rather than deleted so the change is visible.)*
 
 Command Center (in the platform monorepo) consumes this service's
 `/api/v1/manager/*` endpoints through a per-agency service login. Its

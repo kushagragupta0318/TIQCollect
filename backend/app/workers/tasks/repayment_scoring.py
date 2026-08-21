@@ -55,8 +55,18 @@ def run_nightly_repayment_scoring(self, dry_run: bool = False):
             write_risk_score_enabled=settings.REPAYMENT_WRITE_RISK_SCORE,
             reprice_open_cases_enabled=settings.REPAYMENT_REPRICE_OPEN_CASES,
         )
-        result = RepaymentService(db).rescore(as_of=date.today(), dry_run=dry_run)
+        service = RepaymentService(db)
+        today = date.today()
+        result = service.rescore(as_of=today, dry_run=dry_run)
+
+        # Labelling and pruning run AFTER scoring and only on a real run.
+        # Order matters: scoring may write today's snapshot, and the labeller
+        # only ever touches rows older than the outcome horizon, so the two
+        # cannot collide. Pruning last, so a row labelled this minute is never
+        # a candidate for deletion in the same pass.
         if not dry_run:
+            result["labelling"] = service.attach_outcomes(as_of=today)
+            result["pruning"] = service.prune_snapshots(as_of=today)
             db.commit()
         logger.info("repayment_scoring.complete", **{
             k: v for k, v in result.items() if k != "distribution"})

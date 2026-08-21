@@ -42,13 +42,15 @@ from app.core.config import settings
 from app.ml.repayment_scorecard import (
     SCORECARD_VERSION, risk_category_for, score as scorecard_score,
 )
-from app.models.case import Case
+from app.models.case import Case, CaseStatus
 from app.models.customer import Customer, RiskCategory
 from app.models.loan import Loan
 from app.models.payment import Payment
 from app.models.ptp import PTP, PTPStatus
 from app.models.repayment_snapshot import (
-    RepaymentSnapshot, SOURCE_SCORECARD, TRIGGER_NIGHTLY,
+    OUTCOME_CENSORED, OUTCOME_NO_PAYMENT, OUTCOME_PARTIAL, OUTCOME_REPAID,
+    OUTCOME_SOURCE_INFERRED, OUTCOME_SOURCE_PAYMENT, RepaymentSnapshot,
+    SOURCE_SCORECARD, TRIGGER_NIGHTLY,
 )
 from app.models.visit import Visit, VisitOutcome
 
@@ -73,6 +75,13 @@ _RESOLVED_PTP = frozenset({
     PTPStatus.PARTIALLY_HONORED, PTPStatus.EXPIRED,
 })
 _KEPT_PTP = frozenset({PTPStatus.HONORED, PTPStatus.PARTIALLY_HONORED})
+
+# Case states where "no money arrived" is NOT the borrower declining to pay.
+# A recall, a write-off or an administrative close is the bank's own decision;
+# a model trained on those as negatives learns to blame the borrower for them.
+_CENSORING_STATUSES = frozenset({
+    CaseStatus.CLOSED, CaseStatus.WRITTEN_OFF, CaseStatus.ESCALATED,
+})
 
 # This system's own outputs. Feeding any of them back in trains a model to
 # predict itself, which reads as near-perfect accuracy and is worth nothing.
@@ -513,6 +522,117 @@ class RepaymentService:
         logger.info("repayment.rescore.complete", **{
             k: v for k, v in result.items() if k != "distribution"})
         return result
+
+    # ── Labelling ────────────────────────────────────────────────────────────
+    def attach_outcomes(self, as_of: date | None = None) -> dict[str, Any]:
+        """Fill in what the borrower actually did, one horizon after the score.
+
+        ingest_daily.py already labels from the bank's own `bank_action`, and
+        that always wins — it is the bank's word, not our inference. This fills
+        the rest in from our payment ledger.
+
+        Only snapshots older than the horizon are touched: labelling a
+        three-day-old score NO_PAYMENT would record "did not pay" about a
+        borrower who simply has not had time to.
+        """
+        if self.db is None:
+            raise RuntimeError("attach_outcomes needs a database session")
+
+        as_of = as_of or date.today()
+        horizon = settings.REPAYMENT_OUTCOME_HORIZON_DAYS
+        cutoff = as_of - timedelta(days=horizon)
+
+        due = (
+            self.db.query(RepaymentSnapshot)
+            .filter(RepaymentSnapshot.outcome.is_(None),
+                    RepaymentSnapshot.as_of_date <= cutoff)
+            .all()
+        )
+        if not due:
+            return {"examined": 0, "labelled": 0, "by_outcome": {}}
+
+        # One query for every payment that could matter, rather than one per row.
+        case_ids = {r.case_id for r in due if r.case_id}
+        loan_ids = {r.loan_id for r in due}
+        cases_by_loan: dict[str, list[Case]] = {}
+        for case in self.db.query(Case).filter(Case.loan_id.in_(loan_ids)).all():
+            cases_by_loan.setdefault(case.loan_id, []).append(case)
+            case_ids.add(case.id)
+
+        payments_by_case: dict[str, list[Payment]] = {}
+        if case_ids:
+            for pay in self.db.query(Payment).filter(
+                    Payment.case_id.in_(case_ids)).all():
+                payments_by_case.setdefault(pay.case_id, []).append(pay)
+
+        counts: dict[str, int] = {}
+        labelled = 0
+        for row in due:
+            outcome, amount = self._infer_outcome(
+                row, cases_by_loan.get(row.loan_id, []), payments_by_case)
+            if outcome is None:
+                continue
+            row.outcome = outcome
+            row.outcome_amount = amount
+            row.outcome_source = OUTCOME_SOURCE_PAYMENT if amount else OUTCOME_SOURCE_INFERRED
+            row.outcome_observed_at = as_of
+            row.outcome_horizon_days = horizon
+            row.feature_age_days = (as_of - row.as_of_date).days
+            counts[outcome] = counts.get(outcome, 0) + 1
+            labelled += 1
+
+        logger.info("repayment.labeller.complete", examined=len(due),
+                    labelled=labelled, by_outcome=counts)
+        return {"examined": len(due), "labelled": labelled, "by_outcome": counts}
+
+    @staticmethod
+    def _infer_outcome(row: RepaymentSnapshot, cases: list[Case],
+                       payments_by_case: dict[str, list[Payment]]):
+        """(outcome, amount) for one snapshot, or (None, None) to leave it alone.
+
+        Payments are counted in the window AFTER the score, never before — the
+        question is what the borrower did next, not what they had already done.
+        """
+        start = row.as_of_date
+        end = start + timedelta(days=settings.REPAYMENT_OUTCOME_HORIZON_DAYS)
+
+        target = 0.0
+        received = 0.0
+        for case in cases:
+            target += float(case.target_amount or 0.0)
+            for pay in payments_by_case.get(case.id, []):
+                if pay.payment_date and start < pay.payment_date.date() <= end:
+                    received += float(pay.amount or 0.0)
+
+        if received > 0:
+            if target > 0 and received >= target * settings.REPAYMENT_FULL_RATIO:
+                return OUTCOME_REPAID, round(received, 2)
+            return OUTCOME_PARTIAL, round(received, 2)
+
+        # Nothing received. Distinguish "chose not to pay" from "the case was
+        # taken off the table for a reason that is not the borrower's doing" —
+        # the second is CENSORED and must never train as a negative.
+        if cases and all(c.status in _CENSORING_STATUSES for c in cases):
+            return OUTCOME_CENSORED, None
+        return OUTCOME_NO_PAYMENT, None
+
+    def prune_snapshots(self, as_of: date | None = None) -> dict[str, Any]:
+        """Age out UNLABELLED snapshots. Labelled rows are never pruned at any
+        age — they are the training set, which is the entire point of the table.
+        """
+        if self.db is None:
+            raise RuntimeError("prune_snapshots needs a database session")
+        as_of = as_of or date.today()
+        cutoff = as_of - timedelta(days=settings.REPAYMENT_SNAPSHOT_RETENTION_DAYS)
+        deleted = (
+            self.db.query(RepaymentSnapshot)
+            .filter(RepaymentSnapshot.outcome.is_(None),
+                    RepaymentSnapshot.as_of_date < cutoff)
+            .delete(synchronize_session=False)
+        )
+        logger.info("repayment.snapshots.pruned", deleted=deleted,
+                    cutoff=str(cutoff))
+        return {"deleted": deleted, "cutoff": cutoff.isoformat()}
 
     # ── Bulk loading ─────────────────────────────────────────────────────────
     def _load(self, loan_ids: list[str] | None):

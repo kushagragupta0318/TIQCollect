@@ -16,8 +16,9 @@ from types import SimpleNamespace as NS
 from app.core.config import settings
 from app.ml.eligibility import _SECURED, _UNSECURED
 from app.ml.repayment_scorecard import (
+    _DPD_ENTRY, _DPD_FLOOR,
     BAND_LIKELY, FACTOR_CONDUCT, FACTOR_LEGAL_POSTURE, FACTOR_PROMISE_HISTORY,
-    FACTOR_SECURITY, LIKELIHOOD_BAND_EDGES, MAX_LIKELIHOOD, MIN_LIKELIHOOD,
+    FACTOR_DELINQUENCY_DEPTH, FACTOR_SECURITY, LIKELIHOOD_BAND_EDGES, MAX_LIKELIHOOD, MIN_LIKELIHOOD,
     NO_PTP_HISTORY, RISK_BAND_EDGES, TOTAL_WEIGHT, band_for, risk_category_for,
     risk_score_from, score,
 )
@@ -88,6 +89,55 @@ def test_low_risk_is_reachable():
 def test_likelihood_is_non_increasing_in_dpd():
     values = [score(features(dpd=d))["likelihood"] for d in SEEDED_DPD]
     assert all(a >= b for a, b in zip(values, values[1:])), values
+
+
+def test_delinquency_is_penalty_only():
+    """v1.1.0. On a collections book every account is delinquent by definition,
+    so being 42 days late is not a virtue. v1.0.0 put the neutral point at 90
+    DPD and handed +16 to borrowers merely six weeks overdue — which is how 55%
+    of the LOW band came to rest on a positive delinquency term, and how 18
+    customers reached LOW with no behavioural evidence at all."""
+    for dpd in SEEDED_DPD:
+        pts = _codes(score(features(dpd=dpd)))[FACTOR_DELINQUENCY_DEPTH]["points"]
+        assert pts <= 0, f"dpd={dpd} scored {pts:+}, delinquency must never reward"
+
+
+def test_delinquency_is_zero_at_the_entry_point_and_full_at_the_floor():
+    """Read from the constants, so the scale survives a deliberate edge change."""
+    assert _codes(score(features(dpd=int(_DPD_ENTRY))))[
+        FACTOR_DELINQUENCY_DEPTH]["points"] == 0.0
+    assert _codes(score(features(dpd=int(_DPD_FLOOR))))[
+        FACTOR_DELINQUENCY_DEPTH]["points"] == -30.0
+    assert _codes(score(features(dpd=400)))[
+        FACTOR_DELINQUENCY_DEPTH]["points"] == -30.0     # clamped
+
+
+def test_low_now_requires_behavioural_evidence():
+    """The whole point of the 1.1.0 change. A borrower about whom nothing
+    behavioural is known can no longer reach LOW on delinquency alone."""
+    blind = score(NS(dpd=42, cibil_score=676, emi_amount=852.0,
+                     overdue_amount=1704.0, loan_type=LoanType.AUTO,
+                     last_payment_amount=675.0, customer_segment="SELF_EMPLOYED"))
+    assert blind["risk_category"] != "LOW"
+    assert blind["evidence_coverage"] < settings.REPAYMENT_MIN_COVERAGE_TO_SHOW
+
+
+def test_coverage_floor_sits_above_the_non_behavioural_ceiling():
+    """DERIVED, not chosen. The six always-available factors total 63 of 124 =
+    0.508 on their own, so a 0.5 floor could never catch a borrower with zero
+    behavioural evidence — 17 of 18 such customers sailed through it on
+    2026-08-21. The floor must exceed that ceiling and must not exceed what one
+    behavioural factor buys, or it would reject borrowers who DO have evidence."""
+    from app.ml.repayment_scorecard import (
+        _W_ARREARS, _W_BUREAU, _W_CONTACT, _W_DELINQUENCY, _W_LAST_PAYMENT,
+        _W_SECURITY, _W_SEGMENT,
+    )
+    ceiling = (_W_DELINQUENCY + _W_ARREARS + _W_BUREAU + _W_SECURITY
+               + _W_LAST_PAYMENT + _W_SEGMENT) / TOTAL_WEIGHT
+    with_one = (ceiling * TOTAL_WEIGHT + _W_CONTACT) / TOTAL_WEIGHT
+    floor = settings.REPAYMENT_MIN_COVERAGE_TO_SHOW
+    assert ceiling < floor <= with_one, (
+        f"floor {floor} must sit in ({ceiling:.4f}, {with_one:.4f}]")
 
 
 def test_dpd_alone_does_not_determine_the_score():

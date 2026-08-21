@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import structlog
 from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
@@ -41,6 +42,8 @@ from app.models.customer import Customer
 from app.models.ptp import PTP, PTPStatus
 from app.models.visit import Visit
 from app.services.media_service import MediaService
+
+logger = structlog.get_logger()
 
 _URGENT_WINDOW_SECONDS = 45 * 60
 
@@ -444,6 +447,31 @@ class CaseService:
     # -----------------------------------------------------------------
     # GET /agent/cases/{case_id}
     # -----------------------------------------------------------------
+    def _repayment_block(self, case: Case) -> dict | None:
+        """The repayment likelihood for this case's loan, with its reasons.
+
+        Returns None rather than raising if anything is missing or the scorer
+        misbehaves: an agent standing at a door must still get their case
+        detail. A missing score degrades the page; an exception loses it.
+        """
+        if case.loan is None:
+            return None
+        try:
+            from datetime import date as _date
+
+            from app.services.repayment_service import RepaymentService
+
+            svc = RepaymentService(self.db)
+            outcome = svc.score_loan(
+                case.loan, case.customer, _date.today(),
+                cases=[case], visits=list(case.visits or []),
+                ptps=list(case.ptps or []), payments=list(case.payments or []),
+            )
+            return svc.to_payload(outcome)
+        except Exception as exc:                      # noqa: BLE001
+            logger.warning("repayment_block.failed", case_id=case.id, error=str(exc))
+            return None
+
     def case_detail(self, agent: Agent, case_id: str) -> dict:
         from app.api.v1.endpoints.agent import _format_case
 
@@ -463,6 +491,18 @@ class CaseService:
             raise HTTPException(status_code=404, detail="Case not found or not assigned to you")
 
         base = _format_case(case)
+
+        # Repayment likelihood, computed live for this one loan rather than read
+        # from the nightly snapshot. The snapshot is a point-in-time record for
+        # training; what an agent needs at the doorstep is the CURRENT picture,
+        # including the visit they logged an hour ago. Scoring one loan is cheap;
+        # this is deliberately not done on the case LIST, which would score the
+        # whole book on every page load.
+        #
+        # Decision support only. It carries no verdict and gates nothing —
+        # eligibility lives in ml/eligibility.py. See repayment_service.py.
+        base["repayment"] = self._repayment_block(case)
+
         # Resolve agent names for visit history (may include prior agents)
         visit_agent_ids = {v.agent_id for v in case.visits}
         agent_names: dict[str, str] = {}

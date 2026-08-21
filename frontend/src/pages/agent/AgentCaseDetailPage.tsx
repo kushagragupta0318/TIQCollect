@@ -37,6 +37,7 @@ import { useParams, useNavigate } from "react-router";
 import { ArrowLeft, Phone, Navigation, Calendar, MapPin, CheckCircle, MessageCircle, Lock, Unlock, Sparkles, RefreshCw, Clock, AlertTriangle, TrendingUp, Zap, PhoneCall, X, ShieldCheck, Send } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { AiBadge } from "@/components/ui/AiBadge";
+import { RepaymentScore, type RepaymentScoreData } from "@/components/ui/RepaymentScore";
 import { getCaseDetail, flagCustomer, handoverCase, getVisitStrategy, logCall, notifyCase, reoptimizeBeat, sendPaymentOtp, verifyPaymentOtp, type VisitStrategyBrief, type LogCallPayload } from "@/api/agent";
 import { useVoiceCall } from "@/hooks/useVoiceCall";
 import CallModal from "@/components/ui/CallModal";
@@ -48,6 +49,9 @@ import OtpInput from "@/components/ui/OtpInput";
 import { haversineM } from "@/lib/geo";
 
 interface CaseDetail {
+  // Repayment likelihood, computed live per case by case_service.
+  // Optional: the block degrades to null rather than failing the page.
+  repayment?: RepaymentScoreData | null;
   id: string; case_number: string; status: string; priority: string;
   target_amount: number; collected_amount: number; visit_count: number;
   max_visits_allowed: number; is_escalated: boolean; allocation_date: string | null;
@@ -380,6 +384,11 @@ export default function AgentCaseDetailPage() {
                 agent by handover or manual reassignment — so the person at the door
                 needs to see it, not just the scheduler. */}
             {c.customer.requires_female_agent && <AlertBanner icon="🚫" color="danger" message="Female agent required — do not visit; hand this case back to your manager" />}
+            {/* Repayment likelihood. Sits BELOW the eligibility banners on
+                purpose: do-not-contact and female-agent are instructions, this
+                is only a steer on how to approach the conversation. It never
+                tells an agent to skip a visit. */}
+            {c.repayment && <RepaymentScore data={c.repayment} />}
             {activePTP && (
               <div className="card border-brand-200 bg-brand-50 flex items-center justify-between">
                 <div className="flex items-center gap-2">

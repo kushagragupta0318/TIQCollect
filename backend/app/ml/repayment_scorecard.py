@@ -37,7 +37,13 @@ from app.ml.eligibility import _SECURED, _UNSECURED
 # Bumped whenever a weight, a band edge or a factor definition changes. Stamped
 # onto every snapshot row, so a score can always be traced to the rules that
 # produced it. A weight change is a model change; it must not be silent.
-SCORECARD_VERSION = "scorecard-1.0.0"
+# 1.1.0 (2026-08-21): delinquency became penalty-only. The 90-DPD neutral point
+# was rewarding borrowers for being merely forty days late on a book where every
+# account is delinquent by definition. Bumping the version is not optional — it
+# is stamped on every snapshot, and rows written under 1.0.0 answer a different
+# question from rows written under 1.1.0. A model trained across both without
+# filtering on model_version would be learning two scorecards at once.
+SCORECARD_VERSION = "scorecard-1.1.0"
 
 # ── Direction ────────────────────────────────────────────────────────────────
 # The product concept is a LIKELIHOOD: higher is better. Customer.risk_score is
@@ -168,7 +174,12 @@ DEFAULT_MIN_PTPS = 2
 DEFAULT_MIN_VISITS = 2
 
 # Reference points, each with a reason rather than a round number.
-_DPD_NEUTRAL = 90.0     # the RBI NPA line — the industry's own cut
+# Still the RBI NPA line, and still used to half-weight legal posture past it.
+# It is NO LONGER the delinquency neutral point — see _delinquency_depth.
+_DPD_NEUTRAL = 90.0
+# The shallowest account that reaches field collections. Scores 0, not a bonus:
+# arriving here at all is not evidence of willingness to pay.
+_DPD_ENTRY = 30.0
 _DPD_FLOOR = 180.0      # beyond this, further ageing tells us little new
 _ARREARS_FLOOR = 6.0    # six months of missed EMIs — a structural position
 _CIBIL_MIN, _CIBIL_MAX = 300.0, 900.0   # the CIBIL scale
@@ -268,10 +279,25 @@ def _f(features, name, default=None):
 # absence of evidence is never a finding.
 
 def _delinquency_depth(f):
+    """Penalty only. Delinquency can never earn a borrower points.
+
+    v1.0.0 mapped DPD onto [+30, -30] with a neutral point at 90 (the RBI NPA
+    line), which is right for a general lending book and wrong for this one.
+    Every account here is already delinquent: the book's median is 72 DPD and
+    68% of it sits below 90, so most borrowers were being REWARDED for being
+    only forty-odd days late. Measured on the live book, that put 24.8% of
+    customers in LOW, and 55% of that band depended on the positive term.
+
+    On a collections book the question is never "is this borrower delinquent"
+    — they all are — but "how deep". So the scale runs from 0 at the shallowest
+    account that reaches field collections down to the full penalty at
+    _DPD_FLOOR. Willingness to pay has to be earned from behaviour instead.
+    """
     dpd = _f(f, "dpd")
     if dpd is None:
         return None
-    points = _linear(float(dpd), 0.0, _DPD_FLOOR, _W_DELINQUENCY)
+    frac = _clamp((float(dpd) - _DPD_ENTRY) / (_DPD_FLOOR - _DPD_ENTRY), 0.0, 1.0)
+    points = round(-_W_DELINQUENCY * frac, 2)
     return points, f"{int(dpd)} days past due", {"dpd": int(dpd)}
 
 
