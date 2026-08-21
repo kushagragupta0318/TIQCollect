@@ -20,6 +20,7 @@ celery_app = Celery(
         "app.workers.tasks.transcription",
         "app.workers.tasks.demo_daily_feed",
         "app.workers.tasks.location_retention",
+        "app.workers.tasks.repayment_scoring",
     ],
 )
 
@@ -33,6 +34,20 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     task_track_started=True,
     beat_schedule={
+        # Repayment scoring at 7:45 PM IST — after the daily bank ingest
+        # (~7:30 PM, scripts/ingest_daily.py) and before allocation at 8 PM.
+        # Scoring reads what ingest just wrote; allocation reads what scoring
+        # leaves. Fifteen minutes is the whole margin, which is why the task
+        # bulk-loads rather than querying per loan.
+        #
+        # Writing Customer.risk_score is gated on REPAYMENT_WRITE_RISK_SCORE,
+        # which defaults to False. Scheduling this task does NOT turn that on:
+        # with the gate closed it scores the book and writes snapshots only, so
+        # the training set builds from now while the live column stays put.
+        "nightly-repayment-scoring": {
+            "task": "app.workers.tasks.repayment_scoring.run_nightly_repayment_scoring",
+            "schedule": crontab(hour=19, minute=45),
+        },
         # ML allocation runs at 8 PM IST every day
         "nightly-ml-allocation": {
             "task": "app.workers.tasks.allocation.run_nightly_allocation",

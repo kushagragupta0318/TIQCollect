@@ -1,3 +1,22 @@
+# ─── CHANGELOG (prototype → product) ─────────────────────────────────────────
+# 2026-08-21 — Stopped constructing Customer.risk_score here.
+#
+#   This task minted demo customers with a hand-written ladder:
+#
+#       risk = CRITICAL if dpd > 90 else HIGH if dpd > 60 else MEDIUM
+#       risk_score = 85.0 if CRITICAL else 65.0 if HIGH else 42.0
+#
+#   which made it the third independent scorer in the codebase, alongside the
+#   two in seed_data.py and ingest_daily.py that had already silently drifted
+#   apart from each other. It had the same defect as the seed's copy: no LOW
+#   branch, so a LOW customer would have been given 42.0 — a value every
+#   threshold reads as MEDIUM, contradicting its own category.
+#
+#   This feed is the demo's stand-in for the bank handing over a file, so it now
+#   follows the same rule ingest_daily.py does: create the FACTS (dpd, cibil,
+#   amounts, flags) and let services/repayment_service.py derive the score from
+#   them at the end of the run. Customer.risk_score has one authoritative source.
+# ───────────────────────────────────────────────────────────────────────────
 """
 Demo daily feed — DEMO_MODE only.
 
@@ -48,15 +67,15 @@ def _uid() -> str:
 def _core():
     """Imported lazily so importing this module never triggers a DB connect."""
     from app.core.database import SessionLocal
-    from app.models.customer import Customer, RiskCategory
+    from app.models.customer import Customer
     from app.models.loan import Loan, LoanType, DPDBucket, LoanStatus, RecoveryPotential
     from app.models.case import Case, CaseStatus, CasePriority
-    return (SessionLocal, Customer, RiskCategory, Loan, LoanType, DPDBucket,
+    return (SessionLocal, Customer, Loan, LoanType, DPDBucket,
             LoanStatus, RecoveryPotential, Case, CaseStatus, CasePriority)
 
 
 def _seed_day(db, day: date) -> int:
-    (_, Customer, RiskCategory, Loan, LoanType, DPDBucket, LoanStatus,
+    (_, Customer, Loan, LoanType, DPDBucket, LoanStatus,
      RecoveryPotential, Case, CaseStatus, CasePriority) = _core()
 
     tag = day.strftime("%Y%m%d")
@@ -68,6 +87,7 @@ def _seed_day(db, day: date) -> int:
 
     n = random.randint(NEW_CASES_MIN, NEW_CASES_MAX)
     created = 0
+    new_loan_ids: list[str] = []
     for i in range(n):
         dpd = random.choice([32, 47, 65, 88, 95, 120, 155])
         outstanding = round(random.uniform(35_000, 320_000), 2)
@@ -75,8 +95,6 @@ def _seed_day(db, day: date) -> int:
         priority = (CasePriority.CRITICAL if dpd > 90 else
                     CasePriority.HIGH if dpd > 60 else
                     CasePriority.MEDIUM if dpd > 30 else CasePriority.LOW)
-        risk = (RiskCategory.CRITICAL if dpd > 90 else
-                RiskCategory.HIGH if dpd > 60 else RiskCategory.MEDIUM)
 
         cust = Customer(
             id=_uid(), customer_ref=f"{ref_prefix}{i:02d}",
@@ -88,8 +106,10 @@ def _seed_day(db, day: date) -> int:
             city="Gurugram", state="Haryana", pincode="122001",
             latitude=round(random.uniform(*_GGN_LAT), 6),
             longitude=round(random.uniform(*_GGN_LON), 6),
-            risk_category=risk,
-            risk_score=85.0 if risk == RiskCategory.CRITICAL else 65.0 if risk == RiskCategory.HIGH else 42.0,
+            # risk_category / risk_score are NOT set here. They are derived, and
+            # services/repayment_service.py owns them — see the changelog above.
+            # The column defaults (MEDIUM, 50.0) mean "not yet scored" until the
+            # rescore call at the end of this function.
             cibil_score=520 if dpd > 60 else 600 if dpd > 30 else 650,
             language_preference="HINDI", customer_segment="SALARIED",
         )
@@ -119,6 +139,7 @@ def _seed_day(db, day: date) -> int:
         )
         db.add(loan)
         db.flush()
+        new_loan_ids.append(loan.id)
 
         case = Case(
             id=_uid(), case_number=f"{ref_prefix}C{i:02d}",
@@ -135,6 +156,31 @@ def _seed_day(db, day: date) -> int:
         created += 1
 
     db.commit()
+
+    # Score the accounts this batch created, the same way ingest_daily.py does
+    # at the end of its run. This feed is the demo's stand-in for the bank
+    # handing over a file, so it follows the same rule: create the FACTS, then
+    # let the one scorer derive the score from them.
+    #
+    # Writing Customer.risk_score is gated on REPAYMENT_WRITE_RISK_SCORE
+    # (default False), so by default this records snapshots and the new
+    # customers keep the 50.0 default — which is exactly what every other
+    # unscored customer shows.
+    if new_loan_ids:
+        from app.models.repayment_snapshot import TRIGGER_INGEST
+        from app.services.repayment_service import RepaymentService
+
+        scored = RepaymentService(db).rescore(
+            as_of=day, loan_ids=new_loan_ids, trigger=TRIGGER_INGEST,
+            changed_loan_ids=set(new_loan_ids),   # a brand-new loan is a change
+        )
+        db.commit()
+        logger.info("demo_daily_feed.scored",
+                    loans=scored["loans_scored"],
+                    snapshots=scored["snapshots_written"],
+                    customers_written=scored["customers_written"],
+                    write_gate_open=scored["write_risk_score_enabled"])
+
     logger.info("demo_daily_feed.created", day=str(day), new_cases=created)
     return created
 

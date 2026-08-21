@@ -52,9 +52,11 @@ from app.models.user import User, UserRole
 from app.models.agent import (
     Agent, AgentTier, AgentStatus, AgentSpecialization, AgentPerformance,
 )
-from app.models.customer import Customer, RiskCategory
+from app.models.customer import Customer
 from app.models.loan import Loan, LoanType, DPDBucket, LoanStatus, RecoveryPotential
 from app.models.case import Case, CaseStatus, CasePriority, EscalationReason
+from app.models.repayment_snapshot import TRIGGER_SEED
+from app.services.repayment_service import RepaymentService
 from app.models.visit import Visit, VisitOutcome, PersonMet, DefaultReason, NotMetReason
 from app.models.payment import Payment, PaymentMode, PaymentStatus
 from app.models.ptp import PTP, PTPStatus
@@ -455,13 +457,22 @@ def _dpd_to_bucket(dpd: int) -> DPDBucket:
     elif dpd <= 90:
         return DPDBucket.BUCKET_3
     return DPDBucket.NPA
-def _risk_from_dpd(dpd: int, cibil: int) -> tuple[float, RiskCategory]:
-    base = min(dpd / 90 * 60 + (750 - cibil) / 750 * 40, 100)
-    score = round(min(100, max(30, base + random.uniform(-8, 8))), 1)
-    cat = (RiskCategory.CRITICAL if score >= 80 else
-           RiskCategory.HIGH     if score >= 60 else
-           RiskCategory.MEDIUM)  # minimum MEDIUM since all are NPA
-    return score, cat
+# _risk_from_dpd was DELETED on 2026-08-21, not deprecated.
+#
+# It was one of two near-identical copies of the same formula (the other lived
+# in ingest_daily.py) and they had already drifted: this one floored the score
+# at 30, so RiskCategory.LOW was unreachable on a seeded database and
+# RiskBadge's LOW branch was dead code. It also added random.uniform(-8, 8) of
+# jitter, so the same borrower scored differently on consecutive runs and no
+# score could be reproduced from its inputs.
+#
+# Worst of all it was fed a `dpd_hint` drawn independently of the customer's
+# real loans (see [3/11] below), so the number was decorrelated from the very
+# thing it claimed to measure.
+#
+# Scoring now happens once, at [11c], through services/repayment_service.py —
+# after visits, PTPs and payments exist, because those are what the scorecard's
+# behavioural factors read.
 def _priority_from_score(score: float) -> CasePriority:
     if score >= 85: return CasePriority.CRITICAL
     if score >= 60: return CasePriority.HIGH
@@ -1324,8 +1335,11 @@ def seed():
         _zlat, _zlon, city, state = random.choice(_zone_centers)
         lat, lon = _jitter_coords(_zlat, _zlon, 1.5)  # ~1.5 km scatter within each zone
         cibil = random.randint(300, 680)  # NPA pool: lower CIBIL
-        dpd_hint = random.choices(DPD_CHOICES, DPD_WEIGHTS)[0]
-        risk_score, risk_cat = _risk_from_dpd(dpd_hint, cibil)
+        # `dpd_hint` is gone. It was drawn here, used to set risk_score, and
+        # thrown away — the customer's actual loan DPDs are drawn independently
+        # at [4/11], so the score described a delinquency belonging to no loan
+        # of theirs. Customers are now created unscored and take the column
+        # defaults; [11c] gives them a value from their own loans.
         c = Customer(
             id=_uid(),
             customer_ref=f"CUST{i+1:06d}",
@@ -1341,7 +1355,8 @@ def seed():
             city=city, state=state,
             pincode=str(random.randint(100000, 799999)),
             latitude=lat, longitude=lon,
-            risk_category=risk_cat, risk_score=risk_score,
+            # risk_category / risk_score deliberately omitted — the defaults
+            # (MEDIUM, 50.0) now mean "not yet scored" until [11c].
             cibil_score=cibil,
             language_preference=random.choice(LANGUAGES),
             customer_segment=random.choice(CUSTOMER_SEGMENTS),
@@ -1396,7 +1411,9 @@ def seed():
                 weights=[70, 20, 10]
             )[0]
         bank_risk = round(min(100, dpd / 90 * 50 + (750 - customer.cibil_score) / 450 * 50 + random.uniform(-5, 5)), 1)
-        priority_score = min(100, dpd / 90 * 40 + outstanding_principal / 500000 * 30 + customer.risk_score * 0.3)
+        # The customer.risk_score * 0.3 term is gone: at this point nothing has
+        # been scored, so it could only have contributed the unscored default.
+        priority_score = min(100, dpd / 90 * 40 + outstanding_principal / 500000 * 30)
         l = Loan(
             id=_uid(),
             loan_account_number=f"LN{random.randint(100000000, 999999999)}",
@@ -1758,69 +1775,69 @@ def seed():
         # 0 — Sector 44 (~810m — CRITICAL NPA — visited today 9:30 AM)
         {"name": "Rajesh Kumar Sharma",   "phone": "9876541001", "gender": "MALE",
          "lat": 28.4614, "lon": 77.0682, "addr1": "Plot 78-B, Sector 44",           "pin": "122003",
-         "dpd": 95,  "outstanding": 185000.0, "loan_type": LoanType.PERSONAL, "priority": CasePriority.CRITICAL, "risk": RiskCategory.CRITICAL},
+         "dpd": 95,  "outstanding": 185000.0, "loan_type": LoanType.PERSONAL, "priority": CasePriority.CRITICAL},
         # 1 — Sector 44 (~53m — in geo-fence range for visit testing)
         {"name": "Sunita Devi Agarwal",   "phone": "9876541002", "gender": "FEMALE",
          "lat": 28.455551, "lon": 77.071923, "addr1": "House 12, Sector 44",        "pin": "122003",
-         "dpd": 62,  "outstanding": 94500.0,  "loan_type": LoanType.HOME,      "priority": CasePriority.HIGH,     "risk": RiskCategory.HIGH},
+         "dpd": 62,  "outstanding": 94500.0,  "loan_type": LoanType.HOME,      "priority": CasePriority.HIGH},
         # 2 — Sector 44 (~38m — GEO-FENCE DEMO: dispute pending, unlocks visit)
         #   Showcase customer (DEMO0003). Name/phone come from .env
         #   (DEMO_CONTACT_NAME / DEMO_CONTACT_PHONE) so the demo number is a
         #   config swap, not a reseed — defaults to Balraj Singh / 8015935790.
         {"name": settings.DEMO_CONTACT_NAME, "phone": settings.DEMO_CONTACT_PHONE, "gender": "MALE",
          "lat": 28.455400, "lon": 77.071900, "addr1": "Plot 8, Sector 44",          "pin": "122003",
-         "dpd": 45,  "outstanding": 62000.0,  "loan_type": LoanType.AUTO,      "priority": CasePriority.HIGH,     "risk": RiskCategory.HIGH},
+         "dpd": 45,  "outstanding": 62000.0,  "loan_type": LoanType.AUTO,      "priority": CasePriority.HIGH},
         # 3 — Sector 44 (~50m — GEO-FENCE DEMO: partially paid, unlocks visit)
         {"name": "Priya Singh Rawat",     "phone": "9311448017", "gender": "FEMALE",
          "lat": 28.454800, "lon": 77.071300, "addr1": "Flat 2A, Sector 44",         "pin": "122003",
-         "dpd": 38,  "outstanding": 41000.0,  "loan_type": LoanType.PERSONAL,  "priority": CasePriority.MEDIUM,   "risk": RiskCategory.MEDIUM},
+         "dpd": 38,  "outstanding": 41000.0,  "loan_type": LoanType.PERSONAL,  "priority": CasePriority.MEDIUM},
         # 4 — MG Road / Sector 28 (~4.9km NE — escalated RTP — visited today 10:30 AM)
         {"name": "Deepak Verma Gupta",    "phone": "9876541005", "gender": "MALE",
          "lat": 28.4793, "lon": 77.0998, "addr1": "45 MG Road, Sector 28",          "pin": "122002",
-         "dpd": 55,  "outstanding": 33500.0,  "loan_type": LoanType.BUSINESS,  "priority": CasePriority.MEDIUM,   "risk": RiskCategory.MEDIUM},
+         "dpd": 55,  "outstanding": 33500.0,  "loan_type": LoanType.BUSINESS,  "priority": CasePriority.MEDIUM},
         # 5 — Sector 44 (~67m — in geo-fence range for visit testing)
         {"name": "Anita Kapoor Malhotra", "phone": "9876541006", "gender": "FEMALE",
          "lat": 28.454651, "lon": 77.072023, "addr1": "C-22, Sector 44",            "pin": "122003",
-         "dpd": 33,  "outstanding": 27000.0,  "loan_type": LoanType.PERSONAL,  "priority": CasePriority.LOW,      "risk": RiskCategory.MEDIUM},
+         "dpd": 33,  "outstanding": 27000.0,  "loan_type": LoanType.PERSONAL,  "priority": CasePriority.LOW},
         # 6 — Sector 44 (~72m — in geo-fence range for visit testing)
         {"name": "Suresh Chand Bansal",   "phone": "9876541007", "gender": "MALE",
          "lat": 28.455751, "lon": 77.071323, "addr1": "15, Sector 44",              "pin": "122003",
-         "dpd": 44,  "outstanding": 19500.0,  "loan_type": LoanType.GOLD,      "priority": CasePriority.LOW,      "risk": RiskCategory.MEDIUM},
+         "dpd": 44,  "outstanding": 19500.0,  "loan_type": LoanType.GOLD,      "priority": CasePriority.LOW},
         # 7 — DLF Phase 1 (~3.0km NE — NPA 120 DPD — HOSTILE — escalated legal)
         {"name": "Ramesh Lal Gupta",      "phone": "9876541008", "gender": "MALE",
          "lat": 28.4724, "lon": 77.0985, "addr1": "B-44, DLF Phase 1",              "pin": "122022",
-         "dpd": 120, "outstanding": 285000.0, "loan_type": LoanType.HOME,      "priority": CasePriority.CRITICAL, "risk": RiskCategory.CRITICAL,
+         "dpd": 120, "outstanding": 285000.0, "loan_type": LoanType.HOME,      "priority": CasePriority.CRITICAL,
          "is_hostile": True},
         # 8 — Sector 49 (~4.2km S — SMA-1 — DO NOT CONTACT (legal complaint filed))
         {"name": "Kavitha Rao Pillai",    "phone": "9876541009", "gender": "FEMALE",
          "lat": 28.4192, "lon": 77.0820, "addr1": "Flat 7C, Orchid Petals, Sector 49", "pin": "122018",
-         "dpd": 44,  "outstanding": 78000.0,  "loan_type": LoanType.PERSONAL,  "priority": CasePriority.MEDIUM,   "risk": RiskCategory.MEDIUM,
+         "dpd": 44,  "outstanding": 78000.0,  "loan_type": LoanType.PERSONAL,  "priority": CasePriority.MEDIUM,
          "do_not_contact": True},
         # 9 — Sector 44 (~67m — in geo-fence range for visit testing)
         {"name": "Vikas Kumar Pandey",    "phone": "9876541010", "gender": "MALE",
          "lat": 28.454851, "lon": 77.071023, "addr1": "D-5, Sector 44",             "pin": "122003",
-         "dpd": 72,  "outstanding": 145000.0, "loan_type": LoanType.BUSINESS,  "priority": CasePriority.HIGH,     "risk": RiskCategory.HIGH},
+         "dpd": 72,  "outstanding": 145000.0, "loan_type": LoanType.BUSINESS,  "priority": CasePriority.HIGH},
         # 10 — Sector 44 (~74m — in geo-fence range for visit testing)
         {"name": "Meena Devi Tiwari",     "phone": "9876541011", "gender": "FEMALE",
          "lat": 28.455651, "lon": 77.071123, "addr1": "Plot 7, Sector 44",          "pin": "122003",
-         "dpd": 55,  "outstanding": 89000.0,  "loan_type": LoanType.GOLD,      "priority": CasePriority.MEDIUM,   "risk": RiskCategory.MEDIUM},
+         "dpd": 55,  "outstanding": 89000.0,  "loan_type": LoanType.GOLD,      "priority": CasePriority.MEDIUM},
         # 11 — Sector 44 (~69m — in geo-fence range for visit testing)
         {"name": "Arun Prasad Singh",     "phone": "9876541012", "gender": "MALE",
          "lat": 28.454551, "lon": 77.071423, "addr1": "Flat 3C, Sector 44",         "pin": "122003",
-         "dpd": 35,  "outstanding": 52000.0,  "loan_type": LoanType.PERSONAL,  "priority": CasePriority.LOW,      "risk": RiskCategory.LOW},
+         "dpd": 35,  "outstanding": 52000.0,  "loan_type": LoanType.PERSONAL,  "priority": CasePriority.LOW},
         # 12 — Sector 47 (~2.0km SW — SMA-2 HIGH — REQUIRES FEMALE AGENT)
         {"name": "Fatima Begum Ansari",   "phone": "9876541013", "gender": "FEMALE",
          "lat": 28.4495, "lon": 77.0580, "addr1": "25-B, Sheetla Mata Road, Sector 47", "pin": "122018",
-         "dpd": 83,  "outstanding": 167000.0, "loan_type": LoanType.HOME,      "priority": CasePriority.HIGH,     "risk": RiskCategory.HIGH,
+         "dpd": 83,  "outstanding": 167000.0, "loan_type": LoanType.HOME,      "priority": CasePriority.HIGH,
          "requires_female_agent": True},
         # 13 — Sector 66 (~5.2km S — NPA 210 DPD — CRITICAL — legal notice served)
         {"name": "Rohit Kumar Singh",     "phone": "9876541014", "gender": "MALE",
          "lat": 28.4081, "lon": 77.0926, "addr1": "3rd Floor, Tower B, Sector 66",  "pin": "122101",
-         "dpd": 210, "outstanding": 425000.0, "loan_type": LoanType.HOME,      "priority": CasePriority.CRITICAL, "risk": RiskCategory.CRITICAL},
+         "dpd": 210, "outstanding": 425000.0, "loan_type": LoanType.HOME,      "priority": CasePriority.CRITICAL},
         # 14 — Sector 31 (~2.5km W — SMA-1 — handover from prev agent, IN_PROGRESS)
         {"name": "Seema Agarwal Joshi",   "phone": "9876541015", "gender": "FEMALE",
          "lat": 28.4564, "lon": 77.0441, "addr1": "B-37, Sector 31",                "pin": "122001",
-         "dpd": 48,  "outstanding": 63000.0,  "loan_type": LoanType.PERSONAL,  "priority": CasePriority.MEDIUM,   "risk": RiskCategory.MEDIUM},
+         "dpd": 48,  "outstanding": 63000.0,  "loan_type": LoanType.PERSONAL,  "priority": CasePriority.MEDIUM},
     ]
     demo_cases: list[Case] = []
     for idx, d in enumerate(DEMO_PROXIMITY):
@@ -1833,8 +1850,14 @@ def seed():
             address_line1=d["addr1"],
             city="Gurugram", state="Haryana", pincode=d.get("pin", "122022"),
             latitude=d["lat"], longitude=d["lon"],
-            risk_category=d["risk"],
-            risk_score=85.0 if d["risk"] == RiskCategory.CRITICAL else 65.0 if d["risk"] == RiskCategory.HIGH else 42.0,
+            # Neither risk_score NOR risk_category is hand-set here. They are one
+            # logical value and must move together: the old 85/65/42 ladder had
+            # no LOW branch, so the LOW demo customer was given 42.0 — a number
+            # every threshold reads as MEDIUM, contradicting its own category.
+            # Setting only one of the pair reproduces that same contradiction
+            # from the other side. [11c] derives both, for these rows as for
+            # every other. The "risk" key was dropped from the dicts above for
+            # the same reason.
             cibil_score=520 if d["dpd"] > 60 else 600 if d["dpd"] > 30 else 650,
             language_preference="HINDI", customer_segment="SALARIED",
             is_hostile=d.get("is_hostile", False),
@@ -2541,7 +2564,8 @@ def seed():
             address_line1="House 12, Sector 56",
             city="Gurugram", state="Haryana", pincode="122011",
             latitude=d["lat"], longitude=d["lon"],
-            risk_category=RiskCategory.HIGH, risk_score=70.0,
+            # risk_score / risk_category both derived at [11c] — see the demo
+            # block above for why neither is hand-set.
             cibil_score=540, language_preference="HINDI", customer_segment="SALARIED",
         )
         db.add(cust)
@@ -3023,6 +3047,27 @@ def seed():
             print(f"       {k:34} {v}")
     else:
         print("       nothing to repair.")
+    # ── Repayment scoring ─────────────────────────────────────────────────────
+    # LAST, and that ordering is the whole point. The scorecard's behavioural
+    # factors read visits, PTPs and payments; scoring before [5/11]-[11b] have
+    # run would leave every one of them abstaining and produce a flat book —
+    # which is precisely the failure the old formula had, from the other end.
+    #
+    # This is the ONLY place a seeded database gets a repayment score. Writing
+    # Customer.risk_score is gated on REPAYMENT_WRITE_RISK_SCORE (default
+    # False), so by default a fresh seed leaves every customer at the 50.0
+    # column default and records snapshots only.
+    print("[11c] Scoring repayment likelihood (scorecard)...")
+    _score = RepaymentService(db).rescore(as_of=today, trigger=TRIGGER_SEED)
+    db.commit()
+    _dist = _score["distribution"]["after"]
+    print(f"       {_score['loans_scored']} loans, {_score['customers_affected']} customers, "
+          f"{_score['snapshots_written']} snapshots")
+    print(f"       Customer.risk_score written: {_score['customers_written']} "
+          f"(write gate {'OPEN' if _score['write_risk_score_enabled'] else 'CLOSED'})")
+    if _dist.get("n"):
+        print(f"       would-be risk_score  median={_dist['median']}  mean={_dist['mean']}  "
+              f"bands={_dist['bands']}")
     # ── Reconcile current-month agent counters ────────────────────────────────
     # Strictly the calendar month to date — the tile is labelled "This Month",
     # so it has to mean the month. Seeded early in a month that means a small

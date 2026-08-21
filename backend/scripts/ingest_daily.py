@@ -38,6 +38,12 @@ from app.models.base import Base
 from app.models.customer import Customer, RiskCategory
 from app.models.loan import Loan, LoanType, DPDBucket, LoanStatus
 from app.models.case import Case, CaseStatus, CasePriority, EscalationReason
+from app.models.repayment_snapshot import (
+    OUTCOME_DECEASED, OUTCOME_RECALLED, OUTCOME_REPAID, OUTCOME_SETTLED,
+    OUTCOME_SOURCE_BANK_ACTION, OUTCOME_WRITTEN_OFF, RepaymentSnapshot,
+    TRIGGER_INGEST,
+)
+from app.services.repayment_service import RepaymentService
 
 logging.basicConfig(
     level=logging.INFO,
@@ -93,18 +99,18 @@ def _dpd_to_bucket(dpd: int) -> DPDBucket:
     return DPDBucket.NPA
 
 
-def _risk_from_dpd_cibil(dpd: int, cibil: int) -> tuple[float, RiskCategory]:
-    score = min(100.0, max(0.0, dpd / 90 * 60 + (750 - cibil) / 750 * 40))
-    score = round(score, 1)
-    if score >= 80:
-        cat = RiskCategory.CRITICAL
-    elif score >= 60:
-        cat = RiskCategory.HIGH
-    elif score >= 35:
-        cat = RiskCategory.MEDIUM
-    else:
-        cat = RiskCategory.LOW
-    return score, cat
+# _risk_from_dpd_cibil was DELETED on 2026-08-21, not deprecated.
+#
+# It computed dpd/90*60 + (750-cibil)/750*40 and overwrote Customer.risk_score on
+# every daily run — a relabelling of two columns this script had just written.
+# seed_data.py carried a near-identical copy that had already drifted (it floored
+# at 30 and could never produce RiskCategory.LOW; this one floored at 0 and
+# could), and nobody noticed because nothing rendered the column.
+#
+# Leaving it here dormant would guarantee it got called again. Scoring now
+# belongs to services/repayment_service.py and to nothing else — see
+# _apply_risk_score, the single write site. This script's job narrows to writing
+# FACTS: dpd, cibil_score, amounts, flags and bank_action consequences.
 
 
 def _priority_from_score(score: float) -> CasePriority:
@@ -207,6 +213,14 @@ def process_row(row: dict, db, dry_run: bool, today: date) -> dict:
         "action_loan": None,
         "action_case": None,
         "skipped_reason": None,
+        # Carried out to run_ingestion so it can rescore exactly the loans this
+        # file touched, and label the snapshots that predicted a terminal
+        # outcome. Both are file-level concerns: scoring needs the whole row set
+        # committed first, and a label must not be written for a row that a
+        # later error rolls back.
+        "loan_id": None,
+        "bank_action": None,
+        "state_changed": False,
     }
 
     customer_ref  = row.get("customer_ref", "").strip()
@@ -230,7 +244,6 @@ def process_row(row: dict, db, dry_run: bool, today: date) -> dict:
     # ── Parse financial fields ────────────────────────────────────────────────
     dpd               = _parse_int(row.get("dpd", "0"))
     cibil             = _parse_int(row.get("cibil_score", "650"), 650)
-    risk_score, risk_cat = _risk_from_dpd_cibil(dpd, cibil)
     total_outstanding = _parse_float(row.get("total_outstanding", "0"))
     overdue_amount    = _parse_float(row.get("overdue_amount", "0"))
 
@@ -245,8 +258,10 @@ def process_row(row: dict, db, dry_run: bool, today: date) -> dict:
     # ── Customer UPSERT ───────────────────────────────────────────────────────
     customer = db.query(Customer).filter(Customer.customer_ref == customer_ref).first()
     if customer:
-        customer.risk_score    = risk_score
-        customer.risk_category = risk_cat
+        # risk_score / risk_category are deliberately NOT set here. They are
+        # derived values and belong to the repayment scorer, which runs against
+        # the facts below once the whole file has landed. cibil_score IS a fact
+        # and stays.
         customer.cibil_score   = cibil if cibil else customer.cibil_score
         phone = row.get("phone_primary", "").strip()
         if phone:
@@ -286,8 +301,9 @@ def process_row(row: dict, db, dry_run: bool, today: date) -> dict:
             pincode=row.get("pincode", "000000").strip(),
             latitude=lat,
             longitude=lon,
-            risk_category=risk_cat,
-            risk_score=risk_score,
+            # No risk_category / risk_score: the column defaults (MEDIUM, 50.0)
+            # now mean exactly what they say — "not yet scored" — until the
+            # rescore pass at the end of run_ingestion() gives them a value.
             cibil_score=cibil if cibil else None,
             preferred_contact_start=_parse_int(row.get("preferred_contact_start", "9"), 9),
             preferred_contact_end=_parse_int(row.get("preferred_contact_end", "18"), 18),
@@ -303,6 +319,7 @@ def process_row(row: dict, db, dry_run: bool, today: date) -> dict:
         result["action_customer"] = "inserted"
 
     # ── Loan UPSERT ───────────────────────────────────────────────────────────
+    result["bank_action"] = bank_action
     loan = db.query(Loan).filter(Loan.loan_account_number == loan_account).first()
     if loan:
         prev_bucket = loan.dpd_bucket
@@ -320,6 +337,11 @@ def process_row(row: dict, db, dry_run: bool, today: date) -> dict:
         next_due = row.get("next_due_date", "").strip()
         if next_due:
             loan.next_due_date = next_due
+
+        # A DPD move or a terminal bank action is the most valuable moment to
+        # have a snapshot for — it is the score as it stood immediately before
+        # the thing that changed the account.
+        result["state_changed"] = (loan.dpd != dpd) or bank_action != "ACTIVE"
 
         if bank_action in ("PAID_DIRECT", "SETTLED"):
             loan.status = LoanStatus.SETTLED if bank_action == "SETTLED" else LoanStatus.ACTIVE
@@ -375,7 +397,12 @@ def process_row(row: dict, db, dry_run: bool, today: date) -> dict:
         if not dry_run:
             db.add(loan)
             db.flush()
+        result["state_changed"] = True          # a brand-new loan is a change
         result["action_loan"] = "inserted"
+
+    # Both branches converge here with a loan in hand. On a dry run a brand-new
+    # loan has no id yet, which is correct — there is nothing to rescore.
+    result["loan_id"] = loan.id
 
     # ── Case logic by bank_action ─────────────────────────────────────────────
     existing_case = db.query(Case).filter(Case.case_number == case_number).first()
@@ -426,7 +453,11 @@ def process_row(row: dict, db, dry_run: bool, today: date) -> dict:
                     result["action_case"] = "no_change"
         else:
             # New overdue account — create UNASSIGNED case for allocator
-            score = min(100.0, dpd / 90 * 40 + total_outstanding / 500000 * 30 + risk_score * 0.3)
+            # The risk_score * 0.3 term is gone: at this point in the row loop
+            # the loan has not been scored yet, so it could only have used the
+            # stale value. Priority here is PROVISIONAL — the rescore pass at the
+            # end of run_ingestion() is what settles it.
+            score = min(100.0, dpd / 90 * 40 + total_outstanding / 500000 * 30)
             new_case = Case(
                 id=_uid(),
                 case_number=case_number,
@@ -452,6 +483,59 @@ def process_row(row: dict, db, dry_run: bool, today: date) -> dict:
 
 
 # ─── Main runner ──────────────────────────────────────────────────────────────
+
+# The bank's own verdict on an account, mapped onto a snapshot outcome. This is
+# the whole reason repayment_score_snapshots can ever become a training set:
+# the truth about whether a borrower paid arrives HERE, in this column, once a
+# day — and until today it was applied and then discarded.
+#
+# SETTLED / RECALLED / WRITTEN_OFF / DECEASED are CENSORED, not negatives. They
+# are the bank's administrative decisions; labelling them "the borrower failed
+# to pay" would teach a model that the bank's own choice is the borrower's
+# fault, and it would then underrate exactly the accounts pulled back for good
+# reasons. The documented training pull excludes them.
+_BANK_ACTION_OUTCOME = {
+    "PAID_DIRECT": OUTCOME_REPAID,
+    "SETTLED":     OUTCOME_SETTLED,
+    "WRITTEN_OFF": OUTCOME_WRITTEN_OFF,
+    "RECALL":      OUTCOME_RECALLED,
+    "DECEASED":    OUTCOME_DECEASED,
+}
+
+
+def _label_snapshots(db, verdicts: dict, today: date) -> dict:
+    """Attach the bank's verdict to the snapshots that predicted it.
+
+    Only UNLABELLED snapshots are touched, and only for loans this file reported
+    a terminal action on. A snapshot already carrying an outcome is left alone —
+    the first truth observed is the truth, and overwriting it would quietly
+    rewrite history a model has already been trained on.
+    """
+    labelled = {"rows": 0, "loans": 0}
+    for loan_id, action in verdicts.items():
+        outcome = _BANK_ACTION_OUTCOME.get(action)
+        if outcome is None or not loan_id:
+            continue
+        rows = (
+            db.query(RepaymentSnapshot)
+            .filter(RepaymentSnapshot.loan_id == loan_id,
+                    RepaymentSnapshot.outcome.is_(None))
+            .all()
+        )
+        if not rows:
+            continue
+        labelled["loans"] += 1
+        for row in rows:
+            row.outcome = outcome
+            row.outcome_source = OUTCOME_SOURCE_BANK_ACTION
+            row.outcome_observed_at = today
+            row.outcome_horizon_days = (today - row.as_of_date).days
+            # How stale the features were when the truth landed. A modeller can
+            # filter on freshness instead of assuming it.
+            row.feature_age_days = (today - row.as_of_date).days
+            labelled["rows"] += 1
+    return labelled
+
 
 def run_ingestion(file_path: Path, dry_run: bool = False) -> None:
     log.info("=" * 60)
@@ -491,7 +575,19 @@ def run_ingestion(file_path: Path, dry_run: bool = False) -> None:
         "cases_target_increased": 0,
         # cases — already done
         "cases_already_resolved": 0,
+        # repayment scoring (2026-08-21)
+        "loans_rescored": 0,
+        "snapshots_written": 0,
+        "snapshot_rows_labelled": 0,
+        "customers_risk_written": 0,
     }
+
+    # Loans this file touched, and the bank's verdict where it gave one. Both
+    # are applied AFTER the row loop: scoring needs every row committed first,
+    # and a label must not survive a row-level rollback.
+    touched_loan_ids: set[str] = set()
+    changed_loan_ids: set[str] = set()
+    verdicts: dict[str, str] = {}
 
     try:
         with open(file_path, newline="", encoding="utf-8-sig") as f:
@@ -538,6 +634,13 @@ def run_ingestion(file_path: Path, dry_run: bool = False) -> None:
                     elif "already" in action_case or "skipped" in action_case:
                         counters["cases_already_resolved"] += 1
 
+                    if result["loan_id"]:
+                        touched_loan_ids.add(result["loan_id"])
+                        if result["state_changed"]:
+                            changed_loan_ids.add(result["loan_id"])
+                        if result["bank_action"] in _BANK_ACTION_OUTCOME:
+                            verdicts[result["loan_id"]] = result["bank_action"]
+
                     if not dry_run and i % 200 == 0:
                         db.commit()
                         log.info("  Batch commit at row %d ...", i)
@@ -550,6 +653,35 @@ def run_ingestion(file_path: Path, dry_run: bool = False) -> None:
         if not dry_run:
             db.commit()
             log.info("Final commit done.")
+
+        # ── Repayment scoring ────────────────────────────────────────────────
+        # Runs once, after the facts are in. This is the ONLY thing that gives
+        # Customer.risk_score a value; writing it is gated on
+        # REPAYMENT_WRITE_RISK_SCORE, which defaults to False, so by default
+        # this accrues snapshots and changes nothing a user can see.
+        if touched_loan_ids:
+            label_result = _label_snapshots(db, verdicts, today) if not dry_run else {
+                "rows": 0, "loans": 0}
+            score_result = RepaymentService(db).rescore(
+                as_of=today,
+                loan_ids=sorted(touched_loan_ids),
+                trigger=TRIGGER_INGEST,
+                dry_run=dry_run,
+                changed_loan_ids=changed_loan_ids,
+            )
+            if not dry_run:
+                db.commit()
+            counters["loans_rescored"] = score_result["loans_scored"]
+            counters["snapshots_written"] = score_result["snapshots_written"]
+            counters["snapshot_rows_labelled"] = label_result["rows"]
+            counters["customers_risk_written"] = score_result["customers_written"]
+            log.info(
+                "Repayment scoring: %d loans, %d snapshots, %d rows labelled, "
+                "%d customers written (write gate %s)",
+                score_result["loans_scored"], score_result["snapshots_written"],
+                label_result["rows"], score_result["customers_written"],
+                "OPEN" if score_result["write_risk_score_enabled"] else "closed",
+            )
 
     except Exception as e:
         db.rollback()

@@ -15,6 +15,15 @@
 #   so OTP_MAX_ATTEMPTS (3) is the real brute-force defence, and
 #   RESEND_THROTTLE/MAX_SENDS bound SMS-bomb / cost abuse. See
 #   prototype_to_product/30.07.md and /changelog.md.
+# 2026-08-21 — Added the repayment-likelihood block (REPAYMENT_*, at the end):
+#   config seam for ml/repayment_scorecard.py and services/repayment_service.py.
+#   Two of these are rollout gates and BOTH default to False, so a fresh
+#   deployment behaves exactly as it does today: REPAYMENT_WRITE_RISK_SCORE
+#   stops the scorer touching the legacy Customer.risk_score column, and
+#   REPAYMENT_REPRICE_OPEN_CASES is off because nothing has ever recomputed
+#   Case.priority on an existing case and turning that on is new behaviour,
+#   not a like-for-like swap. Wiring the nightly task must not be what makes
+#   either of them live.
 # ───────────────────────────────────────────────────────────────────────────
 from functools import lru_cache
 from typing import List
@@ -290,6 +299,71 @@ class Settings(BaseSettings):
     # of trail is never a finding — see fraud_service._trail_contradiction.
     FRAUD_TRAIL_MIN_POINTS: int = 3
     FRAUD_TRAIL_AWAY_METRES: int = 500
+
+    # Repayment likelihood (2026-08-21)
+    # Customer.risk_score was dpd/90*60 + (750-cibil)/750*40 — a relabelling of
+    # two columns we already store, feeding collection_priority_score at 0.3
+    # weight and therefore ordering field work. ml/repayment_scorecard.py
+    # replaces it with a scorecard whose every point has a stated reason.
+    #
+    # The eleven factor WEIGHTS are deliberately NOT here. They are module
+    # constants in the scorecard with prose justifications, because a weight
+    # change is a model change: it must bump SCORECARD_VERSION, which is stamped
+    # on every snapshot row. An env var could change what the score means while
+    # leaving already-written rows claiming a version that no longer describes
+    # them. What lives here is the business-tunable thresholds only.
+    #
+    # scorecard | command_center | model. Only "scorecard" is implemented; the
+    # other two exist so adding a tier later is wiring rather than a rewrite.
+    REPAYMENT_SCORER: str = "scorecard"
+    # ROLLOUT GATE, and OFF by default. False -> the scorer computes and
+    # snapshots exactly as normal but never writes Customer.risk_score, so the
+    # legacy value stays where it is and every downstream consumer behaves as it
+    # does today. Training data keeps accruing meanwhile, which is the point:
+    # the table fills up whether or not the column is live.
+    #
+    # Defaulted False on 2026-08-21 (was True). Measured on the seeded book,
+    # turning this on moves 424 of 425 customers and shifts 74.4% of them across
+    # a RiskCategory band. A change of that size must be an explicit deployment
+    # decision — it must NOT become active merely because the nightly Celery
+    # task got wired up. Enabling and rolling back are then the same one-line
+    # act: set it, restart the worker. No migration, nothing to undo.
+    REPAYMENT_WRITE_RISK_SCORE: bool = False
+    # KILL SWITCH, and OFF by design. Case.priority is written once at case
+    # creation (seed_data.py:1505, ingest_daily.py:437) and has never been
+    # recomputed for an existing case. Turning this on is NEW behaviour: it
+    # would reprice open cases and change the nightly allocation order for work
+    # already in flight. Left off so the default deployment matches today.
+    REPAYMENT_REPRICE_OPEN_CASES: bool = False
+    # How far back behavioural evidence is read. Six months matches the seeded
+    # history depth and one full PTP cycle several times over.
+    REPAYMENT_BEHAVIOUR_WINDOW_DAYS: int = 180
+    # Below these, the corresponding factor ABSTAINS rather than scoring zero.
+    # One resolved promise is an anecdote; zero is not evidence of anything.
+    # Scoring an unknown borrower as a bad one makes every new case a defaulter.
+    REPAYMENT_MIN_PTPS_FOR_HISTORY: int = 2
+    REPAYMENT_MIN_VISITS_FOR_CONTACT: int = 2
+    # Share of the scorecard's total weight that must have had evidence before
+    # a NUMBER is shown rather than just a band. Silence is not evidence, and a
+    # confident-looking figure resting on two factors is worse than no figure.
+    REPAYMENT_MIN_COVERAGE_TO_SHOW: float = 0.5
+    # How long after a score we wait before deciding what the borrower did.
+    # 30 days is one billing cycle — long enough for a promise to come due.
+    REPAYMENT_OUTCOME_HORIZON_DAYS: int = 30
+    # Share of the case target that counts as REPAID rather than PARTIAL.
+    REPAYMENT_FULL_RATIO: float = 0.9
+    # Snapshot write policy. Scoring every loan every night would store ~191k
+    # near-identical rows a year; the interesting rows are the ones next to a
+    # change. A row is written on the first score, when the likelihood moves by
+    # at least MIN_DELTA, when ANCHOR_DAYS have passed regardless, or when
+    # ingest reported a state change on that loan.
+    REPAYMENT_SNAPSHOT_MIN_DELTA: float = 1.0
+    REPAYMENT_SNAPSHOT_ANCHOR_DAYS: int = 7
+    # Unlabelled snapshots older than this are pruned. LABELLED rows are never
+    # pruned at any age — they are the training set, which is the whole point
+    # of the table. Unlike the location trail this is not employee-monitoring
+    # data, so the window is generous rather than minimal.
+    REPAYMENT_SNAPSHOT_RETENTION_DAYS: int = 400
 
     # Location trail (2026-08-18)
     # How long a full-resolution trail is kept before the nightly sweep in

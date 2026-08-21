@@ -12,6 +12,7 @@ from app.models.audit_log import AuditLog, AuditAction
 from app.models.quick_login_token import UsedQuickLoginToken
 from app.models.agent_location import AgentLocation, LocationSource
 from app.models.fraud_review import FraudReview, ReviewVerdict
+from app.models.repayment_snapshot import RepaymentSnapshot
 
 __all__ = [
     "User", "UserRole",
@@ -28,4 +29,5 @@ __all__ = [
     "UsedQuickLoginToken",
     "AgentLocation", "LocationSource",
     "FraudReview", "ReviewVerdict",
+    "RepaymentSnapshot",
 ]
