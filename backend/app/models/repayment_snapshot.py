@@ -158,6 +158,70 @@ class RepaymentSnapshot(Base, UUIDPrimaryKey):
     # than assumed. A 7-day anchor row and a same-day row are not equivalent.
     feature_age_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
+    # ── Recovery potential (2026-08-24) ──────────────────────────────────────
+    # A SECOND score on the same row rather than a second table. The grain is
+    # identical — one loan, one day — as is the point-in-time discipline, the
+    # nightly scan and the retention rule. A parallel table would have duplicated
+    # the JSON variant fallback, the censoring vocabulary and every index below,
+    # and then drifted from them, which is the failure mode this codebase's
+    # changelogs are mostly about.
+    #
+    # All nullable. Rows written before this shipped have no recovery prediction,
+    # and that must stay distinguishable from "predicted, and the answer was
+    # zero" — see the IS NOT NULL guard in attach_recovery_outcomes.
+    #
+    # recovery_potential is a plain String, not the RecoveryPotential enum, for
+    # the same reason `outcome` above is: adding a value to a Postgres enum needs
+    # a migration and can never be removed. The scorecard's band vocabulary is
+    # ours and may grow.
+    recovery_potential: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    recovery_rate_30: Mapped[float | None] = mapped_column(Float, nullable=True)
+    recovery_rate_60: Mapped[float | None] = mapped_column(Float, nullable=True)
+    recovery_rate_90: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # How fast, as distinct from how much. Kept because the 30/60 rates are
+    # derived from it and a modeller reading this row should not have to
+    # re-derive the ramp to know why they differ from the 90.
+    recovery_speed_index: Mapped[float | None] = mapped_column(Float, nullable=True)
+    recovery_evidence_coverage: Mapped[float | None] = mapped_column(Float, nullable=True)
+    recovery_source: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    recovery_model_version: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    recovery_contributions: Mapped[dict | None] = mapped_column(_JSON_DOC, nullable=True)
+
+    # ── What actually came back. Written by the labeller, one horizon at a time.
+    #
+    # NULL NEVER MEANS "nothing arrived" — 0.0 means that. NULL is one of two
+    # things, told apart by recovery_labelled_through_days:
+    #
+    #   amount NULL, marker <  horizon  -> the horizon has not matured yet
+    #   amount NULL, marker >= horizon  -> matured, but UNOBSERVABLE
+    #   amount 0.0                      -> observed, and nothing came back
+    #
+    # UNOBSERVABLE (added 2026-08-24) means the loan had no case for the whole
+    # window. Payment.case_id is NOT NULL, so money reaches the ledger only
+    # through a case: a caseless loan cannot show a recovery however much the
+    # borrower paid. Recording 0.0 there would put a fact in the training set
+    # that is not one, and on the 2026-08-24 cohort it would have biased LOW
+    # hardest — 50 of the 115 caseless loans are LOW against 26 HIGH — flattering
+    # the scorecard's apparent separation. Validation excludes these and counts
+    # them separately.
+    recovered_amount_30: Mapped[float | None] = mapped_column(Float, nullable=True)
+    recovered_amount_60: Mapped[float | None] = mapped_column(Float, nullable=True)
+    recovered_amount_90: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # How far the labeller has got with this row: 0, 30, 60 or 90. NOT NULL with
+    # a server default, so the partial index below has a total predicate and a
+    # pre-existing row reads as "nothing done yet" rather than as unknown.
+    #
+    # This is what makes the recovery label multi-horizon at all. The repayment
+    # labeller visits a row once and is finished; this one has to come back twice
+    # more, and "have I already done 60?" has to be a fact on the row rather than
+    # something inferred from which amount columns happen to be populated —
+    # a genuinely-zero recovery at 60 days is indistinguishable from an unvisited
+    # one otherwise.
+    recovery_labelled_through_days: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+
     __table_args__ = (
         # One score per loan per day. This is what makes "ingest scored it at
         # 19:30, the beat scored it again at 19:45" a no-op instead of a
@@ -172,6 +236,18 @@ class RepaymentSnapshot(Base, UUIDPrimaryKey):
         Index(
             "ix_repayment_snapshot_unlabelled", "as_of_date",
             postgresql_where=text("outcome IS NULL"),
+        ),
+        # The recovery labeller's scan. A SEPARATE partial index, not a widening
+        # of the one above: a row can have its repayment `outcome` filled in at
+        # day 30 and still owe its 60- and 90-day recovery figures, so
+        # "outcome IS NULL" stops describing the work left to do the moment
+        # recovery labelling exists.
+        #
+        # Same shrinking-minority reasoning as above — every row this finds, it
+        # removes from the index by advancing recovery_labelled_through_days.
+        Index(
+            "ix_repayment_snapshot_recovery_unlabelled", "as_of_date",
+            postgresql_where=text("recovery_labelled_through_days < 90"),
         ),
     )
 

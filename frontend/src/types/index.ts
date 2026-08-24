@@ -20,6 +20,13 @@ export interface LoginResponse {
 export type DPDBucket = "CURRENT" | "BUCKET_1" | "BUCKET_2" | "BUCKET_3" | "NPA";
 export type CaseStatus = "UNASSIGNED" | "ASSIGNED" | "IN_PROGRESS" | "PTP_SET" | "PARTIALLY_PAID" | "PAID" | "ESCALATED" | "CLOSED" | "WRITTEN_OFF";
 export type CasePriority = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+/**
+ * How much of a loan we expect to recover. Computed by the backend's
+ * recovery scorecard, banded on the 90-day estimate.
+ *
+ * Note the direction is the OPPOSITE of CasePriority: HIGH here is good news.
+ */
+export type RecoveryPotential = "HIGH" | "MEDIUM" | "LOW";
 export type AgentTier = "TIER_1" | "TIER_2" | "TIER_3";
 export type AgentStatus = "ON_DUTY" | "OFF_DUTY" | "ON_LEAVE" | "SUSPENDED";
 export type VisitOutcome =
@@ -134,11 +141,45 @@ export interface Loan {
   settlement_status: string;
 }
 
+/**
+ * The recovery estimate for one loan, as the manager endpoints send it.
+ *
+ * Read from the nightly snapshot, not from Loan.recovery_potential — that column
+ * stays untouched until RECOVERY_WRITE_LABEL is enabled on the backend.
+ *
+ * `is_modelled` is always false: this is a hand-weighted scorecard with no
+ * training behind it, so there is no accuracy figure and none is sent. Do not
+ * render it as a model output.
+ */
+export interface RecoveryScore {
+  recovery_potential: RecoveryPotential;
+  rate_30: number;
+  rate_60: number;
+  rate_90: number;
+  label_horizon_days: number;
+  speed_index: number | null;
+  evidence_coverage: number | null;
+  model_version: string | null;
+  source: string | null;
+  is_modelled: boolean;
+  as_of: string | null;
+}
+
 export interface Case {
   id: string;
   case_number: string;
   customer: Customer;
   loan: Loan;
+  /**
+   * DUE NOW — overdue_amount + penal_charges. A ledger fact: what can lawfully
+   * be demanded today, and the number a manager allocates work against.
+   *
+   * Always present, including on an unscored loan — arrears do not depend on the
+   * scorecard having run.
+   */
+  due_now: number;
+  /** null when this loan has not been scored yet — render "Not scored", not LOW. */
+  recovery?: RecoveryScore | null;
   agent_id: string | null;
   agent_name?: string | null;
   status: CaseStatus;

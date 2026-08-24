@@ -22,7 +22,7 @@ from datetime import datetime, date, timezone, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
-from sqlalchemy import func
+from sqlalchemy import and_, func
 # Aliased: `Case` in this module is the SQLAlchemy model for a collections
 # case, so importing the SQL CASE construct under its own name would read as
 # the model with a typo.
@@ -38,6 +38,10 @@ from app.core import storage
 from app.models.beat import Beat
 from app.models.case import Case, CaseStatus
 from app.models.loan import DPDBucket, Loan
+from app.models.repayment_snapshot import RepaymentSnapshot
+from app.ml.recovery_scorecard import (
+    expected_recoverable_amount as _recovery_expected_amount,
+)
 from app.models.payment import Payment, PaymentStatus
 from app.models.ptp import PTP, PTPStatus
 from app.models.user import User
@@ -63,7 +67,84 @@ def _effective_today(agent_ids: list[str], db) -> tuple[datetime, datetime, date
     return start, end, eff_date
 
 
-def _format_case(case: Case, agent_name_map: dict | None = None, visited_today_ids: set[str] | None = None) -> dict:
+# ── Recovery potential (2026-08-24) ──────────────────────────────────────────
+# Read from the SNAPSHOT, never from Loan.recovery_potential.
+#
+# That is not a detail. RECOVERY_WRITE_LABEL is off by default, so the Loan
+# column still holds whatever it held before this feature shipped — for a seeded
+# database, the output of random.choices(). Reading it here would show managers
+# the old noise while the computed label sat in a table nobody looked at, which
+# is the exact opposite of the point of shipping this.
+#
+# The snapshot is written on every scoring run regardless of the gate, so this is
+# always the current computed answer.
+
+
+def _latest_recovery_by_loan(db, loan_ids: list[str]) -> dict[str, dict]:
+    """The most recent recovery label for each of these loans.
+
+    One query for the page, not one per row. Returns {} for an empty input rather
+    than issuing a query with an empty IN clause.
+    """
+    if not loan_ids:
+        return {}
+    newest = (
+        db.query(RepaymentSnapshot.loan_id,
+                 func.max(RepaymentSnapshot.as_of_date).label("as_of_date"))
+        .filter(RepaymentSnapshot.loan_id.in_(loan_ids),
+                RepaymentSnapshot.recovery_rate_90.is_not(None))
+        .group_by(RepaymentSnapshot.loan_id)
+        .subquery()
+    )
+    rows = (
+        db.query(RepaymentSnapshot)
+        .join(newest, and_(RepaymentSnapshot.loan_id == newest.c.loan_id,
+                           RepaymentSnapshot.as_of_date == newest.c.as_of_date))
+        .all()
+    )
+    return {
+        r.loan_id: {
+            "recovery_potential": r.recovery_potential,
+            "rate_30": r.recovery_rate_30,
+            "rate_60": r.recovery_rate_60,
+            "rate_90": r.recovery_rate_90,
+            "label_horizon_days": settings.RECOVERY_LABEL_HORIZON_DAYS,
+            "speed_index": r.recovery_speed_index,
+            "evidence_coverage": r.recovery_evidence_coverage,
+            "model_version": r.recovery_model_version,
+            "source": r.recovery_source,
+            # A hand-weighted scorecard, never a trained model. Sent so the UI
+            # cannot present it as one; there is no accuracy figure to send
+            # because none exists.
+            "is_modelled": False,
+            "as_of": r.as_of_date.isoformat() if r.as_of_date else None,
+        }
+        for r in rows
+    }
+
+
+def _loan_ids_with_recovery(db, band: str) -> list[str]:
+    """Loans whose LATEST label is this band — for the manager case filter."""
+    newest = (
+        db.query(RepaymentSnapshot.loan_id,
+                 func.max(RepaymentSnapshot.as_of_date).label("as_of_date"))
+        .filter(RepaymentSnapshot.recovery_rate_90.is_not(None))
+        .group_by(RepaymentSnapshot.loan_id)
+        .subquery()
+    )
+    return [
+        r[0] for r in
+        db.query(RepaymentSnapshot.loan_id)
+        .join(newest, and_(RepaymentSnapshot.loan_id == newest.c.loan_id,
+                           RepaymentSnapshot.as_of_date == newest.c.as_of_date))
+        .filter(RepaymentSnapshot.recovery_potential == band)
+        .all()
+    ]
+
+
+def _format_case(case: Case, agent_name_map: dict | None = None,
+                 visited_today_ids: set[str] | None = None,
+                 recovery_map: dict[str, dict] | None = None) -> dict:
     c = case.customer
     l = case.loan
     agent_name = None
@@ -133,6 +214,33 @@ def _format_case(case: Case, agent_name_map: dict | None = None, visited_today_i
             "bank_risk_score": l.bank_risk_score,
             "collection_priority_score": l.collection_priority_score,
         },
+        # ── DUE NOW — a ledger fact, not a model output (2026-08-24) ─────────
+        # overdue_amount + penal_charges: what can lawfully be demanded today.
+        # This is the operational number a manager allocates work against, and it
+        # leads the pairing in the UI: "Rs X due now · Recovery outlook: HIGH".
+        #
+        # It is deliberately NOT expected_recoverable_amount, which was here until
+        # today and has been moved to Analytics. That figure is rate_90 x
+        # TOTAL_OUTSTANDING, so it includes principal that is not yet due — across
+        # this book it came to 229% of what is actually demandable, and on a
+        # single loan it read Rs 10.65 lakh against Rs 1.18 lakh of real arrears.
+        # A manager scanning a case list would read it as "money to collect", and
+        # it is not that.
+        #
+        # No estimate is derived from it here. rate_90 is a rate on total
+        # outstanding and applying it to arrears would be arithmetically wrong;
+        # min(expected, due) would be a second unvalidated estimator. The honest
+        # pairing is a fact plus a graded likelihood, which is what this is.
+        #
+        # Always present, including on an unscored loan — arrears do not depend on
+        # the scorecard having run.
+        "due_now": round(float(l.overdue_amount or 0.0)
+                         + float(l.penal_charges or 0.0), 2),
+        # Computed HIGH/MEDIUM/LOW plus the 30/60/90 ramp, or None when this loan
+        # has not been scored yet. None rather than a default band: an unscored
+        # loan is unknown, and rendering it as LOW would write off money nobody
+        # has looked at.
+        "recovery": (recovery_map or {}).get(case.loan_id),
         "collection_stage": case.collection_stage,
         "bank_ptp_date": case.bank_ptp_date,
         "bank_ptp_amount": case.bank_ptp_amount,
@@ -526,6 +634,10 @@ def list_cases(
     agent_id: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    # HIGH / MEDIUM / LOW. Filters on the loan's LATEST computed label, so it
+    # answers "show me where the recoverable money is" rather than "show me what
+    # the label said on some past day".
+    recovery: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
 ):
@@ -540,6 +652,11 @@ def list_cases(
         q = q.filter(Case.status == status)
     if priority:
         q = q.filter(Case.priority == priority)
+    if recovery:
+        # Resolved to loan ids first rather than joined in: the case query
+        # already carries two joinedloads and a window-free correlated subquery
+        # here would be re-evaluated per row.
+        q = q.filter(Case.loan_id.in_(_loan_ids_with_recovery(db, recovery.upper())))
     if agent_id:
         q = q.filter(Case.agent_id == agent_id)
     if date_from:
@@ -574,6 +691,10 @@ def list_cases(
         .limit(limit)
         .all()
     )
+
+    # Recovery labels for this page only — one query, not one per row.
+    recovery_map = _latest_recovery_by_loan(
+        db, [c.loan_id for c in cases if c.loan_id])
 
     # Build agent name map for this page only
     page_agent_ids = {c.agent_id for c in cases if c.agent_id}
@@ -624,7 +745,8 @@ def list_cases(
 
     return {
         "total": total,
-        "cases": [_format_case(c, agent_name_map, visited_today_ids) for c in cases],
+        "cases": [_format_case(c, agent_name_map, visited_today_ids, recovery_map)
+                  for c in cases],
     }
 
 
@@ -782,7 +904,10 @@ def get_case_detail(case_id: str, current_user: ManagerOnly, db: DbSession):
         if row:
             agent_name = row[0]
 
-    base = _format_case(case, {case.agent_id: agent_name} if agent_name else None)
+    base = _format_case(
+        case, {case.agent_id: agent_name} if agent_name else None,
+        recovery_map=_latest_recovery_by_loan(db, [case.loan_id] if case.loan_id else []),
+    )
 
     # Resolve agent names for all visits (visits may have different agents)
     visit_agent_ids = {v.agent_id for v in case.visits if v.agent_id}
@@ -1350,9 +1475,83 @@ def analytics(current_user: ManagerOnly, db: DbSession):
     )
     n_agents = len(my_agent_ids) or 1
 
+    # ── Recovery potential across the open book ──────────────────────────────
+    # Scoped to this manager's own agents, like every other figure here.
+    #
+    # Counts AND money. A count of HIGH cases says how much work there is; the
+    # summed expected recoverable amount says how much it is worth, and those two
+    # routinely disagree — a handful of large secured loans can outweigh a long
+    # tail of small ones. Reporting only the count is what leaves a team working
+    # the tail.
+    #
+    # The amount is derived at read time from the LIVE balance and the stored
+    # rate, through the scorecard's own multiplication. It is deliberately not a
+    # stored column: "where is the recoverable money now" wants today's
+    # outstanding, and a rate cannot be summed while an amount can.
+    # TWO figures per band, and the pairing is the point. `due_now` is a ledger
+    # fact — arrears plus penal charges, demandable today. The 90-day recovery
+    # estimate is rate_90 x total outstanding, which includes principal not yet
+    # due. On the 2026-08-24 dry run the two RANKED THE BANDS DIFFERENTLY: HIGH
+    # led on the estimate (Rs 10.36 Cr vs Rs 8.98 Cr) while MEDIUM led on what is
+    # actually collectable (Rs 3.72 Cr vs Rs 2.16 Cr), because HIGH loans are
+    # secured, long-tenor and barely in arrears. Showing only one of them points
+    # a team at the wrong pile, so Analytics carries both.
+    open_cases = (
+        db.query(Case.loan_id, Loan.total_outstanding,
+                 Loan.overdue_amount, Loan.penal_charges)
+        .join(Loan, Case.loan_id == Loan.id)
+        .filter(Case.agent_id.in_(my_agent_ids),
+                Case.status.notin_([CaseStatus.CLOSED, CaseStatus.WRITTEN_OFF]))
+        .all()
+    )
+    outstanding_by_loan = {r[0]: float(r[1] or 0.0) for r in open_cases}
+    due_now_by_loan = {r[0]: float(r[2] or 0.0) + float(r[3] or 0.0)
+                       for r in open_cases}
+    labels = _latest_recovery_by_loan(db, list(outstanding_by_loan))
+
+    recovery_breakdown = []
+    for band in ("HIGH", "MEDIUM", "LOW"):
+        loans = [lid for lid, lab in labels.items()
+                 if lab["recovery_potential"] == band]
+        recovery_breakdown.append({
+            "band": band,
+            "cases": len(loans),
+            # The fact.
+            "due_now": round(sum(due_now_by_loan.get(lid, 0.0)
+                                 for lid in loans), 2),
+            # The estimate. Field name unchanged on the wire; the UI renders it
+            # as "90-day recovery estimate" with the denominator spelled out.
+            "expected_recoverable_amount": round(sum(
+                _recovery_expected_amount(labels[lid]["rate_90"] or 0.0,
+                                          outstanding_by_loan.get(lid, 0.0))
+                for lid in loans), 2),
+            "total_outstanding": round(sum(
+                outstanding_by_loan.get(lid, 0.0) for lid in loans), 2),
+        })
+
+    # Loans with no label yet are reported rather than folded into LOW. An
+    # unscored loan is unknown, and quietly banding it as the worst case writes
+    # off money nobody has looked at.
+    unscored = [lid for lid in outstanding_by_loan if lid not in labels]
+
     return {
         "monthly_trend": monthly_trend,
         "dpd_breakdown": dpd_breakdown,
+        "recovery_breakdown": recovery_breakdown,
+        "recovery_summary": {
+            "scored_cases": len(labels),
+            "unscored_cases": len(unscored),
+            # Every open case, scored or not — arrears are a fact and do not wait
+            # on the scorecard, so this total is deliberately wider than the
+            # per-band rows, which cover scored loans only.
+            "due_now": round(sum(due_now_by_loan.values()), 2),
+            "expected_recoverable_amount": round(
+                sum(b["expected_recoverable_amount"] for b in recovery_breakdown), 2),
+            "label_horizon_days": settings.RECOVERY_LABEL_HORIZON_DAYS,
+            # A hand-weighted scorecard, not a model. No accuracy figure is sent
+            # because none exists.
+            "is_modelled": False,
+        },
         "leaderboard": leaderboard,
         "leave_summary": {
             "total_leave_days_30d": total_leave_days,

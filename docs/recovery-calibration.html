@@ -1,0 +1,934 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  Recovery Label Calibration — dry run of 2026-08-24.
+  Standalone: open this file directly in a browser, no server needed.
+  The only external request is Google Fonts; offline it falls back to
+  Georgia / system stacks and stays fully readable.
+  Also published as a private artifact:
+  https://claude.ai/code/artifact/e190d8e4-61ac-41c9-b414-24a9d528b951
+-->
+<title>Recovery Label Calibration</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+/* ─────────────────────────────────────────────────────────────────────────
+   Recovery Label Calibration — dry run of 2026-08-24
+   Palette validated with the dataviz validator in both modes.
+   Light surface #EFF2F4 · dark surface #12181D.
+   ───────────────────────────────────────────────────────────────────────── */
+
+:root {
+  --ground:      #EFF2F4;
+  --surface:     #FFFFFF;
+  --sunk:        #E3E8EC;
+  --ink:         #16212B;
+  --ink-2:       #3C4A55;
+  --muted:       #55656F;
+  --rule:        #CBD5DB;
+  --rule-soft:   #DDE4E9;
+
+  --accent:      #B57614;   /* brass — structural: eyebrows, rules, emphasis */
+  --measured:    #067A5C;   /* observed in the dry run */
+  --assumed:     #5B4FC4;   /* asserted by the scorecard, never validated */
+  --flag:        #B33A28;   /* the one finding that needs a decision */
+
+  --measured-wash: #067A5C1A;
+  --assumed-wash:  #5B4FC41A;
+  --flag-wash:     #B33A281A;
+  --accent-wash:   #B576141A;
+
+  --shadow: 0 1px 2px #16212B0F, 0 8px 24px -12px #16212B1F;
+
+  /* Sequential ramp for the count matrix — one hue, light to dark. */
+  --m0: #E3E8EC;
+  --m1: #CBE0D9;
+  --m2: #9DC8BC;
+  --m3: #5FA894;
+  --m4: #2A8A6D;
+  --m5: #067A5C;
+  --on-hot: #FFFFFF;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground:    #12181D;
+    --surface:   #19212A;
+    --sunk:      #0E141A;
+    --ink:       #E4EBF1;
+    --ink-2:     #C2CED8;
+    --muted:     #93A3AF;
+    --rule:      #2B3742;
+    --rule-soft: #232E38;
+
+    --accent:    #B37F1C;
+    --measured:  #279272;
+    --assumed:   #7F70D4;
+    --flag:      #CC5A44;
+
+    --measured-wash: #27927226;
+    --assumed-wash:  #7F70D426;
+    --flag-wash:     #CC5A4426;
+    --accent-wash:   #B37F1C26;
+
+    --shadow: 0 1px 2px #00000040, 0 8px 24px -12px #00000066;
+
+    --m0: #0E141A;
+    --m1: #16302A;
+    --m2: #1D4A3E;
+    --m3: #216653;
+    --m4: #248068;
+    --m5: #279272;
+    --on-hot: #08110E;
+  }
+}
+
+:root[data-theme="dark"] {
+  --ground:    #12181D;
+  --surface:   #19212A;
+  --sunk:      #0E141A;
+  --ink:       #E4EBF1;
+  --ink-2:     #C2CED8;
+  --muted:     #93A3AF;
+  --rule:      #2B3742;
+  --rule-soft: #232E38;
+
+  --accent:    #B37F1C;
+  --measured:  #279272;
+  --assumed:   #7F70D4;
+  --flag:      #CC5A44;
+
+  --measured-wash: #27927226;
+  --assumed-wash:  #7F70D426;
+  --flag-wash:     #CC5A4426;
+  --accent-wash:   #B37F1C26;
+
+  --shadow: 0 1px 2px #00000040, 0 8px 24px -12px #00000066;
+
+  --m0: #0E141A;
+  --m1: #16302A;
+  --m2: #1D4A3E;
+  --m3: #216653;
+  --m4: #248068;
+  --m5: #279272;
+  --on-hot: #08110E;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  background: var(--ground);
+  color: var(--ink);
+  font-family: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 16px;
+  line-height: 1.6;
+  margin: 0;
+  padding: 0 20px 96px;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap { max-width: 1080px; margin: 0 auto; }
+.prose { max-width: 68ch; }
+
+/* ── Type scale ─────────────────────────────────────────────────────────── */
+h1, h2, h3 { font-family: Spectral, Georgia, "Times New Roman", serif; text-wrap: balance; margin: 0; }
+h1 { font-size: clamp(2.1rem, 5vw, 3.1rem); font-weight: 600; line-height: 1.08; letter-spacing: -0.015em; }
+h2 { font-size: clamp(1.45rem, 3vw, 1.9rem); font-weight: 600; line-height: 1.18; letter-spacing: -0.01em; }
+h3 { font-size: 1.12rem; font-weight: 600; line-height: 1.3; }
+p  { margin: 0 0 1em; color: var(--ink-2); }
+p.lead { font-size: 1.14rem; color: var(--ink); }
+strong { font-weight: 600; color: var(--ink); }
+em { font-style: italic; }
+
+.eyebrow {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 0.68rem; font-weight: 600;
+  letter-spacing: 0.13em; text-transform: uppercase;
+  color: var(--accent);
+}
+.mono { font-family: "IBM Plex Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+.num  { font-family: "IBM Plex Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+
+/* ── Masthead ───────────────────────────────────────────────────────────── */
+header.masthead { padding: 72px 0 40px; border-bottom: 2px solid var(--ink); }
+.masthead .eyebrow { display: block; margin-bottom: 18px; }
+.masthead h1 { margin-bottom: 18px; }
+.masthead .dek { font-size: 1.16rem; color: var(--ink-2); max-width: 62ch; margin: 0 0 26px; }
+.meta-row {
+  display: flex; flex-wrap: wrap; gap: 10px 28px;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 0.76rem; color: var(--muted);
+}
+.meta-row b { color: var(--ink); font-weight: 500; }
+
+.gate {
+  display: inline-flex; align-items: center; gap: 9px;
+  margin-top: 24px; padding: 8px 15px;
+  background: var(--measured-wash);
+  border: 1px solid var(--measured);
+  border-radius: 999px;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 0.76rem; font-weight: 500; color: var(--ink);
+}
+.gate .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--measured); flex: none; }
+
+/* ── Statement band ─────────────────────────────────────────────────────── */
+.statement {
+  display: grid; gap: 1px;
+  grid-template-columns: repeat(auto-fit, minmax(184px, 1fr));
+  background: var(--rule-soft);
+  border: 1px solid var(--rule);
+  margin: 40px 0 0;
+}
+.statement .cell { background: var(--surface); padding: 20px 20px 18px; }
+.statement .k {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 0.66rem; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--muted); display: block; margin-bottom: 9px;
+}
+.statement .v {
+  font-family: Spectral, Georgia, serif; font-size: 2.05rem; font-weight: 600;
+  line-height: 1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums;
+  display: block; color: var(--ink);
+}
+.statement .s { font-size: 0.79rem; color: var(--muted); display: block; margin-top: 7px; }
+
+/* ── Sections with the provenance rail ──────────────────────────────────── */
+section { padding: 56px 0 0; }
+.sec-head { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 8px; }
+.sec-head h2 { flex: 1 1 auto; }
+
+.rail { display: grid; grid-template-columns: 106px minmax(0, 1fr); gap: 26px; align-items: start; }
+@media (max-width: 760px) { .rail { grid-template-columns: 1fr; gap: 12px; } }
+
+.tag {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 5px 10px; border-radius: 4px;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 0.62rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+  white-space: nowrap;
+}
+.tag::before { content: ""; width: 7px; height: 7px; border-radius: 1px; flex: none; }
+.tag.measured { color: var(--measured); background: var(--measured-wash); }
+.tag.measured::before { background: var(--measured); }
+.tag.assumed { color: var(--assumed); background: var(--assumed-wash); }
+.tag.assumed::before { background: var(--assumed); transform: rotate(45deg); }
+.tag.flag { color: var(--flag); background: var(--flag-wash); }
+.tag.flag::before { background: var(--flag); border-radius: 50%; }
+
+/* ── Panels ─────────────────────────────────────────────────────────────── */
+.panel {
+  background: var(--surface); border: 1px solid var(--rule);
+  padding: 24px; margin: 22px 0; box-shadow: var(--shadow);
+}
+.panel > h3 { margin-bottom: 4px; }
+.panel .cap { font-size: 0.83rem; color: var(--muted); margin: 0 0 20px; }
+
+/* ── Bar charts (CSS marks) ─────────────────────────────────────────────── */
+.chart { display: flex; flex-direction: column; gap: 16px; }
+.grp { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: 14px; align-items: center; }
+@media (max-width: 620px) { .grp { grid-template-columns: 1fr; gap: 6px; } }
+.grp .lab {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 0.74rem; font-weight: 500; color: var(--ink-2); text-align: right;
+}
+@media (max-width: 620px) { .grp .lab { text-align: left; } }
+.bars { display: flex; flex-direction: column; gap: 2px; }
+.bar-row { display: flex; align-items: center; gap: 10px; }
+.track { flex: 1 1 auto; min-width: 0; background: var(--sunk); height: 17px; position: relative; }
+.fill {
+  height: 100%; border-radius: 0 4px 4px 0;
+  transition: filter 120ms ease;
+}
+.bar-row:hover .fill { filter: brightness(1.08); }
+.fill.s1 { background: var(--measured); }
+.fill.s2 { background: var(--accent); }
+.fill.neg { background: var(--flag); }
+.val {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-variant-numeric: tabular-nums; font-size: 0.76rem; font-weight: 500;
+  color: var(--ink); min-width: 92px; flex: none;
+}
+.legend {
+  display: flex; flex-wrap: wrap; gap: 8px 20px; margin-bottom: 20px;
+  font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 0.72rem; color: var(--muted);
+}
+.legend i { display: inline-block; width: 11px; height: 11px; margin-right: 7px; vertical-align: -1px; border-radius: 2px; }
+
+/* ── Waterfall ──────────────────────────────────────────────────────────── */
+.fall { display: flex; flex-direction: column; gap: 3px; }
+.fall-row { display: grid; grid-template-columns: 168px minmax(0, 1fr) 96px; gap: 14px; align-items: center; }
+@media (max-width: 620px) { .fall-row { grid-template-columns: 118px minmax(0,1fr) 76px; gap: 8px; } }
+.fall-row .lab { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 0.73rem; color: var(--ink-2); }
+.fall-track { position: relative; height: 27px; background: var(--sunk); }
+.fall-seg { position: absolute; top: 0; height: 100%; border-radius: 2px; }
+.fall-seg.base  { background: var(--muted); }
+.fall-seg.up    { background: var(--measured); }
+.fall-seg.down  { background: var(--flag); }
+.fall-seg.total { background: var(--ink); }
+.fall-row .amt {
+  font-family: "IBM Plex Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums;
+  font-size: 0.79rem; font-weight: 500; text-align: right; color: var(--ink);
+}
+.fall-row.rule-top { border-top: 1px solid var(--rule); padding-top: 5px; margin-top: 3px; }
+
+/* ── Tables ─────────────────────────────────────────────────────────────── */
+.scroll { overflow-x: auto; margin: 20px 0; border: 1px solid var(--rule); background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 0.83rem; min-width: 560px; }
+th, td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--rule-soft); }
+thead th {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 0.65rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--muted); background: var(--sunk); border-bottom: 1px solid var(--rule); white-space: nowrap;
+}
+td.n, th.n { text-align: right; font-family: "IBM Plex Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+tbody tr:last-child td { border-bottom: none; }
+tbody tr:hover td { background: var(--sunk); }
+tr.emph td { background: var(--flag-wash); }
+tr.emph:hover td { background: var(--flag-wash); }
+tr.tot td { border-top: 1px solid var(--ink); font-weight: 600; }
+
+/* ── Matrix ─────────────────────────────────────────────────────────────── */
+.matrix { border-collapse: separate; border-spacing: 2px; min-width: 460px; }
+.matrix td.cell {
+  text-align: center; font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-variant-numeric: tabular-nums; font-weight: 500; border: none;
+  padding: 13px 8px; color: var(--ink);
+}
+.matrix td.cell.hot { color: var(--on-hot); }
+.matrix th { background: transparent; border: none; }
+.matrix tbody th {
+  font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 0.68rem;
+  text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted);
+  text-align: right; white-space: nowrap; background: transparent;
+}
+.ramp-key { display: flex; align-items: center; gap: 9px; margin-top: 14px; font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 0.68rem; color: var(--muted); }
+.ramp-key .swatches { display: flex; gap: 2px; }
+.ramp-key .swatches i { width: 26px; height: 11px; display: block; }
+
+/* ── Case cards ─────────────────────────────────────────────────────────── */
+.cases { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); margin: 22px 0; }
+.case { background: var(--surface); border: 1px solid var(--rule); border-top: 3px solid var(--rule); padding: 20px; }
+.case.hi { border-top-color: var(--measured); }
+.case.lo { border-top-color: var(--flag); }
+.case.mix { border-top-color: var(--assumed); }
+.case .id { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 0.79rem; font-weight: 600; color: var(--ink); }
+.case .sub { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 0.7rem; color: var(--muted); margin: 5px 0 14px; }
+.case .headline { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+.case .band { font-family: Spectral, Georgia, serif; font-size: 1.5rem; font-weight: 600; line-height: 1; }
+.case.hi .band { color: var(--measured); }
+.case.lo .band { color: var(--flag); }
+.case.mix .band { color: var(--assumed); }
+.case .money { font-family: "IBM Plex Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; font-size: 0.83rem; color: var(--ink-2); }
+.ramp { display: flex; gap: 2px; margin-bottom: 14px; }
+.ramp div { flex: 1; text-align: center; padding: 7px 3px; background: var(--sunk); font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 0.72rem; font-variant-numeric: tabular-nums; color: var(--ink); }
+.ramp div span { display: block; font-size: 0.58rem; color: var(--muted); letter-spacing: 0.05em; margin-bottom: 2px; }
+.factors { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.factors li {
+  display: grid; grid-template-columns: 118px 62px minmax(0, 1fr); gap: 8px; align-items: baseline;
+  font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 0.68rem; padding: 3px 0;
+  border-bottom: 1px dotted var(--rule-soft);
+}
+.factors li:last-child { border-bottom: none; }
+.factors .fc { color: var(--ink-2); font-weight: 500; }
+.factors .fp { font-variant-numeric: tabular-nums; text-align: right; font-weight: 600; }
+.factors .fp.up { color: var(--measured); }
+.factors .fp.down { color: var(--flag); }
+.factors .fp.off { color: var(--muted); font-weight: 400; }
+.factors .fs { color: var(--muted); font-size: 0.64rem; line-height: 1.45; }
+
+/* ── Callouts ───────────────────────────────────────────────────────────── */
+.note { border-left: 3px solid var(--accent); background: var(--accent-wash); padding: 16px 20px; margin: 22px 0; }
+.note.warn { border-left-color: var(--flag); background: var(--flag-wash); }
+.note.assume { border-left-color: var(--assumed); background: var(--assumed-wash); }
+.note p:last-child { margin-bottom: 0; }
+.note .h { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 0.68rem; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; display: block; margin-bottom: 8px; color: var(--accent); }
+.note.warn .h { color: var(--flag); }
+.note.assume .h { color: var(--assumed); }
+
+footer { margin-top: 72px; padding-top: 26px; border-top: 2px solid var(--ink); font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 0.72rem; color: var(--muted); }
+footer p { color: var(--muted); }
+
+a { color: var(--accent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="masthead">
+  <span class="eyebrow">Calibration review · dry run 2026-08-24</span>
+  <h1>Recovery Label Calibration</h1>
+  <p class="dek">A computed HIGH/MEDIUM/LOW recovery label, scored against the live book of 525 delinquent loans and compared with the random label it would replace. Nothing was written.</p>
+  <div class="meta-row">
+    <span>Loans scored <b>525</b></span>
+    <span>Customers <b>425</b></span>
+    <span>Cases <b>410</b></span>
+    <span>Scorecard <b>recovery-scorecard-1.0.0</b></span>
+    <span>Horizon <b>90 days</b></span>
+  </div>
+  <div class="gate"><span class="dot"></span> RECOVERY_WRITE_LABEL = false — no loan label was modified</div>
+</header>
+
+<div class="statement">
+  <div class="cell">
+    <span class="k">Book outstanding</span>
+    <span class="v">₹53.58<span style="font-size:1.1rem"> Cr</span></span>
+    <span class="s">525 loans in field collections</span>
+  </div>
+  <div class="cell">
+    <span class="k">Expected recoverable</span>
+    <span class="v">₹21.81<span style="font-size:1.1rem"> Cr</span></span>
+    <span class="s">within 90 days</span>
+  </div>
+  <div class="cell">
+    <span class="k">Implied recovery rate</span>
+    <span class="v">40.7<span style="font-size:1.1rem">%</span></span>
+    <span class="s">of the outstanding book</span>
+  </div>
+  <div class="cell">
+    <span class="k">Labels that would change</span>
+    <span class="v">303</span>
+    <span class="s">57.7% of loans, if the gate opened</span>
+  </div>
+</div>
+
+<!-- ── How to read this ─────────────────────────────────────────────────── -->
+<section>
+  <div class="prose" style="margin-bottom:26px">
+    <h2 style="margin-bottom:14px">How to read this report</h2>
+    <p style="margin-bottom:0">Every claim below carries one of two marks. The distinction matters more than any single number here, because this scorecard has never been tested against money that actually came back.</p>
+  </div>
+
+  <div class="rail">
+    <div><span class="tag measured">Measured</span></div>
+    <div class="prose">
+      <p style="margin-bottom:10px"><strong>Measured</strong> — observed in the dry run against real portfolio data. These figures are reproducible: re-run the scorer and they come back the same. They describe what the scorecard <em>does</em>.</p>
+    </div>
+  </div>
+  <div class="rail" style="margin-top:14px">
+    <div><span class="tag assumed">Assumed</span></div>
+    <div class="prose">
+      <p style="margin-bottom:10px"><strong>Assumed</strong> — a hand-chosen constant or judgement built into the scorecard. Nothing validates these. They were picked by reasoning, not fitted to outcomes, and they are load-bearing for every number on this page.</p>
+      <p>There is no third category yet. <strong>No prediction here has been compared with a realised recovery</strong>, because no labelled outcome exists — the first 30-day figures land 30 days after the first real scoring run.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ── Where the money is ───────────────────────────────────────────────── -->
+<section>
+  <div class="sec-head"><h2>Where the recoverable money sits</h2><span class="tag measured">Measured</span></div>
+  <p class="prose">This is the finding the label exists to produce. Case volume and recoverable value are not the same shape, and the gap between them is the argument for prioritising at all.</p>
+
+  <div class="panel">
+    <h3>Share of cases vs share of recoverable money</h3>
+    <p class="cap">Both series are percentages of their own total, so they sit on one axis.</p>
+    <div class="legend">
+      <span><i style="background:var(--measured)"></i>Share of cases</span>
+      <span><i style="background:var(--accent)"></i>Share of recoverable money</span>
+    </div>
+    <div class="chart">
+      <div class="grp">
+        <div class="lab">HIGH</div>
+        <div class="bars">
+          <div class="bar-row"><div class="track"><div class="fill s1" style="width:31.4%"></div></div><span class="val">31.4% · 165</span></div>
+          <div class="bar-row"><div class="track"><div class="fill s2" style="width:48.7%"></div></div><span class="val">48.7% · ₹10.62 Cr</span></div>
+        </div>
+      </div>
+      <div class="grp">
+        <div class="lab">MEDIUM</div>
+        <div class="bars">
+          <div class="bar-row"><div class="track"><div class="fill s1" style="width:44.8%"></div></div><span class="val">44.8% · 235</span></div>
+          <div class="bar-row"><div class="track"><div class="fill s2" style="width:44.1%"></div></div><span class="val">44.1% · ₹9.61 Cr</span></div>
+        </div>
+      </div>
+      <div class="grp">
+        <div class="lab">LOW</div>
+        <div class="bars">
+          <div class="bar-row"><div class="track"><div class="fill s1" style="width:23.8%"></div></div><span class="val">23.8% · 125</span></div>
+          <div class="bar-row"><div class="track"><div class="fill s2" style="width:7.2%"></div></div><span class="val">7.2% · ₹1.58 Cr</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="scroll">
+    <table>
+      <thead><tr><th>Band</th><th class="n">Loans</th><th class="n">Outstanding</th><th class="n">Expected recoverable</th><th class="n">Implied rate</th><th class="n">Share of recoverable</th></tr></thead>
+      <tbody>
+        <tr><td><strong>HIGH</strong></td><td class="n">165</td><td class="n">₹16.41 Cr</td><td class="n">₹10.62 Cr</td><td class="n">64.7%</td><td class="n">48.7%</td></tr>
+        <tr><td><strong>MEDIUM</strong></td><td class="n">235</td><td class="n">₹25.90 Cr</td><td class="n">₹9.61 Cr</td><td class="n">37.1%</td><td class="n">44.1%</td></tr>
+        <tr><td><strong>LOW</strong></td><td class="n">125</td><td class="n">₹11.26 Cr</td><td class="n">₹1.58 Cr</td><td class="n">14.0%</td><td class="n">7.2%</td></tr>
+        <tr class="tot"><td>Total</td><td class="n">525</td><td class="n">₹53.58 Cr</td><td class="n">₹21.81 Cr</td><td class="n">40.7%</td><td class="n">100%</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note">
+    <span class="h">The operational finding</span>
+    <p><strong>71 loans — 13.5% of the book — carry half the recoverable money.</strong> The top 50 alone account for ₹8.73 Cr of the ₹21.81 Cr. Meanwhile the LOW band is 125 loans, nearly a quarter of the agents' case list, holding 7.2% of the recoverable value.</p>
+    <p style="margin-bottom:0">This concentration is measured from real balances, and it holds regardless of whether the scorecard's absolute rates are well calibrated — it depends on the <em>ordering</em>, not the levels.</p>
+  </div>
+</section>
+
+<!-- ── Rate distributions ───────────────────────────────────────────────── -->
+<section>
+  <div class="sec-head"><h2>Recovery rates at 30, 60 and 90 days</h2><span class="tag measured">Measured</span></div>
+  <p class="prose">Each loan gets three estimates: the share of its outstanding balance expected back within each window. The bars show the middle half of the book (25th–75th percentile) with the median marked.</p>
+
+  <div class="panel">
+    <h3>Distribution across 525 loans</h3>
+    <p class="cap">Bar spans p25–p75 · vertical rule is the median · whisker labels are min and max.</p>
+    <div class="chart">
+      <div class="grp">
+        <div class="lab">30 days</div>
+        <div class="bars">
+          <div class="bar-row">
+            <div class="track" style="height:22px">
+              <div class="fill s1" style="position:absolute;left:8.4%;width:10.3%;border-radius:4px;opacity:.55"></div>
+              <div style="position:absolute;left:13.9%;top:0;width:2px;height:100%;background:var(--measured)"></div>
+            </div>
+            <span class="val">med 13.9%</span>
+          </div>
+        </div>
+      </div>
+      <div class="grp">
+        <div class="lab">60 days</div>
+        <div class="bars">
+          <div class="bar-row">
+            <div class="track" style="height:22px">
+              <div class="fill s1" style="position:absolute;left:15.3%;width:16.5%;border-radius:4px;opacity:.75"></div>
+              <div style="position:absolute;left:23.6%;top:0;width:2px;height:100%;background:var(--measured)"></div>
+            </div>
+            <span class="val">med 23.6%</span>
+          </div>
+        </div>
+      </div>
+      <div class="grp">
+        <div class="lab">90 days</div>
+        <div class="bars">
+          <div class="bar-row">
+            <div class="track" style="height:22px">
+              <div class="fill s1" style="position:absolute;left:25.8%;width:30.4%;border-radius:4px"></div>
+              <div style="position:absolute;left:39.0%;top:0;width:2px;height:100%;background:var(--ink)"></div>
+            </div>
+            <span class="val">med 39.0%</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="cap" style="margin:16px 0 0">Axis runs 0–100% of outstanding balance. The 90-day figure is the one the HIGH/MEDIUM/LOW label is banded on.</p>
+  </div>
+
+  <div class="scroll">
+    <table>
+      <thead><tr><th>Horizon</th><th class="n">Min</th><th class="n">p25</th><th class="n">Median</th><th class="n">p75</th><th class="n">Max</th><th class="n">Mean</th></tr></thead>
+      <tbody>
+        <tr><td>30 days</td><td class="n">0.3%</td><td class="n">8.4%</td><td class="n">13.9%</td><td class="n">18.7%</td><td class="n">32.2%</td><td class="n">14.0%</td></tr>
+        <tr><td>60 days</td><td class="n">0.8%</td><td class="n">15.3%</td><td class="n">23.6%</td><td class="n">31.8%</td><td class="n">52.7%</td><td class="n">24.1%</td></tr>
+        <tr><td><strong>90 days</strong></td><td class="n">2.0%</td><td class="n">25.8%</td><td class="n">39.0%</td><td class="n">56.2%</td><td class="n">82.1%</td><td class="n">40.1%</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="prose" style="font-size:0.9rem;color:var(--muted)">Ordering held on every loan: no case produced a 30-day estimate above its 60-day, or a 60 above its 90. That is structural rather than lucky — the three figures are one eventual rate multiplied by a speed fraction bounded below 1.</p>
+</section>
+
+<!-- ── Decomposition ────────────────────────────────────────────────────── -->
+<section>
+  <div class="sec-head"><h2>Where the 40.7% comes from</h2><span class="tag assumed">Assumed</span></div>
+  <p class="prose">The portfolio estimate is not mostly earned by the evidence. It is mostly a constant.</p>
+
+  <div class="panel">
+    <h3>Mean 90-day rate, decomposed</h3>
+    <p class="cap">Averaged across all 525 loans. Positive and negative contributions are the sums of the factors that spoke.</p>
+    <div class="fall">
+      <div class="fall-row">
+        <span class="lab">BASE_RATE</span>
+        <div class="fall-track"><div class="fall-seg base" style="left:0;width:35%"></div></div>
+        <span class="amt">35.0%</span>
+      </div>
+      <div class="fall-row">
+        <span class="lab">+ positive factors</span>
+        <div class="fall-track"><div class="fall-seg up" style="left:35%;width:24.4%"></div></div>
+        <span class="amt">+24.4</span>
+      </div>
+      <div class="fall-row">
+        <span class="lab">− negative factors</span>
+        <div class="fall-track"><div class="fall-seg down" style="left:39.5%;width:19.9%"></div></div>
+        <span class="amt">−19.9</span>
+      </div>
+      <div class="fall-row rule-top">
+        <span class="lab">Net of all factors</span>
+        <div class="fall-track"><div class="fall-seg base" style="left:35%;width:4.5%;opacity:.85"></div></div>
+        <span class="amt">+4.5</span>
+      </div>
+      <div class="fall-row">
+        <span class="lab"><strong>Mean final rate</strong></span>
+        <div class="fall-track"><div class="fall-seg total" style="left:0;width:40.1%"></div></div>
+        <span class="amt"><strong>40.1%</strong></span>
+      </div>
+    </div>
+    <div class="legend" style="margin:18px 0 0">
+      <span><i style="background:var(--muted)"></i>Assumed constant</span>
+      <span><i style="background:var(--measured)"></i>Positive contribution</span>
+      <span><i style="background:var(--flag)"></i>Negative contribution</span>
+      <span><i style="background:var(--ink)"></i>Resulting rate</span>
+    </div>
+  </div>
+
+  <div class="rail">
+    <div><span class="tag assumed">Assumed</span></div>
+    <div class="prose">
+      <p><strong>87% of the mean estimate is BASE_RATE.</strong> Of the 40.1% mean 90-day rate, 35.0 points are the starting constant and only <strong>+4.5 points net</strong> are contributed by everything the scorecard reads about a loan. The factors are individually large — they move a loan by ±24 and ∓20 points on average — but across the book they very nearly cancel.</p>
+      <p>Read carefully, that is two separate statements. The factors are doing real work <em>ranking</em> loans against each other: 308 loans finish net positive and 217 net negative, and the spread from 2.0% to 82.1% is entirely factor-driven. What the factors are <em>not</em> doing is setting the portfolio's overall level. That comes from a constant chosen by reasoning, never fitted to a recovery.</p>
+      <p style="margin-bottom:0">So the ordering and the level deserve different amounts of trust. The ordering rests on measured loan attributes. The level rests on one number nobody has tested.</p>
+    </div>
+  </div>
+
+  <div class="note assume">
+    <span class="h">What would settle it</span>
+    <p style="margin-bottom:0">The <span class="mono">recovered_amount_30/60/90</span> columns added by this work are exactly the evidence needed. Once the first cohort matures, the mean realised recovery can be compared with the 40.7% estimate directly. Until then no recommendation about BASE_RATE can be grounded in this data, and none is made here.</p>
+  </div>
+
+  <p class="prose" style="font-size:0.9rem;color:var(--muted)">Note on the arithmetic: the mean of the raw sums is 39.5%, and the reported 40.1% is slightly higher because 24 loans were clamped up to the 2.0% floor. Nothing hit the 95% ceiling.</p>
+</section>
+
+<!-- ── Factor dominance ─────────────────────────────────────────────────── -->
+<section>
+  <div class="sec-head"><h2>One factor dominates more than its weight implies</h2><span class="tag flag">Needs a decision</span></div>
+  <p class="prose">Each factor has a nominal weight — its share of the scorecard's total. What it actually contributes across the book can differ, and for one factor it differs sharply.</p>
+
+  <div class="panel">
+    <h3>Nominal weight share vs realised share of score movement</h3>
+    <p class="cap">Realised share is each factor's portion of the total absolute point movement across 525 loans.</p>
+    <div class="legend">
+      <span><i style="background:var(--measured)"></i>Nominal weight share</span>
+      <span><i style="background:var(--accent)"></i>Realised share of movement</span>
+    </div>
+    <div class="chart">
+      <div class="grp">
+        <div class="lab">SECURITY</div>
+        <div class="bars">
+          <div class="bar-row"><div class="track"><div class="fill s1" style="width:56.2%"></div></div><span class="val">17.8%</span></div>
+          <div class="bar-row"><div class="track"><div class="fill s2" style="width:100%"></div></div><span class="val">31.7% · 1.8×</span></div>
+        </div>
+      </div>
+      <div class="grp">
+        <div class="lab">PAYMENT_RECENCY</div>
+        <div class="bars">
+          <div class="bar-row"><div class="track"><div class="fill s1" style="width:49.2%"></div></div><span class="val">15.6%</span></div>
+          <div class="bar-row"><div class="track"><div class="fill s2" style="width:64.4%"></div></div><span class="val">20.4%</span></div>
+        </div>
+      </div>
+      <div class="grp">
+        <div class="lab">ARREARS_SHARE</div>
+        <div class="bars">
+          <div class="bar-row"><div class="track"><div class="fill s1" style="width:35.0%"></div></div><span class="val">11.1%</span></div>
+          <div class="bar-row"><div class="track"><div class="fill s2" style="width:44.8%"></div></div><span class="val">14.2%</span></div>
+        </div>
+      </div>
+      <div class="grp">
+        <div class="lab">AGEING</div>
+        <div class="bars">
+          <div class="bar-row"><div class="track"><div class="fill s1" style="width:63.1%"></div></div><span class="val">20.0%</span></div>
+          <div class="bar-row"><div class="track"><div class="fill s2" style="width:44.5%"></div></div><span class="val">14.1%</span></div>
+        </div>
+      </div>
+      <div class="grp">
+        <div class="lab">PAYMENT_MOMENTUM</div>
+        <div class="bars">
+          <div class="bar-row"><div class="track"><div class="fill s1" style="width:42.0%"></div></div><span class="val">13.3%</span></div>
+          <div class="bar-row"><div class="track"><div class="fill s2" style="width:35.3%"></div></div><span class="val">11.2%</span></div>
+        </div>
+      </div>
+      <div class="grp">
+        <div class="lab">NPA_STATUS</div>
+        <div class="bars">
+          <div class="bar-row"><div class="track"><div class="fill s1" style="width:21.1%"></div></div><span class="val">6.7%</span></div>
+          <div class="bar-row"><div class="track"><div class="fill s2" style="width:13.9%"></div></div><span class="val">4.4%</span></div>
+        </div>
+      </div>
+      <div class="grp">
+        <div class="lab">PENAL_DRAG</div>
+        <div class="bars">
+          <div class="bar-row"><div class="track"><div class="fill s1" style="width:21.1%"></div></div><span class="val">6.7%</span></div>
+          <div class="bar-row"><div class="track"><div class="fill s2" style="width:7.3%"></div></div><span class="val">2.3%</span></div>
+        </div>
+      </div>
+      <div class="grp">
+        <div class="lab">LEGAL_POSTURE</div>
+        <div class="bars">
+          <div class="bar-row"><div class="track"><div class="fill s1" style="width:28.1%"></div></div><span class="val">8.9%</span></div>
+          <div class="bar-row"><div class="track"><div class="fill s2" style="width:5.4%"></div></div><span class="val">1.7%</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="scroll">
+    <table>
+      <thead><tr><th>Factor</th><th class="n">Weight</th><th class="n">Nominal</th><th class="n">Realised</th><th class="n">Spoke on</th><th class="n">Mean ±</th><th class="n">Largest mover</th></tr></thead>
+      <tbody>
+        <tr class="emph"><td><strong>SECURITY</strong></td><td class="n">0.16</td><td class="n">17.8%</td><td class="n">31.7%</td><td class="n">88.0%</td><td class="n">−0.030</td><td class="n">424 loans</td></tr>
+        <tr><td>PAYMENT_RECENCY</td><td class="n">0.14</td><td class="n">15.6%</td><td class="n">20.4%</td><td class="n">100%</td><td class="n">+0.055</td><td class="n">30</td></tr>
+        <tr><td>ARREARS_SHARE</td><td class="n">0.10</td><td class="n">11.1%</td><td class="n">14.2%</td><td class="n">100%</td><td class="n">+0.056</td><td class="n">18</td></tr>
+        <tr><td>AGEING</td><td class="n">0.18</td><td class="n">20.0%</td><td class="n">14.1%</td><td class="n">100%</td><td class="n">−0.063</td><td class="n">52</td></tr>
+        <tr><td>PAYMENT_MOMENTUM</td><td class="n">0.12</td><td class="n">13.3%</td><td class="n">11.2%</td><td class="n">96.6%</td><td class="n">+0.052</td><td class="n">1</td></tr>
+        <tr><td>NPA_STATUS</td><td class="n">0.06</td><td class="n">6.7%</td><td class="n">4.4%</td><td class="n">32.4%</td><td class="n">−0.060</td><td class="n">0</td></tr>
+        <tr><td>PENAL_DRAG</td><td class="n">0.06</td><td class="n">6.7%</td><td class="n">2.3%</td><td class="n">100%</td><td class="n">−0.010</td><td class="n">0</td></tr>
+        <tr><td>LEGAL_POSTURE</td><td class="n">0.08</td><td class="n">8.9%</td><td class="n">1.7%</td><td class="n">16.6%</td><td class="n">+0.014</td><td class="n">0</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note warn">
+    <span class="h">Collateral is close to deciding the label on its own</span>
+    <p><strong>SECURITY is the single largest contributor on 424 of 525 loans (81%)</strong>, against a nominal share of 17.8% — it realises 1.8× its designed influence. The mechanism is visible in the data: it is the only <em>binary</em> factor. Every other factor scales with how late, how much, how recently; SECURITY fires at its full ±0.16 or abstains, so it never lands anywhere in the middle.</p>
+      <p>The consequence shows in the band composition. Of 165 HIGH loans, <strong>139 are secured, 25 are BUSINESS loans where the factor abstained, and exactly 1 is unsecured.</strong> Median 90-day rate is 60.1% for secured against 29.1% for unsecured — a 31-point gap, close to the full 32-point swing the factor can produce by itself.</p>
+    <p style="margin-bottom:0">This may well be correct: collateral genuinely drives recovery, and a HIGH band that means "secured" is not obviously wrong. But it is a business judgement, not a technical one — it decides whether the label tells a manager something they could not get from the loan type column alone. <strong>No weight change is proposed here</strong>, because nothing in this data shows the current weighting produces a worse ordering than an alternative. Realised recoveries split by secured/unsecured would settle it.</p>
+  </div>
+</section>
+
+<!-- ── Examples ─────────────────────────────────────────────────────────── -->
+<section>
+  <div class="sec-head"><h2>What the strongest and weakest cases are made of</h2><span class="tag measured">Measured</span></div>
+  <p class="prose">Contributions are in rate points; the label is banded on the 90-day figure. Factors with no evidence abstain rather than scoring zero, and say so.</p>
+
+  <div class="cases">
+    <article class="case hi">
+      <div class="id">LN174366341 · HOME · 35 DPD</div>
+      <div class="sub">₹12,98,335 outstanding · random label said MEDIUM</div>
+      <div class="headline"><span class="band">HIGH</span><span class="money">₹10,65,803 expected recoverable</span></div>
+      <div class="ramp">
+        <div><span>30D</span>32.2%</div><div><span>60D</span>52.7%</div><div><span>90D</span>82.1%</div>
+      </div>
+      <ul class="factors">
+        <li><span class="fc">SECURITY</span><span class="fp up">+0.160</span><span class="fs">Secured against collateral</span></li>
+        <li><span class="fc">PAYMENT_RECENCY</span><span class="fp up">+0.140</span><span class="fs">Last payment 3 days ago</span></li>
+        <li><span class="fc">ARREARS_SHARE</span><span class="fp up">+0.090</span><span class="fs">9% of the balance is overdue</span></li>
+        <li><span class="fc">PAYMENT_MOMENTUM</span><span class="fp up">+0.090</span><span class="fs">₹1,22,723 received recently</span></li>
+        <li><span class="fc">AGEING</span><span class="fp down">−0.006</span><span class="fs">35 days past due</span></li>
+        <li><span class="fc">PENAL_DRAG</span><span class="fp down">−0.003</span><span class="fs">₹5,842 — 0.4% of balance</span></li>
+        <li><span class="fc">LEGAL_POSTURE</span><span class="fp off">abstain</span><span class="fs">No legal or settlement action</span></li>
+        <li><span class="fc">NPA_STATUS</span><span class="fp off">abstain</span><span class="fs">Not classified NPA</span></li>
+      </ul>
+    </article>
+
+    <article class="case lo">
+      <div class="id">LN714818630 · EDUCATION · 210 DPD</div>
+      <div class="sub">₹15,92,768 outstanding · random label said LOW</div>
+      <div class="headline"><span class="band">LOW</span><span class="money">₹31,855 expected recoverable</span></div>
+      <div class="ramp">
+        <div><span>30D</span>0.3%</div><div><span>60D</span>0.8%</div><div><span>90D</span>2.0%</div>
+      </div>
+      <ul class="factors">
+        <li><span class="fc">AGEING</span><span class="fp down">−0.180</span><span class="fs">210 days past due</span></li>
+        <li><span class="fc">SECURITY</span><span class="fp down">−0.160</span><span class="fs">Unsecured debt</span></li>
+        <li><span class="fc">PAYMENT_RECENCY</span><span class="fp down">−0.140</span><span class="fs">Last payment 223 days ago</span></li>
+        <li><span class="fc">NPA_STATUS</span><span class="fp down">−0.060</span><span class="fs">Classified NPA by the bank</span></li>
+        <li><span class="fc">LEGAL_POSTURE</span><span class="fp up">+0.040</span><span class="fs">SARFAESI enforcement under way</span></li>
+        <li><span class="fc">ARREARS_SHARE</span><span class="fp up">+0.050</span><span class="fs">19% of the balance is overdue</span></li>
+        <li><span class="fc">PAYMENT_MOMENTUM</span><span class="fp up">+0.031</span><span class="fs">₹0 received; last payment was 64% of an EMI</span></li>
+        <li><span class="fc">PENAL_DRAG</span><span class="fp down">−0.000</span><span class="fs">₹1,097 — 0.1% of balance</span></li>
+      </ul>
+      <p class="cap" style="margin:12px 0 0;font-size:0.72rem">Raw score fell below the 2.0% floor and was clamped — one of 24 such loans.</p>
+    </article>
+  </div>
+</section>
+
+<!-- ── Disagreement ─────────────────────────────────────────────────────── -->
+<section>
+  <div class="sec-head"><h2>Where willingness and value disagree</h2><span class="tag measured">Measured</span></div>
+  <p class="prose">The repayment scorecard answers <em>will this borrower pay</em>. The recovery scorecard answers <em>how much of this loan comes back</em>. They are computed independently — neither reads the other's output — so they are free to disagree, and the cells where they do are the reason for carrying two numbers.</p>
+
+  <div class="panel">
+    <h3>Repayment band × recovery band</h3>
+    <p class="cap">Loan counts. Darker cells hold more loans.</p>
+    <div class="scroll" style="border:none;margin:0">
+      <table class="matrix">
+        <thead>
+          <tr><th></th><th class="n" style="text-align:center;font-family:'IBM Plex Mono';font-size:0.68rem;color:var(--muted);letter-spacing:0.06em">HIGH</th><th class="n" style="text-align:center;font-family:'IBM Plex Mono';font-size:0.68rem;color:var(--muted);letter-spacing:0.06em">MEDIUM</th><th class="n" style="text-align:center;font-family:'IBM Plex Mono';font-size:0.68rem;color:var(--muted);letter-spacing:0.06em">LOW</th></tr>
+        </thead>
+        <tbody>
+          <tr><th>Likely</th>
+            <td class="cell" style="background:var(--m2)">33</td>
+            <td class="cell" style="background:var(--m1)">8</td>
+            <td class="cell" style="background:var(--m0)">0</td></tr>
+          <tr><th>Uncertain</th>
+            <td class="cell hot" style="background:var(--m5)">92</td>
+            <td class="cell hot" style="background:var(--m5)">96</td>
+            <td class="cell" style="background:var(--m1)">14</td></tr>
+          <tr><th>Unlikely</th>
+            <td class="cell" style="background:var(--m2)">38</td>
+            <td class="cell hot" style="background:var(--m5)">99</td>
+            <td class="cell" style="background:var(--m3)">42</td></tr>
+          <tr><th>Very unlikely</th>
+            <td class="cell" style="background:var(--m0)">2</td>
+            <td class="cell" style="background:var(--m2)">32</td>
+            <td class="cell hot" style="background:var(--m4)">69</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="ramp-key">
+      <span>Fewer</span>
+      <span class="swatches">
+        <i style="background:var(--m0)"></i><i style="background:var(--m2)"></i><i style="background:var(--m2)"></i><i style="background:var(--m4)"></i><i style="background:var(--m5)"></i>
+      </span>
+      <span>More loans</span>
+    </div>
+  </div>
+
+  <div class="rail">
+    <div><span class="tag measured">Measured</span></div>
+    <div class="prose">
+      <p><strong>40 loans are unlikely to be paid and HIGH to recover, together worth ₹2.38 Cr.</strong> These are the cases a willingness-only view would deprioritise and a value view would chase. Only 8 loans run the other way — likely to pay but MEDIUM or LOW recovery — and none is both LIKELY and LOW.</p>
+      <p style="margin-bottom:0">The asymmetry is itself informative: the two scores agree far more often than they conflict, so the recovery label is not simply a re-labelling of the repayment score, but neither is it independent noise.</p>
+    </div>
+  </div>
+
+  <div class="cases">
+    <article class="case mix">
+      <div class="id">LN773282001 · GOLD · 210 DPD</div>
+      <div class="sub">₹37,80,406 outstanding · random label said LOW</div>
+      <div class="headline"><span class="band">HIGH</span><span class="money">₹19,73,372 expected · repayment VERY UNLIKELY (16.7)</span></div>
+      <div class="ramp"><div><span>30D</span>15.8%</div><div><span>60D</span>28.8%</div><div><span>90D</span>52.2%</div></div>
+      <ul class="factors">
+        <li><span class="fc">SECURITY</span><span class="fp up">+0.160</span><span class="fs">Secured against collateral</span></li>
+        <li><span class="fc">PAYMENT_RECENCY</span><span class="fp up">+0.140</span><span class="fs">Last payment 4 days ago</span></li>
+        <li><span class="fc">ARREARS_SHARE</span><span class="fp up">+0.060</span><span class="fs">16% of the balance is overdue</span></li>
+        <li><span class="fc">PAYMENT_MOMENTUM</span><span class="fp up">+0.053</span><span class="fs">₹53,242 received recently</span></li>
+        <li><span class="fc">AGEING</span><span class="fp down">−0.180</span><span class="fs">210 days past due</span></li>
+        <li><span class="fc">NPA_STATUS</span><span class="fp down">−0.060</span><span class="fs">Classified NPA by the bank</span></li>
+      </ul>
+      <p class="cap" style="margin:12px 0 0;font-size:0.72rem">Gold collateral plus live payments against a very poor promise history. The label says the money is there; the repayment score says the borrower will not volunteer it.</p>
+    </article>
+
+    <article class="case mix">
+      <div class="id">LN878891323 · BUSINESS · 65 DPD</div>
+      <div class="sub">₹38,43,388 outstanding · random label said MEDIUM</div>
+      <div class="headline"><span class="band">HIGH</span><span class="money">₹22,06,489 expected · repayment UNLIKELY (32.8)</span></div>
+      <div class="ramp"><div><span>30D</span>26.4%</div><div><span>60D</span>40.8%</div><div><span>90D</span>57.4%</div></div>
+      <ul class="factors">
+        <li><span class="fc">PAYMENT_RECENCY</span><span class="fp up">+0.140</span><span class="fs">Last payment 4 days ago</span></li>
+        <li><span class="fc">ARREARS_SHARE</span><span class="fp up">+0.070</span><span class="fs">13% of the balance is overdue</span></li>
+        <li><span class="fc">PAYMENT_MOMENTUM</span><span class="fp up">+0.057</span><span class="fs">₹56,679 in, 96% of an EMI</span></li>
+        <li><span class="fc">AGEING</span><span class="fp down">−0.042</span><span class="fs">65 days past due</span></li>
+        <li><span class="fc">SECURITY</span><span class="fp off">abstain</span><span class="fs">BUSINESS — collateral undetermined</span></li>
+        <li><span class="fc">LEGAL_POSTURE</span><span class="fp off">abstain</span><span class="fs">No legal or settlement action</span></li>
+        <li><span class="fc">NPA_STATUS</span><span class="fp off">abstain</span><span class="fs">Not classified NPA</span></li>
+      </ul>
+      <p class="cap" style="margin:12px 0 0;font-size:0.72rem">The largest single opportunity in this group, and the thinnest evidence behind it — coverage 0.667, the lowest of the 40. Three factors abstained, including the one that dominates the band elsewhere.</p>
+    </article>
+  </div>
+</section>
+
+<!-- ── Anomalies ────────────────────────────────────────────────────────── -->
+<section>
+  <div class="sec-head"><h2>Two behaviours worth a business opinion</h2><span class="tag flag">Needs a decision</span></div>
+  <p class="prose">Both surfaced from the real data rather than from reading the code, and both are matters of what the business thinks these signals mean — not arithmetic errors.</p>
+
+  <div class="note warn">
+    <span class="h">Positive payment momentum with no money received</span>
+    <p><strong>227 loans (43%) scored a positive PAYMENT_MOMENTUM contribution while nothing at all arrived in the behaviour window. 77 of those are 90+ DPD.</strong> The factor credits the size of the last recorded payment relative to an EMI even when that payment is long past, so a loan whose last payment was 223 days ago still earns credit for it having been a decent-sized payment.</p>
+    <p style="margin-bottom:0">The reason lines read oddly as a result — one LOW case shows <span class="mono">"₹0 received recently; last payment covered 64% of an EMI"</span> attached to a positive score. Whether historic payment size should count as momentum when nothing is currently moving is a collections judgement.</p>
+  </div>
+
+  <div class="note warn">
+    <span class="h">Arrears share reads as positive on deeply distressed loans</span>
+    <p style="margin-bottom:0"><strong>123 loans at 90+ DPD received a positive ARREARS_SHARE contribution.</strong> The factor rewards a low ratio of overdue amount to total balance. On a long-tenor loan that ratio is low because the balance is large, not because the borrower is nearly current — a 210-DPD NPA with 19% of a ₹15.9 lakh balance overdue scores as favourably on this factor as a genuinely mildly-delinquent account.</p>
+  </div>
+
+  <p class="prose" style="font-size:0.9rem;color:var(--muted)">Neither is a scoring bug in the sense of producing a wrong number from its own rules; both are cases where the rule may not mean what its name suggests to a collections manager reading it.</p>
+</section>
+
+<!-- ── Evidence coverage ────────────────────────────────────────────────── -->
+<section>
+  <div class="sec-head"><h2>How much evidence each score rests on</h2><span class="tag measured">Measured</span></div>
+  <p class="prose">Coverage is the share of the scorecard's total weight that had actual evidence behind it. A factor with nothing to read abstains and withholds its weight rather than scoring zero.</p>
+
+  <div class="scroll">
+    <table>
+      <thead><tr><th>Measure</th><th class="n">Value</th><th>Reading</th></tr></thead>
+      <tbody>
+        <tr><td>Median coverage</td><td class="n">84.4%</td><td>Most loans are scored on nearly all available factors</td></tr>
+        <tr><td>Minimum coverage</td><td class="n">53.3%</td><td>No loan fell below half the scorecard's weight</td></tr>
+        <tr><td>Loans below 55%</td><td class="n">2</td><td>0.4% of the book</td></tr>
+        <tr><td>Loans scored on ageing alone</td><td class="n">0</td><td>No score rests on a single factor</td></tr>
+        <tr><td>Loans with no recovery score</td><td class="n">0</td><td>Every loan produced a label</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p class="prose">Coverage is high because the always-available factors — ageing, arrears share, penal drag, payment recency — speak on essentially every loan. The two frequent abstentions are <span class="mono">LEGAL_POSTURE</span> (83.4% of loans) and <span class="mono">NPA_STATUS</span> (67.6%), both of which only carry information once an account is deep enough for the bank to have acted.</p>
+
+  <div class="note assume">
+    <span class="h">An assumption worth naming</span>
+    <p style="margin-bottom:0">Recovery has <strong>no configured coverage floor</strong>. The repayment scorecard suppresses a number below 55% coverage; recovery shows a band regardless. On this book that affects 2 loans, so it is not currently material — but it is a deliberate difference between the two scores that nothing has validated.</p>
+  </div>
+</section>
+
+<!-- ── What changes ─────────────────────────────────────────────────────── -->
+<section>
+  <div class="sec-head"><h2>What opening the gate would change</h2><span class="tag measured">Measured</span></div>
+  <p class="prose">The gate controls one thing: whether the computed label overwrites <span class="mono">Loan.recovery_potential</span>. The snapshot is written either way, and the manager screens read the snapshot — so the label is already visible without opening it.</p>
+
+  <div class="scroll">
+    <table>
+      <thead><tr><th>From the random label</th><th class="n">HIGH</th><th class="n">MEDIUM</th><th class="n">LOW</th><th class="n">Row total</th></tr></thead>
+      <tbody>
+        <tr><th style="background:transparent;border-bottom:1px solid var(--rule-soft);text-transform:none;font-family:'IBM Plex Sans';font-size:0.83rem;letter-spacing:0;color:var(--ink)">HIGH</th><td class="n">64</td><td class="n">59</td><td class="n">15</td><td class="n">138</td></tr>
+        <tr><th style="background:transparent;border-bottom:1px solid var(--rule-soft);text-transform:none;font-family:'IBM Plex Sans';font-size:0.83rem;letter-spacing:0;color:var(--ink)">MEDIUM</th><td class="n">57</td><td class="n">78</td><td class="n">24</td><td class="n">159</td></tr>
+        <tr><th style="background:transparent;border-bottom:1px solid var(--rule-soft);text-transform:none;font-family:'IBM Plex Sans';font-size:0.83rem;letter-spacing:0;color:var(--ink)">LOW</th><td class="n">42</td><td class="n">96</td><td class="n">80</td><td class="n">218</td></tr>
+        <tr><th style="background:transparent;border-bottom:1px solid var(--rule-soft);text-transform:none;font-family:'IBM Plex Sans';font-size:0.83rem;letter-spacing:0;color:var(--ink)">Unset</th><td class="n">2</td><td class="n">2</td><td class="n">6</td><td class="n">10</td></tr>
+        <tr class="tot"><td>New total</td><td class="n">165</td><td class="n">235</td><td class="n">125</td><td class="n">525</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p class="prose"><strong>303 of 525 labels would change (57.7%)</strong> — 10 of them from unset, 293 from one band to another. 222 already agree. A real run would also insert 525 new snapshot rows and update none, because the existing 523 rows are dated 21 August and carry a different point-in-time key.</p>
+
+  <p class="prose">The computed book is more optimistic than the random one it replaces: LOW falls from 218 loans to 125, HIGH rises from 138 to 165. That is a change in what the label asserts, not evidence that either is right — the labels being replaced were drawn from <span class="mono">random.choices()</span>, so agreement with them carries no information at all.</p>
+</section>
+
+<!-- ── Summary ──────────────────────────────────────────────────────────── -->
+<section>
+  <div class="sec-head"><h2>Measured against assumed, side by side</h2></div>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>Statement</th><th>Status</th><th>What backs it</th></tr></thead>
+      <tbody>
+        <tr><td>71 loans hold half the recoverable money</td><td><span class="tag measured">Measured</span></td><td>Real balances × scored rates, this book</td></tr>
+        <tr><td>HIGH is 31% of cases and 49% of value</td><td><span class="tag measured">Measured</span></td><td>Dry run over 525 loans</td></tr>
+        <tr><td>30/60/90 estimates never invert</td><td><span class="tag measured">Measured</span></td><td>0 violations in 525 loans; structural</td></tr>
+        <tr><td>SECURITY realises 1.8× its nominal weight</td><td><span class="tag measured">Measured</span></td><td>Contribution attribution across the book</td></tr>
+        <tr><td>40 loans: unlikely to pay, high to recover</td><td><span class="tag measured">Measured</span></td><td>Independent scores, cross-tabulated</td></tr>
+        <tr><td>A delinquent book recovers ~35% by default</td><td><span class="tag assumed">Assumed</span></td><td>BASE_RATE, chosen by reasoning</td></tr>
+        <tr><td>HIGH begins at 50% and MEDIUM at 25%</td><td><span class="tag assumed">Assumed</span></td><td>Band edges, chosen by reasoning</td></tr>
+        <tr><td>Collateral is worth ±0.16 of the balance</td><td><span class="tag assumed">Assumed</span></td><td>Factor weight, chosen by reasoning</td></tr>
+        <tr><td>10–55% lands by 30 days, 35–80% by 60</td><td><span class="tag assumed">Assumed</span></td><td>Maturity shares, chosen by reasoning</td></tr>
+        <tr><td>The portfolio will recover 40.7%</td><td><span class="tag assumed">Assumed</span></td><td>87% of it is BASE_RATE; untested</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note">
+    <span class="h">Where that leaves the decision</span>
+    <p>The <em>ordering</em> is measured and defensible: it separates ₹10.62 Cr of recoverable value from ₹1.58 Cr using real loan attributes, and it concentrates half the money into 13.5% of the book. Nothing in this dry run contradicts it.</p>
+    <p>The <em>levels</em> are not. Any statement of the form "we will recover ₹21.81 Cr" inherits an untested constant for 87% of its value, and should not be quoted to anyone outside this review as a forecast.</p>
+    <p style="margin-bottom:0">Two items need a business opinion before the label drives field work: whether a HIGH band that is 139/165 secured is telling managers something they did not already know, and whether historic payment size should count as current momentum. Neither is answerable from this data alone.</p>
+  </div>
+</section>
+
+<footer>
+  <p>Dry run executed 2026-08-24 against the live database through a read-only connection. Row-level SHA-256 digests of loans, customers, cases, payments, PTPs and the snapshot table were identical before and after: nothing was written. <span class="mono">RECOVERY_WRITE_LABEL</span> remained <span class="mono">false</span> throughout.</p>
+  <p style="margin-bottom:0">Scorecard <span class="mono">recovery-scorecard-1.0.0</span> · hand-weighted, not a trained model · no accuracy, AUC or Gini figure exists because none has been measured.</p>
+</footer>
+
+</div>
+</body>
+</html>

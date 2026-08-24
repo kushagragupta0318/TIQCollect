@@ -232,12 +232,28 @@ goals, streaks or achievements, and the agent can't see their own standing.
 reallocation-plan (about agents, not cases). Nothing chooses visit vs call vs
 reminder vs skip-trace vs settlement vs escalate.
 
-**7 · Recovery Probability — the keystone.** No model. `customer.risk_score`
+**7 · Recovery Probability — the keystone.** ~~No model.~~ `customer.risk_score`
 (default 50.0), `loan.bank_risk_score` and `collection_priority_score` are all
-bank-supplied. `loans.recovery_potential` exists as a column but
-`scripts/add_recovery_potential.py` fills it with **`random()`**, weighted by DPD
-and secured/unsecured — plausible-looking demo data, not a prediction. Nothing
-reads it.
+bank-supplied.
+
+*Updated 2026-08-24.* `loans.recovery_potential` used to be filled with
+**`random()`** by two separate writers — `scripts/add_recovery_potential.py` and
+`seed_data.py:481-509` — weighted by DPD and secured/unsecured. Plausible-looking
+demo data, not a prediction, and nothing read it. Both writers are now gone: the
+script is deleted and the seed writes facts only.
+
+It is now **computed** by `app/ml/recovery_scorecard.py` — a hand-weighted
+scorecard (no training, no AUC), banded on the 90-day expected recovery rate,
+with 30/60/90 estimates and a per-loan reason list. Written by exactly one site,
+`RepaymentService._apply_recovery_label`, and only when `RECOVERY_WRITE_LABEL` is
+enabled — which it is **not** by default, pending a dry run and a review of how
+the distribution lands on the real book. The label is snapshotted regardless, so
+the manager surface reads a computed value while the shared column stays as it
+was.
+
+Still open: the repayment likelihood and the recovery rate are both scorecards,
+not models. The snapshot table accrues the labels (`recovered_amount_30/60/90`)
+that could train one.
 
 **8 · Settlement Recommendation** — `loan.settlement_status` is a bank flag,
 read-only, gated on `borrower_verified`. No range calculation, policy constraints or

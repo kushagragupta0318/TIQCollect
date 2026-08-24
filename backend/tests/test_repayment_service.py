@@ -40,6 +40,13 @@ def loan(**over):
         emi_amount=18400.0, overdue_amount=73600.0,
         outstanding_principal=520000.0, last_payment_amount=9000.0,
         legal_status="NONE", settlement_status="NONE",
+        # Added 2026-08-24 alongside the recovery scorecard. A stand-in for a
+        # Loan must carry what a Loan carries — a stub that omits a real column
+        # makes the builder look tolerant of missing data when the model can
+        # never actually present it, and hides the omission until something
+        # reads the column for real.
+        total_outstanding=592000.0, penal_charges=12000.0, npa_flag=False,
+        last_payment_date="2026-07-04",
     )
     base.update(over)
     return NS(**base)
@@ -83,8 +90,21 @@ def case(**over):
     return NS(**base)
 
 
+_UNSET = object()
+
+
 def build(**kw):
-    return SVC.build_features(loan(), customer(), AS_OF, **kw)
+    """Features for the default loan and customer, unless one is passed in.
+
+    `loan=` / `customer=` were added 2026-08-24 so the recovery tests can vary the
+    LOAN rather than only its behavioural history — collateral, penal charges and
+    the balance all live on the loan, and none of them could be reached before.
+    """
+    ln = kw.pop("loan", None) or loan()
+    cust = kw.pop("customer", _UNSET)
+    if cust is _UNSET:
+        cust = customer()
+    return SVC.build_features(ln, cust, AS_OF, **kw)
 
 
 # ── Point-in-time correctness ────────────────────────────────────────────────
@@ -187,6 +207,30 @@ def test_target_is_none_when_there_are_no_cases():
 
 
 # ── Snapshot write policy ────────────────────────────────────────────────────
+def recovery_outcome(likelihood=60.0, as_of=AS_OF, potential="MEDIUM", rate_90=0.42,
+                     total_outstanding=592000.0):
+    """An outcome that DID produce a recovery label.
+
+    The plain outcome() below deliberately carries none, so every pre-recovery
+    call site keeps testing exactly what it always tested. This one is for the
+    clauses that only fire once a label exists.
+    """
+    risk = 100.0 - likelihood
+    return ScoreOutcome(
+        loan_id="loan-1", customer_id="cust-1", case_id=None, as_of=as_of,
+        likelihood=likelihood, risk_score=risk, band=band_for(likelihood),
+        risk_category=risk_category_for(risk), evidence_coverage=0.8,
+        model_version="scorecard-1.0.0", source="SCORECARD",
+        features={"total_outstanding": total_outstanding}, factors=[],
+        recovery_potential=potential, recovery_rate_30=round(rate_90 * 0.3, 4),
+        recovery_rate_60=round(rate_90 * 0.6, 4), recovery_rate_90=rate_90,
+        recovery_speed_index=0.5, recovery_evidence_coverage=0.77,
+        recovery_model_version="recovery-scorecard-1.0.0",
+        recovery_source="SCORECARD", recovery_factors=[{"code": "AGEING"}],
+        recovery_speed_reasons=["collateral realisation takes quarters"],
+    )
+
+
 def outcome(likelihood=60.0, as_of=AS_OF):
     """Band and category are DERIVED, never hardcoded — a fixture whose score
     and label disagree tests nothing real and hides the bug it looks like."""
@@ -200,9 +244,17 @@ def outcome(likelihood=60.0, as_of=AS_OF):
     )
 
 
-def snapshot(likelihood=60.0, days_ago=1):
+def snapshot(likelihood=60.0, days_ago=1, recovery_rate_90=0.42,
+             recovery_potential="MEDIUM"):
+    """A stand-in for an EXISTING snapshot row.
+
+    The recovery fields default to populated — the common case once this feature
+    has been running. Pass recovery_rate_90=None to model a row written before it
+    shipped, which is what test_null_recovery_forces_a_new_row exercises.
+    """
     return NS(likelihood=likelihood, as_of_date=AS_OF - timedelta(days=days_ago),
-              scored_at=None)
+              scored_at=None, recovery_rate_90=recovery_rate_90,
+              recovery_potential=recovery_potential)
 
 
 def test_first_score_is_always_written():
@@ -351,3 +403,288 @@ def test_payload_carries_no_eligibility_verdict():
     payload = SVC.to_payload(outcome(likelihood=2.0))
     for key in ("blocked", "eligible", "do_not_visit", "suppress", "allocatable"):
         assert key not in payload
+
+
+# ── The four feature keys the recovery scorecard needs (2026-08-24) ──────────
+def test_recovery_feature_keys_are_present():
+    """The recovery scorecard reads these four. Absent, every one of its ratio
+    factors abstains at once and the whole book scores at the base rate — a
+    uniform label that looks plausible and says nothing."""
+    f = build()
+    assert f["total_outstanding"] == 592000.0
+    assert f["penal_charges"] == 12000.0
+    assert f["npa_flag"] is False
+    assert "days_since_last_payment" in f
+
+
+def test_new_keys_did_not_disturb_the_repayment_scorecard():
+    """Purely additive. The repayment factors read by name and ignore extras, so
+    SCORECARD_VERSION must NOT need a bump — asserted, because bumping it would
+    silently split the training set across two model_versions."""
+    from app.ml.repayment_scorecard import SCORECARD_VERSION
+    from app.ml.repayment_scorecard import score as repayment_score
+    added = {"total_outstanding", "penal_charges", "npa_flag",
+             "days_since_last_payment"}
+    before = repayment_score({k: v for k, v in build().items() if k not in added})
+    after = repayment_score(build())
+    assert before["likelihood"] == after["likelihood"]
+    assert after["model_version"] == SCORECARD_VERSION
+
+
+def test_recency_comes_from_the_ledger_when_the_ledger_has_it():
+    """The ledger is bounded by as_of earlier in the builder, so it cannot leak.
+    Loan.last_payment_date can."""
+    f = build(payments=[payment(days_ago=3)])
+    assert f["days_since_last_payment"] == 3
+    assert f["_payment_recency_source"] == "LEDGER"
+
+
+def test_recency_falls_back_to_the_loan_column_only_for_a_past_date():
+    """The column is windowless, so it still answers for a borrower who last paid
+    longer ago than the behaviour window. Worth keeping as a fallback."""
+    f = build(loan=loan(last_payment_date="2026-06-01"))
+    assert f["days_since_last_payment"] == (AS_OF - date(2026, 6, 1)).days
+    assert f["_payment_recency_source"] == "LOAN_COLUMN"
+
+
+def test_recency_refuses_a_loan_column_date_after_as_of():
+    """THE LEAK THIS GUARDS. Loan.last_payment_date is overwritten in place by
+    ingest with no history, exactly like Loan.dpd — so on a backfill it reports a
+    payment that had not happened yet on as_of. Accepting it would teach a model
+    that money already known to have arrived predicts money arriving; the
+    measured accuracy would be excellent and worthless."""
+    f = build(loan=loan(last_payment_date="2026-09-15"))   # after AS_OF
+    assert f["days_since_last_payment"] is None
+    assert f["_payment_recency_source"] == "LOAN_COLUMN_REFUSED_FUTURE"
+
+
+def test_recency_is_none_when_nothing_was_ever_paid():
+    """None, not zero. Zero days would read as "paid today"."""
+    f = build(loan=loan(last_payment_date=None))
+    assert f["days_since_last_payment"] is None
+    assert f["_payment_recency_source"] == "NONE_ON_RECORD"
+
+
+def test_recovery_outputs_are_forbidden_as_features():
+    """The ban runs both ways: the recovery scorecard must not read the repayment
+    likelihood, and nothing may read the recovery rates back in. Feeding either
+    into the other collapses the pair into one number wearing two labels."""
+    for key in ("recovery_rate_90", "recovery_potential", "speed_index",
+                "expected_recoverable_amount"):
+        assert key in _FORBIDDEN_FEATURE_KEYS
+        with pytest.raises(ValueError, match="Label leakage"):
+            SVC._raise_if_leaked({"dpd": 75, key: 0.4})
+
+
+# ── The NULL -> computed rule ────────────────────────────────────────────────
+def test_null_recovery_forces_a_new_row_even_on_a_flat_likelihood():
+    """WITHOUT THIS CLAUSE THE FEATURE WRITES NOTHING on a stable book. Every row
+    written before recovery shipped has NULL recovery fields, as does every loan
+    the nightly demo feed creates. If the likelihood has not moved, no other
+    clause fires, no row is written, and the prediction is silently discarded —
+    the feature would appear to work while persisting nothing at all."""
+    previous = snapshot(likelihood=60.0, days_ago=1, recovery_rate_90=None,
+                        recovery_potential=None)
+    assert SVC.should_snapshot(recovery_outcome(likelihood=60.0), previous) is True
+
+
+def test_a_populated_recovery_row_is_not_rewritten_for_nothing():
+    """The counterpart. If NULL -> computed were implemented as "always write",
+    the table would gain a row per loan per night and the write policy would be
+    defeated."""
+    previous = snapshot(likelihood=60.0, days_ago=1, recovery_rate_90=0.42,
+                        recovery_potential="MEDIUM")
+    assert SVC.should_snapshot(
+        recovery_outcome(likelihood=60.0, potential="MEDIUM"), previous) is False
+
+
+def test_recovery_band_move_is_written_on_a_flat_likelihood():
+    """The label a manager acted on has changed. Banded rather than thresholded on
+    the rate: the label is what surfaces, and a three-bucket value moves far more
+    slowly than a 0.1-precision likelihood."""
+    previous = snapshot(likelihood=60.0, days_ago=1, recovery_potential="LOW")
+    assert SVC.should_snapshot(
+        recovery_outcome(likelihood=60.0, potential="HIGH"), previous) is True
+
+
+def test_an_outcome_without_recovery_leaves_the_policy_untouched():
+    """A caller that produced no recovery score must not start forcing rows."""
+    previous = snapshot(likelihood=60.0, days_ago=1, recovery_rate_90=None,
+                        recovery_potential=None)
+    assert SVC.should_snapshot(outcome(likelihood=60.0), previous) is False
+
+
+# ── Persistence, both branches ───────────────────────────────────────────────
+def test_persist_writes_recovery_on_a_new_row():
+    row = SVC.persist(recovery_outcome(potential="HIGH", rate_90=0.61), None)
+    assert row.recovery_potential == "HIGH"
+    assert row.recovery_rate_90 == 0.61
+    assert row.recovery_model_version == "recovery-scorecard-1.0.0"
+    assert row.recovery_contributions["factors"] == [{"code": "AGEING"}]
+
+
+def test_persist_refreshes_recovery_on_a_same_day_rescore():
+    """MISSING THIS BRANCH IS A SILENT STALENESS BUG. persist() updates in place
+    when the row is today's; writing only the insert path would refresh the
+    likelihood and leave yesterday's recovery label beside it, nothing raising."""
+    existing = NS(as_of_date=AS_OF, scored_at=None, likelihood=1.0,
+                  recovery_potential="LOW", recovery_rate_90=0.10)
+    SVC.persist(recovery_outcome(as_of=AS_OF, potential="HIGH", rate_90=0.61),
+                existing)
+    assert existing.recovery_potential == "HIGH"
+    assert existing.recovery_rate_90 == 0.61
+
+
+def test_persist_does_not_erase_a_label_when_none_was_computed():
+    """Guarded on has_recovery, so a caller that produced no recovery score leaves
+    the existing label alone rather than nulling it."""
+    existing = NS(as_of_date=AS_OF, scored_at=None, likelihood=1.0,
+                  recovery_potential="HIGH", recovery_rate_90=0.61)
+    SVC.persist(outcome(as_of=AS_OF), existing)
+    assert existing.recovery_potential == "HIGH"
+
+
+# ── The gate ─────────────────────────────────────────────────────────────────
+def test_recovery_label_is_not_written_while_the_gate_is_shut():
+    """RECOVERY_WRITE_LABEL defaults False and stays False until a dry run and a
+    distribution review are done. The snapshot is written regardless — that split
+    is what lets the manager surface show computed labels while the shared Loan
+    column is left alone."""
+    assert settings.RECOVERY_WRITE_LABEL is False
+    ln = loan(recovery_potential=None)
+    assert SVC._apply_recovery_label(ln, recovery_outcome(potential="HIGH")) is False
+    assert ln.recovery_potential is None
+
+
+def test_recovery_label_writes_when_the_gate_is_opened(monkeypatch):
+    from app.models.loan import RecoveryPotential
+    monkeypatch.setattr(settings, "RECOVERY_WRITE_LABEL", True)
+    ln = loan(recovery_potential=None)
+    assert SVC._apply_recovery_label(ln, recovery_outcome(potential="HIGH")) is True
+    assert ln.recovery_potential == RecoveryPotential.HIGH
+
+
+def test_recovery_label_write_is_idempotent(monkeypatch):
+    """Returns False when the label has not moved, so the run counter reports rows
+    actually changed rather than rows visited."""
+    from app.models.loan import RecoveryPotential
+    monkeypatch.setattr(settings, "RECOVERY_WRITE_LABEL", True)
+    ln = loan(recovery_potential=RecoveryPotential.HIGH)
+    assert SVC._apply_recovery_label(ln, recovery_outcome(potential="HIGH")) is False
+
+
+def test_apply_recovery_label_is_the_only_write_site():
+    """The counterpart of test_apply_risk_score_is_the_only_write_site. This column
+    had TWO writers before today, both random and separately weighted
+    (seed_data.py:481-509 and scripts/add_recovery_potential.py), disagreeing with
+    each other while nothing read either."""
+    # Anchored on `loan.` and excluding `==`. RepaymentSnapshot has a column of
+    # the same name, and persist() assigning to it is a different act entirely —
+    # writing the frozen record, not the live column another system may read.
+    pattern = re.compile(r"loan\.recovery_potential\s*=(?!=)")
+    root = pathlib.Path(__file__).resolve().parents[1] / "app"
+    offenders = []
+    for path in root.rglob("*.py"):
+        for num, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if pattern.search(line) and path.name != "repayment_service.py":
+                offenders.append(f"{path.relative_to(root)}:{num}")
+    assert offenders == [], (
+        f"recovery_potential written outside the single site: {offenders}")
+
+
+# ── The two scores must be able to disagree ──────────────────────────────────
+def _both(**over):
+    """Score one loan through BOTH scorecards, from one feature dict."""
+    from app.ml.recovery_scorecard import score as rec_score
+    from app.ml.repayment_scorecard import score as rep_score
+    f = build(**over)
+    return rep_score(f), rec_score(f)
+
+
+def test_unlikely_to_pay_can_still_be_high_to_recover():
+    """THE MOST USEFUL THING THIS PAIR SAYS. A hostile borrower who breaks
+    promises on a GOLD loan is a poor bet on willingness and a good bet on money —
+    the collateral pays whether they cooperate or not. A recovery label derived
+    from the repayment likelihood could never produce this row, which is exactly
+    why it is computed independently."""
+    rep, rec = _both(
+        loan=loan(loan_type=LoanType.GOLD, dpd=85, overdue_amount=40000.0,
+                  total_outstanding=800000.0, penal_charges=0.0,
+                  last_payment_date="2026-08-14", last_payment_amount=18400.0),
+        customer=customer(cibil_score=330, is_hostile=True, fraud_flag=True),
+        visits=[visit(days_ago=d, met=True, outcome=VisitOutcome.RTP)
+                for d in (2, 5, 9)],
+        ptps=[ptp(days_ago=d, status=PTPStatus.BROKEN, updated_days_ago=d)
+              for d in (10, 25, 40)],
+        payments=[payment(days_ago=7)],
+    )
+    assert rep["likelihood"] < 40.0, rep["likelihood"]
+    assert rec["recovery_potential"] == "HIGH", rec["recovery_rate_90"]
+
+
+def test_likely_to_pay_can_still_be_low_to_recover():
+    """The other direction, and the one that stops the label being read as a
+    politer spelling of the repayment score. A cooperative borrower on an
+    unsecured card — keeps promises, always in, strong bureau — is genuinely
+    LIKELY to pay. What they can realistically produce is still a sliver of the
+    balance: nothing secures it, 92% of it is already overdue, and ₹95,000 of the
+    demand is penal charges they never borrowed.
+
+    Willing and worth little is a real category, and spreading field effort as if
+    it were the same as willing-and-worth-a-lot is the misallocation this label
+    exists to correct."""
+    rep, rec = _both(
+        loan=loan(loan_type=LoanType.CREDIT_CARD, dpd=60, overdue_amount=480000.0,
+                  total_outstanding=520000.0, penal_charges=95000.0,
+                  npa_flag=True, settlement_status="NEGOTIATING",
+                  last_payment_date="2026-08-11", last_payment_amount=6000.0),
+        customer=customer(cibil_score=780, customer_segment="SALARIED"),
+        visits=[visit(days_ago=d, met=True) for d in (2, 6, 11, 16)],
+        ptps=[ptp(days_ago=d, status=PTPStatus.HONORED, updated_days_ago=d)
+              for d in (12, 30, 55)],
+    )
+    # Asserted on the BAND, not a magic number: the claim is "the product would
+    # tell an agent this borrower is likely to pay", and the band is what it says.
+    assert rep["band"] == "LIKELY", (rep["band"], rep["likelihood"])
+    assert rec["recovery_potential"] == "LOW", rec["recovery_rate_90"]
+
+
+def test_neither_score_is_a_transform_of_the_other():
+    """If one were derived from the other, a set of loans would order identically
+    (or exactly inverted) under both. Asserting the orderings differ is what keeps
+    the second number worth showing at all."""
+    def cooperative():
+        return dict(
+            customer=customer(cibil_score=740),
+            visits=[visit(days_ago=d, met=True) for d in (3, 8, 14)],
+            ptps=[ptp(days_ago=d, status=PTPStatus.HONORED, updated_days_ago=d)
+                  for d in (10, 28, 44)],
+        )
+
+    def obstructive():
+        return dict(
+            customer=customer(cibil_score=340, is_hostile=True),
+            visits=[visit(days_ago=d, met=True, outcome=VisitOutcome.RTP)
+                    for d in (3, 8, 14)],
+            ptps=[ptp(days_ago=d, status=PTPStatus.BROKEN, updated_days_ago=d)
+                  for d in (10, 28, 44)],
+        )
+
+    # Collateral crossed with conduct. Conduct dominates the likelihood (promise
+    # history alone is 20 of 124 there and collateral only 6); collateral is the
+    # single largest weight on the recovery side. So the secured-but-obstructive
+    # loan and the unsecured-but-cooperative one swap places between the two
+    # orderings — which is the property being asserted.
+    variants = [
+        dict(loan=loan(loan_type=LoanType.GOLD, dpd=45), **cooperative()),
+        dict(loan=loan(loan_type=LoanType.GOLD, dpd=210), **obstructive()),
+        dict(loan=loan(loan_type=LoanType.CREDIT_CARD, dpd=45), **cooperative()),
+        dict(loan=loan(loan_type=LoanType.CREDIT_CARD, dpd=210), **obstructive()),
+    ]
+    scored = [_both(**v) for v in variants]
+    by_likelihood = [i for i, _ in sorted(
+        enumerate(scored), key=lambda t: t[1][0]["likelihood"])]
+    by_recovery = [i for i, _ in sorted(
+        enumerate(scored), key=lambda t: t[1][1]["recovery_rate_90"])]
+    assert by_likelihood != by_recovery
+    assert by_likelihood != list(reversed(by_recovery))

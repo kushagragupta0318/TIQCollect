@@ -53,7 +53,7 @@ from app.models.agent import (
     Agent, AgentTier, AgentStatus, AgentSpecialization, AgentPerformance,
 )
 from app.models.customer import Customer
-from app.models.loan import Loan, LoanType, DPDBucket, LoanStatus, RecoveryPotential
+from app.models.loan import Loan, LoanType, DPDBucket, LoanStatus
 from app.models.case import Case, CaseStatus, CasePriority, EscalationReason
 from app.models.repayment_snapshot import TRIGGER_SEED
 from app.services.repayment_service import RepaymentService
@@ -478,35 +478,17 @@ def _priority_from_score(score: float) -> CasePriority:
     if score >= 60: return CasePriority.HIGH
     if score >= 35: return CasePriority.MEDIUM
     return CasePriority.LOW
-def _recovery_potential(dpd: int, loan_type: LoanType, risk_score: float) -> RecoveryPotential:
-    """Derive recovery_potential with realistic signal for ML training.
-
-    DPD is the primary driver; loan_type and risk_score add secondary signal.
-    Weights are [HIGH, MEDIUM, LOW] and always sum to 100 (approx).
-    """
-    # Base weights by DPD bucket
-    if dpd <= 60:       # SMA-1: borrower still reachable, salary-linked defaults
-        w = [50, 30, 20]
-    elif dpd <= 90:     # SMA-2: harder, some absconding
-        w = [20, 45, 35]
-    else:               # NPA 90+: mostly resistant or untraceable
-        w = [8, 22, 70]
-
-    # Secured loans (HOME / AUTO / GOLD) have collateral → easier to convert
-    if loan_type in (LoanType.HOME, LoanType.AUTO, LoanType.GOLD):
-        w[0] += 8
-        w[2] -= 8
-
-    # High risk score means behaviour is deteriorating → lower potential
-    if risk_score >= 75:
-        w[0] -= 12
-        w[2] += 12
-    elif risk_score <= 45:
-        w[0] += 8
-        w[2] -= 8
-
-    w = [max(1, x) for x in w]   # no negative weights
-    return random.choices(list(RecoveryPotential), weights=w)[0]
+# _recovery_potential() lived here until 2026-08-24. It ended in
+# random.choices(list(RecoveryPotential), weights=w) and its docstring claimed to
+# be deriving "realistic signal for ML training" — it was DPD-shaped noise, and a
+# second writer (scripts/add_recovery_potential.py) drew the same column from a
+# differently-weighted random() at the same time.
+#
+# Seeding now writes FACTS ONLY. The loan goes in with recovery_potential unset
+# and the rescore pass at the end of this script computes it through
+# ml/recovery_scorecard.py, the single writer. Seeded data no longer asserts a
+# label nobody calculated, and a demo book stops carrying invented signal that a
+# model could be trained to reproduce.
 
 
 def _collection_stage(dpd: int, legal: str) -> str:
@@ -1444,7 +1426,6 @@ def seed():
             settlement_status=settle_st,
             bank_risk_score=bank_risk,
             collection_priority_score=round(priority_score, 2),
-            recovery_potential=_recovery_potential(dpd, loan_type, bank_risk),
         )
         db.add(l)
         loans.append(l)
@@ -1898,9 +1879,6 @@ def seed():
             interest_rate=14.5, npa_flag=d["dpd"] > 90,
             bank_risk_score=round(d["dpd"] / 120 * 100, 1),
             collection_priority_score=round(d["dpd"] / 120 * 100, 1),
-            recovery_potential=_recovery_potential(
-                d["dpd"], d["loan_type"], round(d["dpd"] / 120 * 100, 1)
-            ),
         )
         db.add(demo_loan)
         db.flush()

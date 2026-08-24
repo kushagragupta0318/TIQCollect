@@ -21,6 +21,7 @@ import { AiBadge } from "@/components/ui/AiBadge";
 import type {
   AnalyticsData, AgentsPerformanceData, AgentPerfEntry, AgentMonthlyPerf,
   AgentAvailabilityCalendar, AgentCalendarDay, AgentDPDRow, TeamAttendance,
+  RecoveryBreakdown,
 } from "@/api/manager";
 import { TierBadge } from "@/components/ui/Badge";
 
@@ -414,7 +415,7 @@ export default function ManagerAnalyticsPage() {
   if (loading) return <LoadingSkeleton />;
   if (!analytics || !agentPerf) return <p className="text-sm p-6" style={{ color: "#6B6D76" }}>No data.</p>;
 
-  const { kpis, monthly_trend, dpd_breakdown } = analytics;
+  const { kpis, monthly_trend, dpd_breakdown, recovery_breakdown, recovery_summary } = analytics;
   const { months, agents } = agentPerf;
 
   // Window totals — the sum of every month on this page, so the unselected
@@ -684,8 +685,19 @@ export default function ManagerAnalyticsPage() {
         )}
       </div>
 
-      {/* DPD + Duty Calendar row — context-aware */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5" style={{ animation: `enter 420ms ${EASE} 300ms both` }}>
+      {/* Recovery + DPD, then the duty pair — context-aware.
+          Every card below is a DIRECT grid child, deliberately. Wrapping two of
+          them in a stacked <div> made the grid hold three items instead of four:
+          the pair landed in one cell, the fourth cell stayed empty, and the row
+          heights stopped matching. Flat children give two clean rows of two, and
+          grid's default stretch keeps each row's cards the same height. */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-stretch" style={{ animation: `enter 420ms ${EASE} 300ms both` }}>
+        <RecoveryBreakdownCard
+          rows={recovery_breakdown ?? []}
+          summary={recovery_summary}
+          loading={loading}
+          barReady={barReady}
+        />
         <DPDBreakdownCard
           rows={selectedAgent ? (agentDpdRows ?? dpd_breakdown) : (teamDpdRows ?? dpd_breakdown)}
           loading={agentDataLoading}
@@ -694,13 +706,19 @@ export default function ManagerAnalyticsPage() {
           selMonth={!selectedAgent ? selTeamMonth : selAgentMonth}
         />
         {selectedAgent && agentCalendar ? (
-          <DutyCalendarCard
-            cal={agentCalendar}
-            loading={agentDataLoading}
-            jumpToMonth={selAgentMonth ? months.find((m) => monthLabel(m) === selAgentMonth) : undefined}
-          />
+          // One card for the third slot, so it spans the row rather than
+          // leaving the cell beside it empty.
+          <div className="lg:col-span-2">
+            <DutyCalendarCard
+              cal={agentCalendar}
+              loading={agentDataLoading}
+              jumpToMonth={selAgentMonth ? months.find((m) => monthLabel(m) === selAgentMonth) : undefined}
+            />
+          </div>
         ) : (
-          <div className="space-y-4">
+          // Two cards, so they fill the second row: duty on the left, leave
+          // summary on the right.
+          <>
             <AgencyDutyOverview months={months} />
             <TeamLeaveSummaryCard
               months={months}
@@ -708,7 +726,7 @@ export default function ManagerAnalyticsPage() {
               todayOnDuty={analytics.leave_summary.by_type["ON_DUTY"] ?? 0}
               totalAgents={(analytics.leave_summary.by_type["ON_DUTY"] ?? 0) + (analytics.leave_summary.by_type["OFF_DUTY"] ?? 0)}
             />
-          </div>
+          </>
         )}
       </div>
 
@@ -729,6 +747,152 @@ export default function ManagerAnalyticsPage() {
 // ── DPD Breakdown Card (team or agent) ────────────────────────────────────────
 
 type DPDEntry = { bucket: string; case_count: number; target_lakhs: number; collected_lakhs: number; collection_rate_pct: number };
+
+// ── Recovery: what is collectable now, and what the scorecard estimates ──────
+//
+// TWO figures per band, side by side, because they rank the bands differently
+// and only showing one points a team at the wrong pile.
+//
+//   Due now  = overdue_amount + penal_charges. A LEDGER FACT. Demandable today.
+//   90-day recovery estimate = rate_90 x TOTAL OUTSTANDING. A scorecard output
+//   that includes principal not yet due — on the 2026-08-24 book it came to 229%
+//   of what was actually demandable.
+//
+// On that same book HIGH led the estimate (Rs 10.36 Cr vs Rs 8.98 Cr) while
+// MEDIUM led on collectable money (Rs 3.72 Cr vs Rs 2.16 Cr): HIGH loans are
+// secured, long-tenor and barely in arrears, so their recovery is real but slow
+// and mostly not yet askable. That inversion is the reason both bars are here.
+//
+// Colour is a deliberate hierarchy rather than two equal series: the fact is
+// solid and blue, the estimate is recessive grey, because the estimate must not
+// be read as a collections target. Both bars carry a direct value label, so
+// identity never rests on colour alone.
+//
+// No derived figure is computed here — no rate x overdue, no min(estimate, due).
+// A fact plus a graded likelihood, and nothing invented in between.
+
+function RecoveryBreakdownCard({ rows, summary, loading, barReady }: {
+  rows: RecoveryBreakdown[];
+  summary: AnalyticsData["recovery_summary"] | undefined;
+  loading: boolean;
+  barReady: boolean;
+}) {
+  const BAND_LABEL: Record<string, string> = {
+    HIGH: "High recovery",
+    MEDIUM: "Medium recovery",
+    LOW: "Low recovery",
+  };
+  const DUE_COLOUR = "#1677FF";
+  const EST_COLOUR = "#94A3B8";
+
+  const scale = Math.max(
+    1,
+    ...rows.map((r) => Math.max(r.due_now || 0, r.expected_recoverable_amount || 0)),
+  );
+  const money = (n: number) =>
+    n >= 1e7 ? `₹${(n / 1e7).toFixed(2)}Cr` : `₹${(n / 1e5).toFixed(1)}L`;
+
+  const dueTotal = rows.reduce((a, r) => a + (r.due_now || 0), 0);
+  const estTotal = rows.reduce((a, r) => a + (r.expected_recoverable_amount || 0), 0);
+
+  return (
+    <div className="card p-4">
+      <h2 className="text-sm font-bold mb-1" style={{ color: "#1C1C1F" }}>Recovery outlook</h2>
+      <p className="text-xs mb-3" style={{ color: "#6B6D76" }}>
+        Open cases
+        {summary && summary.unscored_cases > 0 && (
+          <> · <span style={{ color: "#94a3b8" }}>{summary.unscored_cases} not scored yet</span></>
+        )}
+      </p>
+
+      <div className="flex flex-wrap gap-x-4 gap-y-1 mb-4 text-[11px]" style={{ color: "#6B6D76" }}>
+        <span className="inline-flex items-center gap-1.5">
+          <i style={{ width: 10, height: 10, borderRadius: 2, background: DUE_COLOUR, display: "inline-block" }} />
+          Due now
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <i style={{ width: 10, height: 10, borderRadius: 2, background: EST_COLOUR, display: "inline-block" }} />
+          {summary?.label_horizon_days ?? 90}-day recovery estimate
+        </span>
+      </div>
+
+      {loading ? (
+        <div className="space-y-4">
+          {[0, 1, 2].map((i) => <div key={i} className="h-10 rounded-lg animate-pulse" style={{ background: "#EFF0F4" }} />)}
+        </div>
+      ) : rows.length === 0 || summary?.scored_cases === 0 ? (
+        <p className="text-sm text-center py-8" style={{ color: "#94a3b8" }}>No cases scored yet.</p>
+      ) : (
+        <>
+          <div className="space-y-4">
+            {rows.map((r, di) => (
+              <div
+                key={r.band}
+                className="row-stat -mx-2 px-2 py-1.5 rounded-xl"
+                style={{ animation: `enter 380ms ${EASE} ${di * 80}ms both` }}
+              >
+                <div className="flex justify-between text-sm mb-1.5">
+                  <span className="font-semibold" style={{ color: "#1C1C1F" }}>
+                    {BAND_LABEL[r.band] ?? r.band}
+                  </span>
+                  <span style={{ color: "#6B6D76" }}>{r.cases} cases</span>
+                </div>
+
+                <div className="flex items-center gap-2 mb-1">
+                  <div className="flex-1 rounded-full overflow-hidden" style={{ height: 9, background: "#EFF0F4" }}>
+                    <div
+                      className="h-full rounded-full"
+                      style={{
+                        width: barReady && !loading ? `${Math.min((r.due_now / scale) * 100, 100)}%` : "0%",
+                        background: DUE_COLOUR,
+                        transition: `width 900ms ${di * 80}ms ${EASE}`,
+                      }}
+                    />
+                  </div>
+                  <span className="text-xs font-bold tabular-nums w-16 text-right" style={{ color: "#1C1C1F" }}>
+                    {money(r.due_now)}
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 rounded-full overflow-hidden" style={{ height: 9, background: "#EFF0F4" }}>
+                    <div
+                      className="h-full rounded-full"
+                      style={{
+                        width: barReady && !loading
+                          ? `${Math.min((r.expected_recoverable_amount / scale) * 100, 100)}%` : "0%",
+                        background: EST_COLOUR,
+                        transition: `width 900ms ${di * 80 + 120}ms ${EASE}`,
+                      }}
+                    />
+                  </div>
+                  <span className="text-xs tabular-nums w-16 text-right" style={{ color: "#6B6D76" }}>
+                    {money(r.expected_recoverable_amount)}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-4 pt-3 text-xs" style={{ borderTop: "1px dashed #EAEBEF", color: "#6B6D76" }}>
+            <p className="mb-1">
+              <span className="font-bold" style={{ color: "#1C1C1F" }}>{money(summary?.due_now ?? dueTotal)}</span>
+              {" "}due now across the open book — arrears plus penal charges, demandable today.
+            </p>
+            <p className="mb-0">
+              <span className="font-semibold">{money(estTotal)}</span>
+              {" "}is the {summary?.label_horizon_days ?? 90}-day recovery estimate
+              {" "}<span style={{ color: "#94a3b8" }}>
+                — of total outstanding, includes principal not yet due. Scorecard
+                estimate, not a model prediction, and not a collections target.
+              </span>
+            </p>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
 function DPDBreakdownCard({ rows, loading, barReady, agentName, selMonth }: {
   rows: DPDEntry[];

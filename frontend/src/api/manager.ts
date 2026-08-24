@@ -27,6 +27,9 @@ export async function getCases(params?: {
   agent_id?: string;
   date_from?: string;
   date_to?: string;
+  /** HIGH | MEDIUM | LOW — filters on the loan's latest computed recovery label.
+   *  Server-side, so it narrows the whole book rather than the current page. */
+  recovery?: string;
   limit?: number;
   offset?: number;
 }) {
@@ -424,9 +427,36 @@ export async function getMonthlyReport(month: string, agentId?: string): Promise
   return data;
 }
 
+/** One HIGH/MEDIUM/LOW row of the open book. */
+export interface RecoveryBreakdown {
+  band: "HIGH" | "MEDIUM" | "LOW";
+  cases: number;
+  /** Arrears + penal charges, summed. A ledger fact — demandable today. */
+  due_now: number;
+  /**
+   * rate_90 x live TOTAL OUTSTANDING, summed. Rendered as "90-day recovery
+   * estimate"; it includes principal not yet due, so it is not a collections
+   * target and must never be shown as one.
+   */
+  expected_recoverable_amount: number;
+  total_outstanding: number;
+}
+
 export interface AnalyticsData {
   monthly_trend: MonthlyTrend[];
   dpd_breakdown: DPDBreakdown[];
+  recovery_breakdown: RecoveryBreakdown[];
+  recovery_summary: {
+    scored_cases: number;
+    /** Reported, not folded into LOW — an unscored loan is unknown, not written off. */
+    unscored_cases: number;
+    /** Every open case, scored or not — wider than the per-band rows. */
+    due_now: number;
+    expected_recoverable_amount: number;
+    label_horizon_days: number;
+    /** Always false. A hand-weighted scorecard, never a trained model. */
+    is_modelled: boolean;
+  };
   leaderboard: LeaderboardEntry[];
   leave_summary: { total_leave_days_30d: number; by_type: Record<string, number> };
   kpis: {

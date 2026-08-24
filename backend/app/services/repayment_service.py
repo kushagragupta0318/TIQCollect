@@ -32,20 +32,21 @@
 """Score loans, roll up to customers, and freeze the evidence for later."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import TYPE_CHECKING, Any, Iterable
 
 import structlog
 
 from app.core.config import settings
+from app.ml.recovery_scorecard import score as recovery_score
 from app.ml.repayment_scorecard import (
     SCORECARD_VERSION, risk_category_for, score as scorecard_score,
 )
 from app.models.case import Case, CaseStatus
 from app.models.customer import Customer, RiskCategory
-from app.models.loan import Loan
-from app.models.payment import Payment
+from app.models.loan import Loan, RecoveryPotential
+from app.models.payment import Payment, PaymentStatus
 from app.models.ptp import PTP, PTPStatus
 from app.models.repayment_snapshot import (
     OUTCOME_CENSORED, OUTCOME_NO_PAYMENT, OUTCOME_PARTIAL, OUTCOME_REPAID,
@@ -85,14 +86,45 @@ _CENSORING_STATUSES = frozenset({
 
 # This system's own outputs. Feeding any of them back in trains a model to
 # predict itself, which reads as near-perfect accuracy and is worth nothing.
-# bank_risk_score and recovery_potential are here because in seeded data they
-# are themselves functions of dpd and cibil (seed_data.py:1398, :470-498), so
-# including them triple-counts delinquency; on real data they are a partner's
-# model output and belong to a later tier, never to this scorecard.
+# bank_risk_score is here because in seeded data it is itself a function of dpd
+# and cibil (seed_data.py:1398), so including it triple-counts delinquency; on
+# real data it is a partner's model output and belongs to a later tier, never to
+# this scorecard.
+#
+# 2026-08-24 — recovery_potential stays banned, and its siblings joined it. It
+# used to be listed because seeded data derived it from dpd; it is now listed
+# because WE compute it (ml/recovery_scorecard.py), which is the stronger reason.
+# The ban runs both ways by design: the recovery scorecard does not read the
+# repayment likelihood either. Two scorecards may share INPUTS — that is normal
+# — but neither may eat the other's OUTPUT, or the pair collapses into one
+# number wearing two labels, and the disagreement between them (unlikely to pay,
+# high to recover) is the most useful thing either of them says.
 _FORBIDDEN_FEATURE_KEYS = frozenset({
     "risk_score", "risk_category", "collection_priority_score",
     "bank_risk_score", "recovery_potential", "priority", "allocation_score",
+    "recovery_rate_30", "recovery_rate_60", "recovery_rate_90",
+    "recovery_band", "expected_recoverable_amount", "speed_index",
 })
+
+# Money that counts as ACTUALLY RECOVERED, for the recovery training label.
+#
+# 2026-08-24. VERIFIED only, approved as the business rule. The label is the
+# ground truth a future model is fitted against, so it records money the bank
+# confirmed landed — not money an agent receipted that may yet fail. REJECTED
+# and REVERSED are precisely the cases where a receipt turned out to be false,
+# and PENDING_VERIFICATION is the state they pass through, so counting pending
+# money would mean counting some of the failures as successes.
+#
+# The known cost is a conservative bias where verification lags: a payment made
+# on day 29 and verified on day 33 is missing from the 30-day figure. That is
+# the right direction for a training label — it understates recovery rather than
+# inventing it — and it shrinks at the longer horizons. On the ledger as at
+# 2026-08-24 the exposure is 1 pending payment out of 460 (0.2%).
+#
+# DELIBERATELY NOT APPLIED to _infer_outcome below, which labels the REPAYMENT
+# outcome and is out of scope here. The two are allowed to differ: this one
+# measures rupees recovered, that one classifies borrower conduct.
+_RECOVERED_PAYMENT_STATUSES = frozenset({PaymentStatus.VERIFIED.value})
 
 
 @dataclass(frozen=True)
@@ -112,6 +144,40 @@ class ScoreOutcome:
     features: dict[str, Any]
     factors: list[dict[str, Any]]
 
+    # ── Recovery potential (2026-08-24) ──────────────────────────────────────
+    # A SECOND, INDEPENDENT score carried on the same outcome object, because it
+    # is computed from the same point-in-time feature dict on the same loan and
+    # splitting it into a parallel object would mean building that dict twice.
+    #
+    # Independent is the operative word: nothing below is derived from
+    # `likelihood` above, and nothing above reads these. The two are free to
+    # disagree, and their disagreement — unlikely to pay, high to recover — is
+    # the most useful thing the pair says. See ml/recovery_scorecard.py.
+    #
+    # Defaulted so every existing construction site keeps working and a caller
+    # that has not been taught about recovery yet degrades to "no recovery
+    # score" rather than to a wrong one.
+    recovery_potential: str | None = None
+    recovery_rate_30: float | None = None
+    recovery_rate_60: float | None = None
+    recovery_rate_90: float | None = None
+    recovery_speed_index: float | None = None
+    recovery_evidence_coverage: float | None = None
+    recovery_model_version: str | None = None
+    recovery_source: str | None = None
+    recovery_factors: list[dict[str, Any]] = field(default_factory=list)
+    recovery_speed_reasons: list[str] = field(default_factory=list)
+
+    @property
+    def has_recovery(self) -> bool:
+        """Whether a recovery label was produced at all.
+
+        Load-bearing for should_snapshot: a row whose recovery fields are NULL
+        must be rewritten once a label exists, even when the repayment
+        likelihood has not moved a point.
+        """
+        return self.recovery_rate_90 is not None
+
     @property
     def is_modelled(self) -> bool:
         """False for a scorecard. The direct analogue of LLMResult.ai_generated
@@ -128,6 +194,22 @@ class ScoreOutcome:
 def _end_of(as_of: date):
     """Exclusive upper bound for datetime comparisons against a date."""
     return as_of + timedelta(days=1)
+
+
+def _parse_iso_date(value: Any) -> date | None:
+    """Loan.last_payment_date is a String(10), not a Date. Parse defensively.
+
+    Returns None rather than raising on anything unparseable: a malformed date on
+    one loan must not take down the nightly scoring pass for the whole book.
+    """
+    if value is None:
+        return None
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except (TypeError, ValueError):
+        return None
 
 
 class RepaymentService:
@@ -203,6 +285,38 @@ class RepaymentService:
         resolved = [p for p in ptps if p.status in _RESOLVED_PTP]
         target = sum(float(c.target_amount or 0.0) for c in cases) or None
 
+        # Days since money last arrived — added 2026-08-24 for the recovery
+        # scorecard, which needs payment RECENCY where the repayment scorecard
+        # only needed payment SIZE.
+        #
+        # Derived from the payment LEDGER, not from Loan.last_payment_date, and
+        # that is not a style preference. That column is overwritten in place by
+        # ingest with no history, exactly like Loan.dpd and PTP.status, so on a
+        # backfill it reports a payment that had not happened yet on as_of — the
+        # precise leak this builder exists to prevent. The ledger rows are
+        # already bounded above by as_of a few lines up.
+        #
+        # The column is still consulted as a FALLBACK, because the ledger is
+        # windowed and a borrower who last paid 300 days ago has no row in it.
+        # It is accepted only when it does not post-date as_of; a future value is
+        # refused and recorded as refused rather than silently dropped.
+        ledger_dates = [p.payment_date.date() for p in payments
+                        if p.payment_date is not None]
+        last_paid_on = max(ledger_dates) if ledger_dates else None
+        recency_source = "LEDGER"
+        if last_paid_on is None:
+            fallback = _parse_iso_date(loan.last_payment_date)
+            if fallback is None:
+                recency_source = "NONE_ON_RECORD"
+            elif fallback <= as_of:
+                last_paid_on = fallback
+                recency_source = "LOAN_COLUMN"
+            else:
+                recency_source = "LOAN_COLUMN_REFUSED_FUTURE"
+        days_since_last_payment = (
+            (as_of - last_paid_on).days if last_paid_on is not None else None
+        )
+
         features: dict[str, Any] = {
             # Loan facts
             "dpd": int(loan.dpd or 0),
@@ -213,6 +327,20 @@ class RepaymentService:
             "last_payment_amount": float(loan.last_payment_amount or 0.0),
             "legal_status": loan.legal_status or "NONE",
             "settlement_status": loan.settlement_status or "NONE",
+            # Added 2026-08-24 for ml/recovery_scorecard.py. Purely additive:
+            # the repayment scorecard reads features by name through _f() and
+            # ignores extras, so no repayment factor changes and
+            # SCORECARD_VERSION is deliberately NOT bumped.
+            #
+            # total_outstanding is the DENOMINATOR of the recovery rate. It is
+            # emphatically not a recovery factor — a rate must not be moved by an
+            # absolute rupee amount, or the label means "share recovered" and
+            # "amount at stake" at the same time. See the changelog header of
+            # ml/recovery_scorecard.py.
+            "total_outstanding": float(loan.total_outstanding or 0.0),
+            "penal_charges": float(loan.penal_charges or 0.0),
+            "npa_flag": bool(loan.npa_flag),
+            "days_since_last_payment": days_since_last_payment,
             # Customer facts
             "cibil_score": customer.cibil_score if customer else None,
             "customer_segment": customer.customer_segment if customer else None,
@@ -234,6 +362,11 @@ class RepaymentService:
             "_horizon_exclusive": horizon.isoformat(),
             "_payment_status_at_scoring": "ANY",
             "_ptps_excluded_stale": stale_ptps,
+            # LEDGER / LOAN_COLUMN / LOAN_COLUMN_REFUSED_FUTURE / NONE_ON_RECORD.
+            # Carried so a modeller can drop rows whose recency came from the
+            # mutable loan column rather than from the ledger, instead of having
+            # to assume they are equivalent. They are not.
+            "_payment_recency_source": recency_source,
         }
 
         self._raise_if_leaked(features)
@@ -270,6 +403,15 @@ class RepaymentService:
         )
         cases = kwargs.get("cases") or ()
         case_id = next((c.id for c in cases), None)
+
+        # Recovery potential, from the SAME feature dict. Two scorecards, one
+        # point-in-time read of the loan — building the features twice is how the
+        # two would eventually disagree about what "dpd as of Tuesday" means.
+        #
+        # `result` is deliberately not passed in. The recovery scorecard never
+        # sees the repayment likelihood; see _FORBIDDEN_FEATURE_KEYS above.
+        recovery = recovery_score(features)
+
         return ScoreOutcome(
             loan_id=loan.id,
             customer_id=loan.customer_id,
@@ -284,6 +426,16 @@ class RepaymentService:
             source=SOURCE_SCORECARD,
             features=_jsonable(features),
             factors=result["factors"],
+            recovery_potential=recovery["recovery_potential"],
+            recovery_rate_30=recovery["recovery_rate_30"],
+            recovery_rate_60=recovery["recovery_rate_60"],
+            recovery_rate_90=recovery["recovery_rate_90"],
+            recovery_speed_index=recovery["speed_index"],
+            recovery_evidence_coverage=recovery["evidence_coverage"],
+            recovery_model_version=recovery["model_version"],
+            recovery_source=SOURCE_SCORECARD,
+            recovery_factors=recovery["factors"],
+            recovery_speed_reasons=recovery["speed_reasons"],
         )
 
     # ── Snapshot write policy ────────────────────────────────────────────────
@@ -307,6 +459,28 @@ class RepaymentService:
             # The most valuable row in the table: the score as it stood
             # immediately before the thing that changed the account.
             return True
+
+        # ── Recovery (2026-08-24) ────────────────────────────────────────────
+        # NULL -> computed IS a change, and this clause is not a nicety: without
+        # it the recovery label would never be persisted for a loan on a stable
+        # book. Every row written before this feature shipped has NULL recovery
+        # fields, as does every loan the nightly demo feed creates
+        # (workers/tasks/demo_daily_feed.py). If the likelihood has not moved a
+        # point, none of the clauses below fire, no row is written, and the
+        # prediction is silently discarded — the feature would appear to work
+        # while writing nothing at all.
+        if outcome.has_recovery and previous.recovery_rate_90 is None:
+            return True
+
+        # A band move on the second score deserves a row for the same reason a
+        # likelihood move does: the label a manager acted on has changed. Banded
+        # rather than thresholded on the rate, because the label is what surfaces
+        # and a three-bucket value moves far more slowly than a 0.1-precision
+        # likelihood.
+        if (outcome.recovery_potential is not None
+                and outcome.recovery_potential != previous.recovery_potential):
+            return True
+
         if abs(outcome.likelihood - previous.likelihood) >= settings.REPAYMENT_SNAPSHOT_MIN_DELTA:
             return True
         gap = (outcome.as_of - previous.as_of_date).days
@@ -374,6 +548,26 @@ class RepaymentService:
             previous.contributions = {"factors": outcome.factors}
             previous.model_version = outcome.model_version
             previous.source = outcome.source
+            # Recovery, on the SAME row. Missing this branch and writing only the
+            # insert below is a silent staleness bug: a same-day rescore would
+            # refresh the likelihood and leave yesterday's recovery label sitting
+            # beside it, and nothing would raise.
+            #
+            # Guarded on has_recovery so a caller that produced no recovery score
+            # leaves the existing label alone rather than erasing it with None.
+            if outcome.has_recovery:
+                previous.recovery_potential = outcome.recovery_potential
+                previous.recovery_rate_30 = outcome.recovery_rate_30
+                previous.recovery_rate_60 = outcome.recovery_rate_60
+                previous.recovery_rate_90 = outcome.recovery_rate_90
+                previous.recovery_speed_index = outcome.recovery_speed_index
+                previous.recovery_evidence_coverage = outcome.recovery_evidence_coverage
+                previous.recovery_model_version = outcome.recovery_model_version
+                previous.recovery_source = outcome.recovery_source
+                previous.recovery_contributions = {
+                    "factors": outcome.recovery_factors,
+                    "speed_reasons": outcome.recovery_speed_reasons,
+                }
             return previous
 
         row = RepaymentSnapshot(
@@ -392,6 +586,19 @@ class RepaymentService:
             evidence_coverage=outcome.evidence_coverage,
             features=outcome.features,
             contributions={"factors": outcome.factors},
+            recovery_potential=outcome.recovery_potential,
+            recovery_rate_30=outcome.recovery_rate_30,
+            recovery_rate_60=outcome.recovery_rate_60,
+            recovery_rate_90=outcome.recovery_rate_90,
+            recovery_speed_index=outcome.recovery_speed_index,
+            recovery_evidence_coverage=outcome.recovery_evidence_coverage,
+            recovery_model_version=outcome.recovery_model_version,
+            recovery_source=outcome.recovery_source,
+            recovery_contributions=(
+                {"factors": outcome.recovery_factors,
+                 "speed_reasons": outcome.recovery_speed_reasons}
+                if outcome.has_recovery else None
+            ),
         )
         if self.db:
             self.db.add(row)
@@ -415,6 +622,33 @@ class RepaymentService:
             return False
         customer.risk_score = worst.risk_score
         customer.risk_category = RiskCategory(worst.risk_category)
+        return True
+
+    def _apply_recovery_label(self, loan: Loan, outcome: ScoreOutcome) -> bool:
+        """Write the computed label onto Loan.recovery_potential. Returns whether
+        it wrote.
+
+        THE SINGLE SITE. `grep -rn "_apply_recovery_label" backend/` finds every
+        place that column can change. It had two writers before today, both
+        random and separately weighted (seed_data.py:481-509 and
+        scripts/add_recovery_potential.py), which disagreed with each other and
+        with nothing reading either — the same shape of failure as the two
+        risk_score writers above.
+
+        GATED, and the gate is CLOSED by default. RECOVERY_WRITE_LABEL=False
+        means the label is computed and snapshotted exactly as normal but the
+        shared Loan column is left alone. The manager surface reads the snapshot,
+        not this column, so the feature is fully reviewable with the gate shut —
+        and opening it later is one line with nothing to undo.
+        """
+        if not settings.RECOVERY_WRITE_LABEL:
+            return False
+        if not outcome.has_recovery:
+            return False
+        computed = RecoveryPotential(outcome.recovery_potential)
+        if loan.recovery_potential == computed:
+            return False
+        loan.recovery_potential = computed
         return True
 
     # ── Orchestration ────────────────────────────────────────────────────────
@@ -451,6 +685,7 @@ class RepaymentService:
         after: list[float] = []
         snapshots_written = 0
         snapshots_skipped = 0
+        recovery_labels_written = 0
 
         latest = self._existing([ln.id for ln in loans])
 
@@ -466,6 +701,14 @@ class RepaymentService:
 
             if dry_run:
                 continue
+
+            # The gate is checked inside, not here, so that a closed gate still
+            # scores and still snapshots. That is the whole point of the split:
+            # training data accrues from the day this ships, not from the day
+            # someone opts in.
+            if self._apply_recovery_label(loan, outcome):
+                recovery_labels_written += 1
+
             state_changed = bool(changed_loan_ids and loan.id in changed_loan_ids)
             if self.should_snapshot(outcome, latest.get(loan.id),
                                     state_changed=state_changed):
@@ -514,6 +757,9 @@ class RepaymentService:
             "snapshots_skipped_no_change": snapshots_skipped,
             # Reported every run so "is the switch on?" is never a guess.
             "write_risk_score_enabled": settings.REPAYMENT_WRITE_RISK_SCORE,
+            "recovery_scorer": settings.RECOVERY_SCORER,
+            "write_recovery_label_enabled": settings.RECOVERY_WRITE_LABEL,
+            "recovery_labels_written": recovery_labels_written,
             "reprice_open_cases_enabled": reprice_requested,
             "reprice_implemented": False,
             "case_priority_rows_touched": 0,
@@ -583,7 +829,194 @@ class RepaymentService:
 
         logger.info("repayment.labeller.complete", examined=len(due),
                     labelled=labelled, by_outcome=counts)
-        return {"examined": len(due), "labelled": labelled, "by_outcome": counts}
+        return {
+            "examined": len(due), "labelled": labelled, "by_outcome": counts,
+            # Nested rather than a second call site, so the nightly task and
+            # every other caller pick the recovery pass up without being edited.
+            "recovery": self.attach_recovery_outcomes(as_of=as_of),
+        }
+
+    def attach_recovery_outcomes(self, as_of: date | None = None) -> dict[str, Any]:
+        """Fill in how much actually came back, at 30, 60 and 90 days.
+
+        The repayment labeller above visits each row ONCE, at one horizon, and
+        writes one outcome. This one must revisit: a row scored today cannot know
+        its 90-day recovery until 90 days have passed, but its 30-day figure is
+        knowable long before that. So rows carry `recovery_labelled_through_days`
+        and are picked up again as each horizon matures.
+
+        A row can also mature past several horizons between runs — a backlog, or
+        a worker that was down for a fortnight — so every horizon that has come
+        due is filled in one pass rather than one per night.
+
+        CENSORED rows are still measured. The amount that arrived is a fact and
+        recording it costs nothing; what keeps a bank recall out of the training
+        set is `outcome`, which this pass never touches. Deliberately: a row must
+        not become uncensored because money happened to arrive after the bank
+        pulled the case.
+        """
+        if self.db is None:
+            raise RuntimeError("attach_recovery_outcomes needs a database session")
+
+        as_of = as_of or date.today()
+        horizons = sorted(settings.RECOVERY_OUTCOME_HORIZONS)
+        if not horizons:
+            return {"examined": 0, "labelled": 0, "by_horizon": {}}
+        final_horizon = horizons[-1]
+
+        # Broad filter in SQL, exact filter in Python. The precise predicate is
+        # `as_of_date <= today - (recovery_labelled_through_days + 30)`, which
+        # needs date arithmetic against a COLUMN — expressible in Postgres, not
+        # portably so on the SQLite the test suite builds the schema on. The
+        # partial index does the narrowing either way; what reaches Python is a
+        # small and shrinking set, and each row it labels leaves that index.
+        #
+        # recovery_rate_90 IS NOT NULL is load-bearing, not defensive: every row
+        # written before this feature shipped has no recovery prediction, and
+        # retro-labelling those would attach outcomes to a score nobody made.
+        due = (
+            self.db.query(RepaymentSnapshot)
+            .filter(
+                RepaymentSnapshot.recovery_rate_90.is_not(None),
+                RepaymentSnapshot.recovery_labelled_through_days < final_horizon,
+                RepaymentSnapshot.as_of_date <= as_of - timedelta(days=horizons[0]),
+            )
+            .all()
+        )
+        if not due:
+            return {"examined": 0, "labelled": 0, "by_horizon": {}}
+
+        # One query for every payment that could matter, rather than one per row —
+        # same shape as attach_outcomes above.
+        loan_ids = {r.loan_id for r in due}
+        case_ids: set[str] = {r.case_id for r in due if r.case_id}
+        cases_by_loan: dict[str, list[Case]] = {}
+        for case in self.db.query(Case).filter(Case.loan_id.in_(loan_ids)).all():
+            cases_by_loan.setdefault(case.loan_id, []).append(case)
+            case_ids.add(case.id)
+
+        payments_by_case: dict[str, list[Payment]] = {}
+        if case_ids:
+            for pay in self.db.query(Payment).filter(
+                    Payment.case_id.in_(case_ids)).all():
+                payments_by_case.setdefault(pay.case_id, []).append(pay)
+
+        by_horizon: dict[int, int] = {}
+        labelled = 0
+        unobservable_pending = 0   # no case yet, horizons still open — retry later
+        unobservable_closed = 0    # no case and every horizon matured — give up
+        for row in due:
+            todo = self._recovery_horizons_due(row, as_of, horizons)
+            if not todo:
+                continue
+
+            cases = cases_by_loan.get(row.loan_id, [])
+
+            # ── UNOBSERVABLE, NOT ZERO (2026-08-24) ──────────────────────────
+            # Payment.case_id is NOT NULL, so money is reachable only through a
+            # case. A loan with no case cannot show a recovery however much the
+            # borrower paid — the ledger has nowhere to record it.
+            #
+            # Writing 0.0 for those would be a lie a model would happily learn:
+            # "no case" would become a strong predictor of "recovers nothing",
+            # and on the 2026-08-24 cohort it would bias LOW hardest (50 of the
+            # 115 caseless loans are LOW, against 26 HIGH), flattering the
+            # scorecard's apparent separation.
+            #
+            # So the amounts stay NULL and the row is RETRIED, because a case can
+            # be allocated later and make the remaining horizons observable. Once
+            # every horizon has matured with still no case, the marker is
+            # advanced so the row leaves the scan index rather than being
+            # re-examined nightly forever.
+            #
+            # The three states are then distinguishable without a new column:
+            #   amount NULL, marker <  horizon -> not yet matured
+            #   amount NULL, marker >= horizon -> matured but UNOBSERVABLE
+            #   amount 0.0                     -> observed, nothing arrived
+            if not cases:
+                if row.as_of_date + timedelta(days=final_horizon) <= as_of:
+                    row.recovery_labelled_through_days = final_horizon
+                    unobservable_closed += 1
+                else:
+                    unobservable_pending += 1
+                continue
+
+            for horizon in todo:
+                received = self._received_within(
+                    row.as_of_date, horizon, cases, payments_by_case)
+                setattr(row, f"recovered_amount_{horizon}", received)
+                by_horizon[horizon] = by_horizon.get(horizon, 0) + 1
+
+            row.recovery_labelled_through_days = max(todo)
+            labelled += 1
+
+        logger.info("recovery.labeller.complete", examined=len(due),
+                    labelled=labelled, by_horizon=by_horizon,
+                    unobservable_pending=unobservable_pending,
+                    unobservable_closed=unobservable_closed)
+        return {
+            "examined": len(due), "labelled": labelled, "by_horizon": by_horizon,
+            # Reported, never folded into the labelled count. A caseless loan is
+            # a gap in what the ledger can see, and a validation run that cannot
+            # tell it apart from a genuine zero will overstate the scorecard.
+            "unobservable_pending": unobservable_pending,
+            "unobservable_closed": unobservable_closed,
+        }
+
+    @staticmethod
+    def _recovery_horizons_due(row, as_of: date, horizons: list[int]) -> list[int]:
+        """Which horizons this row can now be labelled for, oldest first.
+
+        A pure decision, separated out so it is testable without a database —
+        same convention as _infer_outcome above.
+
+        Returns EVERY matured horizon not yet done, not just the next one. A
+        worker that was down for a fortnight, or a row scored during a backlog,
+        can cross two boundaries between runs; labelling one per night would then
+        take three more nights to catch up and would leave the row sitting in the
+        scan index the whole time.
+        """
+        done_through = row.recovery_labelled_through_days or 0
+        return [h for h in horizons
+                if h > done_through and row.as_of_date + timedelta(days=h) <= as_of]
+
+    @staticmethod
+    def _received_within(start: date, horizon_days: int, cases: list[Case],
+                         payments_by_case: dict[str, list[Payment]]) -> float:
+        """Money received in the window AFTER the score, never before.
+
+        The question is what came back once the prediction was made, not what had
+        already been collected — counting the latter would score the scorecard on
+        history it was handed rather than on anything it foresaw.
+
+        The window is half-open, `(start, start + horizon]`, matching
+        _infer_outcome: a payment on the scoring date itself was already known
+        when the score was computed.
+
+        ONLY VERIFIED MONEY COUNTS — see _RECOVERED_PAYMENT_STATUSES. Until
+        2026-08-24 this summed every payment regardless of status, so a REJECTED
+        or REVERSED receipt would have been recorded as money recovered. Nothing
+        in the ledger had either status at the time, so the defect was latent
+        rather than biting, but it would have corrupted the first real reversal
+        into a training label that says the borrower paid.
+
+        Status is read as the CURRENT value, and that is correct here in a way it
+        would not be in build_features. There, reading current status leaks the
+        future backwards into a feature. Here the question is asked after the
+        horizon has closed and the answer wanted is what finally happened.
+        """
+        end = start + timedelta(days=horizon_days)
+        received = 0.0
+        for case in cases:
+            for pay in payments_by_case.get(case.id, []):
+                # Tolerates the enum or its plain value, so a stand-in in a test
+                # and an ORM row behave identically.
+                status = getattr(pay.status, "value", pay.status)
+                if status not in _RECOVERED_PAYMENT_STATUSES:
+                    continue
+                if pay.payment_date and start < pay.payment_date.date() <= end:
+                    received += float(pay.amount or 0.0)
+        return round(received, 2)
 
     @staticmethod
     def _infer_outcome(row: RepaymentSnapshot, cases: list[Case],

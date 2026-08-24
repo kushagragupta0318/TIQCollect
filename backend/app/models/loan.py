@@ -94,7 +94,24 @@ class Loan(Base, UUIDPrimaryKey, TimestampMixin):
     # Priority score — computed by TIQCollect ML
     collection_priority_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
 
-    # Daily recovery tag pushed by Command Centre — HIGH / MEDIUM / LOW
+    # How much of this loan we expect to get back — HIGH / MEDIUM / LOW.
+    #
+    # 2026-08-24 — this comment used to read "Daily recovery tag pushed by
+    # Command Centre". That was never true: nothing has ever pushed it, and the
+    # bank's daily feed carries 45 columns of which this is not one
+    # (scripts/sample_daily_feed.csv). The claim mattered because it was the only
+    # thing in the codebase suggesting the label arrived from outside, and it
+    # sent anyone asking "do we compute this or does the bank send it?" to the
+    # wrong answer. Corrected rather than deleted so the change is visible.
+    #
+    # WE compute it, in ml/recovery_scorecard.py, banded on the 90-day expected
+    # recovery rate. Written by exactly one site — RepaymentService.
+    # _apply_recovery_label — and only when RECOVERY_WRITE_LABEL is on, which it
+    # is not by default. Until then this column holds whatever it held before and
+    # the computed label is read from the snapshot instead.
+    #
+    # It was filled by random.choices() until that date, by two separate writers
+    # with different weights, while nothing read it.
     recovery_potential: Mapped[RecoveryPotential | None] = mapped_column(
         SAEnum(RecoveryPotential, name="recovery_potential_enum"), nullable=True
     )

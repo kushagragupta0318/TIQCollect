@@ -375,6 +375,51 @@ class Settings(BaseSettings):
     # data, so the window is generous rather than minimal.
     REPAYMENT_SNAPSHOT_RETENTION_DAYS: int = 400
 
+    # ── Recovery potential (2026-08-24) ──────────────────────────────────────
+    # Same split as the block above: weights and band edges live in
+    # ml/recovery_scorecard.py because a weight change is a model change and must
+    # move RECOVERY_SCORECARD_VERSION, which is stamped on every snapshot row.
+    # Only business-tunable thresholds live here.
+    #
+    # scorecard | command_center | model. Only "scorecard" is implemented. The
+    # other two are named because the brief asked whether we compute this label
+    # or the bank sends it, and the honest answer is "we compute it today, and
+    # here is where a supplied one would arrive". The bank's daily feed carries
+    # 45 columns and recovery potential is not among them.
+    RECOVERY_SCORER: str = "scorecard"
+    # ROLLOUT GATE, and OFF by default. False -> the label is computed and
+    # snapshotted exactly as normal but Loan.recovery_potential is never written.
+    #
+    # The manager surface reads the SNAPSHOT, not that column, so the feature is
+    # fully visible and reviewable with this gate shut. What the gate protects is
+    # the shared Loan column, which another system may one day read.
+    #
+    # It stays False through implementation and testing. Turning it on is a
+    # deployment decision to be made once, deliberately, after a dry run and a
+    # review of how the HIGH/MEDIUM/LOW distribution lands on the real book.
+    # Enabling and rolling back are then the same one-line act.
+    #
+    # Note this differs from REPAYMENT_WRITE_RISK_SCORE in what it displaces:
+    # that gate guards a real, if drifted, computed value. This one guards a
+    # column currently filled by random.choices(). The gate is still closed by
+    # default — the distribution review is worth having either way — but the
+    # thing being replaced is noise, not signal.
+    RECOVERY_WRITE_LABEL: bool = False
+    # Which horizon the HIGH/MEDIUM/LOW label is banded on. 90 days, because
+    # "how much can we realistically get back" is an EVENTUAL-recovery question:
+    # banding on 30 would mark a slow-but-secured loan LOW and steer agents away
+    # from money that is genuinely recoverable by quarter-end, which is the exact
+    # misallocation this label exists to correct.
+    #
+    # Read by the API for display; the scorecard's own LABEL_HORIZON is what
+    # actually bands the number, so the two must agree. See the assertion in
+    # tests/test_recovery_scorecard.py.
+    RECOVERY_LABEL_HORIZON_DAYS: int = 90
+    # The horizons the labeller fills in. A row is revisited as each one matures,
+    # so this list is also the set of `recovered_amount_*` columns that exist —
+    # adding a horizon here without adding its column is a silent no-op.
+    RECOVERY_OUTCOME_HORIZONS: list[int] = [30, 60, 90]
+
     # Location trail (2026-08-18)
     # How long a full-resolution trail is kept before the nightly sweep in
     # workers/tasks/location_retention.py deletes it. Movement history is

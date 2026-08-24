@@ -25,6 +25,32 @@ export function DPDBadge({ bucket }: { bucket: DPDBucket }) {
   return <Badge variant={variant}>{label}</Badge>;
 }
 
+/**
+ * How much of this loan we expect to get back — HIGH / MEDIUM / LOW.
+ *
+ * `null` renders "Not scored" rather than falling back to LOW. An unscored loan
+ * is unknown, and a grey chip that reads as the worst band would quietly write
+ * off money nobody has looked at.
+ *
+ * Deliberately NOT coloured on the same scale as PriorityBadge: there, HIGH is
+ * bad and red. Here HIGH is good, so it is green. Sharing a palette across two
+ * opposite meanings is how a manager ends up reading the wrong column.
+ */
+export function RecoveryBadge({ potential, compact = false }: {
+  potential: RecoveryPotential | null | undefined;
+  /** Table cells are one column wide; the column header supplies the noun. */
+  compact?: boolean;
+}) {
+  if (!potential) return <Badge variant="gray">{compact ? "—" : "Not scored"}</Badge>;
+  const map: Record<RecoveryPotential, { label: string; short: string; variant: BadgeProps["variant"] }> = {
+    HIGH: { label: "High recovery", short: "High", variant: "green" },
+    MEDIUM: { label: "Medium recovery", short: "Medium", variant: "yellow" },
+    LOW: { label: "Low recovery", short: "Low", variant: "red" },
+  };
+  const { label, short, variant } = map[potential];
+  return <Badge variant={variant}>{compact ? short : label}</Badge>;
+}
+
 export function PriorityBadge({ priority }: { priority: CasePriority }) {
   const map: Record<CasePriority, { label: string; variant: BadgeProps["variant"] }> = {
     LOW: { label: "Low", variant: "green" },

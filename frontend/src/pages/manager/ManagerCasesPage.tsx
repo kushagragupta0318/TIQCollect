@@ -24,7 +24,16 @@ import { toast } from "react-hot-toast";
 import { getCases, getCaseDetail, getCasesDateRange } from "@/api/manager";
 import type { ManagerCaseDetail, VisitRecord } from "@/api/manager";
 import { Input } from "@/components/ui/Input";
-import { DPDBadge, PriorityBadge, CaseStatusBadge } from "@/components/ui/Badge";
+import { DPDBadge, PriorityBadge, CaseStatusBadge, RecoveryBadge } from "@/components/ui/Badge";
+
+/** Compact rupees for a one-column table cell: ₹2.4L, ₹34K, ₹820. */
+function shortRupees(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return "₹0";
+  if (n >= 1e7) return `₹${(n / 1e7).toFixed(2)}Cr`;
+  if (n >= 1e5) return `₹${(n / 1e5).toFixed(1)}L`;
+  if (n >= 1e3) return `₹${Math.round(n / 1e3)}K`;
+  return `₹${Math.round(n)}`;
+}
 import { useModalA11y } from "@/hooks/useModalA11y";
 import type { Case } from "@/types";
 
@@ -156,6 +165,10 @@ function CaseDetailModal({ caseId, onClose }: { caseId: string; onClose: () => v
                 <InfoRow label="City" value={`${detail.customer.city}, ${detail.customer.state}`} />
                 <InfoRow label="Collection Stage" value={detail.collection_stage ?? "—"} />
                 <InfoRow label="DPD" value={`${detail.loan.dpd} days (${detail.loan.dpd_bucket.replace("_", " ")})`} />
+                <InfoRow label="Due now" value={`₹${detail.due_now.toLocaleString("en-IN")}`} />
+                <InfoRow label="Recovery outlook">
+                  <RecoveryBadge potential={detail.recovery?.recovery_potential} />
+                </InfoRow>
                 <InfoRow label="Status">
                   <CaseStatusBadge status={detail.status as never} />
                 </InfoRow>
@@ -566,6 +579,16 @@ function CaseRow({ c, onOpen }: { c: Case; onOpen: () => void }) {
         </div>
         <div className="col-span-1"><DPDBadge bucket={c.loan.dpd_bucket} /></div>
         <div className="col-span-1"><PriorityBadge priority={c.priority} /></div>
+        {/* Due now leads; the outlook grades it. The amount is a ledger fact
+            (arrears + penal charges) — never the recovery estimate, which
+            includes principal that is not yet due. */}
+        <div className="col-span-1 min-w-0">
+          <p className="font-semibold text-[13px] tabular-nums truncate" style={{ color: "#1C1C1F" }}
+             title={`₹${c.due_now.toLocaleString("en-IN")} due now`}>
+            {shortRupees(c.due_now)}
+          </p>
+          <div className="mt-1"><RecoveryBadge potential={c.recovery?.recovery_potential} compact /></div>
+        </div>
         <div className="col-span-1"><CaseStatusBadge status={c.status} /></div>
         <div className="col-span-2 min-w-0">
           <p className="font-semibold truncate" style={{ color: "#1C1C1F" }}>₹{c.target_amount.toLocaleString("en-IN")}</p>
@@ -573,7 +596,7 @@ function CaseRow({ c, onOpen }: { c: Case; onOpen: () => void }) {
             <p className="text-xs text-success-600 truncate">₹{c.collected_amount.toLocaleString("en-IN")} paid</p>
           )}
         </div>
-        <div className="col-span-2 text-xs truncate" style={{ color: "#6B6D76" }}>
+        <div className="col-span-1 text-xs truncate" style={{ color: "#6B6D76" }}>
           {c.agent_name ?? <span style={{ color: "#C4C6CF" }}>Unassigned</span>}
         </div>
         <div className="col-span-1 text-xs" style={{ color: "#6B6D76" }}>{c.allocation_date}</div>
@@ -593,10 +616,15 @@ function CaseRow({ c, onOpen }: { c: Case; onOpen: () => void }) {
         <p className="font-semibold text-[15px] leading-tight truncate" style={{ color: "#1C1C1F" }}>{c.customer.full_name}</p>
         <p className="text-xs mt-0.5 truncate" style={{ color: "#6B6D76" }}>{c.customer.city}</p>
 
-        {/* All three badges */}
-        <div className="flex flex-wrap items-center gap-1.5 mt-2">
+        {/* Due now, then the badges that qualify it. */}
+        <p className="mt-2 text-sm font-semibold tabular-nums" style={{ color: "#1C1C1F" }}>
+          ₹{c.due_now.toLocaleString("en-IN")}{" "}
+          <span className="text-xs font-normal" style={{ color: "#6B6D76" }}>due now</span>
+        </p>
+        <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
           <DPDBadge bucket={c.loan.dpd_bucket} />
           <PriorityBadge priority={c.priority} />
+          <RecoveryBadge potential={c.recovery?.recovery_potential} />
           <CaseStatusBadge status={c.status} />
         </div>
 
@@ -628,6 +656,10 @@ export default function ManagerCasesPage() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [bucketFilter, setBucketFilter] = useState("ALL");
+  // Server-side, unlike bucketFilter: the recovery label lives in the snapshot
+  // table, so narrowing it client-side would only filter the 50 rows already
+  // fetched and leave a HIGH-recovery case on page 3 sitting on page 3.
+  const [recoveryFilter, setRecoveryFilter] = useState("ALL");
   const [dateFrom, setDateFrom] = useState(() => searchParams.get("date_from") || "");
   const [dateTo, setDateTo] = useState(() => searchParams.get("date_to") || "");
   // The date filter used to default to [six months ago, today]. Cases are
@@ -657,6 +689,7 @@ export default function ManagerCasesPage() {
       setLoading(true);
       getCases({
         status: statusFilter !== "ALL" ? statusFilter : undefined,
+        recovery: recoveryFilter !== "ALL" ? recoveryFilter : undefined,
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
         agent_id: agentId || undefined,
@@ -670,7 +703,7 @@ export default function ManagerCasesPage() {
         .catch(() => toast.error("Failed to load cases"))
         .finally(() => setLoading(false));
     },
-    [statusFilter, dateFrom, dateTo, agentId]
+    [statusFilter, recoveryFilter, dateFrom, dateTo, agentId]
   );
 
   // Seed the filter from the data's own span. Runs once; failure just leaves the
@@ -718,6 +751,16 @@ export default function ManagerCasesPage() {
     if (statusFilter !== "ALL") {
       out.push({ key: "status", label: statusFilter.replace(/_/g, " "), clear: () => setStatusFilter("ALL") });
     }
+    if (recoveryFilter !== "ALL") {
+      const labels: Record<string, string> = {
+        HIGH: "High recovery", MEDIUM: "Medium recovery", LOW: "Low recovery",
+      };
+      out.push({
+        key: "recovery",
+        label: labels[recoveryFilter] ?? recoveryFilter,
+        clear: () => setRecoveryFilter("ALL"),
+      });
+    }
     if (bucketFilter !== "ALL") {
       const labels: Record<string, string> = { BUCKET_2: "31–60 DPD", BUCKET_3: "61–90 DPD", NPA: "NPA 90+" };
       out.push({ key: "bucket", label: labels[bucketFilter] ?? bucketFilter, clear: () => setBucketFilter("ALL") });
@@ -737,7 +780,7 @@ export default function ManagerCasesPage() {
       });
     }
     return out;
-  }, [statusFilter, bucketFilter, dateFrom, dateTo, defaultRange]);
+  }, [statusFilter, bucketFilter, recoveryFilter, dateFrom, dateTo, defaultRange]);
 
   return (
     <>
@@ -841,6 +884,12 @@ export default function ManagerCasesPage() {
                 <option key={s} value={s}>{s.replace(/_/g, " ")}</option>
               ))}
             </select>
+            <select className="input w-full lg:w-auto tap-target-h" value={recoveryFilter} onChange={(e) => setRecoveryFilter(e.target.value)} aria-label="Filter by recovery potential">
+              <option value="ALL">All Recovery</option>
+              <option value="HIGH">High recovery</option>
+              <option value="MEDIUM">Medium recovery</option>
+              <option value="LOW">Low recovery</option>
+            </select>
             <select className="input w-full lg:w-auto tap-target-h" value={bucketFilter} onChange={(e) => setBucketFilter(e.target.value)} aria-label="Filter by DPD bucket">
               <option value="ALL">All Buckets</option>
               <option value="BUCKET_2">31–60 DPD</option>
@@ -870,9 +919,10 @@ export default function ManagerCasesPage() {
             <span className="col-span-1">Location</span>
             <span className="col-span-1">DPD</span>
             <span className="col-span-1">Priority</span>
+            <span className="col-span-1">Due now · Outlook</span>
             <span className="col-span-1">Status</span>
             <span className="col-span-2">Target / Collected</span>
-            <span className="col-span-2">Agent</span>
+            <span className="col-span-1">Agent</span>
             <span className="col-span-1">Date</span>
           </div>
 

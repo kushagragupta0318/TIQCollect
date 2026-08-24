@@ -68,15 +68,15 @@ def _core():
     """Imported lazily so importing this module never triggers a DB connect."""
     from app.core.database import SessionLocal
     from app.models.customer import Customer
-    from app.models.loan import Loan, LoanType, DPDBucket, LoanStatus, RecoveryPotential
+    from app.models.loan import Loan, LoanType, DPDBucket, LoanStatus
     from app.models.case import Case, CaseStatus, CasePriority
     return (SessionLocal, Customer, Loan, LoanType, DPDBucket,
-            LoanStatus, RecoveryPotential, Case, CaseStatus, CasePriority)
+            LoanStatus, Case, CaseStatus, CasePriority)
 
 
 def _seed_day(db, day: date) -> int:
     (_, Customer, Loan, LoanType, DPDBucket, LoanStatus,
-     RecoveryPotential, Case, CaseStatus, CasePriority) = _core()
+     Case, CaseStatus, CasePriority) = _core()
 
     tag = day.strftime("%Y%m%d")
     ref_prefix = f"DAILY{tag}"

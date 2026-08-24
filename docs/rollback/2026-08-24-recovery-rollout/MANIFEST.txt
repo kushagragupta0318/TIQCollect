@@ -1,0 +1,40 @@
+ROLLBACK ARTIFACT MANIFEST — recovery rollout of 2026-08-24
+===========================================================
+
+Captured before the first controlled recovery snapshot write, from the live
+database through a read-only connection. The database was not modified.
+
+  alembic migration      f4b7d9c1e832
+  recovery scorecard     recovery-scorecard-1.1.0
+  repayment scorecard    scorecard-1.1.0   (unchanged)
+  RECOVERY_WRITE_LABEL   false             (gate shut at capture)
+  loans captured         525  (10 NULL)
+  distribution           LOW 218 · MEDIUM 159 · HIGH 138 · NULL 10
+  snapshot rows          523  (all dated 2026-08-21; 0 dated 2026-08-24)
+
+FILES
+
+  01-rollback-snapshots.sql
+    sha256  cc9633eff8194e2ebbc6d2f3d95fdff92e2a218e477f45aaaf09deb4bedcd89b
+    bytes   2,799
+
+  02-restore-loan-recovery-potential.sql
+    sha256  9207311779bc96c8c1f4f18e50fbf4cf95617bd80961ca7572ec7bbf2214041e
+    bytes   31,278
+
+  loan_recovery_potential_before.csv
+    sha256  5dfceb0b2ad13825ab60d068d03fa1feb24c771ba9a705b7b7f6c65810d84469
+    bytes   22,137
+
+USE
+---
+  Undo today's snapshot write (SAFE, this is the one you want):
+      psql -h localhost -p 15432 -U fieldops -d fieldops -f 01-rollback-snapshots.sql
+
+  Restore loan labels (NOT for today — the gate was shut, nothing was written):
+      Only after RECOVERY_WRITE_LABEL has been opened and labels overwritten.
+      The file ends in ROLLBACK, so running it as-is is a dry run. Change the
+      final ROLLBACK to COMMIT to restore for real.
+
+The two are separate files on purpose: running the snapshot rollback cannot
+touch loans.recovery_potential, because that SQL is not in it.
