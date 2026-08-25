@@ -798,11 +798,18 @@ function RecoveryBreakdownCard({ rows, summary, loading, barReady }: {
   return (
     <div className="card p-4">
       <h2 className="text-sm font-bold mb-1" style={{ color: "#1C1C1F" }}>Recovery outlook</h2>
+      {/* Says "not filtered by month" out loud, because the card next to it IS.
+          Recovery is a CURRENT POSITION — what is owed today and what the
+          scorecard expects back over the next 90 days — so a month selector has
+          nothing to filter. Sitting beside the DPD card, which relabels itself
+          "May payments" when a month is picked, silence here reads as a bug. */}
       <p className="text-xs mb-3" style={{ color: "#6B6D76" }}>
-        Open cases
+        Open cases · position today
         {summary && summary.unscored_cases > 0 && (
           <> · <span style={{ color: "#94a3b8" }}>{summary.unscored_cases} not scored yet</span></>
         )}
+        <br />
+        <span style={{ color: "#94a3b8" }}>Not filtered by the month above</span>
       </p>
 
       <div className="flex flex-wrap gap-x-4 gap-y-1 mb-4 text-[11px]" style={{ color: "#6B6D76" }}>

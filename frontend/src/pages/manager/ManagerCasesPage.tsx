@@ -26,6 +26,34 @@ import type { ManagerCaseDetail, VisitRecord } from "@/api/manager";
 import { Input } from "@/components/ui/Input";
 import { DPDBadge, PriorityBadge, CaseStatusBadge, RecoveryBadge } from "@/components/ui/Badge";
 
+/**
+ * The desktop table's column widths, declared ONCE and used by both the header
+ * and every row.
+ *
+ * Was `grid-cols-12` with col-span-N on each cell. Twelve equal units could not
+ * express what this table needs: adding the "Due now · Outlook" column meant
+ * taking a unit from Agent, and agent names then truncated to "Pankaj Kumar ...".
+ * Proportional tracks give Agent the room a full name needs without starving
+ * anything else, and one shared constant means the header can never drift out of
+ * step with the rows it labels.
+ *
+ * minmax(0, …) on every track is load-bearing: without it a long unbreakable
+ * value (a case number, a rupee figure) sets a floor wider than its share and
+ * pushes the whole row sideways.
+ */
+const TABLE_COLS = [
+  "minmax(0,1.05fr)",  // Case — fits DAILY20260825C01, the longest form
+  "minmax(0,1.5fr)",   // Customer
+  "minmax(0,0.8fr)",   // Location — city names are short
+  "minmax(0,0.9fr)",   // DPD
+  "minmax(0,0.85fr)",  // Priority
+  "minmax(0,1.1fr)",   // Due now · Outlook
+  "minmax(0,0.9fr)",   // Status
+  "minmax(0,1.15fr)",  // Target / Collected
+  "minmax(0,1.4fr)",   // Agent — the widest text column; fits a full name
+  "minmax(0,0.85fr)",  // Date
+].join(" ");
+
 /** Compact rupees for a one-column table cell: ₹2.4L, ₹34K, ₹820. */
 function shortRupees(n: number): string {
   if (!Number.isFinite(n) || n <= 0) return "₹0";
@@ -555,8 +583,9 @@ function CaseRow({ c, onOpen }: { c: Case; onOpen: () => void }) {
       style={{ borderColor: "#EAEBEF" }}
     >
       {/* ── Desktop table row ── */}
-      <div className="hidden lg:grid grid-cols-12 gap-3 px-4 py-3 text-sm items-center">
-        <div className="col-span-1 min-w-0">
+      <div className="hidden lg:grid gap-3 px-4 py-3 text-sm items-center"
+           style={{ gridTemplateColumns: TABLE_COLS }}>
+        <div className="min-w-0">
           <p className="text-xs font-mono font-medium truncate" style={{ color: "#6B6D76" }}>{c.case_number}</p>
           {/* The bank's short name used to sit under the case number. Dropped
               here: every case in this list belongs to the same agency, so it
@@ -568,38 +597,39 @@ function CaseRow({ c, onOpen }: { c: Case; onOpen: () => void }) {
             <div className="flex items-center gap-1.5 mt-0.5 text-xs">{visitedChip}</div>
           )}
         </div>
-        <div className="col-span-2 min-w-0">
+        <div className="min-w-0">
           <p className="font-semibold truncate" style={{ color: "#1C1C1F" }}>{c.customer.full_name}</p>
         </div>
         {/* City moved out from under the name into its own column, so it lines
             up down the table instead of reading as a second line of the
             customer cell. */}
-        <div className="col-span-1 text-xs truncate min-w-0" style={{ color: "#6B6D76" }}>
+        <div className="text-xs truncate min-w-0" style={{ color: "#6B6D76" }}>
           {c.customer.city}
         </div>
-        <div className="col-span-1"><DPDBadge bucket={c.loan.dpd_bucket} /></div>
-        <div className="col-span-1"><PriorityBadge priority={c.priority} /></div>
+        <div className="min-w-0"><DPDBadge bucket={c.loan.dpd_bucket} /></div>
+        <div className="min-w-0"><PriorityBadge priority={c.priority} /></div>
         {/* Due now leads; the outlook grades it. The amount is a ledger fact
             (arrears + penal charges) — never the recovery estimate, which
             includes principal that is not yet due. */}
-        <div className="col-span-1 min-w-0">
+        <div className="min-w-0">
           <p className="font-semibold text-[13px] tabular-nums truncate" style={{ color: "#1C1C1F" }}
              title={`₹${c.due_now.toLocaleString("en-IN")} due now`}>
             {shortRupees(c.due_now)}
           </p>
           <div className="mt-1"><RecoveryBadge potential={c.recovery?.recovery_potential} compact /></div>
         </div>
-        <div className="col-span-1"><CaseStatusBadge status={c.status} /></div>
-        <div className="col-span-2 min-w-0">
+        <div className="min-w-0"><CaseStatusBadge status={c.status} /></div>
+        <div className="min-w-0">
           <p className="font-semibold truncate" style={{ color: "#1C1C1F" }}>₹{c.target_amount.toLocaleString("en-IN")}</p>
           {c.collected_amount > 0 && (
             <p className="text-xs text-success-600 truncate">₹{c.collected_amount.toLocaleString("en-IN")} paid</p>
           )}
         </div>
-        <div className="col-span-1 text-xs truncate" style={{ color: "#6B6D76" }}>
+        <div className="text-xs truncate min-w-0" style={{ color: "#6B6D76" }}
+             title={c.agent_name ?? "Unassigned"}>
           {c.agent_name ?? <span style={{ color: "#C4C6CF" }}>Unassigned</span>}
         </div>
-        <div className="col-span-1 text-xs" style={{ color: "#6B6D76" }}>{c.allocation_date}</div>
+        <div className="text-xs whitespace-nowrap min-w-0" style={{ color: "#6B6D76" }}>{c.allocation_date}</div>
       </div>
 
       {/* ── Mobile card ── */}
@@ -911,19 +941,20 @@ export default function ManagerCasesPage() {
             either way; only the arrangement changes. */}
         <div className="card p-0 overflow-hidden" style={{ animation: `enter 420ms ${EASE} 120ms both` }}>
           <div
-            className="hidden lg:grid grid-cols-12 gap-3 px-4 py-3 border-b text-xs font-semibold uppercase tracking-wide"
-            style={{ background: "#F5F6F9", borderColor: "#EAEBEF", color: "#6B6D76" }}
+            className="hidden lg:grid gap-3 px-4 py-3 border-b text-xs font-semibold uppercase tracking-wide items-center"
+            style={{ background: "#F5F6F9", borderColor: "#EAEBEF", color: "#6B6D76",
+                     gridTemplateColumns: TABLE_COLS }}
           >
-            <span className="col-span-1">Case</span>
-            <span className="col-span-2">Customer</span>
-            <span className="col-span-1">Location</span>
-            <span className="col-span-1">DPD</span>
-            <span className="col-span-1">Priority</span>
-            <span className="col-span-1">Due now · Outlook</span>
-            <span className="col-span-1">Status</span>
-            <span className="col-span-2">Target / Collected</span>
-            <span className="col-span-1">Agent</span>
-            <span className="col-span-1">Date</span>
+            <span>Case</span>
+            <span>Customer</span>
+            <span>Location</span>
+            <span>DPD</span>
+            <span>Priority</span>
+            <span>Due now</span>
+            <span>Status</span>
+            <span>Target / Collected</span>
+            <span>Agent</span>
+            <span>Date</span>
           </div>
 
           {loading ? (
