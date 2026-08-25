@@ -135,11 +135,16 @@ export default function AgentProfilePage() {
             value={inrCompact(agent?.current_month_collections ?? 0)} label="Collected" />
           <MetricTile icon={<TrendingUp className="w-4 h-4" />} color="text-brand-600"
             value={agent?.current_month_visits ?? 0} label="Visits" />
+          {/* "PTPs Due", not "PTPs Set" — the backend counts promises whose
+              committed_date falls in this month and has passed, which is what
+              came due rather than what was raised. An agent who took twelve
+              promises this month, four of them dated next week, sees eight
+              here; calling that "Set" would read as lost work. */}
           <MetricTile icon={<Calendar className="w-4 h-4" />} color="text-warning-600"
-            value={agent?.current_month_ptps_set ?? 0} label="PTPs Set" />
+            value={agent?.current_month_ptps_set ?? 0} label="PTPs Due" />
           <MetricTile icon={<Target className="w-4 h-4" />} color="text-brand-600"
             value={`${ptpRate}%`} label="PTP Rate"
-            sub={`${agent?.current_month_ptps_honored ?? 0}/${agent?.current_month_ptps_set ?? 0} honored`} />
+            sub={`${agent?.current_month_ptps_honored ?? 0} of ${agent?.current_month_ptps_set ?? 0} due kept`} />
         </div>
       </div>
 

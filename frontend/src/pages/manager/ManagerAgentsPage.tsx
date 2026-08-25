@@ -593,7 +593,12 @@ function AgentRow({
         >
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
             <StatMini label="Visits This Month"  value={String(agent.current_month_visits)} />
-            <StatMini label="PTPs Set"           value={String(agent.current_month_ptps_set)} />
+            {/* "PTPs Due", not "PTPs Set". The backend counts promises whose
+                committed_date falls in this month and has passed — what came
+                due — not what was raised. Promises dated later this month are
+                deliberately excluded, so labelling this "Set" would show a
+                number smaller than the agent knows they took. */}
+            <StatMini label="PTPs Due"           value={String(agent.current_month_ptps_set)} />
             <StatMini label="PTPs Honored"       value={String(agent.current_month_ptps_honored)} />
             <StatMini label="Lifetime Rate"      value={`${(agent.lifetime_collection_rate * 100).toFixed(0)}%`} />
           </div>

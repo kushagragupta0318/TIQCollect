@@ -404,10 +404,13 @@ def _live_monthly_metrics(db, agent_ids: list[str], months: list[str]) -> dict[s
                     today_target figure in this endpoint already uses, extended
                     from a day to a month.
       rate          collected / target, 0 when the agent visited nothing.
-      ptps_honored  PTPs RAISED in that month that are now honoured. Scoping to
-                    the month matters: the snapshot task counts every honoured
-                    PTP the agent has ever set against a single month's total,
-                    which climbs forever and can exceed ptps_set.
+      ptps_set      PTPs whose committed_date falls in the month AND has passed.
+                    Promises not yet due are excluded — one dated next week is
+                    an unknown, not a broken promise.
+      ptps_honored  How many of those were honoured. Scoping to the month
+                    matters: the snapshot task counts every honoured PTP the
+                    agent has ever set against a single month's total, which
+                    climbs forever and can exceed ptps_set.
 
     Four grouped queries for the whole team, not four per agent — this endpoint
     already runs four per-agent queries in its main loop and does not need more.
@@ -476,8 +479,36 @@ def _live_monthly_metrics(db, agent_ids: list[str], months: list[str]) -> dict[s
         if mo in wanted and aid in out:
             out[aid][mo]["target"] = float(total or 0.0)
 
-    # 4. PTPs raised in the month, and how many of those are now honoured.
-    ptp_month = _month_of(PTP.created_at)
+    # 4. PTPs DUE in the month, and how many of those were honoured.
+    #
+    # 2026-08-25: this bucketed on PTP.created_at, and the Analytics PTP
+    # conversion gauge read 0% for every month except the one the database was
+    # seeded in. created_at is `server_default now()` — the row-insert
+    # timestamp, not a business date — so all 457 seeded PTPs carried
+    # 2026-08-21 and every other month had an empty denominator.
+    #
+    # The bug is not merely a seeded-data artefact. The other three metrics in
+    # this helper already key off business dates (Payment.payment_date,
+    # Visit.check_in_time); PTP was the only one keying off a row timestamp,
+    # which is wrong for a monthly business figure however the rows were
+    # created. committed_date — the date the borrower promised to pay — is the
+    # business date, and it is already indexed twice.
+    #
+    # NOT-YET-DUE PROMISES ARE EXCLUDED, and that is the other half of the fix.
+    # Simply switching the column would have shown August at 6.2%, because 178
+    # of its 211 promises had not come due yet and every one of them counted
+    # against the denominator. A promise dated next week is not a broken
+    # promise; it is an unknown one — the same distinction the recovery
+    # labeller draws between "observed and zero" and "not yet matured".
+    #
+    # The maturity test is on the DATE, not on the status. Excluding rows that
+    # are still ACTIVE instead would make the figure depend on agents keeping
+    # PTP statuses tidy, and would flatter it: August would read 39.4% by
+    # ignoring the 99 promises that came due and are still unresolved. Keying
+    # on the date needs no status hygiene and states a fact — as of today, that
+    # promise came due and was not honoured. It reads conservatively, which is
+    # the right direction for a figure a manager acts on.
+    ptp_month = _month_of(PTP.committed_date)
     for aid, mo, n_set, n_hon in (
         db.query(
             PTP.agent_id,
@@ -485,7 +516,9 @@ def _live_monthly_metrics(db, agent_ids: list[str], months: list[str]) -> dict[s
             func.count(PTP.id),
             func.count(sa_case((PTP.status == PTPStatus.HONORED, PTP.id))),
         )
-        .filter(PTP.agent_id.in_(agent_ids), PTP.created_at >= window_start)
+        .filter(PTP.agent_id.in_(agent_ids),
+                PTP.committed_date >= window_start.date(),
+                PTP.committed_date <= date.today())
         .group_by(PTP.agent_id, ptp_month)
         .all()
     ):
@@ -1456,14 +1489,25 @@ def analytics(current_user: ManagerOnly, db: DbSession):
     # AgentPerformance. The snapshot columns are seeded
     # (`sim_ptps_set = sim_visits * random.uniform(0.10, 0.30)`), and summing
     # every archived month also double-counts an agent's PTPs once per month row.
+    #
+    # 2026-08-25: the same maturity rule as _live_monthly_metrics, and the
+    # reason is that these two figures share ONE CARD. The UI shows the selected
+    # month's rate when a month is picked and falls back to this all-time figure
+    # when none is, so clicking a month must change the PERIOD and nothing else.
+    # Without the filter it changed the definition too: this counted all 457
+    # PTPs including 129 dated in the future, reading 23.0% against the monthly
+    # basis of 31.7%. A card whose number means something different depending on
+    # what you clicked is worse than a card with no number.
+    _ptp_matured = PTP.committed_date <= date.today()
     total_ptps_set = (
         db.query(func.count(PTP.id))
-        .filter(PTP.agent_id.in_(my_agent_ids))
+        .filter(PTP.agent_id.in_(my_agent_ids), _ptp_matured)
         .scalar() or 0
     ) if my_agent_ids else 0
     total_ptps_honored = (
         db.query(func.count(PTP.id))
-        .filter(PTP.agent_id.in_(my_agent_ids), PTP.status == PTPStatus.HONORED)
+        .filter(PTP.agent_id.in_(my_agent_ids), _ptp_matured,
+                PTP.status == PTPStatus.HONORED)
         .scalar() or 0
     ) if my_agent_ids else 0
 

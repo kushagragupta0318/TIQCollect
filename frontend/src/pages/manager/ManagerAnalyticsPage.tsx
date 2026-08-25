@@ -1494,27 +1494,47 @@ function KPICard({ label, value, sub, icon, color, deltaText, deltaPositive }: {
     : color.includes("brand")   ? "bg-brand-600"
     : "bg-slate-500";
   return (
-    <div className="card group">
+    // h-full is load-bearing. The grid stretches the animation wrapper around
+    // this card, but .card declares no height, so without h-full each card is
+    // only as tall as its own content — and the four KPIs do not have the same
+    // content. Total Collected carries a sub-line beside its value, which grows
+    // that line box by the small text's descender, and it ended up visibly
+    // taller than its neighbours. Heights are the grid's job; let it do it.
+    <div className="card group h-full">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: "#6B6D76" }}>{label}</p>
-          <p className={`text-2xl font-semibold mt-1.5 leading-none tracking-tight ${color}`}>{value}</p>
-          {/* Delta and sub-line together, not either/or. The old ternary meant
-              any month with a month-over-month delta dropped its sub-line, so
-              "of ₹NNNL target" showed up only on the first month of the window
-              — the one with no previous month to compare against.
-              flex-wrap + items-baseline: they sit on one baseline while they
-              fit, and the sub-line drops to its own line on a narrow card
-              instead of being clipped. */}
-          {(deltaText || sub) && (
-            <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 mt-1">
-              {deltaText && (
-                <span className="text-xs font-semibold" style={{ color: deltaPositive ? "#16a34a" : "#dc2626" }}>
-                  {deltaText}
-                </span>
-              )}
-              {sub && <span className="text-xs" style={{ color: "#6B6D76" }}>{sub}</span>}
-            </div>
+          {/* The sub-line belongs to the VALUE, not to the delta, and it has to
+              sit on the value's line to say so.
+              It used to share a baseline row with the delta, which put
+              "↑34.5%" immediately before "of ₹39.3L target" and read as one
+              phrase: "34.5% of ₹39.3L target". That is not merely cramped, it
+              is FALSE — ₹10.5L of ₹39.3L is 26.7%, and 34.5% is the
+              month-over-month change, a different number about a different
+              thing. Two figures that mean nothing to each other must not be
+              allowed to form a sentence.
+              So: value and its qualifier on one baseline, delta alone beneath.
+              items-baseline rather than items-center, so the small text sits on
+              the big number's baseline instead of floating at its middle. */}
+          <div className={`flex flex-wrap items-baseline gap-x-2 mt-1.5 ${color}`}>
+            <span className="text-2xl font-semibold leading-none tracking-tight">{value}</span>
+            {/* text-sm, not text-2xl: these cards are a quarter of the row on
+                desktop and half of it on a phone, and at the value's size
+                "of ₹39.3L target" wraps to its own line on every one of them —
+                which is the layout this change exists to get rid of. Same
+                baseline, one step down in size, and it reads as one unit. */}
+            {/* leading-none on this too, so a card WITH a sub-line has exactly
+                the same value-row height as one without. Left at the default
+                line-height it adds a few pixels of descender to the row, which
+                is the difference that made this card look off in the first
+                place — h-full then hides it, but the row is still the wrong
+                height and the numbers no longer share a baseline cleanly. */}
+            {sub && <span className="text-sm font-medium leading-none" style={{ color: "#6B6D76" }}>{sub}</span>}
+          </div>
+          {deltaText && (
+            <p className="text-xs font-semibold mt-1" style={{ color: deltaPositive ? "#16a34a" : "#dc2626" }}>
+              {deltaText}
+            </p>
           )}
         </div>
         <div className={`icon-circle flex-shrink-0 text-white ${iconBg}`} style={{ transition: "transform 200ms cubic-bezier(0.16,1,0.3,1)" }}>

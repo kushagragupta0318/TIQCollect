@@ -41,19 +41,35 @@ def take_monthly_snapshot(self):
                 Case.allocation_date < month_end.isoformat(),
             ).count()
 
+            # 2026-08-25: keyed on committed_date, not created_at, to match
+            # _live_monthly_metrics in endpoints/manager.py. created_at is
+            # `server_default now()` — the row-insert timestamp, not a business
+            # date — so on a seeded book every PTP landed in the month the
+            # database was created and every other month archived a zero.
+            #
+            # This table is read by GET /manager/reports/monthly and by the AI
+            # narrative, neither of which goes through the live helper. Leaving
+            # the two keyed differently meant the monthly report and the
+            # Analytics page quoted different PTP conversion rates for the same
+            # month, with nothing on either screen to say why.
+            #
+            # No upper maturity bound is needed here: this task runs on the 1st
+            # for the month that has just ENDED, so every promise dated inside
+            # that month has already come due. The live helper needs the bound
+            # only because it also reports the month in progress.
             ptps_set = db.query(PTP).filter(
                 PTP.agent_id == agent.id,
-                PTP.created_at >= month_start.isoformat(),
-                PTP.created_at < month_end.isoformat(),
+                PTP.committed_date >= month_start,
+                PTP.committed_date < month_end,
             ).count()
-            # Bounded to PTPs RAISED in this month. Without the upper bound and
+            # Bounded to PTPs DUE in this month. Without the upper bound and
             # the start filter this counted every honoured PTP the agent had
             # ever set against one month's total — a number that only climbs,
             # and can exceed ptps_set.
             ptps_honored = db.query(PTP).filter(
                 PTP.agent_id == agent.id,
-                PTP.created_at >= month_start.isoformat(),
-                PTP.created_at < month_end.isoformat(),
+                PTP.committed_date >= month_start,
+                PTP.committed_date < month_end,
                 PTP.status == PTPStatus.HONORED,
             ).count()
 
