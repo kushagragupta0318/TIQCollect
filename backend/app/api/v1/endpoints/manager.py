@@ -379,6 +379,23 @@ def _complete_months_before(anchor: date, count: int) -> list[str]:
     return list(reversed(months))
 
 
+def _recent_months(anchor: date, count: int) -> list[str]:
+    # The `count` months ending at anchor's month, oldest first (YYYY-MM).
+    # Steps back one month arithmetically rather than subtracting 30-day
+    # timedelta chunks: 30 days from the 1st can land two iterations in the
+    # same month and skip another entirely, silently shortening the window.
+    if count <= 0:
+        return []
+    months: list[str] = []
+    year, month = anchor.year, anchor.month
+    for _ in range(count):
+        months.append(f"{year:04d}-{month:02d}")
+        month -= 1
+        if month == 0:
+            year, month = year - 1, 12
+    return list(reversed(months))
+
+
 def _live_monthly_metrics(db, agent_ids: list[str], months: list[str]) -> dict[str, dict[str, dict]]:
     """Per-agent, per-month performance computed from the transactional tables.
 
@@ -1060,13 +1077,9 @@ def agents_performance(
         a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()
     ]
     _, _, eff_today_perf = _effective_today(my_agent_ids_perf, db)
-    month_list: list[str] = []
-    for i in range(months - 1, -1, -1):
-        d = eff_today_perf.replace(day=1) - timedelta(days=30 * i)
-        month_list.append(d.strftime("%Y-%m"))
-    # dedupe
-    seen: set[str] = set()
-    month_list = [m for m in month_list if not (m in seen or seen.add(m))]  # type: ignore[func-returns-value]
+    # Arithmetically stepped so no month is skipped or duplicated — see
+    # _recent_months. The old 30-day-timedelta loop could drop a month.
+    month_list: list[str] = _recent_months(eff_today_perf, max(months, 1))
 
     my_agents = (
         db.query(Agent, User.full_name)
@@ -1291,24 +1304,35 @@ def review_fraud_alert(body: _ReviewBody, current_user: ManagerOnly, db: DbSessi
 
 @router.get("/compliance")
 def compliance_metrics(current_user: ManagerOnly, db: DbSession):
+    # Scoped to this manager's own agents, like every other figure in this
+    # router — compliance numbers are per-team, not company-wide.
+    my_agent_ids = [
+        a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()
+    ]
+
     start_of_month = date.today().replace(day=1)
     start_of_month_dt = datetime.combine(start_of_month, datetime.min.time()).replace(tzinfo=timezone.utc)
 
     total_visits = (
-        db.query(func.count(Visit.id)).filter(Visit.check_in_time >= start_of_month_dt).scalar() or 0
+        db.query(func.count(Visit.id))
+        .filter(Visit.agent_id.in_(my_agent_ids), Visit.check_in_time >= start_of_month_dt)
+        .scalar() or 0
     )
     out_of_hours = (
         db.query(func.count(Visit.id))
-        .filter(Visit.check_in_time >= start_of_month_dt, Visit.within_contact_hours == False)  # noqa: E712
+        .filter(Visit.agent_id.in_(my_agent_ids), Visit.check_in_time >= start_of_month_dt,
+                Visit.within_contact_hours == False)  # noqa: E712
         .scalar() or 0
     )
     geo_violations = (
         db.query(func.count(Visit.id))
-        .filter(Visit.check_in_time >= start_of_month_dt, Visit.geo_verified == False)  # noqa: E712
+        .filter(Visit.agent_id.in_(my_agent_ids), Visit.check_in_time >= start_of_month_dt,
+                Visit.geo_verified == False)  # noqa: E712
         .scalar() or 0
     )
     sos_active = (
-        db.query(func.count(Agent.id)).filter(Agent.sos_active == True).scalar() or 0  # noqa: E712
+        db.query(func.count(Agent.id))
+        .filter(Agent.id.in_(my_agent_ids), Agent.sos_active == True).scalar() or 0  # noqa: E712
     )
 
     return {
@@ -1333,19 +1357,9 @@ def analytics(current_user: ManagerOnly, db: DbSession):
     ]
     _, _, today = _effective_today(my_agent_ids, db)
 
-    # 6-month window
-    months: list[str] = []
-    for i in range(5, -1, -1):
-        m = (today.replace(day=1) - timedelta(days=30 * i))
-        months.append(m.strftime("%Y-%m"))
-    # deduplicate preserving order
-    seen: set[str] = set()
-    months_ordered: list[str] = []
-    for m in months:
-        if m not in seen:
-            seen.add(m)
-            months_ordered.append(m)
-    months_ordered.sort()
+    # 6-month window — arithmetically stepped via _recent_months; the old
+    # 30-day-timedelta loop could land two rows in one month and skip another.
+    months_ordered: list[str] = _recent_months(today, 6)
 
     # Monthly collection trend — live, from the transactional tables.
     #
