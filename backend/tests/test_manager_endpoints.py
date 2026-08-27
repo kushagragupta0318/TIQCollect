@@ -31,7 +31,7 @@ from app.models.beat import Beat, BeatStatus
 from app.models.case import Case, CaseStatus
 from app.models.customer import Customer, RiskCategory
 from app.models.loan import DPDBucket, Loan, LoanStatus, LoanType
-from app.models.payment import Payment, PaymentMode
+from app.models.payment import Payment, PaymentMode, PaymentStatus
 from app.models.ptp import PTP, PTPStatus
 from app.models.user import User, UserRole
 from app.models.visit import PersonMet, Visit, VisitOutcome
@@ -215,6 +215,36 @@ def test_agent_rows_carry_today_figures(client, seeded):
     row = r.json()[0]
     for key in ("cases_today", "today_collected", "today_target", "sos_active"):
         assert key in row
+
+
+def test_agent_ptp_rate_counts_verified_payment_evidence(client, seeded):
+    db = seeded["db"]
+    ag1 = seeded["agents"][0]
+    c2 = seeded["cases"][1]
+    due_ptp = PTP(
+        case_id=c2.id,
+        agent_id=ag1.id,
+        committed_amount=1000.0,
+        committed_date=TODAY - timedelta(days=1),
+        status=PTPStatus.ACTIVE,
+    )
+    paid_on_time = Payment(
+        case_id=c2.id,
+        agent_id=ag1.id,
+        amount=1000.0,
+        mode=PaymentMode.UPI,
+        receipt_number="RCPT-PTP-EVIDENCE",
+        payment_date=NOW - timedelta(days=1),
+        status=PaymentStatus.VERIFIED,
+    )
+    db.add_all([due_ptp, paid_on_time])
+    db.commit()
+
+    r = client.get("/api/v1/manager/agents", headers=auth_headers(seeded["manager"]))
+    assert r.status_code == 200
+    row = r.json()[0]
+    assert row["current_month_ptps_honored"] >= 1
+    assert row["ptp_rate_pct"] > 0
 
 
 # ─ GET /manager/agents/performance ─────────────

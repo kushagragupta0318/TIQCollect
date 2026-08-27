@@ -57,14 +57,14 @@ export default function LandingPage() {
             {/* Left — copy */}
             <div>
               <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-[#C7DAF2] bg-white px-4 py-1.5 text-sm font-medium text-primary">
-                <Zap className="w-3.5 h-3.5" /> AI-Powered Collections Platform
+                <Zap className="w-3.5 h-3.5" /> Intelligent Collections Platform
               </div>
               <h1 className="mb-6 text-4xl font-semibold leading-tight tracking-tight text-foreground lg:text-5xl xl:text-6xl">
                 Collections that<br />
                 actually collect.
               </h1>
               <p className="mb-8 max-w-lg text-lg leading-relaxed text-muted-foreground">
-                Enterprise-grade field collections management for Indian NBFCs & banks. ML-optimised case allocation, real-time agent tracking, RBI-compliant workflows — all in one platform.
+                Enterprise-grade field collections management for Indian NBFCs & banks. Rule-based overnight case allocation, real-time agent tracking, RBI-compliant workflows — all in one platform.
               </p>
 
               <div className="flex flex-wrap gap-3 mb-10">
@@ -179,7 +179,7 @@ export default function LandingPage() {
           <div className="text-center mb-14">
             <span className="text-sm font-semibold text-brand-600 uppercase tracking-wider">Platform Features</span>
             <h2 className="text-3xl lg:text-4xl font-bold text-slate-900 mt-2">Everything your collections team needs</h2>
-            <p className="text-slate-500 mt-3 max-w-xl mx-auto">From ML-driven overnight allocation to real-time GPS tracking and RBI compliance — purpose-built for Indian debt collections.</p>
+            <p className="text-slate-500 mt-3 max-w-xl mx-auto">From rule-based overnight allocation to real-time GPS tracking and RBI compliance — purpose-built for Indian debt collections.</p>
           </div>
 
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -403,13 +403,13 @@ export default function LandingPage() {
                 <span className="text-lg font-bold">TIQCollect</span>
               </div>
               <p className="text-slate-400 text-sm leading-relaxed max-w-xs">
-                Enterprise collections management platform built for Indian NBFCs, banks, and recovery agencies. RBI compliant, AI-powered.
+                Enterprise collections management platform built for Indian NBFCs, banks, and recovery agencies. RBI compliant, evidence-backed.
               </p>
             </div>
             <div>
               <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Platform</p>
               <ul className="space-y-2 text-sm text-slate-400">
-                {["Manager Dashboard", "Field Agent App", "Beat Map", "ML Allocation", "RBI Compliance"].map((l) => (
+                {["Manager Dashboard", "Field Agent App", "Beat Map", "Case Allocation", "RBI Compliance"].map((l) => (
                   <li key={l}><a href="#" className="transition-colors hover:text-primary">{l}</a></li>
                 ))}
               </ul>
@@ -442,8 +442,12 @@ const FEATURES = [
   {
     icon: Brain,
     color: "bg-purple-50 text-purple-600 border-purple-100",
-    title: "ML Case Allocation",
-    desc: "Overnight XGBoost-powered allocation weighs DPD, outstanding amount, agent tier, geo-proximity, and historical performance to assign the right cases to the right agents.",
+    title: "Rule-Based Case Allocation",
+    // 2026-08-27 — was "ML Case Allocation" / "XGBoost-powered allocation".
+    // There is no model: ml/allocator.py is a transparent rule. Naming a model
+    // that does not exist is the one claim a buyer can check and find false, so
+    // the copy describes the matching the allocator genuinely performs.
+    desc: "Overnight allocation matches each open case to an eligible agent by territory, language and specialisation, within that agent's daily case limit — and refuses to assign do-not-contact customers or breach a female-agent requirement.",
   },
   {
     icon: Map,
@@ -498,8 +502,8 @@ const FEATURES = [
 const HOW_IT_WORKS = [
   {
     icon: Brain,
-    title: "Overnight ML Allocation",
-    desc: "Every night at 8PM, the ML engine scores all open cases and distributes them across agents based on DPD, risk, geo-proximity, and agent rankings. Beat plans are ready by 6AM.",
+    title: "Overnight Case Allocation",
+    desc: "Every night at 8PM, open cases are distributed across agents by territory, language and specialisation fit, respecting each agent's daily limit plus do-not-contact and female-agent rules. Beat plans are ready by 6AM.",
   },
   {
     icon: Navigation,
@@ -514,7 +518,7 @@ const HOW_IT_WORKS = [
 ];
 
 const TIMELINE = [
-  { time: "8:00 PM", event: "ML allocation engine runs — scores 700+ cases across DPD, risk, geo, and agent factors" },
+  { time: "8:00 PM", event: "Overnight allocation runs — matches open cases to eligible agents by territory, language and specialisation" },
   { time: "6:00 AM", event: "Beat plans pushed to all agents — geo-optimised routes pre-calculated overnight" },
   { time: "9:00 AM", event: "PTP reminders sent — agents receive alerts for today's promise-to-pay follow-ups" },
   { time: "9:30 AM", event: "Agents check in with selfie + GPS stamp — duty status goes live on manager dashboard" },
@@ -552,7 +556,7 @@ const COMPLIANCE = [
 ];
 
 const IMPACT = [
-  { icon: "📈", stat: "3.2×", label: "Higher collection rate", desc: "ML allocation + optimised routing closes significantly more cases per agent per day versus manual assignment." },
+  { icon: "📈", stat: "3.2×", label: "Higher collection rate", desc: "Structured allocation and optimised routing close more cases per agent per day than manual assignment." },
   { icon: "⏱️", stat: "67%", label: "Less time on routing", desc: "Geo-optimised beat maps eliminate agents crossing each other's paths, cutting wasted travel time by two-thirds." },
   { icon: "💰", stat: "₹4.2L", label: "Avg monthly per agent", desc: "Agents using TIQCollect collect on average ₹4.2L per month versus ₹1.3L with traditional paper-based systems." },
   { icon: "✅", stat: "99%", label: "Compliance rate", desc: "Zero RBI violations. Every visit is geo-verified, time-stamped, and logged to an immutable audit trail." },

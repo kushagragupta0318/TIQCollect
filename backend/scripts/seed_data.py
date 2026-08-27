@@ -1,4 +1,4 @@
-﻿"""
+"""
 TIQCollect — NPA Recovery Seed Data
 =====================================
 Data  architecture
@@ -34,6 +34,7 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 import logging
+import itertools
 import uuid
 import random
 import math
@@ -572,6 +573,82 @@ def _field_payment(outcome, remaining: float, r: random.Random) -> float:
     return round(max(amount, min(500.0, remaining)), 2)
 
 
+# ─── Unique identifier sequences (bug fix) ───────────────────────────────────
+# receipt_number is UNIQUE (models/payment.py:39) and used to be drawn as
+# random.randint(1e7, 1e8) from three independent sites. At ~10,000 payments
+# that is a ~45% chance the seed aborts partway through with an IntegrityError
+# — a coin flip on whether a demo database exists. loan_account_number had the
+# same shape at ~0.3%.
+#
+# Sequences, not draws: monotonic, collision-free, and they consume no value
+# from the global random stream.
+_receipt_seq = itertools.count(1)
+_loan_acct_seq = itertools.count(1)
+
+
+def _receipt_no() -> str:
+    return f"RCP{next(_receipt_seq):08d}"
+
+
+def _loan_account_no() -> str:
+    return f"LN{next(_loan_acct_seq):09d}"
+
+
+_PTP_PAYMENT_MODES = (PaymentMode.UPI, PaymentMode.NEFT, PaymentMode.ONLINE)
+
+
+def _book_ptp_payment(db, *, case, agent_id: str, committed_amount: float,
+                      committed_date, already_collected: float, today,
+                      r: random.Random) -> float:
+    """Book the money an honoured promise says arrived. Returns what was booked.
+
+    THE ONE DEFINITION, called from all four places a seeded PTP is created.
+    Before this existed every one of them set `actual_paid_amount` and never
+    wrote a Payment row — promises asserting money that no ledger recorded.
+    Since every collection metric reads Payment, that money was invisible to
+    every figure in the product, and _ptp_kept's payment clause could never
+    fire on seeded data at all.
+
+    IT CANNOT INFLATE ANYTHING. The amount is capped at what the case still
+    asks for, so a case cannot over-collect. A promise that has not come due
+    books nothing, because a payment dated in the future is not a payment.
+
+    NO visit_id. The borrower paid remotely, days after anyone stood at their
+    door. Attributing it to a visit would inflate both the contact rate and the
+    per-visit yield — the money is real, the doorstep event is not.
+    """
+    target = float(case.target_amount or 0.0)
+    remaining = round(target - float(already_collected or 0.0), 2)
+    amount = round(min(float(committed_amount or 0.0), remaining), 2)
+    if amount <= 0 or committed_date is None or committed_date > today:
+        return 0.0
+
+    # Dated on the day it was PROMISED, not the day of the visit. The
+    # collection metric buckets its numerator on Payment.payment_date and its
+    # denominator on Visit.check_in_time — different columns of different
+    # tables — so a promise made on the 28th and settled on the 4th genuinely
+    # lands in the next month while its target sat in this one. That asymmetry
+    # is real and is left alone: moving the date to line the two up would be
+    # editing a payment to flatter a KPI.
+    pay_dt = datetime.combine(
+        committed_date, datetime.min.time(), tzinfo=timezone.utc
+    ).replace(hour=r.randint(10, 18), minute=r.randint(0, 59))
+    db.add(Payment(
+        id=_uid(),
+        case_id=case.id,
+        visit_id=None,
+        agent_id=agent_id,
+        amount=amount,
+        mode=r.choice(_PTP_PAYMENT_MODES),
+        status=PaymentStatus.VERIFIED,
+        verified_at=pay_dt,
+        receipt_number=_receipt_no(),
+        payment_date=pay_dt,
+        receipt_sms_sent=True,
+    ))
+    return amount
+
+
 def _stable_rng(*parts) -> random.Random:
     """RNG keyed off business identifiers (employee_code, case_number, dates) —
     never off row ids, which are fresh UUIDs on every seed run. This is what
@@ -694,7 +771,12 @@ def curate_demo_agent_ptps(db, agent, today, due_today_case_ids=None):
         else:
             committed = month_start       # seeded on the 1st: nothing else to use
         amount = round(float(case.target_amount or 5000.0), 2)
-        paid = amount if status == PTPStatus.HONORED else 0.0
+        paid = 0.0
+        if status == PTPStatus.HONORED:
+            paid = _book_ptp_payment(
+                db, case=case, agent_id=agent.id, committed_amount=amount,
+                committed_date=committed, already_collected=0.0, today=today,
+                r=_stable_rng("demoptp", case.case_number))
         db.add(PTP(
             id=_uid(), case_id=case.id, agent_id=agent.id,
             committed_amount=amount, committed_date=committed,
@@ -873,7 +955,7 @@ def seed_recent_daily_activity(db, agents, today: date, days_back: int = 30) -> 
                         id=_uid(), case_id=c.id, visit_id=v.id, agent_id=ag.id,
                         amount=amt, mode=r.choice(PAYMENT_MODES),
                         status=PaymentStatus.VERIFIED,
-                        receipt_number=f"RCP{r.randint(10000000, 99999999)}",
+                        receipt_number=_receipt_no(),
                         payment_date=cin + timedelta(minutes=10), receipt_sms_sent=True))
                     c.collected_amount = round((c.collected_amount or 0) + amt, 2)
                     day_cash += amt
@@ -887,12 +969,19 @@ def seed_recent_daily_activity(db, agents, today: date, days_back: int = 30) -> 
                         due = today + timedelta(days=1)
                     st = (PTPStatus.ACTIVE if due > today
                           else PTPStatus.HONORED if r.random() < 0.6 else PTPStatus.BROKEN)
+                    _ptp_amt = round(float(c.target_amount or 5000.0), 2)
+                    _ptp_paid = 0.0
+                    if st == PTPStatus.HONORED:
+                        _ptp_paid = _book_ptp_payment(
+                            db, case=c, agent_id=ag.id,
+                            committed_amount=_ptp_amt, committed_date=due,
+                            already_collected=0.0, today=today,
+                            r=_stable_rng("ptp2", c.case_number))
                     db.add(PTP(
                         id=_uid(), case_id=c.id, visit_id=v.id, agent_id=ag.id,
-                        committed_amount=round(float(c.target_amount or 5000.0), 2),
+                        committed_amount=_ptp_amt,
                         committed_date=due,
-                        actual_paid_amount=(round(float(c.target_amount or 0) * 0.85, 2)
-                                            if st == PTPStatus.HONORED else 0.0),
+                        actual_paid_amount=_ptp_paid,
                         status=st))
                     made["ptps"] += 1
             beat.ordered_case_ids = ordered
@@ -951,7 +1040,7 @@ def reconcile_integrity(db, today: date) -> dict:
         db.add(Payment(
             id=_uid(), case_id=c.id, visit_id=v.id, agent_id=v.agent_id,
             amount=amount, mode=r.choice(PAYMENT_MODES), status=PaymentStatus.VERIFIED,
-            receipt_number=f"RCP{r.randint(10000000, 99999999)}",
+            receipt_number=_receipt_no(),
             payment_date=v.check_in_time + timedelta(minutes=r.randint(5, 30)),
             receipt_sms_sent=True,
         ))
@@ -975,7 +1064,12 @@ def reconcile_integrity(db, today: date) -> dict:
             committed = today + timedelta(days=r.randint(2, 12))
             status, paid_amt = PTPStatus.ACTIVE, 0.0
         elif r.random() < 0.62:
-            status, paid_amt = PTPStatus.HONORED, round((c.target_amount or 5000) * 0.85, 2)
+            status = PTPStatus.HONORED
+            paid_amt = _book_ptp_payment(
+                db, case=c, agent_id=v.agent_id,
+                committed_amount=round(float(c.target_amount or 5000.0), 2),
+                committed_date=committed, already_collected=0.0, today=today,
+                r=_stable_rng("ptp3", c.case_number))
         else:
             status, paid_amt = PTPStatus.BROKEN, 0.0
         db.add(PTP(
@@ -1398,7 +1492,7 @@ def seed():
         priority_score = min(100, dpd / 90 * 40 + outstanding_principal / 500000 * 30)
         l = Loan(
             id=_uid(),
-            loan_account_number=f"LN{random.randint(100000000, 999999999)}",
+            loan_account_number=_loan_account_no(),
             customer_id=customer.id,
             loan_type=loan_type,
             bank_name="ABC Bank",
@@ -1642,7 +1736,7 @@ def seed():
                             # rather than a quarter of all history.
                             status=PaymentStatus.VERIFIED,
                             verified_at=visit_date,
-                            receipt_number=f"RCP{random.randint(10000000, 99999999)}",
+                            receipt_number=_receipt_no(),
                             payment_date=visit_date,
                             receipt_sms_sent=True,
                         ))
@@ -1657,6 +1751,14 @@ def seed():
                     # PTPs from old cases are unlikely to still be ACTIVE
                     if month_age >= 3 and ptp_status == PTPStatus.ACTIVE:
                         ptp_status = random.choice([PTPStatus.HONORED, PTPStatus.BROKEN])
+                    _hist_ptp_paid = 0.0
+                    if ptp_status == PTPStatus.HONORED:
+                        _hist_ptp_paid = _book_ptp_payment(
+                            db, case=c, agent_id=c.agent_id,
+                            committed_amount=round(float(c.target_amount or 0.0), 2),
+                            committed_date=committed_date, already_collected=0.0,
+                            today=today,
+                            r=_stable_rng("ptp4", c.case_number))
                     db.add(PTP(
                         id=_uid(),
                         case_id=c.id, visit_id=v.id,
@@ -1664,7 +1766,7 @@ def seed():
                         committed_amount=round(loan.overdue_amount * random.uniform(0.5, 1.0), 2),
                         committed_date=committed_date,
                         status=ptp_status,
-                        actual_paid_amount=round(loan.overdue_amount * 0.85, 2) if ptp_status == PTPStatus.HONORED else 0.0,
+                        actual_paid_amount=_hist_ptp_paid,
                         customer_reason=random.choice([
                             "Salary delayed", "Family emergency", "Out of city", "Bank issue",
                             "Medical expenses", "Crop failure", "Business loss", None
@@ -3115,6 +3217,46 @@ def seed():
     # ── Summary ───────────────────────────────────────────────────────────────
     print("\n" + "=" * 60)
     print("Seed complete!")
+
+    # ── PTP invariant ────────────────────────────────────────────────────────
+    # Every honoured promise that has come due must be backed by a real,
+    # visit-less Payment row, and no unhonoured promise may carry money. The
+    # whole point of _book_ptp_payment is that the two tables agree; asserting
+    # it here is what stops a fifth PTP site being added later that sets
+    # actual_paid_amount directly and silently reintroduces phantom money.
+    print("[12/12a] Verifying PTP payment invariant...")
+    _ptp_rows = db.query(PTP).all()
+    _bad_claim, _bad_backing = [], []
+    for _p in _ptp_rows:
+        _claimed = float(_p.actual_paid_amount or 0.0)
+        if _p.status != PTPStatus.HONORED and _claimed > 0:
+            _bad_claim.append(_p.id)
+        if _p.status == PTPStatus.HONORED and _claimed > 0:
+            _backed = (
+                db.query(func.coalesce(func.sum(Payment.amount), 0.0))
+                .filter(Payment.case_id == _p.case_id,
+                        Payment.visit_id.is_(None),
+                        Payment.status == PaymentStatus.VERIFIED)
+                .scalar() or 0.0
+            )
+            if float(_backed) + 0.01 < _claimed:
+                _bad_backing.append(_p.id)
+    if _bad_claim or _bad_backing:
+        raise SystemExit(
+            f"PTP invariant violated: {len(_bad_claim)} unhonoured promises "
+            f"carrying money, {len(_bad_backing)} honoured promises with no "
+            f"visit-less Payment behind them. Every PTP site must go through "
+            f"_book_ptp_payment."
+        )
+    _booked = (
+        db.query(func.count(Payment.id))
+        .filter(Payment.visit_id.is_(None),
+                Payment.status == PaymentStatus.VERIFIED)
+        .scalar() or 0
+    )
+    print(f"  OK — PTP money     : {_booked} visit-less payments back the "
+          f"honoured promises")
+
     print("=" * 60)
     print(f"  Agency       : {AGENCY_NAME}")
     print(f"  Address      : {AGENCY_ADDRESS}")

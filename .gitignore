@@ -62,3 +62,7 @@ Thumbs.db
 # matching rule, so these would be dead if they sat above the .env block.
 !*.example
 !**/*.example
+
+# Postgres dumps taken before/after a destructive reseed. Binary, large,
+# and regenerable from scripts/seed_data.py — never in git.
+backups/

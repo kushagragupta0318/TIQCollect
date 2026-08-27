@@ -32,6 +32,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone, timedelta
 
+from sqlalchemy import func
+
 from app.core.config import settings
 from app.core.errors import AppException, ErrorCode
 from app.models.audit_log import AuditLog, AuditAction
@@ -118,6 +120,7 @@ class PaymentService:
                 details={"amount": req.amount, "mode": str(req.mode), "channel": "OTP", "deferred": False},
                 success=True,
             ))
+            self._honor_active_ptps_paid_by_due_date(case.id, agent.id, now_utc)
 
         remaining = round(case.target_amount - case.collected_amount, 2)
         if req.amount > remaining:
@@ -139,6 +142,61 @@ class PaymentService:
 
         self._notify_payment_received(agent, case, payment, req)
         return self._payment_response(payment, case)
+
+    def _honor_active_ptps_paid_by_due_date(self, case_id: str, agent_id: str, paid_at: datetime) -> None:
+        """Keep PTP status in sync when an OTP-verified payment satisfies it."""
+        paid_date = paid_at.date()
+        active_ptps = (
+            self.db.query(PTP)
+            .filter(
+                PTP.case_id == case_id,
+                PTP.agent_id == agent_id,
+                PTP.status == PTPStatus.ACTIVE,
+                PTP.committed_date >= paid_date,
+            )
+            .all()
+        )
+        for ptp in active_ptps:
+            total_paid = (
+                self.db.query(func.coalesce(func.sum(Payment.amount), 0.0))
+                .filter(
+                    Payment.case_id == case_id,
+                    Payment.agent_id == agent_id,
+                    Payment.status == PaymentStatus.VERIFIED,
+                    func.date(Payment.payment_date) <= ptp.committed_date,
+                )
+                .scalar()
+                or 0.0
+            )
+            if float(total_paid) >= float(ptp.committed_amount):
+                previous = str(ptp.status)
+                ptp.status = PTPStatus.HONORED
+                ptp.actual_paid_amount = float(total_paid)
+                # PTP_UPDATED has been declared since the AuditLog model was
+                # written and never once emitted — one of the eighteen action
+                # types in that enum with no call site. This is the case it was
+                # meant for: a commitment's status changing on its own, from a
+                # side effect of another action, with no human deciding it.
+                # A manager asking "who marked this honoured?" would otherwise
+                # find nothing, and the honest answer is "the payment did".
+                self.db.add(AuditLog(
+                    id=str(uuid.uuid4()),
+                    created_at=paid_at,
+                    user_id=None,   # nobody did this; a verified payment did
+                    action=AuditAction.PTP_UPDATED,
+                    entity_type="PTP",
+                    entity_id=ptp.id,
+                    details={
+                        "from": previous,
+                        "to": str(PTPStatus.HONORED),
+                        "reason": "VERIFIED_PAYMENT_BY_COMMITTED_DATE",
+                        "committed_amount": float(ptp.committed_amount),
+                        "committed_date": ptp.committed_date.isoformat(),
+                        "verified_paid_by_due_date": float(total_paid),
+                        "actor": "SYSTEM",
+                    },
+                    success=True,
+                ))
 
     def _find_recent_duplicate(self, case_id: str, agent_id: str, req) -> Payment | None:
         window_start = datetime.now(timezone.utc) - timedelta(seconds=self._DUPLICATE_SUBMIT_WINDOW_SECONDS)

@@ -443,16 +443,24 @@ export default function ManagerAnalyticsPage() {
   const teamVisitsDelta  = selTeamTrend && prevTeamTrend && prevTeamTrend.total_visits > 0
     ? +((selTeamTrend.total_visits - prevTeamTrend.total_visits) / prevTeamTrend.total_visits * 100).toFixed(1) : null;
 
-  // PTP per month — derived from per-agent monthly data since monthly_trend has no PTP fields
-  function teamPTPRate(monthYM: string | null | undefined) {
-    if (!monthYM) return null;
-    const set     = agents.reduce((s, a) => s + (a.monthly.find((m) => m.month === monthYM)?.ptps_set     ?? 0), 0);
-    const honored = agents.reduce((s, a) => s + (a.monthly.find((m) => m.month === monthYM)?.ptps_honored ?? 0), 0);
-    return set > 0 ? +(honored / set * 100).toFixed(1) : 0;
-  }
-  const teamPTPSel  = selTeamTrend  ? teamPTPRate(selTeamTrend.month)  : null;
-  const teamPTPPrev = prevTeamTrend ? teamPTPRate(prevTeamTrend.month) : null;
-  const teamPTPDelta = teamPTPSel !== null && teamPTPPrev !== null ? +(teamPTPSel - teamPTPPrev).toFixed(1) : null;
+  // ── The two PTP numbers, kept apart ──────────────────────────────────────
+  // CAPTURE grades the agent at the door: of the visits where a commitment was
+  // the right outcome, how many secured one. Known the same day, so it is the
+  // figure a manager can act on now — which is why it leads the card.
+  // CONVERSION grades the borrower's follow-through and is not knowable for up
+  // to a month. Both are shown, because high capture with low conversion means
+  // soft promises taken to close visits, and reporting one number would hide it.
+  //
+  // Capture comes straight off monthly_trend now that the backend carries it
+  // there, summed as counts and divided once. The old per-agent reduce is gone:
+  // averaging per-agent rates let an agent with three visits move the team line
+  // as far as one with ninety.
+  const teamCapSel = selTeamTrend ? selTeamTrend.ptp_capture_pct : null;
+  const teamCapPrev = prevTeamTrend ? prevTeamTrend.ptp_capture_pct : null;
+  const teamCapDelta = teamCapSel !== null && teamCapPrev !== null
+    ? +(teamCapSel - teamCapPrev).toFixed(1) : null;
+
+
 
   const teamSeries = [
     { label: "Collected", color: "#1677FF", values: monthly_trend.map((m) => m.collected_lakhs * 100000) },
@@ -494,10 +502,31 @@ export default function ManagerAnalyticsPage() {
             icon: <IndianRupee className="w-5 h-5" />, color: "text-success-600",
           },
           {
-            label: "PTP Conversion Rate",
-            value: teamPTPSel !== null ? `${teamPTPSel}%` : `${kpis.ptp_conversion_rate_pct.toFixed(1)}%`,
-            sub: teamPTPSel !== null ? "" : "PTPs honored",
-            delta: teamPTPDelta, deltaSuffix: "%",
+            // ONE NUMBER. This card briefly carried the kept rate as a
+            // qualifier — "23.2% / 63.2% then kept" — and it read as a riddle:
+            // two percentages of two different denominators, three words of
+            // explanation, in a box 274px wide. The kept rate is still on this
+            // same page in the agent spotlight's "PTP conv." tile and in the
+            // Agents table, both of which have room to label it properly.
+            //
+            // Capture earns the card because it is the LEADING indicator: known
+            // the same day, and about something the team controls. Kept is not
+            // knowable for up to a month.
+            label: "PTP Capture Rate",
+            value: teamCapSel !== null
+              ? `${teamCapSel.toFixed(1)}%`
+              : `${kpis.ptp_capture_rate_pct.toFixed(1)}%`,
+            // The denominator, named — capture is a share of the visits where a
+            // promise was the right outcome, not of all visits. Blank when a
+            // month is selected, matching the other three cards.
+            //
+            // Kept SHORT on purpose: "of visits needing a PTP" wrapped inside a
+            // 274px card, and because the cards are height-matched that one
+            // wrap grew all four from 80px to 94px. A balance survives every
+            // visit except a paid-in-full one, so "unpaid" is the accurate
+            // short form — part-paid visits are still in the denominator.
+            sub: teamCapSel !== null ? "" : "of unpaid visits",
+            delta: teamCapDelta, deltaSuffix: "%",
             icon: <BarChart2 className="w-5 h-5" />, color: "text-warning-600",
           },
           {

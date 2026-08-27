@@ -45,7 +45,7 @@ from app.ml.recovery_scorecard import (
 from app.models.payment import Payment, PaymentStatus
 from app.models.ptp import PTP, PTPStatus
 from app.models.user import User
-from app.models.visit import Visit
+from app.models.visit import Visit, VisitOutcome
 from app.services.notification_service import NotificationService
 
 router = APIRouter(prefix="/manager", tags=["manager"])
@@ -396,6 +396,46 @@ def _recent_months(anchor: date, count: int) -> list[str]:
     return list(reversed(months))
 
 
+def _ptp_kept(db):
+    """"The borrower kept this promise" — ONE definition, used by every caller.
+
+    It exists as a function because it did not, and the cost showed up
+    immediately. The per-month figures counted HONORED, PARTIALLY_HONORED or a
+    verified payment by the due date; the headline KPI in analytics() counted
+    HONORED alone. Both feed the SAME CARD — the UI shows the selected month's
+    rate when a month is picked and this KPI when none is — so clicking a month
+    moved the number from 29.0% to 61.1% on identical data. A card whose value
+    depends on what you clicked is worse than a card with no value, and two
+    copies of a predicate is how that happens twice.
+
+    The payment clause is the interesting half. Some PTPs sit at ACTIVE even
+    though the borrower paid on time — 69 of the 293 matured promises on this
+    book — because nothing closed them out. Reading status alone reports those
+    agents as having converted nothing. The payment ledger is the harder
+    evidence: money arrived, on or before the promised date, and it was
+    verified. Status hygiene is not allowed to be the thing that decides whether
+    an agent's work counts.
+
+    Correlated on PTP deliberately — the subquery references PTP.case_id and
+    PTP.agent_id from the enclosing query, so it must be built where PTP is in
+    the outer FROM. That is why this takes `db` rather than being a constant.
+    """
+    paid_by_due_date = (
+        db.query(Payment.id)
+        .filter(
+            Payment.case_id == PTP.case_id,
+            Payment.agent_id == PTP.agent_id,
+            Payment.status == PaymentStatus.VERIFIED,
+            func.date(Payment.payment_date) <= PTP.committed_date,
+        )
+        .exists()
+    )
+    return (
+        PTP.status.in_([PTPStatus.HONORED, PTPStatus.PARTIALLY_HONORED])
+        | paid_by_due_date
+    )
+
+
 def _live_monthly_metrics(db, agent_ids: list[str], months: list[str]) -> dict[str, dict[str, dict]]:
     """Per-agent, per-month performance computed from the transactional tables.
 
@@ -428,6 +468,15 @@ def _live_monthly_metrics(db, agent_ids: list[str], months: list[str]) -> dict[s
                     matters: the snapshot task counts every honoured PTP the
                     agent has ever set against a single month's total, which
                     climbs forever and can exceed ptps_set.
+      ptps_captured VISITS that secured a commitment (PTP or PART_PAID_PTP).
+      visits_needing_promise
+                    Visits where a commitment was the right outcome — every
+                    visit except PAID_FULL, which left nothing to promise.
+      ptp_capture_pct
+                    captured / needing a promise. A DIFFERENT metric from
+                    ptps_honored: capture grades the agent at the door, honoured
+                    grades the borrower's follow-through. See the note at the
+                    visit query.
 
     Four grouped queries for the whole team, not four per agent — this endpoint
     already runs four per-agent queries in its main loop and does not need more.
@@ -441,7 +490,9 @@ def _live_monthly_metrics(db, agent_ids: list[str], months: list[str]) -> dict[s
 
     out: dict[str, dict[str, dict]] = {
         aid: {mo: {"visits": 0, "collected": 0.0, "target": 0.0,
-                   "ptps_set": 0, "ptps_honored": 0} for mo in months}
+                   "ptps_set": 0, "ptps_honored": 0,
+                   "visits_needing_promise": 0, "ptps_captured": 0}
+              for mo in months}
         for aid in agent_ids
     }
 
@@ -463,16 +514,48 @@ def _live_monthly_metrics(db, agent_ids: list[str], months: list[str]) -> dict[s
         if mo in wanted and aid in out:
             out[aid][mo]["collected"] = float(total or 0.0)
 
-    # 2. Visit count
+    # 2. Visit count, and PTP CAPTURE off the same scan.
+    #
+    # Capture answers a different question from ptps_honored below, and the two
+    # must not be confused: capture grades the AGENT AT THE DOOR (did the visit
+    # produce a commitment, or nothing?), while ptps_honored grades the
+    # BORROWER'S FOLLOW-THROUGH (was the promise met?). They fail independently
+    # and the gap between them is the diagnosis — high capture with low kept
+    # means the team is collecting soft promises to close the visit; low capture
+    # with high kept means they only commit the reliable ones. One number cannot
+    # tell you which, and the wrong one sends you to the wrong fix.
+    #
+    # PAID_FULL is the only outcome excluded from the denominator: nothing is
+    # left to promise, so no promise was the right result and counting it as a
+    # miss would penalise the best visit of the day. PART_PAID DELIBERATELY
+    # STAYS IN — a balance survives, so a commitment for the remainder was the
+    # right outcome and its absence is a genuine miss.
+    #
+    # PART_PAID_PTP counts as captured: money arrived AND the rest was
+    # committed to. It is the best mixed outcome there is.
+    #
+    # Grain is the VISIT, not the case. Three visits to one stubborn case count
+    # as three attempts, because this measures doorstep effort efficiency rather
+    # than case coverage — and an agent who needs three knocks to get one
+    # promise is doing something different from one who needs one.
     visit_month = _month_of(Visit.check_in_time)
-    for aid, mo, n in (
-        db.query(Visit.agent_id, visit_month, func.count(Visit.id))
+    _captured = Visit.outcome.in_([VisitOutcome.PTP, VisitOutcome.PART_PAID_PTP])
+    _needs_promise = Visit.outcome != VisitOutcome.PAID_FULL
+    for aid, mo, n, n_elig, n_cap in (
+        db.query(
+            Visit.agent_id, visit_month,
+            func.count(Visit.id),
+            func.count(sa_case((_needs_promise, Visit.id))),
+            func.count(sa_case((_captured, Visit.id))),
+        )
         .filter(Visit.agent_id.in_(agent_ids), Visit.check_in_time >= window_start)
         .group_by(Visit.agent_id, visit_month)
         .all()
     ):
         if mo in wanted and aid in out:
             out[aid][mo]["visits"] = int(n or 0)
+            out[aid][mo]["visits_needing_promise"] = int(n_elig or 0)
+            out[aid][mo]["ptps_captured"] = int(n_cap or 0)
 
     # 3. Target — distinct cases visited, then summed. Two visits to the same
     #    case in a month must not count its target twice.
@@ -525,13 +608,18 @@ def _live_monthly_metrics(db, agent_ids: list[str], months: list[str]) -> dict[s
     # on the date needs no status hygiene and states a fact — as of today, that
     # promise came due and was not honoured. It reads conservatively, which is
     # the right direction for a figure a manager acts on.
+    #
+    # A verified payment by the promised date is also treated as honoured
+    # evidence. Some legacy/seed rows were left ACTIVE even though the borrower
+    # paid on time, which made the manager table show 0% for agents who had
+    # actually converted promises.
     ptp_month = _month_of(PTP.committed_date)
     for aid, mo, n_set, n_hon in (
         db.query(
             PTP.agent_id,
             ptp_month,
             func.count(PTP.id),
-            func.count(sa_case((PTP.status == PTPStatus.HONORED, PTP.id))),
+            func.count(sa_case((_ptp_kept(db), PTP.id))),
         )
         .filter(PTP.agent_id.in_(agent_ids),
                 PTP.committed_date >= window_start.date(),
@@ -543,12 +631,19 @@ def _live_monthly_metrics(db, agent_ids: list[str], months: list[str]) -> dict[s
             out[aid][mo]["ptps_set"] = int(n_set or 0)
             out[aid][mo]["ptps_honored"] = int(n_hon or 0)
 
-    # Derive the rate once, here, so no caller can reinvent it differently.
+    # Derive the rates once, here, so no caller can reinvent them differently.
+    # That is not a style preference: the PTP conversion figure has now had the
+    # same two-definitions-one-card bug twice, both times because a caller
+    # computed its own version of a rate this helper already knew.
     for per_month in out.values():
         for stats in per_month.values():
             stats["rate_pct"] = (
                 round(stats["collected"] / stats["target"] * 100, 1)
                 if stats["target"] > 0 else 0.0
+            )
+            stats["ptp_capture_pct"] = (
+                round(stats["ptps_captured"] / stats["visits_needing_promise"] * 100, 1)
+                if stats["visits_needing_promise"] > 0 else 0.0
             )
     return out
 
@@ -847,11 +942,36 @@ def unallocated_cases(current_user: ManagerOnly, db: DbSession):
             reason, detail = "NO_AGENT_ON_DUTY", "No agent in your team is on duty."
         elif not any(agent_block_reason(a, customer) is None for a in on_duty):
             reason = "NO_ELIGIBLE_AGENT"
-            # Deliberately does not say WHY an agent is ineligible. The only
-            # current reason is the customer's female-agent requirement, and
-            # agent gender is not a manager's to see — surfacing it here would
-            # let the person whose workload the rule blocks work around it.
-            detail = "No agent in your team can be assigned to this customer."
+            # Deliberately does not say WHY any INDIVIDUAL agent is ineligible.
+            # The only current reason is the customer's female-agent
+            # requirement, and agent gender is not a manager's to see —
+            # surfacing it per agent would let the person whose workload the
+            # rule blocks work around it.
+            #
+            # 2026-08-27 — but it now separates the two causes at TEAM level,
+            # which names nobody:
+            #
+            #   * no agent record carries a gender at all — a CONFIGURATION
+            #     defect. Agent.gender is nullable and was never populated, so
+            #     is_female returns False for everyone and the rule is
+            #     unsatisfiable. On the seeded book that stranded 324 cases
+            #     permanently, and the old message ("no agent can be assigned")
+            #     read as a staffing problem, which it is not. A control that
+            #     withholds 8% of the book with no way to find out why is
+            #     indistinguishable from a bug.
+            #
+            #   * genders ARE recorded and still nobody qualifies — a genuine
+            #     staffing/shift problem, which a manager can act on.
+            #
+            # The reason CODE is unchanged either way: Command Center switches
+            # on it, and splitting it would break that contract for a message.
+            if not any(a.gender for a in on_duty):
+                detail = ("No agent record in your team has a gender recorded, "
+                          "so this customer's female-agent requirement cannot "
+                          "be satisfied by anyone. This is a data configuration "
+                          "gap, not a shift problem.")
+            else:
+                detail = "No agent in your team can be assigned to this customer."
         elif all(a.max_cases_per_day <= 0 for a in on_duty):
             reason, detail = "NO_CAPACITY", "Every agent is at their daily case limit."
         else:
@@ -1123,6 +1243,12 @@ def agents_performance(
                 "visits": int(p.get("visits", 0)),
                 "ptps_set": int(p.get("ptps_set", 0)),
                 "ptps_honored": int(p.get("ptps_honored", 0)),
+                # Capture: did the visit secure a commitment? A different
+                # question from ptps_honored, which asks whether the borrower
+                # then kept it. Both travel, so the UI never has to guess.
+                "visits_needing_promise": int(p.get("visits_needing_promise", 0)),
+                "ptps_captured": int(p.get("ptps_captured", 0)),
+                "ptp_capture_pct": p.get("ptp_capture_pct", 0.0),
                 # Rate comes from the helper, which computes it the one way the
                 # rest of the product does: collected / target, 0 when nothing
                 # was visited. Never collected / collected.
@@ -1381,6 +1507,11 @@ def analytics(current_user: ManagerOnly, db: DbSession):
         collected = sum((team_metrics.get(a, {}).get(m, {}) or {}).get("collected", 0.0) for a in my_agent_ids)
         target = sum((team_metrics.get(a, {}).get(m, {}) or {}).get("target", 0.0) for a in my_agent_ids)
         visits = sum((team_metrics.get(a, {}).get(m, {}) or {}).get("visits", 0) for a in my_agent_ids)
+        # Capture is summed as counts and divided once, NOT averaged across
+        # agents: an agent who made three visits must not move the team line as
+        # far as one who made ninety. Same reasoning as the collection rate below.
+        cap_num = sum((team_metrics.get(a, {}).get(m, {}) or {}).get("ptps_captured", 0) for a in my_agent_ids)
+        cap_den = sum((team_metrics.get(a, {}).get(m, {}) or {}).get("visits_needing_promise", 0) for a in my_agent_ids)
         monthly_trend.append({
             "month": m,
             "collected_lakhs": round(collected / 100000, 2),
@@ -1390,6 +1521,9 @@ def analytics(current_user: ManagerOnly, db: DbSession):
             # per-agent rates: an agent who visited one small case must not swing
             # the team line as hard as one who worked forty.
             "collection_rate_pct": round(collected / target * 100, 1) if target > 0 else 0.0,
+            "visits_needing_promise": int(cap_den),
+            "ptps_captured": int(cap_num),
+            "ptp_capture_pct": round(cap_num / cap_den * 100, 1) if cap_den > 0 else 0.0,
         })
 
     # DPD bucket breakdown — cases for manager's agents
@@ -1460,7 +1594,9 @@ def analytics(current_user: ManagerOnly, db: DbSession):
     for aid in my_agent_ids:
         m = (team_metrics.get(aid, {}).get(current_month) or
              {"visits": 0, "collected": 0.0, "target": 0.0, "ptps_set": 0,
-              "ptps_honored": 0, "rate_pct": 0.0})
+              "ptps_honored": 0, "rate_pct": 0.0,
+              "visits_needing_promise": 0, "ptps_captured": 0,
+              "ptp_capture_pct": 0.0})
         a = agent_meta.get(aid)
         leaderboard_all.append({
             "agent_id": aid,
@@ -1469,6 +1605,8 @@ def analytics(current_user: ManagerOnly, db: DbSession):
             "total_visits": int(m["visits"]),
             "ptps_set": int(m["ptps_set"]),
             "ptps_honored": int(m["ptps_honored"]),
+            "ptps_captured": int(m["ptps_captured"]),
+            "ptp_capture_pct": m["ptp_capture_pct"],
             "collection_rate_pct": m["rate_pct"],
             "ranking_score": round(float(a.ranking_score or 0), 1) if a else 0.0,
             "tier": a.tier if a else "TIER_3",
@@ -1512,6 +1650,13 @@ def analytics(current_user: ManagerOnly, db: DbSession):
     # PTPs including 129 dated in the future, reading 23.0% against the monthly
     # basis of 31.7%. A card whose number means something different depending on
     # what you clicked is worse than a card with no number.
+    #
+    # 2026-08-26: the NUMERATOR now comes from _ptp_kept too, for the same
+    # reason. The maturity rule was shared but the kept rule was not, so when
+    # the monthly path started accepting PARTIALLY_HONORED and payment evidence
+    # this one kept counting HONORED alone — 29.0% here against 61.1% there, on
+    # the same team and the same months. Both halves of the fraction have to
+    # come from one place or this recurs a third time.
     _ptp_matured = PTP.committed_date <= date.today()
     total_ptps_set = (
         db.query(func.count(PTP.id))
@@ -1520,10 +1665,15 @@ def analytics(current_user: ManagerOnly, db: DbSession):
     ) if my_agent_ids else 0
     total_ptps_honored = (
         db.query(func.count(PTP.id))
-        .filter(PTP.agent_id.in_(my_agent_ids), _ptp_matured,
-                PTP.status == PTPStatus.HONORED)
+        .filter(PTP.agent_id.in_(my_agent_ids), _ptp_matured, _ptp_kept(db))
         .scalar() or 0
     ) if my_agent_ids else 0
+
+    # Window totals for the capture KPI, taken from the trend rows that were
+    # just built rather than re-queried — so the headline and the per-month
+    # figures are arithmetically the same measurement.
+    _cap_num = sum(t["ptps_captured"] for t in monthly_trend)
+    _cap_den = sum(t["visits_needing_promise"] for t in monthly_trend)
 
     # Current month visits per agent (avg) — from the live month already
     # computed above, so it cannot drift from the trend chart's last point.
@@ -1619,6 +1769,19 @@ def analytics(current_user: ManagerOnly, db: DbSession):
             "overall_collection_rate_pct": round(float(overall_collected) / float(overall_target) * 100, 1) if overall_target else 0.0,
             "total_collected_lakhs": round(float(overall_collected) / 100000, 2),
             "total_target_lakhs": round(float(overall_target) / 100000, 2),
+            # TWO PTP NUMBERS, deliberately, because they answer different
+            # questions and fail independently:
+            #   capture    — did the visit secure a commitment? Grades the AGENT
+            #                at the door. Known the same day, so it is the
+            #                figure a manager can act on now.
+            #   conversion — was the commitment then kept? Grades the
+            #                BORROWER's follow-through, and is not knowable for
+            #                up to a month.
+            # High capture with low conversion means the team is taking soft
+            # promises to close visits. Low capture with high conversion means
+            # they only commit the reliable ones. Reporting one number would
+            # hide whichever failure is actually happening.
+            "ptp_capture_rate_pct": round(_cap_num / _cap_den * 100, 1) if _cap_den else 0.0,
             "ptp_conversion_rate_pct": round(float(total_ptps_honored) / float(total_ptps_set) * 100, 1) if total_ptps_set else 0.0,
             "avg_visits_per_agent_current_month": round(cm_visits / n_agents, 1),
         },
@@ -2161,7 +2324,9 @@ def agent_ai_insight(agent_id: str, current_user: ManagerOnly, db: DbSession):
 
     def _blank() -> dict:
         return {"visits": 0, "collected": 0.0, "target": 0.0,
-                "ptps_set": 0, "ptps_honored": 0, "rate_pct": 0.0}
+                "ptps_set": 0, "ptps_honored": 0, "rate_pct": 0.0,
+                "visits_needing_promise": 0, "ptps_captured": 0,
+                "ptp_capture_pct": 0.0}
 
     # Team averages for the current month. Mean of each agent's rate, which is
     # what the previous func.avg(collection_rate) computed — kept deliberately,
