@@ -552,13 +552,31 @@ FIELD_PAYMENT_CAP = 120_000.0
 # it is chasing now, not the whole outstanding balance. Billing the full
 # overdue made a 12-stop day carry a ₹26L+ target, when a field agent's day is
 # worth ₹2-4L; it also made every "collection rate" on screen read near zero.
-CYCLE_TARGET_CAP = 70_000.0
+# A month's recovery goal is capped, because an unbounded goal is not a goal.
+# But a FLAT Rs 70,000 ceiling is the wrong shape: on 2026-08-27 it pinned 166 of
+# 743 cases (22.3%) to the identical number, and because the case list sorts by
+# collected DESC — and capped cases collect the most — 19 of the first 20 rows a
+# manager saw read "Rs 70,000". A book where a fifth of the work carries the same
+# round figure reads as fabricated, which for a demo is the whole problem.
+#
+# The ceiling is now a multiple of the loan's OWN instalment. That varies per
+# loan, so the pile-up disappears, and it says something a collections manager
+# would recognise: a month's goal is a share of the arrears, but never more than
+# about two or three instalments' worth. Kept as an absolute backstop for the
+# pathological case where EMI itself is enormous.
+CYCLE_TARGET_CAP = 500_000.0
+_CYCLE_TARGET_EMI_MULTIPLE = (1.5, 3.0)
 
 
-def _cycle_target(overdue: float) -> float:
+def _cycle_target(overdue: float, emi: float = 0.0) -> float:
+    """This cycle's recovery goal: a share of arrears, ceilinged on the EMI."""
     if not overdue or overdue <= 0:
         return 5000.0
-    return round(min(overdue * random.uniform(0.18, 0.35), CYCLE_TARGET_CAP), 2)
+    share = overdue * random.uniform(0.18, 0.35)
+    emi_ceiling = (float(emi or 0.0)
+                   * random.uniform(*_CYCLE_TARGET_EMI_MULTIPLE))
+    ceiling = min(emi_ceiling, CYCLE_TARGET_CAP) if emi_ceiling > 0         else CYCLE_TARGET_CAP
+    return round(min(share, ceiling), 2)
 
 
 def _field_payment(outcome, remaining: float, r: random.Random) -> float:
@@ -595,6 +613,32 @@ def _loan_account_no() -> str:
 
 
 _PTP_PAYMENT_MODES = (PaymentMode.UPI, PaymentMode.NEFT, PaymentMode.ONLINE)
+
+
+def _collected_so_far(db, case) -> float:
+    """What this case has ACTUALLY banked, read from the ledger.
+
+    THE REASON THIS EXISTS. _book_ptp_payment caps at `target - already_collected`,
+    and that argument was passed by four different call sites from four different
+    local variables. Every one of them was a chance to hand over a stale figure,
+    and two of them did: first all four passed a literal 0.0 (57 cases collected
+    past their target, worst 391%), then after that was fixed a case still
+    doubled because the PTP was written BEFORE the visit that later collected the
+    same target again.
+
+    Summing the payments table removes the whole class of bug: there is one
+    answer and the caller cannot get it wrong. PTP creation is not a hot path —
+    207 promises on a 720-case book — so a query per call is the right trade for
+    an invariant that has now failed twice.
+    """
+    db.flush()          # pending Payment rows must be visible to the sum
+    total = (
+        db.query(func.coalesce(func.sum(Payment.amount), 0.0))
+        .filter(Payment.case_id == case.id,
+                Payment.status == PaymentStatus.VERIFIED)
+        .scalar() or 0.0
+    )
+    return round(float(total), 2)
 
 
 def _book_ptp_payment(db, *, case, agent_id: str, committed_amount: float,
@@ -775,7 +819,9 @@ def curate_demo_agent_ptps(db, agent, today, due_today_case_ids=None):
         if status == PTPStatus.HONORED:
             paid = _book_ptp_payment(
                 db, case=case, agent_id=agent.id, committed_amount=amount,
-                committed_date=committed, already_collected=0.0, today=today,
+                committed_date=committed,
+                already_collected=_collected_so_far(db, case),
+                today=today,
                 r=_stable_rng("demoptp", case.case_number))
         db.add(PTP(
             id=_uid(), case_id=case.id, agent_id=agent.id,
@@ -921,7 +967,15 @@ def seed_recent_daily_activity(db, agents, today: date, days_back: int = 30) -> 
                 ordered.append(c.id)
                 c.allocation_date = day.strftime("%Y-%m-%d")
                 outcome = r.choices(DAY_OUTCOMES, weights=DAY_WEIGHTS)[0]
-                remaining = round((c.target_amount or 0) - (c.collected_amount or 0), 2)
+                # From the LEDGER, not from c.collected_amount. That column can
+                # lag: an honoured PTP written earlier by the historical engine
+                # books a Payment dated in this window, and if the running column
+                # has not caught up, this visit collects the full target a second
+                # time. That is exactly how CASE0000045 banked Rs 2,619 against a
+                # Rs 1,310 target — caught by the [12/12a] invariant, not by a
+                # screen.
+                remaining = round((c.target_amount or 0)
+                                  - _collected_so_far(db, c), 2)
                 if outcome in MONEY and remaining <= 0:
                     outcome = VisitOutcome.PTP      # nothing left to collect
                 met = outcome != VisitOutcome.NOT_AVAILABLE
@@ -975,7 +1029,8 @@ def seed_recent_daily_activity(db, agents, today: date, days_back: int = 30) -> 
                         _ptp_paid = _book_ptp_payment(
                             db, case=c, agent_id=ag.id,
                             committed_amount=_ptp_amt, committed_date=due,
-                            already_collected=0.0, today=today,
+                            already_collected=_collected_so_far(db, c),
+                            today=today,
                             r=_stable_rng("ptp2", c.case_number))
                     db.add(PTP(
                         id=_uid(), case_id=c.id, visit_id=v.id, agent_id=ag.id,
@@ -1068,7 +1123,9 @@ def reconcile_integrity(db, today: date) -> dict:
             paid_amt = _book_ptp_payment(
                 db, case=c, agent_id=v.agent_id,
                 committed_amount=round(float(c.target_amount or 5000.0), 2),
-                committed_date=committed, already_collected=0.0, today=today,
+                committed_date=committed,
+                already_collected=_collected_so_far(db, c),
+                today=today,
                 r=_stable_rng("ptp3", c.case_number))
         else:
             status, paid_amt = PTPStatus.BROKEN, 0.0
@@ -1470,7 +1527,35 @@ def seed():
         outstanding_principal = round(disbursed * outstanding_pct, 2)
         outstanding_interest = round(outstanding_principal * (interest_rate / 100) * random.uniform(0.08, 0.35), 2)
         overdue = round(emi * (dpd // 30 + 1) * random.uniform(0.85, 1.15), 2)
-        total_outstanding = outstanding_principal + outstanding_interest + overdue + round(random.uniform(0, 3000), 2)
+        # ARREARS CANNOT EXCEED THE BALANCE. emi x (dpd//30 + 1) grows without
+        # bound as a loan ages, so a nearly-repaid account could end up "overdue"
+        # for more than it still owes — 10 of 523 loans were, the worst by 2.14x.
+        # Clamped, not redrawn, so the random stream is untouched.
+        overdue = round(min(overdue, outstanding_principal + outstanding_interest), 2)
+        # TOTAL OUTSTANDING = the remaining balance. NOT balance + arrears.
+        #
+        # This read `principal + interest + overdue + noise` until 2026-08-27, and
+        # `overdue` is the past-due PORTION OF principal + interest — so the
+        # arrears were counted twice. Across the book that inflated the figure a
+        # manager reads as "Outstanding" by a mean of Rs 1.82 L per loan (~10%);
+        # on one case the case detail showed Rs 33.37 L against a real balance of
+        # Rs 18.48 L. 500 of 523 loans carried the error; the 23 that did not are
+        # the hand-scripted demo/bank loans, which use a consistent multiplier.
+        #
+        # PENAL IS PART OF THE BALANCE. Leaving it out (as the first cut of this
+        # fix did, to avoid moving a random draw) let `due now` — which is
+        # overdue + penal — exceed `outstanding` on 8 loans, because overdue can
+        # equal the whole principal+interest and penal then pushed it over. A
+        # screen showing more owed today than owed in total is incoherent.
+        #
+        # Drawing penal here rather than inside Loan(...) below DOES shift the
+        # random stream. That is now acceptable: the only artefact that depended
+        # on stream stability was the frozen +52.7% allocation benchmark, and
+        # that was deleted on 2026-08-27 at the user's request. Nothing else
+        # pins it.
+        penal_charges = round(random.uniform(500, 8000), 2)
+        total_outstanding = (outstanding_principal + outstanding_interest
+                             + penal_charges + round(random.uniform(0, 3000), 2))
         status = LoanStatus.ACTIVE
         if dpd >= 90:
             status = random.choices([LoanStatus.ACTIVE, LoanStatus.NPA], weights=[25, 75])[0]
@@ -1514,7 +1599,7 @@ def seed():
             dpd_bucket=bucket,
             status=status,
             interest_rate=round(interest_rate, 2),
-            penal_charges=round(random.uniform(500, 8000), 2),
+            penal_charges=penal_charges,
             npa_flag=dpd >= 90,
             legal_status=legal_st,
             settlement_status=settle_st,
@@ -1595,7 +1680,7 @@ def seed():
                 agent_id=agent.id,
                 status=CaseStatus.ASSIGNED,   # will be updated below
                 priority=_priority_from_score(score),
-                target_amount=_cycle_target(loan.overdue_amount),
+                target_amount=_cycle_target(loan.overdue_amount, loan.emi_amount),
                 collected_amount=0.0,          # updated from payments
                 allocation_date=alloc_date.strftime("%Y-%m-%d"),
                 allocation_score=score,
@@ -1756,9 +1841,12 @@ def seed():
                         _hist_ptp_paid = _book_ptp_payment(
                             db, case=c, agent_id=c.agent_id,
                             committed_amount=round(float(c.target_amount or 0.0), 2),
-                            committed_date=committed_date, already_collected=0.0,
+                            committed_date=committed_date,
+                            already_collected=_collected_so_far(db, c),
                             today=today,
                             r=_stable_rng("ptp4", c.case_number))
+                        case_total_collected = round(
+                            case_total_collected + _hist_ptp_paid, 2)
                     db.add(PTP(
                         id=_uid(),
                         case_id=c.id, visit_id=v.id,
@@ -3248,6 +3336,57 @@ def seed():
             f"visit-less Payment behind them. Every PTP site must go through "
             f"_book_ptp_payment."
         )
+    # NO CASE MAY COLLECT MORE THAN IT ASKED FOR.
+    #
+    # This is the check whose absence let a real bug ship today: the PTP helper
+    # caps at `target - already_collected`, and every call site passed 0.0 for
+    # that argument. So a promise re-booked the FULL target on top of visit
+    # payments that had already collected it — 57 of 743 cases ended over their
+    # target, the worst at 391%. The invariant above could not see it, because it
+    # only checks that promised money HAS a payment, not that the total is sane.
+    _over = (
+        db.query(Case.case_number, Case.target_amount, Case.collected_amount)
+        .filter(Case.target_amount > 0,
+                Case.collected_amount > Case.target_amount + 1.0)
+        .all()
+    )
+    if _over:
+        _worst = max(_over, key=lambda r: (r[2] or 0) - (r[1] or 0))
+        raise SystemExit(
+            f"PTP invariant violated: {len(_over)} cases collected MORE than "
+            f"their target. Worst: {_worst[0]} asked "
+            f"Rs {_worst[1]:,.0f} and banked Rs {_worst[2]:,.0f}. Every "
+            f"_book_ptp_payment call must pass the case's running collected "
+            f"total as already_collected."
+        )
+
+    # NOTHING MAY BE MORE OVERDUE THAN IT IS OWED.
+    #
+    # overdue_amount + penal_charges is the part of the balance already missed;
+    # total_outstanding is the whole remaining balance. The first exceeding the
+    # second is arithmetically impossible and read as a bug on sight — it
+    # happened on 8 loans when penal was briefly left out of the balance.
+    # (These two were surfaced together as "due now" until 2026-08-27. The label
+    # is gone; the invariant it exposed is not, and is checked here regardless of
+    # whether anything displays the sum.)
+    # A rupee of tolerance for float noise, no more.
+    _due_over = (
+        db.query(Loan.loan_account_number, Loan.overdue_amount,
+                 Loan.penal_charges, Loan.total_outstanding)
+        .filter(Loan.overdue_amount + Loan.penal_charges
+                > Loan.total_outstanding + 1.0)
+        .all()
+    )
+    if _due_over:
+        _w = _due_over[0]
+        raise SystemExit(
+            f"Balance invariant violated: {len(_due_over)} loans owe more TODAY "
+            f"than in TOTAL. e.g. {_w[0]}: due now "
+            f"Rs {(_w[1] or 0) + (_w[2] or 0):,.0f} against a balance of "
+            f"Rs {_w[3]:,.0f}. total_outstanding must include penal_charges and "
+            f"overdue must be clamped to principal + interest."
+        )
+
     _booked = (
         db.query(func.count(Payment.id))
         .filter(Payment.visit_id.is_(None),
@@ -3255,7 +3394,8 @@ def seed():
         .scalar() or 0
     )
     print(f"  OK — PTP money     : {_booked} visit-less payments back the "
-          f"honoured promises")
+          f"honoured promises; no case over-collected; no loan owes "
+          f"more today than in total")
 
     print("=" * 60)
     print(f"  Agency       : {AGENCY_NAME}")
