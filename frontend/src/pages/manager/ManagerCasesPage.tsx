@@ -18,13 +18,14 @@ import { useSearchParams } from "react-router";
 import { createPortal } from "react-dom";
 import {
   Search, X, MapPin, Clock, CheckCircle2, AlertTriangle,
-  Calendar, User, FileText, ChevronRight, SlidersHorizontal, ListOrdered, Info,
+  Calendar, User, FileText, ChevronRight, SlidersHorizontal, ListOrdered,
 } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { getCases, getCaseDetail, getCasesDateRange } from "@/api/manager";
 import type { ManagerCaseDetail, VisitRecord, VisitPriority } from "@/api/manager";
 import { Input } from "@/components/ui/Input";
 import { DPDBadge, PriorityBadge, CaseStatusBadge, RecoveryBadge } from "@/components/ui/Badge";
+import { lakhWords } from "@/lib/money";
 
 /**
  * The desktop table's column widths, declared ONCE and used by both the header
@@ -109,6 +110,14 @@ function fmtDate(d: string | null | undefined) {
 //
 // Detail page only. The case table has ten proportional tracks and the docblock
 // on TABLE_COLS records that the last column added there truncated agent names.
+//
+// A compact band chip WAS tried in the table's Priority column on 2026-08-27
+// and removed on 2026-08-28. Stacked under Case.priority it produced rows
+// reading "High" over "MEDIUM" — two measures answering different questions,
+// which a manager reads as a rendering fault, not as extra information. If the
+// band belongs in the list at all it replaces that column rather than joining
+// it; do not stack them again. Sort and the Priority filter still run on the
+// band, so it steers the list without being drawn in it.
 //
 // The value term shows POINTS, never rupees. Same rule this page has followed
 // since 2026-08-24: a rupee figure on a case row is read as "collect this", and
@@ -276,28 +285,21 @@ function CaseDetailModal({ caseId, onClose }: { caseId: string; onClose: () => v
                 <InfoRow label="City" value={`${detail.customer.city}, ${detail.customer.state}`} />
                 <InfoRow label="Collection Stage" value={detail.collection_stage ?? "—"} />
                 <InfoRow label="DPD" value={`${detail.loan.dpd} days (${detail.loan.dpd_bucket.replace("_", " ")})`} />
-                {/* "Due now" (arrears + penal) was removed here on 2026-08-27.
-                    The sum was correct and the hover split it honestly, but the
-                    row sat between "Outstanding" and the target/collected cards
-                    and was routinely read as the amount to collect. Arrears are
-                    still shown on their own below, where nothing competes for
-                    that reading. */}
-                <InfoRow label="Arrears">
-                  <span
-                    className="inline-flex items-center gap-1 cursor-help"
-                    title={
-                      `The instalments already missed. Penal charges of ` +
-                      `₹${detail.loan.penal_charges.toLocaleString("en-IN")} sit on top, ` +
-                      `and the full remaining balance is "Outstanding" ` +
-                      `(₹${detail.loan.total_outstanding.toLocaleString("en-IN")}).`
-                    }
-                  >
-                    <span className="text-sm font-semibold" style={{ color: "#1C1C1F" }}>
-                      ₹{detail.loan.overdue_amount.toLocaleString("en-IN")}
-                    </span>
-                    <Info className="w-3 h-3" style={{ color: "#94a3b8" }} />
-                  </span>
-                </InfoRow>
+                {/* NO ARREARS ROW, AND NO OTHER PRE-SUMMED RUPEE FIGURE.
+                    A "Due now" row (overdue + penal) was added here on
+                    2026-08-24 and renamed "Arrears" on 2026-08-27. Both were
+                    arithmetically honest and both misled for the same reason:
+                    the modal already shows Target, Collected and Loan balance,
+                    and a fourth large rupee number in the grid above them left
+                    a manager unable to tell which figure the case is judged on.
+                    Renaming it did not fix that — only removing it did.
+                    Removed 2026-08-28, restoring the grid to Customer / Agent /
+                    City / Collection Stage / DPD / Status that predated the
+                    2026-08-24 recovery surface.
+
+                    DPD says how late the borrower is, which is the fact this
+                    row was really carrying. overdue_amount and penal_charges
+                    stay on the payload for any caller that needs the rupees. */}
                 <InfoRow label="Recovery outlook">
                   <RecoveryBadge potential={detail.recovery?.recovery_potential} />
                 </InfoRow>
@@ -650,11 +652,31 @@ function InfoRow({ label, value, children }: { label: string; value?: string; ch
   );
 }
 
+/**
+ * Target / Collected / Loan balance.
+ *
+ * The exact rupee amount, formatted identically to the same figure in the case
+ * table — en-IN grouping, which IS lakh notation: 34,18,392 reads as thirty-four
+ * lakh eighteen thousand. Until 2026-08-28 this rounded to `(amount/1000)K`,
+ * so the table showed a case at ₹2,34,214.32 and the modal for that same case
+ * showed ₹234K. Two numbers for one fact, and the rounded one was the one a
+ * manager was asked to act on.
+ *
+ * The lakh/crore line beneath is the readable form, kept SECONDARY and muted:
+ * it is for saying out loud, not for reconciling against. Suppressed below
+ * ₹1 lakh, where the exact figure is already short enough to read at a glance.
+ */
 function AmountCard({ label, amount, color }: { label: string; amount: number; color: string }) {
+  const short = lakhWords(amount);
   return (
     <div className="rounded-xl p-3 text-center" style={{ background: "#F5F6F9", border: "1px solid #EAEBEF" }}>
       <p className="text-xs" style={{ color: "#6B6D76" }}>{label}</p>
-      <p className={`text-base font-bold mt-0.5 ${color}`}>₹{(amount / 1000).toFixed(0)}K</p>
+      <p className={`text-[15px] font-bold mt-0.5 tabular-nums ${color}`}>
+        ₹{amount.toLocaleString("en-IN")}
+      </p>
+      {short && (
+        <p className="text-[11px] mt-0.5 tabular-nums" style={{ color: "#94a3b8" }}>{short}</p>
+      )}
     </div>
   );
 }
@@ -680,29 +702,6 @@ function EmptyState({ text }: { text: string }) {
 // ── Case row — 12-col grid on desktop, card below lg ─────────────────────────
 // Both renderings carry the same eight fields. A case already visited today is
 // dimmed to de-emphasise it without hiding it.
-
-/** The visit-priority band as a compact chip.
- *
- * Stacked UNDER the bank's PriorityBadge rather than replacing it: they answer
- * different questions (the bank's flag vs. what is worth working next) and
- * silently swapping one for the other would change what the column means
- * without saying so. Absent on a resolved case, which has no next visit.
- *
- * Same palette as the detail panel's chip, deliberately NOT RecoveryBadge's —
- * there HIGH is good news, here HIGH means work it first.
- */
-function VisitPriorityChip({ vp }: { vp?: { score: number; band: string } | null }) {
-  if (!vp) return null;
-  return (
-    <span
-      className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded whitespace-nowrap"
-      style={VP_BAND_STYLE[vp.band] ?? VP_BAND_STYLE.LOW}
-      title={`Visit priority ${Math.round(vp.score)} / 100 — ${vp.band}`}
-    >
-      {vp.band}
-    </span>
-  );
-}
 
 function CaseRow({ c, onOpen }: { c: Case; onOpen: () => void }) {
   // Hover, base tint and the dimmed visited-today state all come from
@@ -760,10 +759,14 @@ function CaseRow({ c, onOpen }: { c: Case; onOpen: () => void }) {
           {c.customer.city}
         </div>
         <div className="min-w-0"><DPDBadge bucket={c.loan.dpd_bucket} /></div>
-        <div className="min-w-0 flex flex-col items-start gap-1">
-          <PriorityBadge priority={c.priority} />
-          <VisitPriorityChip vp={c.visit_priority} />
-        </div>
+        {/* ONE badge, not two. The visit-priority band was stacked under
+            Case.priority here from 2026-08-27 and removed on 2026-08-28: the
+            two answer different questions and routinely disagree ("High" over
+            "MEDIUM" on the same row), which reads as a rendering fault rather
+            than as two measures. The band still drives the Sort and Priority
+            filters above the table, and is shown with its three components in
+            the case detail panel, where there is room to say what it means. */}
+        <div className="min-w-0"><PriorityBadge priority={c.priority} /></div>
         {/* Outlook only. "Due now" (arrears + penal) was removed on 2026-08-27:
             sitting one column from "Target / Collected" it was the largest
             number on the row, so it read as the amount to collect. The two
@@ -807,7 +810,6 @@ function CaseRow({ c, onOpen }: { c: Case; onOpen: () => void }) {
         <div className="flex flex-wrap items-center gap-1.5 mt-2">
           <DPDBadge bucket={c.loan.dpd_bucket} />
           <PriorityBadge priority={c.priority} />
-          <VisitPriorityChip vp={c.visit_priority} />
           <RecoveryBadge potential={c.recovery?.recovery_potential} />
           <CaseStatusBadge status={c.status} />
         </div>

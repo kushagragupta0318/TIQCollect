@@ -201,8 +201,9 @@ export interface ManagerCaseDetail {
     bank_name: string;
     total_outstanding: number;
     overdue_amount: number;
-    /** Sent so the Arrears tooltip can name what sits on top of the missed
-     *  instalments rather than leaving a single opaque figure. */
+    /** Nothing renders this today — the modal's arrears row was removed on
+     *  2026-08-28. Kept on the wire because it is a real ledger column and
+     *  the alternative, a pre-summed total, is what kept misleading. */
     penal_charges: number;
     dpd: number;
     dpd_bucket: string;
