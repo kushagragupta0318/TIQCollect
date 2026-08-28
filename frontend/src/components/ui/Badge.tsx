@@ -1,5 +1,5 @@
 import { clsx } from "clsx";
-import type { DPDBucket, CasePriority, AgentTier, CaseStatus, RiskCategory } from "@/types";
+import type { DPDBucket, CasePriority, AgentTier, CaseStatus, RiskCategory, RecoveryPotential } from "@/types";
 
 interface BadgeProps {
   children: React.ReactNode;

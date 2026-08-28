@@ -770,73 +770,22 @@ def list_agents(current_user: ManagerOnly, db: DbSession):
 # GET /manager/cases
 # ---------------------------------------------------------------------------
 
-@router.get("/cases")
-def list_cases(
-    current_user: ManagerOnly,
-    db: DbSession,
-    status: Optional[str] = None,
-    priority: Optional[str] = None,
-    agent_id: Optional[str] = None,
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
-    # HIGH / MEDIUM / LOW. Filters on the loan's LATEST computed label, so it
-    # answers "show me where the recoverable money is" rather than "show me what
-    # the label said on some past day".
-    recovery: Optional[str] = None,
-    limit: int = 50,
-    offset: int = 0,
-):
-    my_agent_ids = [
-        a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()
-    ]
-    q = (db.query(Case)
-         .filter(Case.agent_id.in_(my_agent_ids))
-         .options(joinedload(Case.customer), joinedload(Case.loan)))
+# Statuses that drop out of the actionable priority view. Imported from the one
+# place that defines them rather than restated — services/visit_priority_service
+# already withholds a score for these, and two lists would drift.
+from app.services.visit_priority_service import (  # noqa: E402
+    _RESOLVED_STATUSES as _VISIT_PRIORITY_EXCLUDED,
+    score_cases,
+    sort_key as _vp_sort_key,
+)
 
-    if status:
-        q = q.filter(Case.status == status)
-    if priority:
-        q = q.filter(Case.priority == priority)
-    if recovery:
-        # Resolved to loan ids first rather than joined in: the case query
-        # already carries two joinedloads and a window-free correlated subquery
-        # here would be re-evaluated per row.
-        q = q.filter(Case.loan_id.in_(_loan_ids_with_recovery(db, recovery.upper())))
-    if agent_id:
-        q = q.filter(Case.agent_id == agent_id)
-    if date_from:
-        q = q.filter(Case.allocation_date >= date_from)
-    if date_to:
-        q = q.filter(Case.allocation_date <= date_to)
 
-    total = q.count()
-    # Newest allocation_date first, and WITHIN a day the cases carrying money
-    # lead, largest collected first. Date stays the primary key so page 1 is
-    # still the most recent day's work; payment only reorders inside it.
-    #
-    # Ordered in the query, not in the page component: the list is paginated
-    # server-side, so a client-side sort would only reorder the 50 rows already
-    # fetched and leave a paid case on page 3 sitting on page 3.
-    #
-    # Two NULL guards, both because Postgres defaults a DESC sort to NULLS
-    # FIRST — the opposite of what either column wants:
-    #   * allocation_date is nullable (models/case.py:58), so undated cases
-    #     would otherwise head the list ahead of the newest real day.
-    #   * collected_amount is NOT NULL today (models/case.py:54), but were that
-    #     to change, unpaid rows would float above paid ones.
-    # allocation_date is String(10) 'YYYY-MM-DD', so lexicographic DESC is
-    # chronological DESC.
-    cases = (
-        q.order_by(
-            Case.allocation_date.desc().nullslast(),
-            func.coalesce(Case.collected_amount, 0).desc(),
-            Case.created_at.desc(),
-        )
-        .offset(offset)
-        .limit(limit)
-        .all()
-    )
-
+# ── The page payload, built once for both orderings (2026-08-27) ─────────────
+# list_cases has two paths now — the legacy allocation_date ordering and the
+# visit-priority ordering — and both must return byte-identical row shapes. Two
+# copies of this block would drift the first time one of them gained a field.
+def _cases_payload(db, cases: list, my_agent_ids: list[str], total: int,
+                   scored: dict[str, dict] | None = None) -> dict:
     # Recovery labels for this page only — one query, not one per row.
     recovery_map = _latest_recovery_by_loan(
         db, [c.loan_id for c in cases if c.loan_id])
@@ -890,9 +839,138 @@ def list_cases(
 
     return {
         "total": total,
-        "cases": [_format_case(c, agent_name_map, visited_today_ids, recovery_map)
-                  for c in cases],
+        "cases": [
+            {**_format_case(c, agent_name_map, visited_today_ids, recovery_map),
+             # The SAME score object the case-detail panel renders. Attached per
+             # page rather than per book: 50 rows cost three bounded queries.
+             "visit_priority": (scored or {}).get(c.id)}
+            for c in cases
+        ],
     }
+
+
+@router.get("/cases")
+def list_cases(
+    current_user: ManagerOnly,
+    db: DbSession,
+    status: Optional[str] = None,
+    priority: Optional[str] = None,
+    agent_id: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    # HIGH / MEDIUM / LOW. Filters on the loan's LATEST computed label, so it
+    # answers "show me where the recoverable money is" rather than "show me what
+    # the label said on some past day".
+    recovery: Optional[str] = None,
+    # ── Visit priority (2026-08-27) ─────────────────────────────────────────
+    # sort="priority_desc" | "priority_asc" turns the list into the ACTIONABLE
+    # priority view: resolved cases drop out (a settled case has no next visit
+    # to rank), and the order comes from ml/visit_priority.py.
+    #
+    # Anything else — including the default — keeps the long-standing
+    # allocation_date ordering untouched, so the page a manager already knows
+    # behaves exactly as before.
+    sort: Optional[str] = None,
+    # HIGH / MEDIUM / LOW on the visit-priority band. Distinct from `recovery`,
+    # which bands how much of the LOAN comes back; this bands how much the case
+    # is worth working NEXT.
+    priority_band: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+):
+    my_agent_ids = [
+        a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()
+    ]
+    q = (db.query(Case)
+         .filter(Case.agent_id.in_(my_agent_ids))
+         .options(joinedload(Case.customer), joinedload(Case.loan)))
+
+    if status:
+        q = q.filter(Case.status == status)
+    if priority:
+        q = q.filter(Case.priority == priority)
+    if recovery:
+        # Resolved to loan ids first rather than joined in: the case query
+        # already carries two joinedloads and a window-free correlated subquery
+        # here would be re-evaluated per row.
+        q = q.filter(Case.loan_id.in_(_loan_ids_with_recovery(db, recovery.upper())))
+    if agent_id:
+        q = q.filter(Case.agent_id == agent_id)
+    if date_from:
+        q = q.filter(Case.allocation_date >= date_from)
+    if date_to:
+        q = q.filter(Case.allocation_date <= date_to)
+
+    # ── Priority mode ───────────────────────────────────────────────────────
+    # The score is COMPUTED, so it cannot be an ORDER BY. Two ways out were
+    # possible: persist it on Case, or score the filtered set and paginate in
+    # Python. This takes the second, deliberately.
+    #
+    # Persisting would need a nightly writer to keep ~500 open cases fresh, and
+    # the list would then show a value up to a day stale while the case-detail
+    # panel computes live — the two screens disagreeing about the same case is
+    # the one outcome this feature cannot afford. Scoring in-request makes them
+    # equal BY CONSTRUCTION: one function, one call, one answer.
+    #
+    # Measured on the live book: 487 open cases load in 67 ms, score in 49 ms
+    # (three bounded queries plus pure arithmetic), sort in under 1 ms. And it
+    # only runs when a manager actually asks for the priority view.
+    # /manager/analytics already loads the whole open book this way.
+    _priority_sort = (sort or "").lower() in ("priority_desc", "priority_asc")
+    _band = (priority_band or "").upper() or None
+    if _priority_sort or _band:
+        # A settled case has no next visit, so it is not part of the actionable
+        # view. ESCALATED is deliberately still in: open, visitable, and the
+        # work a manager most wants surfaced.
+        q = q.filter(Case.status.notin_(_VISIT_PRIORITY_EXCLUDED))
+        ranked = q.all()
+        scored = score_cases(db, ranked)
+        if _band:
+            ranked = [c for c in ranked
+                      if (scored.get(c.id) or {}).get("band") == _band]
+        # sort_key is the SAME key factory the allocator and the agent list use,
+        # so "highest priority first" means one thing across the product.
+        ranked.sort(key=_vp_sort_key(scored))
+        if (sort or "").lower() == "priority_asc":
+            ranked.reverse()
+        total = len(ranked)
+        cases = ranked[offset:offset + limit]
+        return _cases_payload(db, cases, my_agent_ids, total,
+                              scored={c.id: scored[c.id] for c in cases
+                                      if c.id in scored})
+
+    total = q.count()
+    # Newest allocation_date first, and WITHIN a day the cases carrying money
+    # lead, largest collected first. Date stays the primary key so page 1 is
+    # still the most recent day's work; payment only reorders inside it.
+    #
+    # Ordered in the query, not in the page component: the list is paginated
+    # server-side, so a client-side sort would only reorder the 50 rows already
+    # fetched and leave a paid case on page 3 sitting on page 3.
+    #
+    # Two NULL guards, both because Postgres defaults a DESC sort to NULLS
+    # FIRST — the opposite of what either column wants:
+    #   * allocation_date is nullable (models/case.py:58), so undated cases
+    #     would otherwise head the list ahead of the newest real day.
+    #   * collected_amount is NOT NULL today (models/case.py:54), but were that
+    #     to change, unpaid rows would float above paid ones.
+    # allocation_date is String(10) 'YYYY-MM-DD', so lexicographic DESC is
+    # chronological DESC.
+    cases = (
+        q.order_by(
+            Case.allocation_date.desc().nullslast(),
+            func.coalesce(Case.collected_amount, 0).desc(),
+            Case.created_at.desc(),
+        )
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+    # Legacy path: score only the rows on this page, so the band chip is
+    # present without paying for the whole book.
+    return _cases_payload(db, cases, my_agent_ids, total,
+                          scored=score_cases(db, cases))
 
 
 # ---------------------------------------------------------------------------
@@ -1079,6 +1157,18 @@ def get_case_detail(case_id: str, current_user: ManagerOnly, db: DbSession):
         recovery_map=_latest_recovery_by_loan(db, [case.loan_id] if case.loan_id else []),
     )
 
+    # Why this case sits where it does in the visit queue: the three named
+    # components and their points. On the DETAIL only, never the list — the case
+    # table has ten proportional tracks already and the last column added there
+    # truncated agent names.
+    #
+    # The value component reports POINTS, not rupees. That is the rule this
+    # module has followed since 2026-08-24 and tests/test_manager_recovery_surface
+    # greps for it: a rupee figure on a case row is read as "collect this", and
+    # rate_90 x total outstanding is not that.
+    from app.services.visit_priority_service import score_cases
+    base["visit_priority"] = score_cases(db, [case]).get(case.id)
+
     # Resolve agent names for all visits (visits may have different agents)
     visit_agent_ids = {v.agent_id for v in case.visits if v.agent_id}
     visit_agent_names: dict[str, str] = {}
@@ -1151,6 +1241,14 @@ def get_case_detail(case_id: str, current_user: ManagerOnly, db: DbSession):
             "amount": p.amount,
             "mode": p.mode,
             "status": p.status,
+            # NULL when the borrower paid remotely — settling a promise days
+            # after the visit, with nobody at their door. Sent because without
+            # it the Payments tab shows a payment count that cannot be
+            # reconciled against the Visits count, and a manager reasonably
+            # concludes a visit is missing. It is not: the money arrived by UPI
+            # or transfer, and attributing it to a visit would inflate both the
+            # contact rate and the per-visit yield.
+            "visit_id": p.visit_id,
             "upi_reference": p.upi_reference,
             "cheque_number": p.cheque_number,
             "bank_reference": p.bank_reference,

@@ -2,7 +2,9 @@
 Rule-based Case Allocator (dummy — no ML model required).
 
 Allocation logic:
-  1. Load all UNASSIGNED cases ordered by priority (CRITICAL first)
+  1. Load all UNASSIGNED cases, then order them by VISIT PRIORITY — recoverable
+     value, urgency around the 90-day NPA line, and effort already spent
+     (see ml/visit_priority.py)
   2. Drop cases the bank has told us not to contact — these are never assigned
   3. For each case, find agents whose territory matches the customer's city
   4. Among matching agents, keep only those ELIGIBLE for this customer
@@ -27,6 +29,24 @@ keep the same run() -> dict interface.
   run() now also reports what it refused to do — blocked and unallocated
   counts with reasons — because an allocator that silently drops cases is
   indistinguishable from one that had nothing to allocate.
+
+2026-08-27 — THE QUEUE ORDER NOW COMES FROM ml/visit_priority.py, replacing
+  `(PRIORITY_ORDER[case.priority], -target_amount)`.
+
+  Why the old key was not good enough: Case.priority is computed once at case
+  creation (seed_data.py:1492) and never recomputed, so it could not reflect
+  effort already spent or a recovery estimate that did not exist when the case
+  was created. `-target_amount` is the monthly ask, not what is recoverable.
+
+  ONLY THE SEQUENCE CHANGED. Eligibility, territory matching and capacity are
+  untouched, so the compliance guarantees hold by construction rather than by
+  re-testing — do_not_contact and requires_female_agent are still applied at the
+  same two points, on the same two pools.
+
+  run() gained `explanations`: per case, the three named components and their
+  points, in allocation order. The brief asks for a ranking "simple enough that
+  a manager can explain to their team why one case sits above another", and a
+  score without its components is not that.
 ─────────────────────────────────────────────────────────────────────────────
 """
 
@@ -41,10 +61,12 @@ from app.ml.eligibility import (
     case_block_reason,
     match_score,
 )
+from app.ml.visit_priority import SCORE_VERSION
 from app.models.agent import Agent, AgentStatus, AgentTier
 from app.models.case import Case, CaseStatus, CasePriority
 from app.models.customer import Customer
 from app.models.loan import Loan
+from app.services.visit_priority_service import score_cases, sort_key
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -71,6 +93,8 @@ class CaseAllocator:
         # version issued one Customer query per case inside the assignment loop.
         self._customers: dict[str, Customer] = {}
         self._loans: dict[str, Loan] = {}
+        # case_id -> visit-priority score dict, populated by _order_cases.
+        self._scored: dict[str, dict] = {}
 
     def run(self) -> dict:
         unassigned = self._load_unassigned_cases()
@@ -80,6 +104,8 @@ class CaseAllocator:
             return {"cases_assigned": 0, "cases_unallocated": 0, "reason": "no_unassigned_cases"}
 
         self._load_case_context(unassigned)
+        # Ordering AFTER the context load — see _order_cases.
+        unassigned = self._order_cases(unassigned)
 
         if not agents:
             return {"cases_assigned": 0, "cases_unallocated": len(unassigned), "reason": "no_active_agents"}
@@ -103,6 +129,10 @@ class CaseAllocator:
         unallocated_count = 0
         blocked: dict[str, int] = defaultdict(int)
         no_eligible_agent = 0
+        # Why each case sat where it sat, in allocation order. An allocator whose
+        # reasoning cannot be read back is indistinguishable from one that
+        # ordered at random.
+        explanations: list[dict] = []
 
         for case in unassigned:
             customer = self._customers.get(case.customer_id)
@@ -125,14 +155,34 @@ class CaseAllocator:
                     no_eligible_agent += 1
                 continue
 
+            entry = (self._scored or {}).get(case.id) or {}
+
             case.agent_id = agent.id
             case.status = CaseStatus.ASSIGNED
             case.allocation_date = self.today
-            case.allocation_score = float(PRIORITY_ORDER.get(case.priority, 9))
+            # The visit-priority score, 0-100, HIGHER = work sooner.
+            #
+            # This column already carried three incompatible conventions across
+            # four writers (this allocator's old 0-3 rank ordinal, the seed's
+            # 0-100 higher-is-worse, the demo feed's 95/75/45/20 band map). It is
+            # not being unified here — that is a separate migration — but what
+            # this allocator writes is now at least one self-consistent scale,
+            # and it is the same number the explanation below reports.
+            case.allocation_score = float(entry.get("score") or 0.0)
+            # A hand-weighted scorecard. Nothing here was learned from data.
             case.is_ml_allocated = False
 
             assigned_today[agent.id] += 1
             assigned_count += 1
+            explanations.append({
+                "rank": assigned_count,
+                "case_number": case.case_number,
+                "score": entry.get("score"),
+                "components": entry.get("components", []),
+                "reason": entry.get("reason"),
+                "assigned_agent": agent.employee_code,
+                "rate_as_of": entry.get("rate_as_of"),
+            })
 
         self.db.commit()
 
@@ -141,7 +191,10 @@ class CaseAllocator:
             "cases_unallocated": unallocated_count,
             "agents_used": len([a for a, c in assigned_today.items() if c > 0]),
             "allocation_date": self.today,
-            "method": "rule_based_v2_eligibility",
+            # "rule" is load-bearing: a transparent scorecard, not a model.
+            "method": f"rule_based_v3_visit_priority_{SCORE_VERSION}",
+            "ordering": "visit_priority",
+            "explanations": explanations,
             # What the allocator refused to do, and why.
             "blocked_by_rule": dict(blocked),
             "no_eligible_agent": no_eligible_agent,
@@ -149,11 +202,27 @@ class CaseAllocator:
 
     # -----------------------------------------------------------------
     def _load_unassigned_cases(self) -> list[Case]:
-        cases = self.db.query(Case).filter(Case.status == CaseStatus.UNASSIGNED).all()
-        return sorted(
-            cases,
-            key=lambda c: (PRIORITY_ORDER.get(c.priority, 9), -c.target_amount),
-        )
+        """Query only. Ordering happens in _order_cases, AFTER the loans load.
+
+        Sorting here is what the previous version did, and it is a trap: the
+        visit-priority score reads loan.total_outstanding and loan.dpd, and
+        self._loans is empty until _load_case_context has run. Sorting first
+        produced a queue that looked ranked, was actually ordered by nothing,
+        and reported itself as ranked — a wrong answer wearing a right one's
+        clothes.
+        """
+        return self.db.query(Case).filter(Case.status == CaseStatus.UNASSIGNED).all()
+
+    def _order_cases(self, cases: list[Case]) -> list[Case]:
+        """Highest visit-priority first. MUST be called after _load_case_context.
+
+        This is the whole behavioural change: everything downstream — territory
+        matching, eligibility, capacity — is untouched, so any difference in
+        outcome comes from sequence alone and the compliance rules cannot be
+        affected by construction.
+        """
+        self._scored = score_cases(self.db, cases, loans=self._loans)
+        return sorted(cases, key=sort_key(self._scored))
 
     def _load_active_agents(self) -> list[Agent]:
         return (

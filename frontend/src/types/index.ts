@@ -194,6 +194,36 @@ export interface Case {
   handover_notes: string | null;
   is_visited_today?: boolean;
   ptp_due_today?: boolean;
+  /** Why this case is worth visiting, and how much. See
+   *  backend/app/ml/visit_priority.py. Null when the loan carried no balance to
+   *  score — such a case sorts last, never first. */
+  visit_priority?: VisitPriority | null;
+}
+
+/** One of the three named terms behind a visit-priority score. Always all three,
+ *  in a fixed order, so a manager comparing two cases reads the same rows in the
+ *  same places. */
+export interface VisitPriorityComponent {
+  code: "RECOVERABLE_VALUE" | "URGENCY" | "EFFORT";
+  points: number;
+  summary: string;
+  evidence?: Record<string, unknown>;
+  /** True when the term had no data. Distinguishes "measured and low" from
+   *  "not measured" — the two read identically without it. */
+  abstained?: boolean;
+}
+
+export interface VisitPriority {
+  score: number;
+  /** HIGH | MEDIUM | LOW — gives the bare score a meaning. */
+  band: "HIGH" | "MEDIUM" | "LOW";
+  components: VisitPriorityComponent[];
+  reason: string;
+  /** Always false. A hand-weighted scorecard, not a learned model. */
+  is_modelled: boolean;
+  model_version: string;
+  /** How old the recovery rate behind the value term is. */
+  rate_as_of?: string | null;
 }
 
 export interface Beat {

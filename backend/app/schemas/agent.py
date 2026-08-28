@@ -361,6 +361,42 @@ class LoanSummary(BaseModel):
     settlement_status: str
 
 
+# ── Visit priority (2026-08-27) ─────────────────────────────────────────────
+# The three named components travel TOGETHER in a nested model, not as loose
+# sibling fields. The brief's requirement is that a manager can explain why one
+# case sits above another; a score whose components can be dropped independently
+# by a later "let's slim the payload" pass stops being explainable while still
+# looking like a score.
+class VisitPriorityComponent(BaseModel):
+    code: str
+    points: float
+    summary: str
+    evidence: dict = {}
+    # True when the component had no data to work with. Distinguishes "we
+    # measured this and it is low" from "we have not measured it".
+    abstained: bool = False
+
+
+class VisitPriority(BaseModel):
+    score: float
+    # HIGH / MEDIUM / LOW. Sent so a screen can say what a bare "11 / 100"
+    # means without asserting a queue position the score does not support.
+    band: str
+    components: list[VisitPriorityComponent]
+    reason: str
+    # A hand-weighted scorecard. Sent so no screen can present it as a model.
+    is_modelled: bool = False
+    model_version: str
+    # How old the recovery rate behind the value component is. The score is
+    # computed now; its main input is as fresh as the last scoring run, and
+    # conflating the two would overstate its currency.
+    rate_as_of: Optional[str] = None
+
+    # `model_version` collides with Pydantic v2's protected `model_` namespace,
+    # which would otherwise emit a UserWarning on every import.
+    model_config = ConfigDict(protected_namespaces=())
+
+
 class CaseSummaryResponse(BaseModel):
     id: str
     case_number: str
@@ -381,6 +417,9 @@ class CaseSummaryResponse(BaseModel):
     bank_ptp_amount: Optional[float] = None
     bank_ptp_status: Optional[str] = None
     bank_agent_remarks: Optional[str] = None
+    # None on a case whose loan carries no balance at all — the list still
+    # renders, the card just shows no score rather than a fabricated zero.
+    visit_priority: Optional[VisitPriority] = None
 
 
 class CaseListItemResponse(CaseSummaryResponse):

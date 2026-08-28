@@ -10,7 +10,7 @@ import { useVoiceCall } from "@/hooks/useVoiceCall";
 import { useLiveLocation } from "@/hooks/useLiveLocation";
 import { haversineM, formatDistance, GEO_FENCE_METRES } from "@/lib/geo";
 import CallModal from "@/components/ui/CallModal";
-import type { Case, CaseStatus, CasePriority } from "@/types";
+import type { Case, CaseStatus } from "@/types";
 
 const STATUS_FILTERS: { label: string; value: CaseStatus | "ALL" | "PTP_TODAY" }[] = [
   { label: "All", value: "ALL" },
@@ -23,7 +23,9 @@ const STATUS_FILTERS: { label: string; value: CaseStatus | "ALL" | "PTP_TODAY" }
 ];
 
 
-const _PRIORITY_ORDER: Record<CasePriority, number> = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
+// 2026-08-27 - _PRIORITY_ORDER removed. Case.priority is frozen at case
+// creation and knew nothing about effort spent or what is recoverable;
+// visit priority (server-computed) replaced it as the ordering here.
 
 export default function AgentCasesPage() {
   const { beat, loading } = useBeat();
@@ -69,6 +71,11 @@ export default function AgentCasesPage() {
     const all = (beat.cases ?? []).map((c) => ({ ...c, is_visited_today: visitedSet.has(c.id) }));
 
     const pending = all.filter((c) => !c.is_visited_today);
+    // Visit priority, server-computed. See backend/app/ml/visit_priority.py —
+    // recoverable value, urgency around the 90-day NPA line, effort already
+    // spent. Absent means the loan carried no balance to score; such a case
+    // sorts last rather than first.
+    const score = (c: Case) => c.visit_priority?.score ?? -1;
     if (here) {
       // Nearest first — the cases the agent can actually reach right now.
       //
@@ -79,9 +86,15 @@ export default function AgentCasesPage() {
       // Sorted on the distance rounded to SORT_BUCKET_M, not the raw metres.
       // Consumer GPS wanders a few metres while standing still, and two cases
       // 3m apart would otherwise trade places every fix — rows visibly
-      // swapping under the agent's thumb. Bucketing makes the order stable
-      // under that noise while still being strictly nearest-first at any
-      // distance the agent can perceive; priority breaks ties inside a bucket.
+      // swapping under the agent's thumb.
+      //
+      // 2026-08-27 — the bucket widened from 10m to 1km, and visit priority
+      // replaced Case.priority as the tie-break inside it. At 10m the tie-break
+      // essentially never fired, so the score would have been invisible in the
+      // one place it matters. At ~1km the agent works the most valuable case in
+      // the neighbourhood they are standing in, while the nearest neighbourhood
+      // still wins overall — so travel stays controlled rather than the score
+      // sending them across the city.
       const distOf = new Map<string, number>();
       for (const c of pending) {
         distOf.set(c.id, haversineM(here.lat, here.lon, c.customer.latitude, c.customer.longitude));
@@ -91,13 +104,12 @@ export default function AgentCasesPage() {
       pending.sort(
         (a, b) =>
           bucket(a) - bucket(b) ||
-          (_PRIORITY_ORDER[a.priority] ?? 9) - (_PRIORITY_ORDER[b.priority] ?? 9) ||
+          score(b) - score(a) ||
           a.id.localeCompare(b.id),
       );
     } else {
-      // No GPS fix yet: keep the previous priority ordering rather than an
-      // arbitrary one.
-      pending.sort((a, b) => (_PRIORITY_ORDER[a.priority] ?? 9) - (_PRIORITY_ORDER[b.priority] ?? 9));
+      // No GPS fix yet: order by visit priority alone.
+      pending.sort((a, b) => score(b) - score(a) || a.id.localeCompare(b.id));
     }
 
     const done = all.filter((c) => c.is_visited_today);
@@ -244,7 +256,12 @@ export default function AgentCasesPage() {
 //                  it is what the list is sorted by, so dropping it entirely
 //                  would leave the ordering unexplained.
 // Distance-sort granularity, in metres. See the sort in `cases` below.
-const SORT_BUCKET_M = 10;
+//
+// 1km, not 10m. This is the knob that decides whether visit priority means
+// anything on the agent's screen: at 10m almost no two cases share a bucket, so
+// the score never breaks a tie. At 1km the score orders the neighbourhood the
+// agent is standing in, and distance still decides which neighbourhood.
+const SORT_BUCKET_M = 1000;
 
 const SHOW_SLA_BADGE = false;
 const SHOW_IN_RANGE_PILL = false;
@@ -328,7 +345,26 @@ function CaseCard({ case_: c, rank, rankBadge, rankBadgeColor, rankReason, onNav
             {rankBadge}
           </span>
         )}
+        {/* Visit priority. Hidden in smart-order mode, where the rank pill above
+            is already the ordering on screen — two competing orderings on one
+            card is how an agent stops trusting either. */}
+        {rank === undefined && c.visit_priority && (
+          <span className="text-xs px-1.5 py-0.5 rounded-full border font-semibold bg-brand-50 text-brand-700 border-brand-200">
+            Priority {c.visit_priority.band === "HIGH" ? "high"
+                     : c.visit_priority.band === "MEDIUM" ? "med" : "low"}
+          </span>
+        )}
       </div>
+
+      {/* Why this case is worth the visit. Plain language, no score jargon —
+          the three components with their points live on the manager's case
+          detail, not at the doorstep. */}
+      {rank === undefined && c.visit_priority && !isDone && (
+        <div className="flex items-start gap-1.5 mb-2 bg-brand-50 rounded-lg px-2.5 py-1.5">
+          <Briefcase className="w-3 h-3 text-brand-400 mt-0.5 flex-shrink-0" />
+          <p className="text-xs text-brand-700 leading-snug">{c.visit_priority.reason}</p>
+        </div>
+      )}
 
       {/* AI reason chip — shown in smart order mode */}
       {rankReason && (

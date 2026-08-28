@@ -250,11 +250,25 @@ class AgentService:
             .all()
         )
 
+        # Visit priority for every case on the beat.
+        #
+        # THIS is the payload the Cases page renders from — AgentCasesPage reads
+        # BeatContext (GET /agent/beat), not GET /agent/cases. Scoring only in
+        # CaseService.list_cases left the score on an endpoint the screen never
+        # calls: the chip and the reason were coded, shipped, and invisible.
+        #
+        # Loans are joinedload-ed above, so this costs two queries for the beat.
+        from app.services.visit_priority_service import score_cases
+        scored = score_cases(self.db, list(cases_by_id.values()), today=eff_day,
+                             loans={c.loan_id: c.loan for c in cases_by_id.values()
+                                    if c.loan_id and c.loan})
+
         ordered_cases = []
         for cid in beat.ordered_case_ids:
             if cid in cases_by_id:
                 case_dict = _format_case(cases_by_id[cid])
                 case_dict["ptp_due_today"] = cid in ptp_due_today_ids
+                case_dict["visit_priority"] = scored.get(cid)
                 ordered_cases.append(case_dict)
 
         ptps_due_today = len(ptp_due_today_ids)

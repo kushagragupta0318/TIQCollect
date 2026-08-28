@@ -224,8 +224,9 @@ class CaseService:
     # GET /agent/cases
     # -----------------------------------------------------------------
     def list_cases(self, agent: Agent) -> list[dict]:
-        """Return today's beat cases — pending first (by priority), done last."""
+        """Return today's beat cases — pending first (by visit priority), done last."""
         from app.api.v1.endpoints.agent import _effective_day, _visited_today, _format_case
+        from app.services.visit_priority_service import score_cases, sort_key
 
         beat = (
             self.db.query(Beat)
@@ -251,12 +252,24 @@ class CaseService:
 
         pending = [c for c in cases if not _is_done(c)]
         done = [c for c in cases if _is_done(c)]
-        pending.sort(key=lambda c: _PRIORITY_ORDER.get(c.priority, 9))
+
+        # 2026-08-27 — ordered by VISIT PRIORITY, replacing the Case.priority
+        # band sort. Case.priority is frozen at case creation and knows nothing
+        # about effort already spent or what is actually recoverable; see
+        # ml/visit_priority.py. Loans are joinedload-ed above, so the score's
+        # value component has the balance it needs.
+        #
+        # Scored for pending AND done: the agent's card shows the score either
+        # way, and a completed case that silently lost its reasoning reads as
+        # though it never had any.
+        scored = score_cases(self.db, cases, today=eff_day)
+        pending.sort(key=sort_key(scored))
 
         result = []
         for c in pending + done:
             formatted = _format_case(c)
             formatted["is_visited_today"] = c.id in visited_today_ids
+            formatted["visit_priority"] = scored.get(c.id)
             result.append(formatted)
         return result
 

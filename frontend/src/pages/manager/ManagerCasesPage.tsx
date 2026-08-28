@@ -18,11 +18,11 @@ import { useSearchParams } from "react-router";
 import { createPortal } from "react-dom";
 import {
   Search, X, MapPin, Clock, CheckCircle2, AlertTriangle,
-  Calendar, User, FileText, ChevronRight, SlidersHorizontal,
+  Calendar, User, FileText, ChevronRight, SlidersHorizontal, ListOrdered, Info,
 } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { getCases, getCaseDetail, getCasesDateRange } from "@/api/manager";
-import type { ManagerCaseDetail, VisitRecord } from "@/api/manager";
+import type { ManagerCaseDetail, VisitRecord, VisitPriority } from "@/api/manager";
 import { Input } from "@/components/ui/Input";
 import { DPDBadge, PriorityBadge, CaseStatusBadge, RecoveryBadge } from "@/components/ui/Badge";
 
@@ -43,14 +43,14 @@ import { DPDBadge, PriorityBadge, CaseStatusBadge, RecoveryBadge } from "@/compo
  */
 const TABLE_COLS = [
   "minmax(0,1.05fr)",  // Case — fits DAILY20260825C01, the longest form
-  "minmax(0,1.5fr)",   // Customer
+  "minmax(0,1.8fr)",   // Customer
   "minmax(0,0.8fr)",   // Location — city names are short
   "minmax(0,0.9fr)",   // DPD
   "minmax(0,0.85fr)",  // Priority
   "minmax(0,1.1fr)",   // Due now · Outlook
   "minmax(0,0.9fr)",   // Status
   "minmax(0,1.15fr)",  // Target / Collected
-  "minmax(0,1.4fr)",   // Agent — the widest text column; fits a full name
+  "minmax(0,1.65fr)",  // Agent — the widest text column; fits a full name
   "minmax(0,0.85fr)",  // Date
 ].join(" ");
 
@@ -107,6 +107,96 @@ function fmtDate(d: string | null | undefined) {
 }
 
 // ── Case detail modal (centered popup) ──────────────────────────────────────
+
+// ── Why this case sits where it does in the visit queue (2026-08-27) ─────────
+// The brief for this score asks for something "simple enough that a manager can
+// explain to their team why one case sits above another". That is only true if
+// the three terms are visible with their points — a single number is not
+// explainable, it is just authoritative-looking.
+//
+// Detail page only. The case table has ten proportional tracks and the docblock
+// on TABLE_COLS records that the last column added there truncated agent names.
+//
+// The value term shows POINTS, never rupees. Same rule this page has followed
+// since 2026-08-24: a rupee figure on a case row is read as "collect this", and
+// rate_90 x total outstanding is not that.
+// Deliberately NOT the RecoveryBadge palette. There HIGH is good news (more
+// money back); here HIGH means "work this first". Sharing a palette across two
+// opposite meanings is how a manager reads the wrong column.
+const VP_BAND_STYLE: Record<string, React.CSSProperties> = {
+  HIGH:   { background: "#0C66E4", color: "#fff", border: "1px solid #0C66E4" },
+  MEDIUM: { background: "#EEF3FD", color: "#0C4DB3", border: "1px solid #C7D9FA" },
+  LOW:    { background: "#F5F6F9", color: "#6B6D76", border: "1px solid #EAEBEF" },
+};
+
+const VP_LABEL: Record<string, string> = {
+  RECOVERABLE_VALUE: "Recoverable value",
+  URGENCY: "Urgency",
+  EFFORT: "Effort already spent",
+};
+
+function VisitPriorityPanel({ vp }: { vp: VisitPriority }) {
+  return (
+    <div className="mt-4 rounded-xl p-3"
+         style={{ background: "rgba(22,119,255,0.05)", border: "1px solid rgba(22,119,255,0.15)" }}>
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <ListOrdered className="w-3.5 h-3.5 flex-shrink-0" style={{ color: "#0C4DB3" }} />
+          {/* "Why this case is visited FIRST" was wrong on almost every case it
+              appeared on — only a handful rank first, and the panel showed that
+              heading above a score of 11/100. The heading now states what the
+              panel IS; the band and the score say where the case actually sits. */}
+          <p className="text-xs font-bold" style={{ color: "#0C4DB3" }}>Visit priority</p>
+          {/* States what it IS. There is no model here, and a chip that says so
+              is cheaper than a reader assuming otherwise. */}
+          <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
+                style={{ background: "#fff", color: "#0C66E4", border: "1px solid #C7D9FA" }}>
+            {vp.is_modelled ? "Model" : "Scorecard"}
+          </span>
+        </div>
+        <span className="flex items-baseline gap-1.5">
+          <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
+                style={VP_BAND_STYLE[vp.band] ?? VP_BAND_STYLE.LOW}>
+            {vp.band}
+          </span>
+          <span className="text-[15px] font-bold" style={{ color: "#0C4DB3" }}>
+            {Math.round(vp.score)}<span className="text-[11px] font-semibold"> / 100</span>
+          </span>
+        </span>
+      </div>
+
+      <p className="text-[11.5px] mt-1.5" style={{ color: "#1677FF" }}>{vp.reason}</p>
+
+      <div className="mt-2.5 space-y-1.5">
+        {vp.components.map((comp) => (
+          <div key={comp.code} className="flex items-start gap-2">
+            {/* Signed and monospaced so the three lines read as arithmetic that
+                sums to the number above, which is the point of showing them. */}
+            <span className="text-[12px] font-mono font-bold flex-shrink-0 text-right"
+                  style={{ width: 34, color: comp.points < 0 ? "#B45309" : "#0F9960" }}>
+              {comp.points > 0 ? "+" : ""}{comp.points}
+            </span>
+            <div className="min-w-0">
+              <p className="text-[11.5px] font-semibold" style={{ color: "#1C1C1F" }}>
+                {VP_LABEL[comp.code] ?? comp.code}
+                {comp.abstained && (
+                  <span className="font-normal ml-1.5" style={{ color: "#94a3b8" }}>· not measured</span>
+                )}
+              </p>
+              <p className="text-[11px]" style={{ color: "#6B6D76" }}>{comp.summary}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <p className="text-[10.5px] mt-2.5 leading-snug" style={{ color: "#94a3b8" }}>
+        {vp.model_version}
+        {vp.rate_as_of && <> · recovery estimate as of {vp.rate_as_of}</>}
+        {" · decides visit order only"}
+      </p>
+    </div>
+  );
+}
 
 function CaseDetailModal({ caseId, onClose }: { caseId: string; onClose: () => void }) {
   const [detail, setDetail] = useState<ManagerCaseDetail | null>(null);
@@ -228,8 +318,12 @@ function CaseDetailModal({ caseId, onClose }: { caseId: string; onClose: () => v
               <div className="mt-4 grid grid-cols-3 gap-2 sm:gap-3">
                 <AmountCard label="Target" amount={detail.target_amount} color="text-slate-900" />
                 <AmountCard label="Collected" amount={detail.collected_amount} color="text-success-600" />
-                <AmountCard label="Outstanding" amount={detail.loan.total_outstanding} color="text-danger-600" />
+                {/* "Outstanding" beside Target/Collected invited the reading
+                    "what's left of the target". It is the whole loan balance. */}
+                <AmountCard label="Loan balance" amount={detail.loan.total_outstanding} color="text-danger-600" />
               </div>
+
+              {detail.visit_priority && <VisitPriorityPanel vp={detail.visit_priority} />}
 
               {detail.bank_agent_remarks && (
                 <div className="mt-3 rounded-xl p-3" style={{ background: "rgba(22,119,255,0.06)", border: "1px solid rgba(22,119,255,0.15)" }}>
@@ -312,7 +406,22 @@ function CaseDetailModal({ caseId, onClose }: { caseId: string; onClose: () => v
                           <span className="sm:col-start-8 sm:col-span-3 sm:text-right font-bold text-success-600">
                             ₹{p.amount.toLocaleString("en-IN")}
                           </span>
-                          <span className="sm:col-start-5 sm:col-span-3 sm:row-start-1 text-xs" style={{ color: "#6B6D76" }}>{p.mode.replace("_", " ")}</span>
+                          <span className="sm:col-start-5 sm:col-span-3 sm:row-start-1 text-xs flex items-center gap-1.5" style={{ color: "#6B6D76" }}>
+                            {p.mode.replace("_", " ")}
+                            {/* A payment with no visit behind it. Marked because
+                                the tab counts otherwise look like a missing
+                                visit — the money came in by transfer against a
+                                promise, days after anyone called. */}
+                            {!p.visit_id && (
+                              <span
+                                className="text-[10px] font-semibold px-1.5 py-0.5 rounded cursor-help whitespace-nowrap"
+                                style={{ background: "#EEF3FD", color: "#0C4DB3", border: "1px solid #C7D9FA" }}
+                                title={"Paid remotely, not at a visit — the borrower settled a promise by transfer. This is why the payment count can exceed the visit count."}
+                              >
+                                Remote
+                              </span>
+                            )}
+                          </span>
                         </div>
                         <div className="flex items-baseline justify-between gap-2 mt-1 sm:mt-0 sm:contents">
                           <span className="sm:col-start-1 sm:col-span-4 sm:row-start-1 font-mono text-xs truncate" style={{ color: "#6B6D76" }}>{p.receipt_number}</span>
@@ -320,6 +429,13 @@ function CaseDetailModal({ caseId, onClose }: { caseId: string; onClose: () => v
                         </div>
                       </div>
                     ))}
+                    {detail.payments.some((p) => !p.visit_id) && (
+                      <p className="text-[11.5px] px-2 pt-1" style={{ color: "#6B6D76" }}>
+                        {detail.payments.filter((p) => !p.visit_id).length} of{" "}
+                        {detail.payments.length} payments arrived remotely against a
+                        promise, so the payment count here does not match the visit count.
+                      </p>
+                    )}
                     <div className="flex justify-end pt-2" style={{ borderTop: "1px solid #EAEBEF" }}>
                       <div className="text-right">
                         <p className="text-xs" style={{ color: "#6B6D76" }}>Total Collected</p>
@@ -551,6 +667,29 @@ function EmptyState({ text }: { text: string }) {
 // Both renderings carry the same eight fields. A case already visited today is
 // dimmed to de-emphasise it without hiding it.
 
+/** The visit-priority band as a compact chip.
+ *
+ * Stacked UNDER the bank's PriorityBadge rather than replacing it: they answer
+ * different questions (the bank's flag vs. what is worth working next) and
+ * silently swapping one for the other would change what the column means
+ * without saying so. Absent on a resolved case, which has no next visit.
+ *
+ * Same palette as the detail panel's chip, deliberately NOT RecoveryBadge's —
+ * there HIGH is good news, here HIGH means work it first.
+ */
+function VisitPriorityChip({ vp }: { vp?: { score: number; band: string } | null }) {
+  if (!vp) return null;
+  return (
+    <span
+      className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded whitespace-nowrap"
+      style={VP_BAND_STYLE[vp.band] ?? VP_BAND_STYLE.LOW}
+      title={`Visit priority ${Math.round(vp.score)} / 100 — ${vp.band}`}
+    >
+      {vp.band}
+    </span>
+  );
+}
+
 function CaseRow({ c, onOpen }: { c: Case; onOpen: () => void }) {
   // Hover, base tint and the dimmed visited-today state all come from
   // .row-accent in index.css, shared with the Field Agents table. Real CSS
@@ -654,6 +793,7 @@ function CaseRow({ c, onOpen }: { c: Case; onOpen: () => void }) {
         <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
           <DPDBadge bucket={c.loan.dpd_bucket} />
           <PriorityBadge priority={c.priority} />
+          <VisitPriorityChip vp={c.visit_priority} />
           <RecoveryBadge potential={c.recovery?.recovery_potential} />
           <CaseStatusBadge status={c.status} />
         </div>
@@ -690,6 +830,12 @@ export default function ManagerCasesPage() {
   // table, so narrowing it client-side would only filter the 50 rows already
   // fetched and leave a HIGH-recovery case on page 3 sitting on page 3.
   const [recoveryFilter, setRecoveryFilter] = useState("ALL");
+  // Visit priority. Default OFF: the legacy allocation_date ordering is the page
+  // a manager already knows, and switching it silently would move every row
+  // under them. Turning it on is the deliberate act of asking "what should my
+  // team work first".
+  const [prioritySort, setPrioritySort] = useState("OFF");
+  const [priorityBand, setPriorityBand] = useState("ALL");
   const [dateFrom, setDateFrom] = useState(() => searchParams.get("date_from") || "");
   const [dateTo, setDateTo] = useState(() => searchParams.get("date_to") || "");
   // The date filter used to default to [six months ago, today]. Cases are
@@ -720,6 +866,8 @@ export default function ManagerCasesPage() {
       getCases({
         status: statusFilter !== "ALL" ? statusFilter : undefined,
         recovery: recoveryFilter !== "ALL" ? recoveryFilter : undefined,
+        sort: prioritySort !== "OFF" ? prioritySort : undefined,
+        priority_band: priorityBand !== "ALL" ? priorityBand : undefined,
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
         agent_id: agentId || undefined,
@@ -733,7 +881,7 @@ export default function ManagerCasesPage() {
         .catch(() => toast.error("Failed to load cases"))
         .finally(() => setLoading(false));
     },
-    [statusFilter, recoveryFilter, dateFrom, dateTo, agentId]
+    [statusFilter, recoveryFilter, prioritySort, priorityBand, dateFrom, dateTo, agentId]
   );
 
   // Seed the filter from the data's own span. Runs once; failure just leaves the
@@ -791,6 +939,25 @@ export default function ManagerCasesPage() {
         clear: () => setRecoveryFilter("ALL"),
       });
     }
+    if (prioritySort !== "OFF") {
+      out.push({
+        key: "prioritySort",
+        // Says the view is narrowed too, not just reordered — resolved cases
+        // drop out of the priority view, so the row count changes and a
+        // manager who did not read this would think cases had vanished.
+        label: prioritySort === "priority_desc"
+          ? "Priority high → low (open cases only)"
+          : "Priority low → high (open cases only)",
+        clear: () => setPrioritySort("OFF"),
+      });
+    }
+    if (priorityBand !== "ALL") {
+      out.push({
+        key: "priorityBand",
+        label: `Priority ${priorityBand}`,
+        clear: () => setPriorityBand("ALL"),
+      });
+    }
     if (bucketFilter !== "ALL") {
       const labels: Record<string, string> = { BUCKET_2: "31–60 DPD", BUCKET_3: "61–90 DPD", NPA: "NPA 90+" };
       out.push({ key: "bucket", label: labels[bucketFilter] ?? bucketFilter, clear: () => setBucketFilter("ALL") });
@@ -810,7 +977,8 @@ export default function ManagerCasesPage() {
       });
     }
     return out;
-  }, [statusFilter, bucketFilter, recoveryFilter, dateFrom, dateTo, defaultRange]);
+  }, [statusFilter, bucketFilter, recoveryFilter, prioritySort, priorityBand,
+      dateFrom, dateTo, defaultRange]);
 
   return (
     <>
@@ -919,6 +1087,26 @@ export default function ManagerCasesPage() {
               <option value="HIGH">High recovery</option>
               <option value="MEDIUM">Medium recovery</option>
               <option value="LOW">Low recovery</option>
+            </select>
+            {/* Visit priority. Two controls rather than one combined dropdown:
+                a manager sorting the whole book and a manager narrowing to the
+                HIGH band are different questions, and either is useful without
+                the other. Both are server-side — the list paginates there, so a
+                client-side sort would only reorder the 50 rows on screen. */}
+            <select className="input w-full lg:w-auto tap-target-h" value={prioritySort}
+                    onChange={(e) => setPrioritySort(e.target.value)}
+                    aria-label="Sort by visit priority">
+              <option value="OFF">Sort: Latest first</option>
+              <option value="priority_desc">Sort: Priority high → low</option>
+              <option value="priority_asc">Sort: Priority low → high</option>
+            </select>
+            <select className="input w-full lg:w-auto tap-target-h" value={priorityBand}
+                    onChange={(e) => setPriorityBand(e.target.value)}
+                    aria-label="Filter by visit priority band">
+              <option value="ALL">All Priority</option>
+              <option value="HIGH">Priority HIGH</option>
+              <option value="MEDIUM">Priority MEDIUM</option>
+              <option value="LOW">Priority LOW</option>
             </select>
             <select className="input w-full lg:w-auto tap-target-h" value={bucketFilter} onChange={(e) => setBucketFilter(e.target.value)} aria-label="Filter by DPD bucket">
               <option value="ALL">All Buckets</option>

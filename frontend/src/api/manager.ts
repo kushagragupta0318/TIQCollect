@@ -30,6 +30,15 @@ export async function getCases(params?: {
   /** HIGH | MEDIUM | LOW — filters on the loan's latest computed recovery label.
    *  Server-side, so it narrows the whole book rather than the current page. */
   recovery?: string;
+  /** "priority_desc" | "priority_asc" — switches the list to the actionable
+   *  visit-priority view. Anything else keeps the legacy allocation_date order.
+   *  Server-side: the list is paginated there, so a client-side sort would only
+   *  reorder the 50 rows already fetched. */
+  sort?: string;
+  /** HIGH | MEDIUM | LOW on the VISIT PRIORITY band — how much a case is worth
+   *  working next. Distinct from `recovery`, which bands how much of the loan
+   *  comes back. */
+  priority_band?: string;
   limit?: number;
   offset?: number;
 }) {
@@ -95,6 +104,11 @@ export interface PaymentRecord {
   amount: number;
   mode: string;
   status: string;
+  /** Null when the borrower paid REMOTELY — settling a promise days after the
+   *  visit, with nobody at their door. Without surfacing this, the payment
+   *  count cannot be reconciled against the visit count and a manager
+   *  reasonably concludes a visit is missing. */
+  visit_id: string | null;
   upi_reference: string | null;
   cheque_number: string | null;
   bank_reference: string | null;
@@ -109,6 +123,32 @@ export interface PTPRecord {
   status: string;
   customer_reason: string | null;
   agent_notes: string | null;
+}
+
+// ── Visit priority (2026-08-27) ───────────────────────────────────────────
+// Why one case sits above another in the visit queue. A hand-weighted
+// scorecard over facts the schema already holds — `is_modelled` is always
+// false, and is sent so no screen can present it as a learned model.
+export interface VisitPriorityComponent {
+  code: "RECOVERABLE_VALUE" | "URGENCY" | "EFFORT";
+  points: number;
+  summary: string;
+  evidence?: Record<string, unknown>;
+  /** True when the term had no data — "not measured", not "measured and low". */
+  abstained?: boolean;
+}
+
+export interface VisitPriority {
+  score: number;
+  /** HIGH | MEDIUM | LOW — gives the bare score a meaning. */
+  band: "HIGH" | "MEDIUM" | "LOW";
+  /** Always three, in a fixed order. */
+  components: VisitPriorityComponent[];
+  reason: string;
+  is_modelled: boolean;
+  model_version: string;
+  /** Age of the recovery rate behind the value term. */
+  rate_as_of?: string | null;
 }
 
 export interface ManagerCaseDetail {
@@ -127,6 +167,18 @@ export interface ManagerCaseDetail {
   bank_ptp_date: string | null;
   bank_ptp_amount: number | null;
   bank_agent_remarks: string | null;
+  /** The loan's recovery band, from the nightly snapshot. Null when unscored —
+   *  render "Not scored", never LOW. */
+  recovery: {
+    recovery_potential: "HIGH" | "MEDIUM" | "LOW";
+    rate_30: number;
+    rate_60: number;
+    rate_90: number;
+    as_of: string | null;
+    is_modelled: boolean;
+  } | null;
+  /** Null when the loan carried no balance to score. */
+  visit_priority: VisitPriority | null;
   customer: {
     id: string;
     full_name: string;
@@ -194,6 +246,13 @@ export interface MonthlyTrend {
   target_lakhs: number;
   total_visits: number;
   collection_rate_pct: number;
+  /** PTP CAPTURE — promises won as a share of the visits where a promise was the
+   *  right outcome. A different question from ptp_conversion (promises KEPT).
+   *  Added to the API in the PTP fix pass; the type was never updated, and the
+   *  vacuous `tsc --noEmit` hid it. */
+  visits_needing_promise: number;
+  ptps_captured: number;
+  ptp_capture_pct: number;
 }
 
 export interface DPDBreakdown {
@@ -464,6 +523,8 @@ export interface AnalyticsData {
     total_collected_lakhs: number;
     total_target_lakhs: number;
     ptp_conversion_rate_pct: number;
+    /** Capture, not conversion — see MonthlyTrend above. */
+    ptp_capture_rate_pct: number;
     avg_visits_per_agent_current_month: number;
   };
 }
