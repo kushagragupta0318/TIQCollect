@@ -330,7 +330,7 @@ class Settings(BaseSettings):
     # act: set it, restart the worker. No migration, nothing to undo.
     REPAYMENT_WRITE_RISK_SCORE: bool = False
     # KILL SWITCH, and OFF by design. Case.priority is written once at case
-    # creation (seed_data.py:1505, ingest_daily.py:437) and has never been
+    # creation (seed_data.py:1577, ingest_daily.py:437) and has never been
     # recomputed for an existing case. Turning this on is NEW behaviour: it
     # would reprice open cases and change the nightly allocation order for work
     # already in flight. Left off so the default deployment matches today.

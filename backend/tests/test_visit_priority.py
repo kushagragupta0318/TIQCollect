@@ -56,6 +56,11 @@ def _pts(result, code):
     return next(c["points"] for c in result["components"] if c["code"] == code)
 
 
+def _component(result, code):
+    """The whole component, for the tests that assert on its summary or flags."""
+    return next(c for c in result["components"] if c["code"] == code)
+
+
 # ── The failure this score exists to correct ────────────────────────────────
 def test_a_large_npa_case_outranks_a_small_pre_npa_case():
     """THE ONE THAT MATTERS.
@@ -281,3 +286,59 @@ def test_the_reason_agrees_with_the_components():
     assert "promise falling due" in promised["reason"]
     late = score(features(dpd=250))
     assert "past the npa line" in late["reason"].lower()
+
+
+def test_the_reason_never_contradicts_the_urgency_summary():
+    """THE ONE THAT CAUGHT A REAL BUG.
+
+    The urgency ladder is deliberately non-monotonic — it peaks at 76-90 and
+    falls past the line — so the SAME points occur at both ends of the DPD
+    range: 8 points is "under 30 days", 10 points is "over 180". The reason
+    line used to read position off the points, which collapsed those two into
+    one branch. On 2026-08-28 that meant 256 of 591 open cases described
+    themselves wrongly: 12 days late reading "long past the NPA line" directly
+    under a summary saying "12 days late", and 95 days late reading
+    "mid-delinquency".
+
+    Swept across the whole range rather than spot-checked, because the failure
+    was invisible at the two DPDs anyone would have tried by hand.
+    """
+    for dpd in (0, 1, 12, 28, 29, 30, 45, 46, 60, 75, 76, 80, 89, 90,
+                91, 95, 100, 120, 121, 180, 181, 250, 400):
+        result = score(features(dpd=dpd))
+        mid = result["reason"].split(", ")[1]
+        past_by_reason = "past the" in mid
+        past_in_fact = dpd > 90
+        assert past_by_reason == past_in_fact, (
+            f"dpd {dpd}: reason says {mid!r}, which is "
+            f"{'not ' if past_in_fact else ''}past the line")
+
+        # And it must not claim lateness the summary does not support.
+        if dpd <= 45:
+            assert mid == "early-stage", (dpd, mid)
+
+
+def test_a_case_with_no_dpd_says_so_instead_of_guessing():
+    """Both abstaining components behave the same way. _value already refused
+    to call an unmeasured loan empty; urgency used to fall to the floor and be
+    described as "long past the NPA line" — a claim about the borrower built
+    out of a gap in our own data."""
+    result = score(features(dpd=None))
+    assert "not recorded" in result["reason"]
+    assert "npa line" not in result["reason"].lower()
+    urgency = _component(result, COMPONENT_URGENCY)
+    assert urgency["abstained"] is True
+    assert urgency["points"] is not None       # still scored, still present
+
+
+def test_the_promise_countdown_reads_grammatically():
+    """"in 2 day" shipped because the plural tested the raw float while the
+    text printed the rounded one."""
+    assert "falls due today" in _component(
+        score(features(ptp_due_in_days=0)), COMPONENT_EFFORT)["summary"]
+    assert "in 1 day —" in _component(
+        score(features(ptp_due_in_days=1)), COMPONENT_EFFORT)["summary"]
+    assert "in 2 days" in _component(
+        score(features(ptp_due_in_days=1.5)), COMPONENT_EFFORT)["summary"]
+    assert "in 3 days" in _component(
+        score(features(ptp_due_in_days=3)), COMPONENT_EFFORT)["summary"]

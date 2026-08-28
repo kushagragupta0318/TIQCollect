@@ -34,7 +34,7 @@ keep the same run() -> dict interface.
   `(PRIORITY_ORDER[case.priority], -target_amount)`.
 
   Why the old key was not good enough: Case.priority is computed once at case
-  creation (seed_data.py:1492) and never recomputed, so it could not reflect
+  creation (seed_data.py:1577) and never recomputed, so it could not reflect
   effort already spent or a recovery estimate that did not exist when the case
   was created. `-target_amount` is the monthly ask, not what is recoverable.
 

@@ -17,6 +17,22 @@ class CaseStatus(str, enum.Enum):
     WRITTEN_OFF = "WRITTEN_OFF"
 
 
+# Cases where the collection question is closed: no next visit, no further
+# money expected, nothing left to rank or predict.
+#
+# ONE DEFINITION, HERE. It was written out twice — case_service (which withholds
+# the repayment score) and visit_priority_service (which withholds the visit
+# score) — each with a comment saying it matched the other. Two copies of one
+# policy held in step by a comment is the drift this codebase already documents
+# elsewhere; merged 2026-08-28.
+#
+# ESCALATED is deliberately absent. It is open, visitable, and the work a manager
+# most wants surfaced — grouping it here would quietly bury the hardest cases.
+RESOLVED_STATUSES = frozenset({
+    CaseStatus.PAID, CaseStatus.CLOSED, CaseStatus.WRITTEN_OFF,
+})
+
+
 class CasePriority(str, enum.Enum):
     LOW = "LOW"
     MEDIUM = "MEDIUM"

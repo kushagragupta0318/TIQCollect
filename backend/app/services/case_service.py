@@ -37,7 +37,7 @@ from app.core.routing import optimize_route
 from app.models.agent import Agent
 from app.models.beat import Beat
 from app.models.call_log import CallLog
-from app.models.case import Case, CaseStatus, CasePriority
+from app.models.case import RESOLVED_STATUSES, Case, CaseStatus
 from app.models.customer import Customer
 from app.models.ptp import PTP, PTPStatus
 from app.models.visit import Visit
@@ -47,16 +47,16 @@ logger = structlog.get_logger()
 
 _URGENT_WINDOW_SECONDS = 45 * 60
 
-_PRIORITY_ORDER = {
-    CasePriority.CRITICAL: 0, CasePriority.HIGH: 1,
-    CasePriority.MEDIUM: 2, CasePriority.LOW: 3,
-}
+# _PRIORITY_ORDER (CRITICAL/HIGH/MEDIUM/LOW -> 0..3) lived here and ordered
+# list_cases until 2026-08-27, when the visit-priority score replaced it. Deleted
+# on 2026-08-28 rather than left as a spare: Case.priority is frozen at case
+# creation and never recomputed, so a sort built on it silently reintroduces the
+# staleness the score exists to fix. app/ml/visit_priority.py owns the order now,
+# and visit_priority_service.sort_key is the single tie-break definition.
 
-# Cases where the collection question is closed. No repayment score is shown
-# for these — see _repayment_block.
-_RESOLVED_STATUSES = frozenset({
-    CaseStatus.PAID, CaseStatus.CLOSED, CaseStatus.WRITTEN_OFF,
-})
+# No repayment score is shown for these — see _repayment_block. Imported rather
+# than restated; models/case.py owns it, shared with visit_priority_service.
+_RESOLVED_STATUSES = RESOLVED_STATUSES
 
 
 class CaseService:

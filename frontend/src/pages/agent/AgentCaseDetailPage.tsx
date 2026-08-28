@@ -912,7 +912,16 @@ export default function AgentCaseDetailPage() {
                     <p className="text-xs font-semibold text-purple-700 uppercase tracking-wide flex items-center gap-1.5">
                       <Zap className="w-3.5 h-3.5" /> Scheduling Intelligence
                     </p>
-                    <p className="text-xs text-purple-600 -mt-2">This intel is used by AI to re-rank your visit priority list</p>
+                    {/* Named the feature it actually feeds. This read "used by AI
+                        to re-rank your visit priority list" until 2026-08-28, by
+                        which point it pointed at the wrong thing: Visit priority
+                        became a specific hand-weighted score (ml/visit_priority.py,
+                        is_modelled false) that reads NONE of this intel. What this
+                        does feed is Smart Order — CaseService.ranked_cases, which
+                        scores call-log availability, last outcome, PTPs and
+                        customer flags, and asks a model only for the one-line
+                        reason it prints. */}
+                    <p className="text-xs text-purple-600 -mt-2">This intel feeds Smart Order, which re-ranks today's beat</p>
 
                     {/* Visit feasible today */}
                     <div>

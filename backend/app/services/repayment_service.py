@@ -730,7 +730,7 @@ class RepaymentService:
                 customers_written += 1
 
         # ── REPRICE: deliberately not implemented ────────────────────────────
-        # Case.priority is written once at case creation (seed_data.py:1505,
+        # Case.priority is written once at case creation (seed_data.py:1577,
         # ingest_daily.py:437) and has never been recomputed for an open case.
         # Doing so is NEW behaviour, not a like-for-like swap, so it is not part
         # of turning the scorer on. The flag is reported rather than silently

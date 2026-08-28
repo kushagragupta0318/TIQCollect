@@ -3,7 +3,7 @@
 #
 #   WHAT THIS REPLACES. Case.priority, computed once at case creation as
 #   min(100, dpd/90*40 + outstanding_principal/500000*30) and never recomputed
-#   (seed_data.py:1492; repayment_service.py:732-745 explicitly declines to
+#   (seed_data.py:1577; repayment_service.py:732-745 explicitly declines to
 #   reprice it). Because it is frozen at creation it cannot reflect effort
 #   already spent, nor a recovery estimate that did not exist yet.
 #
@@ -101,7 +101,7 @@ _VALUE_LADDER = (
 _VALUE_FLOOR = 0.0
 
 # ── Urgency ladder ──────────────────────────────────────────────────────────
-# PEAKS AT 76-89 DPD AND FALLS AFTER 90, on purpose.
+# PEAKS AT 76-90 DPD AND FALLS PAST 90, on purpose.
 #
 # 90 days is the RBI line at which a loan is classified non-performing. The
 # fortnight before it is the last chance to prevent that classification, so it is
@@ -116,7 +116,7 @@ _URGENCY_LADDER = (
     (180.0, 10.0),   # beyond here further ageing tells us little new
     (120.0, 14.0),
     (_DPD_NEUTRAL, 20.0),   # classified; worked on value, not on urgency
-    (75.0, 35.0),    # 76-89 — the peak, the last fortnight before the line
+    (75.0, 35.0),    # 76-90 — the peak, the last stretch before the line
     (60.0, 31.0),
     (45.0, 22.0),
     (30.0, 12.0),
@@ -208,6 +208,7 @@ def _value(features) -> dict:
     return {
         "code": COMPONENT_VALUE,
         "points": points,
+        "abstained": False,
         "summary": f"{_rupees(amount)} recoverable over 90 days",
         "evidence": {
             "rate_90": round(float(rate_90), 4),
@@ -220,9 +221,13 @@ def _urgency(features) -> dict:
     """How close this loan is to the 90-day NPA line, and which side of it."""
     dpd = _f(features, "dpd")
     if dpd is None:
+        # `abstained` for the same reason _value carries it: without it the
+        # reason line has to guess from the points, and the points cannot tell
+        # "no data" apart from "not very late".
         return {
             "code": COMPONENT_URGENCY,
             "points": _URGENCY_FLOOR,
+            "abstained": True,
             "summary": "Days-past-due not recorded on this loan",
             "evidence": {"dpd": None},
         }
@@ -240,6 +245,7 @@ def _urgency(features) -> dict:
     return {
         "code": COMPONENT_URGENCY,
         "points": points,
+        "abstained": False,
         "summary": summary,
         "evidence": {"dpd": dpd, "npa_line": _DPD_NEUTRAL},
     }
@@ -259,10 +265,14 @@ def _effort(features) -> dict:
                  and 0 <= float(ptp_due_in_days) <= PTP_PROTECTION_DAYS)
     if protected:
         days = float(ptp_due_in_days)
-        when = "today" if days < 1 else f"in {days:.0f} day{'s' if days >= 2 else ''}"
+        # Pluralise on the number actually PRINTED. 1.5 renders as "2" but
+        # 1.5 >= 2 is false, which used to print "in 2 day".
+        shown = round(days)
+        when = "today" if days < 1 else f"in {shown} day{'s' if shown != 1 else ''}"
         return {
             "code": COMPONENT_EFFORT,
             "points": PTP_PROTECTION_BONUS,
+            "abstained": False,
             "summary": (f"{visits} visit{'s' if visits != 1 else ''} so far, and a "
                         f"promise falls due {when} — protected"),
             "evidence": {"visit_count": visits,
@@ -285,6 +295,8 @@ def _effort(features) -> dict:
     return {
         "code": COMPONENT_EFFORT,
         "points": points,
+        # Effort never abstains: "not visited yet" is a measurement, not a gap.
+        "abstained": False,
         "summary": summary,
         "evidence": {"visit_count": visits,
                      "max_visits_allowed": allowed,
@@ -319,12 +331,28 @@ def _reason(components: list[dict]) -> str:
     else:
         lead = "Little or no recoverable balance"
 
-    if urgency["points"] >= 31.0:
-        mid = f"close to the {_DPD_NEUTRAL:.0f}-day NPA line"
-    elif urgency["points"] <= 14.0:
+    # FROM THE DPD, NOT FROM THE POINTS. The urgency ladder is deliberately
+    # non-monotonic — it peaks at 76-90 and falls after the line — so the same
+    # points occur at BOTH ends of the range: 8 points means "under 30 days"
+    # and 10 means "over 180". Reading position off the points collapsed those
+    # into one branch, and on 2026-08-28 that made 256 of 591 open cases (43%)
+    # describe themselves wrongly: a case 12 days late read "long past the NPA
+    # line", directly contradicting the "12 days late" printed above it, and a
+    # case at 95 days read "mid-delinquency". Thresholds below mirror
+    # _urgency's own summary exactly, so the two cannot disagree again.
+    dpd_seen = urgency.get("evidence", {}).get("dpd")
+    if urgency.get("abstained") or dpd_seen is None:
+        mid = "days late not recorded"
+    elif dpd_seen > 120.0:
         mid = "long past the NPA line"
-    else:
+    elif dpd_seen > _DPD_NEUTRAL:
+        mid = f"past the {_DPD_NEUTRAL:.0f}-day NPA line"
+    elif dpd_seen > 75.0:
+        mid = f"close to the {_DPD_NEUTRAL:.0f}-day NPA line"
+    elif dpd_seen > 45.0:
         mid = "mid-delinquency"
+    else:
+        mid = "early-stage"
 
     if effort["points"] > 0.0:
         tail = "promise falling due"

@@ -15,7 +15,7 @@ Two things this task does NOT do, both on purpose:
     day this ships rather than from the day someone opts in.
 
   * It never touches Case.priority. Priority is written once at case creation
-    (seed_data.py:1505, ingest_daily.py:437) and has never been recomputed for
+    (seed_data.py:1577, ingest_daily.py:437) and has never been recomputed for
     an open case; doing so is new behaviour and belongs to its own decision.
 
 Idempotent by construction: the snapshot grain is (loan_id, as_of_date) with a

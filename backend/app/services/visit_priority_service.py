@@ -5,8 +5,9 @@
 #   WHY A SEPARATE LAYER. The score needs three facts the Case row does not
 #   carry: the loan's latest recovery rate, the loan's live balance, and whether
 #   a promise is about to fall due. Fetching those per case would be three
-#   queries per row — 1,600 round trips on a 545-case book. This does it in two
-#   bounded queries for the whole set, and hands the pure scorer plain values.
+#   queries per row — 1,600 round trips on a 545-case book. This does it in at
+#   most three bounded queries for the whole set, whatever the case count, and
+#   hands the pure scorer plain values.
 #
 #   QUERY BUDGET: AT MOST THREE, regardless of how many cases are passed in —
 #   latest recovery rate, promises due soon, and the loans themselves when the
@@ -24,7 +25,7 @@ from typing import TYPE_CHECKING, Iterable
 from sqlalchemy import and_, func
 
 from app.ml.visit_priority import PTP_PROTECTION_DAYS, score as _score_one
-from app.models.case import CaseStatus
+from app.models.case import RESOLVED_STATUSES
 from app.models.loan import Loan
 from app.models.ptp import PTP, PTPStatus
 from app.models.repayment_snapshot import RepaymentSnapshot
@@ -34,19 +35,15 @@ if TYPE_CHECKING:
 
     from app.models.case import Case
 
-# Cases where the collection question is closed. These get NO score.
+# Resolved cases get NO score. "Visit priority 64/100" on a case marked PAID is
+# the product contradicting itself on one screen — there is no next visit to
+# rank. On the live book 198 of 743 cases (26.6%) are resolved, so this is the
+# common path, not an edge case.
 #
-# "Why this case is visited first: 64/100" on a case marked PAID is the product
-# contradicting itself on one screen — there is no next visit to rank. On the
-# live book 198 of 743 cases (26.6%) are resolved, so this is the common path,
-# not an edge case.
-#
-# The same list and the same reasoning as case_service._RESOLVED_STATUSES, which
-# withholds the repayment score for exactly this reason. ESCALATED is
-# deliberately absent: it is still open and still visitable.
-_RESOLVED_STATUSES = frozenset({
-    CaseStatus.PAID, CaseStatus.CLOSED, CaseStatus.WRITTEN_OFF,
-})
+# Imported, not restated: models/case.py owns the one definition, shared with
+# case_service, which withholds the repayment score on the same grounds.
+# Re-exported under the private name because manager.py imports it from here.
+_RESOLVED_STATUSES = RESOLVED_STATUSES
 
 
 def _latest_rate_by_loan(db: "Session", loan_ids: list[str]) -> dict[str, tuple]:
