@@ -536,13 +536,18 @@ class CaseService:
         # eligibility lives in ml/eligibility.py. See repayment_service.py.
         base["repayment"] = self._repayment_block(case)
 
-        # Resolve agent names for visit history (may include prior agents)
+        # Resolve agent names for visit history (may include prior agents).
+        # One IN query for the set, not one per agent — a reallocated case's
+        # history can span several agents, and this ran a query for each.
         visit_agent_ids = {v.agent_id for v in case.visits}
         agent_names: dict[str, str] = {}
-        for ag_id in visit_agent_ids:
-            ag_row = self.db.query(Agent).options(joinedload(Agent.user)).filter(Agent.id == ag_id).first()
-            if ag_row and ag_row.user:
-                agent_names[ag_id] = ag_row.user.full_name
+        if visit_agent_ids:
+            for ag_row in (self.db.query(Agent)
+                           .options(joinedload(Agent.user))
+                           .filter(Agent.id.in_(visit_agent_ids))
+                           .all()):
+                if ag_row.user:
+                    agent_names[ag_row.id] = ag_row.user.full_name
 
         base["visits"] = [
             {

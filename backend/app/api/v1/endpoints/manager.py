@@ -658,36 +658,56 @@ def list_agents(current_user: ManagerOnly, db: DbSession):
     start_of_day, _, eff_date = _effective_today(agent_ids, db)
     eff_date_str = eff_date.isoformat()
 
+    # ── Today's figures: three grouped queries for the WHOLE team ────────────
+    # This was four queries PER AGENT in the loop below — 61 statements for a
+    # 15-agent team, measured 2026-08-28 with an event listener on the live
+    # book. The per-agent versions are preserved semantically, only grouped:
+    #
+    #   cases_today      count of cases allocated the effective day
+    #   today_collected  VERIFIED payments since start of day. VERIFIED only,
+    #                    matching the monthly figures below — without the filter
+    #                    this counted PENDING_VERIFICATION too (money the
+    #                    borrower has not yet confirmed by OTP), so "collected
+    #                    today" could exceed the month's collected total.
+    #   today_target     target_amount summed over the DISTINCT cases the agent
+    #                    visited today. The subquery keeps the DISTINCT at the
+    #                    (agent, case) grain the old two-step version had: two
+    #                    visits to one case must not count its target twice,
+    #                    while two AGENTS visiting the same case each count it,
+    #                    exactly as before.
+    cases_today_by_agent = dict(
+        db.query(Case.agent_id, func.count(Case.id))
+        .filter(Case.agent_id.in_(agent_ids), Case.allocation_date == eff_date_str)
+        .group_by(Case.agent_id)
+        .all()
+    )
+    collected_by_agent = dict(
+        db.query(Payment.agent_id, func.coalesce(func.sum(Payment.amount), 0.0))
+        .filter(Payment.agent_id.in_(agent_ids),
+                Payment.payment_date >= start_of_day,
+                Payment.status == PaymentStatus.VERIFIED)
+        .group_by(Payment.agent_id)
+        .all()
+    )
+    _visited_today = (
+        db.query(Visit.agent_id.label("agent_id"), Visit.case_id.label("case_id"))
+        .filter(Visit.agent_id.in_(agent_ids), Visit.check_in_time >= start_of_day)
+        .distinct()
+        .subquery()
+    )
+    target_by_agent = dict(
+        db.query(_visited_today.c.agent_id,
+                 func.coalesce(func.sum(Case.target_amount), 0.0))
+        .join(Case, Case.id == _visited_today.c.case_id)
+        .group_by(_visited_today.c.agent_id)
+        .all()
+    )
+
     result = []
     for agent in agents:
-        cases_today = (
-            db.query(func.count(Case.id))
-            .filter(Case.agent_id == agent.id, Case.allocation_date == eff_date_str)
-            .scalar() or 0
-        )
-        # VERIFIED only, matching the monthly figures below. Without the filter
-        # this counted PENDING_VERIFICATION too — money the borrower has not yet
-        # confirmed by OTP — so "collected today" could exceed the month's
-        # collected total, which is drawn from verified payments alone.
-        today_collected = (
-            db.query(func.coalesce(func.sum(Payment.amount), 0.0))
-            .filter(Payment.agent_id == agent.id,
-                    Payment.payment_date >= start_of_day,
-                    Payment.status == PaymentStatus.VERIFIED)
-            .scalar() or 0.0
-        )
-        agent_visited_ids = [
-            row[0] for row in
-            db.query(Visit.case_id)
-            .filter(Visit.agent_id == agent.id, Visit.check_in_time >= start_of_day)
-            .distinct()
-            .all()
-        ]
-        today_target = (
-            db.query(func.coalesce(func.sum(Case.target_amount), 0.0))
-            .filter(Case.id.in_(agent_visited_ids))
-            .scalar() or 0.0
-        ) if agent_visited_ids else 0.0
+        cases_today = cases_today_by_agent.get(agent.id, 0) or 0
+        today_collected = collected_by_agent.get(agent.id, 0.0) or 0.0
+        today_target = target_by_agent.get(agent.id, 0.0) or 0.0
         result.append({
             "id": agent.id,
             "user_id": agent.user_id,
