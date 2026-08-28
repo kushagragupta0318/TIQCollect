@@ -171,13 +171,12 @@ export interface Case {
   customer: Customer;
   loan: Loan;
   /**
-   * DUE NOW — overdue_amount + penal_charges. A ledger fact: what can lawfully
-   * be demanded today, and the number a manager allocates work against.
-   *
-   * Always present, including on an unscored loan — arrears do not depend on the
-   * scorecard having run.
+   * There is deliberately no pre-summed arrears figure here. `due_now`
+   * (overdue_amount + penal_charges) lived on this type from 2026-08-24 and was
+   * removed on 2026-08-27: on a case row it was the largest rupee number
+   * present, so it read as the amount to collect. Use loan.overdue_amount and
+   * loan.penal_charges, and say which one you mean.
    */
-  due_now: number;
   /** null when this loan has not been scored yet — render "Not scored", not LOW. */
   recovery?: RecoveryScore | null;
   agent_id: string | null;

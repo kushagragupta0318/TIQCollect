@@ -201,6 +201,9 @@ export interface ManagerCaseDetail {
     bank_name: string;
     total_outstanding: number;
     overdue_amount: number;
+    /** Sent so the Arrears tooltip can name what sits on top of the missed
+     *  instalments rather than leaving a single opaque figure. */
+    penal_charges: number;
     dpd: number;
     dpd_bucket: string;
     legal_status: string;
@@ -490,8 +493,9 @@ export async function getMonthlyReport(month: string, agentId?: string): Promise
 export interface RecoveryBreakdown {
   band: "HIGH" | "MEDIUM" | "LOW";
   cases: number;
-  /** Arrears + penal charges, summed. A ledger fact — demandable today. */
-  due_now: number;
+  /** Instalments missed plus penalties, summed. A ledger fact.
+   *  Was `due_now` until 2026-08-27 — see the card's docblock. */
+  arrears_and_penal: number;
   /**
    * rate_90 x live TOTAL OUTSTANDING, summed. Rendered as "90-day recovery
    * estimate"; it includes principal not yet due, so it is not a collections
@@ -510,7 +514,7 @@ export interface AnalyticsData {
     /** Reported, not folded into LOW — an unscored loan is unknown, not written off. */
     unscored_cases: number;
     /** Every open case, scored or not — wider than the per-band rows. */
-    due_now: number;
+    arrears_and_penal: number;
     expected_recoverable_amount: number;
     label_horizon_days: number;
     /** Always false. A hand-weighted scorecard, never a trained model. */

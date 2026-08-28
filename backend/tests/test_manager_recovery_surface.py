@@ -9,10 +9,19 @@
 # scanning a case list reads a rupee figure as "money to collect"; that one is
 # not, because most of it is principal that is not yet due.
 #
-# So the case list now carries `due_now` — overdue + penal charges, a ledger fact
-# — and the estimate lives only in Analytics, where its denominator is spelled
-# out beside it. These tests pin that separation, because it is the kind of thing
-# a well-meaning later change re-merges.
+# The first answer was to put a ledger fact beside it: the case list carried
+# `due_now` — overdue + penal charges — while the estimate lived only in
+# Analytics, where its denominator is spelled out.
+#
+# 2026-08-27 — the fact went too, from the case payload. Correct arithmetic was
+# not enough: sitting a column away from "Target / Collected" it was the largest
+# number on the row and read as the amount to collect. What survives is the rule
+# the dry run established, now enforced in the stricter direction — NO pre-summed
+# rupee total on a case payload, fact or estimate. Analytics keeps the pairing
+# (renamed `arrears_and_penal`) because a summary card is read as a summary.
+#
+# These tests pin that, because it is the kind of thing a well-meaning later
+# change helpfully re-adds.
 import pathlib
 import re
 from types import SimpleNamespace as NS
@@ -81,38 +90,36 @@ SCORED = {"loan-1": {"recovery_potential": "HIGH", "rate_90": 0.821,
                      "rate_60": 0.527, "rate_30": 0.322, "is_modelled": False}}
 
 
-# ── Due now is a fact ───────────────────────────────────────────────────────
-def test_due_now_is_overdue_plus_penal_charges():
-    """The whole point: a number a manager can act on without a model being
-    involved. 118,103 arrears + 5,842 penal = 123,945 demandable today."""
+# ── due_now is GONE from the case payload (2026-08-27) ─────────────────────
+# It was added on 2026-08-24 as overdue + penal and was arithmetically correct.
+# It still misled, because of where it sat: beside "Target / Collected" on a case
+# row it was the largest number present, so it read as the amount to collect.
+#
+# These tests replace the four that asserted its presence. They pin the ABSENCE,
+# because the failure mode now is somebody helpfully re-adding a convenient
+# pre-summed total.
+def test_the_case_payload_carries_no_due_now():
+    """Removed on request: on a case row it read as the collection target."""
     out = _format_case(case(), recovery_map=SCORED)
-    assert out["due_now"] == 123_945.0
+    assert "due_now" not in out
 
 
-def test_due_now_is_present_even_when_the_loan_is_unscored():
-    """Arrears do not wait on the scorecard. A loan with no recovery label still
-    has money owed on it, and a manager still has to work it."""
-    out = _format_case(case(), recovery_map={})
-    assert out["recovery"] is None
-    assert out["due_now"] == 123_945.0
-
-
-def test_due_now_handles_missing_amounts():
-    """Both columns are nullable in principle; a None must read as zero owed, not
-    crash the case list."""
-    out = _format_case(case(loan=loan(overdue_amount=None, penal_charges=None)),
-                       recovery_map=SCORED)
-    assert out["due_now"] == 0.0
-
-
-def test_due_now_is_not_the_recovery_estimate():
-    """THE DISTINCTION THIS FILE EXISTS FOR. On this fixture the estimate would be
-    0.821 x 1,298,335 = Rs 10.66 lakh, against Rs 1.24 lakh actually due. If those
-    two ever converge, someone has re-merged a fact with a forecast."""
+def test_the_two_components_are_still_available_on_the_loan():
+    """Nothing was hidden — only the pre-summed figure. A caller that genuinely
+    needs arrears can still add them, and has to say so by doing it."""
     out = _format_case(case(), recovery_map=SCORED)
-    estimate = SCORED["loan-1"]["rate_90"] * 1_298_335.0
-    assert out["due_now"] < estimate / 8
-    assert out["due_now"] == 123_945.0
+    assert out["loan"]["overdue_amount"] == 118_103.0
+    assert out["loan"]["penal_charges"] == 5_842.0
+
+
+def test_no_field_on_the_case_equals_arrears_plus_penal():
+    """Swept, not spot-checked: a re-added total under any other name — "demandable",
+    "payable_now", "arrears_total" — fails here."""
+    out = _format_case(case(), recovery_map=SCORED)
+    total = 118_103.0 + 5_842.0
+    numeric = [v for v in out.values() if isinstance(v, (int, float))
+               and not isinstance(v, bool)]
+    assert not any(abs(v - total) < 1.0 for v in numeric), out
 
 
 # ── The estimate is off the case list ───────────────────────────────────────

@@ -214,28 +214,27 @@ def _format_case(case: Case, agent_name_map: dict | None = None,
             "bank_risk_score": l.bank_risk_score,
             "collection_priority_score": l.collection_priority_score,
         },
-        # ── DUE NOW — a ledger fact, not a model output (2026-08-24) ─────────
-        # overdue_amount + penal_charges: what can lawfully be demanded today.
-        # This is the operational number a manager allocates work against, and it
-        # leads the pairing in the UI: "Rs X due now · Recovery outlook: HIGH".
+        # ── "due_now" REMOVED FROM THE CASE PAYLOAD (2026-08-27) ────────────
+        # It was added on 2026-08-24 as overdue_amount + penal_charges — a ledger
+        # fact, and defensible in isolation. In practice it misled, and the
+        # reason is position rather than arithmetic: on a case row it sat beside
+        # "Target / Collected", and being the largest number there it read as the
+        # amount to collect. It is not that. A manager comparing "Due now
+        # Rs 15.0 L" against "Target Rs 70,000 / Collected Rs 70,000" cannot tell
+        # which figure the case is judged on.
         #
-        # It is deliberately NOT expected_recoverable_amount, which was here until
-        # today and has been moved to Analytics. That figure is rate_90 x
-        # TOTAL_OUTSTANDING, so it includes principal that is not yet due — across
-        # this book it came to 229% of what is actually demandable, and on a
-        # single loan it read Rs 10.65 lakh against Rs 1.18 lakh of real arrears.
-        # A manager scanning a case list would read it as "money to collect", and
-        # it is not that.
+        # The two components are still on the payload as loan.overdue_amount and
+        # loan.penal_charges, so nothing is lost — only the pre-summed figure
+        # that invited the wrong reading is gone.
         #
-        # No estimate is derived from it here. rate_90 is a rate on total
-        # outstanding and applying it to arrears would be arithmetically wrong;
-        # min(expected, due) would be a second unvalidated estimator. The honest
-        # pairing is a fact plus a graded likelihood, which is what this is.
+        # NOTE FOR THE ANALYTICS PATH: the recovery breakdown still pairs arrears
+        # against the 90-day estimate per band. That pairing is the point of that
+        # card — a bare estimate with no fact beside it would be worse than the
+        # problem being fixed — so the figure stayed and only its NAME changed,
+        # from "due_now" to "arrears_and_penal". A total on a summary card is
+        # read as a total; the same number on a case row is read as an
+        # instruction, which is the whole difference.
         #
-        # Always present, including on an unscored loan — arrears do not depend on
-        # the scorecard having run.
-        "due_now": round(float(l.overdue_amount or 0.0)
-                         + float(l.penal_charges or 0.0), 2),
         # Computed HIGH/MEDIUM/LOW plus the 30/60/90 ramp, or None when this loan
         # has not been scored yet. None rather than a default band: an unscored
         # loan is unknown, and rendering it as LOW would write off money nobody
@@ -1794,8 +1793,8 @@ def analytics(current_user: ManagerOnly, db: DbSession):
     # rate, through the scorecard's own multiplication. It is deliberately not a
     # stored column: "where is the recoverable money now" wants today's
     # outstanding, and a rate cannot be summed while an amount can.
-    # TWO figures per band, and the pairing is the point. `due_now` is a ledger
-    # fact — arrears plus penal charges, demandable today. The 90-day recovery
+    # TWO figures per band, and the pairing is the point. `arrears_and_penal` is
+    # a ledger fact — instalments missed plus penalties. The 90-day recovery
     # estimate is rate_90 x total outstanding, which includes principal not yet
     # due. On the 2026-08-24 dry run the two RANKED THE BANDS DIFFERENTLY: HIGH
     # led on the estimate (Rs 10.36 Cr vs Rs 8.98 Cr) while MEDIUM led on what is
@@ -1811,7 +1810,7 @@ def analytics(current_user: ManagerOnly, db: DbSession):
         .all()
     )
     outstanding_by_loan = {r[0]: float(r[1] or 0.0) for r in open_cases}
-    due_now_by_loan = {r[0]: float(r[2] or 0.0) + float(r[3] or 0.0)
+    arrears_by_loan = {r[0]: float(r[2] or 0.0) + float(r[3] or 0.0)
                        for r in open_cases}
     labels = _latest_recovery_by_loan(db, list(outstanding_by_loan))
 
@@ -1822,9 +1821,11 @@ def analytics(current_user: ManagerOnly, db: DbSession):
         recovery_breakdown.append({
             "band": band,
             "cases": len(loans),
-            # The fact.
-            "due_now": round(sum(due_now_by_loan.get(lid, 0.0)
-                                 for lid in loans), 2),
+            # The fact. Named for what it is — the sum of the two ledger
+            # columns. It was "due_now" until 2026-08-27; that phrase was
+            # removed product-wide for overstating what a figure licenses.
+            "arrears_and_penal": round(sum(arrears_by_loan.get(lid, 0.0)
+                                           for lid in loans), 2),
             # The estimate. Field name unchanged on the wire; the UI renders it
             # as "90-day recovery estimate" with the denominator spelled out.
             "expected_recoverable_amount": round(sum(
@@ -1850,7 +1851,7 @@ def analytics(current_user: ManagerOnly, db: DbSession):
             # Every open case, scored or not — arrears are a fact and do not wait
             # on the scorecard, so this total is deliberately wider than the
             # per-band rows, which cover scored loans only.
-            "due_now": round(sum(due_now_by_loan.values()), 2),
+            "arrears_and_penal": round(sum(arrears_by_loan.values()), 2),
             "expected_recoverable_amount": round(
                 sum(b["expected_recoverable_amount"] for b in recovery_breakdown), 2),
             "label_horizon_days": settings.RECOVERY_LABEL_HORIZON_DAYS,

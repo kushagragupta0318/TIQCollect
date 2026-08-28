@@ -31,11 +31,12 @@ import { DPDBadge, PriorityBadge, CaseStatusBadge, RecoveryBadge } from "@/compo
  * and every row.
  *
  * Was `grid-cols-12` with col-span-N on each cell. Twelve equal units could not
- * express what this table needs: adding the "Due now · Outlook" column meant
- * taking a unit from Agent, and agent names then truncated to "Pankaj Kumar ...".
- * Proportional tracks give Agent the room a full name needs without starving
- * anything else, and one shared constant means the header can never drift out of
- * step with the rows it labels.
+ * express what this table needs: every column added had to take a whole unit
+ * from Agent, and agent names truncated to "Pankaj Kumar ...". Proportional
+ * tracks give Agent the room a full name needs without starving anything else,
+ * and one shared constant means the header can never drift out of step with the
+ * rows it labels. (Removing the "Due now" column on 2026-08-27 returned its
+ * share to Customer and Agent rather than widening everything by a tenth.)
  *
  * minmax(0, …) on every track is load-bearing: without it a long unbreakable
  * value (a case number, a rupee figure) sets a floor wider than its share and
@@ -47,21 +48,13 @@ const TABLE_COLS = [
   "minmax(0,0.8fr)",   // Location — city names are short
   "minmax(0,0.9fr)",   // DPD
   "minmax(0,0.85fr)",  // Priority
-  "minmax(0,1.1fr)",   // Due now · Outlook
+  "minmax(0,0.85fr)",  // Outlook
   "minmax(0,0.9fr)",   // Status
   "minmax(0,1.15fr)",  // Target / Collected
   "minmax(0,1.65fr)",  // Agent — the widest text column; fits a full name
   "minmax(0,0.85fr)",  // Date
 ].join(" ");
 
-/** Compact rupees for a one-column table cell: ₹2.4L, ₹34K, ₹820. */
-function shortRupees(n: number): string {
-  if (!Number.isFinite(n) || n <= 0) return "₹0";
-  if (n >= 1e7) return `₹${(n / 1e7).toFixed(2)}Cr`;
-  if (n >= 1e5) return `₹${(n / 1e5).toFixed(1)}L`;
-  if (n >= 1e3) return `₹${Math.round(n / 1e3)}K`;
-  return `₹${Math.round(n)}`;
-}
 import { useModalA11y } from "@/hooks/useModalA11y";
 import type { Case } from "@/types";
 
@@ -283,7 +276,28 @@ function CaseDetailModal({ caseId, onClose }: { caseId: string; onClose: () => v
                 <InfoRow label="City" value={`${detail.customer.city}, ${detail.customer.state}`} />
                 <InfoRow label="Collection Stage" value={detail.collection_stage ?? "—"} />
                 <InfoRow label="DPD" value={`${detail.loan.dpd} days (${detail.loan.dpd_bucket.replace("_", " ")})`} />
-                <InfoRow label="Due now" value={`₹${detail.due_now.toLocaleString("en-IN")}`} />
+                {/* "Due now" (arrears + penal) was removed here on 2026-08-27.
+                    The sum was correct and the hover split it honestly, but the
+                    row sat between "Outstanding" and the target/collected cards
+                    and was routinely read as the amount to collect. Arrears are
+                    still shown on their own below, where nothing competes for
+                    that reading. */}
+                <InfoRow label="Arrears">
+                  <span
+                    className="inline-flex items-center gap-1 cursor-help"
+                    title={
+                      `The instalments already missed. Penal charges of ` +
+                      `₹${detail.loan.penal_charges.toLocaleString("en-IN")} sit on top, ` +
+                      `and the full remaining balance is "Outstanding" ` +
+                      `(₹${detail.loan.total_outstanding.toLocaleString("en-IN")}).`
+                    }
+                  >
+                    <span className="text-sm font-semibold" style={{ color: "#1C1C1F" }}>
+                      ₹{detail.loan.overdue_amount.toLocaleString("en-IN")}
+                    </span>
+                    <Info className="w-3 h-3" style={{ color: "#94a3b8" }} />
+                  </span>
+                </InfoRow>
                 <InfoRow label="Recovery outlook">
                   <RecoveryBadge potential={detail.recovery?.recovery_potential} />
                 </InfoRow>
@@ -746,16 +760,17 @@ function CaseRow({ c, onOpen }: { c: Case; onOpen: () => void }) {
           {c.customer.city}
         </div>
         <div className="min-w-0"><DPDBadge bucket={c.loan.dpd_bucket} /></div>
-        <div className="min-w-0"><PriorityBadge priority={c.priority} /></div>
-        {/* Due now leads; the outlook grades it. The amount is a ledger fact
-            (arrears + penal charges) — never the recovery estimate, which
-            includes principal that is not yet due. */}
+        <div className="min-w-0 flex flex-col items-start gap-1">
+          <PriorityBadge priority={c.priority} />
+          <VisitPriorityChip vp={c.visit_priority} />
+        </div>
+        {/* Outlook only. "Due now" (arrears + penal) was removed on 2026-08-27:
+            sitting one column from "Target / Collected" it was the largest
+            number on the row, so it read as the amount to collect. The two
+            components remain on the payload as loan.overdue_amount and
+            loan.penal_charges for anything that genuinely needs them. */}
         <div className="min-w-0">
-          <p className="font-semibold text-[13px] tabular-nums truncate" style={{ color: "#1C1C1F" }}
-             title={`₹${c.due_now.toLocaleString("en-IN")} due now`}>
-            {shortRupees(c.due_now)}
-          </p>
-          <div className="mt-1"><RecoveryBadge potential={c.recovery?.recovery_potential} compact /></div>
+          <RecoveryBadge potential={c.recovery?.recovery_potential} compact />
         </div>
         <div className="min-w-0"><CaseStatusBadge status={c.status} /></div>
         <div className="min-w-0">
@@ -785,12 +800,11 @@ function CaseRow({ c, onOpen }: { c: Case; onOpen: () => void }) {
         <p className="font-semibold text-[15px] leading-tight truncate" style={{ color: "#1C1C1F" }}>{c.customer.full_name}</p>
         <p className="text-xs mt-0.5 truncate" style={{ color: "#6B6D76" }}>{c.customer.city}</p>
 
-        {/* Due now, then the badges that qualify it. */}
-        <p className="mt-2 text-sm font-semibold tabular-nums" style={{ color: "#1C1C1F" }}>
-          ₹{c.due_now.toLocaleString("en-IN")}{" "}
-          <span className="text-xs font-normal" style={{ color: "#6B6D76" }}>due now</span>
-        </p>
-        <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+        {/* The badges. A "due now" figure led this block until 2026-08-27; it
+            was removed for the same reason as on the desktop row — the largest
+            rupee number on the card is read as the amount to collect, and
+            arrears + penal is not that. Target and collected follow below. */}
+        <div className="flex flex-wrap items-center gap-1.5 mt-2">
           <DPDBadge bucket={c.loan.dpd_bucket} />
           <PriorityBadge priority={c.priority} />
           <VisitPriorityChip vp={c.visit_priority} />
@@ -1138,7 +1152,7 @@ export default function ManagerCasesPage() {
             <span>Location</span>
             <span>DPD</span>
             <span>Priority</span>
-            <span>Due now</span>
+            <span>Outlook</span>
             <span>Status</span>
             <span>Target / Collected</span>
             <span>Agent</span>

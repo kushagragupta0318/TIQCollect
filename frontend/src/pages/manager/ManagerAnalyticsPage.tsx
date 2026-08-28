@@ -782,10 +782,19 @@ type DPDEntry = { bucket: string; case_count: number; target_lakhs: number; coll
 // TWO figures per band, side by side, because they rank the bands differently
 // and only showing one points a team at the wrong pile.
 //
-//   Due now  = overdue_amount + penal_charges. A LEDGER FACT. Demandable today.
+//   Arrears + penalties = overdue_amount + penal_charges. A LEDGER FACT: the
+//   part of the balance already missed.
 //   90-day recovery estimate = rate_90 x TOTAL OUTSTANDING. A scorecard output
 //   that includes principal not yet due — on the 2026-08-24 book it came to 229%
-//   of what was actually demandable.
+//   of the arrears.
+//
+// This pair was labelled "Due now" until 2026-08-27, when that phrase was
+// retired product-wide for overstating what the number licenses. The FIGURE
+// stayed here, unlike on the case list where it was removed outright: on a case
+// row a large rupee total is read as an instruction to collect, whereas on a
+// summary card beside its own estimate it is read as what it is. Removing it
+// here would have left the estimate standing alone with no fact to scale it,
+// which is the worse failure.
 //
 // On that same book HIGH led the estimate (Rs 10.36 Cr vs Rs 8.98 Cr) while
 // MEDIUM led on collectable money (Rs 3.72 Cr vs Rs 2.16 Cr): HIGH loans are
@@ -811,17 +820,17 @@ function RecoveryBreakdownCard({ rows, summary, loading, barReady }: {
     MEDIUM: "Medium recovery",
     LOW: "Low recovery",
   };
-  const DUE_COLOUR = "#1677FF";
+  const ARREARS_COLOUR = "#1677FF";
   const EST_COLOUR = "#94A3B8";
 
   const scale = Math.max(
     1,
-    ...rows.map((r) => Math.max(r.due_now || 0, r.expected_recoverable_amount || 0)),
+    ...rows.map((r) => Math.max(r.arrears_and_penal || 0, r.expected_recoverable_amount || 0)),
   );
   const money = (n: number) =>
     n >= 1e7 ? `₹${(n / 1e7).toFixed(2)}Cr` : `₹${(n / 1e5).toFixed(1)}L`;
 
-  const dueTotal = rows.reduce((a, r) => a + (r.due_now || 0), 0);
+  const arrearsTotal = rows.reduce((a, r) => a + (r.arrears_and_penal || 0), 0);
   const estTotal = rows.reduce((a, r) => a + (r.expected_recoverable_amount || 0), 0);
 
   return (
@@ -843,8 +852,8 @@ function RecoveryBreakdownCard({ rows, summary, loading, barReady }: {
 
       <div className="flex flex-wrap gap-x-4 gap-y-1 mb-4 text-[11px]" style={{ color: "#6B6D76" }}>
         <span className="inline-flex items-center gap-1.5">
-          <i style={{ width: 10, height: 10, borderRadius: 2, background: DUE_COLOUR, display: "inline-block" }} />
-          Due now
+          <i style={{ width: 10, height: 10, borderRadius: 2, background: ARREARS_COLOUR, display: "inline-block" }} />
+          Arrears + penalties
         </span>
         <span className="inline-flex items-center gap-1.5">
           <i style={{ width: 10, height: 10, borderRadius: 2, background: EST_COLOUR, display: "inline-block" }} />
@@ -879,14 +888,14 @@ function RecoveryBreakdownCard({ rows, summary, loading, barReady }: {
                     <div
                       className="h-full rounded-full"
                       style={{
-                        width: barReady && !loading ? `${Math.min((r.due_now / scale) * 100, 100)}%` : "0%",
-                        background: DUE_COLOUR,
+                        width: barReady && !loading ? `${Math.min((r.arrears_and_penal / scale) * 100, 100)}%` : "0%",
+                        background: ARREARS_COLOUR,
                         transition: `width 900ms ${di * 80}ms ${EASE}`,
                       }}
                     />
                   </div>
                   <span className="text-xs font-bold tabular-nums w-16 text-right" style={{ color: "#1C1C1F" }}>
-                    {money(r.due_now)}
+                    {money(r.arrears_and_penal)}
                   </span>
                 </div>
 
@@ -912,8 +921,8 @@ function RecoveryBreakdownCard({ rows, summary, loading, barReady }: {
 
           <div className="mt-4 pt-3 text-xs" style={{ borderTop: "1px dashed #EAEBEF", color: "#6B6D76" }}>
             <p className="mb-1">
-              <span className="font-bold" style={{ color: "#1C1C1F" }}>{money(summary?.due_now ?? dueTotal)}</span>
-              {" "}due now across the open book — arrears plus penal charges, demandable today.
+              <span className="font-bold" style={{ color: "#1C1C1F" }}>{money(summary?.arrears_and_penal ?? arrearsTotal)}</span>
+              {" "}in arrears across the open book — instalments already missed, plus penalties.
             </p>
             <p className="mb-0">
               <span className="font-semibold">{money(estTotal)}</span>
