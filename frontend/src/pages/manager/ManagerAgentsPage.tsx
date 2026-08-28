@@ -33,6 +33,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { Search, MapPin, AlertTriangle, Phone, ChevronDown, ChevronUp, ChevronsUpDown, Brain, Shuffle, X, Loader2, TrendingUp, TrendingDown, Minus, IndianRupee } from "lucide-react";
 import { toast } from "react-hot-toast";
+import { shortAmount, shortMoney } from "@/lib/money";
 import { AiBadge } from "@/components/ui/AiBadge";
 import { getAgents, getAgentInsight, getReallocationPlan, updateAgentStatus, acknowledgeAgentSos } from "@/api/manager";
 import type { AgentInsight, ReallocationPlan } from "@/api/manager";
@@ -1164,7 +1165,7 @@ function AgentInsightStrip({ insight }: { insight: AgentInsight }) {
                 color: yieldDelta >= 0 ? "#16a34a" : "#dc2626",
               }}
             >
-              ₹{(insight.current_month.per_visit_yield / 1000).toFixed(0)}K/visit ({yieldDelta >= 0 ? "+" : ""}₹{Math.abs(yieldDelta / 1000).toFixed(0)}K vs team)
+              {shortMoney(insight.current_month.per_visit_yield)}/visit ({yieldDelta >= 0 ? "+" : ""}{shortMoney(Math.abs(yieldDelta))} vs team)
             </span>
           );
         })()}
@@ -1258,7 +1259,7 @@ function ReallocationModal({ plan, onClose }: { plan: ReallocationPlan; onClose:
                     <span className="text-xs" style={{ color: "#6B6D76" }}>{r.case_number}</span>
                   </div>
                   <div className="flex items-center gap-3 mt-1 text-xs" style={{ color: "#6B6D76" }}>
-                    <span className="flex items-center gap-0.5"><IndianRupee className="w-3 h-3" />{(r.target_amount / 1000).toFixed(0)}K target</span>
+                    <span className="flex items-center gap-0.5"><IndianRupee className="w-3 h-3" />{shortAmount(r.target_amount)} target</span>
                     <span>{r.priority} priority</span>
                     <span>DPD {r.dpd}</span>
                   </div>
@@ -1280,7 +1281,7 @@ function ReallocationModal({ plan, onClose }: { plan: ReallocationPlan; onClose:
               {plan.unallocatable_cases.map((u) => (
                 <div key={u.case_number} className="flex flex-wrap justify-between gap-x-3 text-xs py-1" style={{ color: "#6B6D76" }}>
                   <span className="min-w-0">{u.customer_name} · {u.case_number}</span>
-                  <span className="flex-shrink-0">₹{(u.target_amount / 1000).toFixed(0)}K · {u.reason}</span>
+                  <span className="flex-shrink-0">{shortMoney(u.target_amount)} · {u.reason}</span>
                 </div>
               ))}
             </div>

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
+import { shortMoney } from "@/lib/money";
 import { ArrowLeft, Navigation, CheckCircle, MapPin, ChevronRight, Zap, Route, RefreshCw } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { reoptimizeBeat } from "@/api/agent";
@@ -167,7 +168,7 @@ export default function BeatMapPage() {
             </div>
             <div className="text-right">
               <p className="text-xs text-slate-400">Total target</p>
-              <p className="font-bold text-slate-700">₹{(beat.total_target_amount / 1000).toFixed(0)}K</p>
+              <p className="font-bold text-slate-700">{shortMoney(beat.total_target_amount)}</p>
             </div>
           </div>
         </div>
@@ -291,7 +292,7 @@ export default function BeatMapPage() {
                     </div>
 
                     <div className="flex-shrink-0 text-right">
-                      <p className="text-xs font-semibold text-danger-600">₹{(c.target_amount / 1000).toFixed(0)}K</p>
+                      <p className="text-xs font-semibold text-danger-600">{shortMoney(c.target_amount)}</p>
                       <CaseStatusBadge status={c.status} />
                     </div>
                   </div>

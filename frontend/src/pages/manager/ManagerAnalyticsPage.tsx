@@ -9,6 +9,7 @@ import { useEffect, useState } from "react";
 import { useIsBelowLg, useMediaQuery } from "@/hooks/useMediaQuery";
 import { TrendingUp, BarChart2, IndianRupee, Users, Calendar, X, Brain, Loader2 } from "lucide-react";
 import { toast } from "react-hot-toast";
+import { shortAmount, shortMoney } from "@/lib/money";
 import {
   AreaChart, Area, LineChart as RLineChart, Line,
   XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
@@ -57,10 +58,10 @@ const TOOLTIP_STYLE = {
 };
 const TICK_STYLE = { fontSize: 10, fill: "#94a3b8", fontWeight: 500 };
 
+// Axis ticks. Delegates to lib/money so the tick and the tooltip beside it
+// cannot disagree about the unit.
 function yFmt(v: number) {
-  if (v >= 100000) return `${(v / 100000).toFixed(1)}L`;
-  if (v >= 1000)   return `${(v / 1000).toFixed(0)}K`;
-  return String(v);
+  return shortAmount(v);
 }
 
 // ── Dual-line chart for agent spotlight (collected + target) ──────────────────
@@ -282,7 +283,7 @@ function AgentSpotlight({ entry, months, color, animate, onClose, selMonth, onMo
       <div className="flex items-center gap-2 mb-3 flex-wrap">
         {([
           { label: "rate",      value: `${rate.toFixed(0)}%`,   colorVal: rc,               delta: rateDelta    },
-          { label: "collected", value: collected >= 100000 ? `₹${(collected/100000).toFixed(1)}L` : `₹${(collected/1000).toFixed(0)}K`, colorVal: "#1C1C1F", delta: collectDelta },
+          { label: "collected", value: shortMoney(collected), colorVal: "#1C1C1F", delta: collectDelta },
           { label: "visits",    value: String(visits),           colorVal: "#1C1C1F",        delta: visitsDelta  },
           { label: "PTP conv.", value: `${ptpRate}%`,            colorVal: rateCol(ptpRate), delta: ptpDelta     },
         ] as { label: string; value: string; colorVal: string; delta: number | null }[]).map(({ label, value, colorVal, delta }) => (
@@ -828,7 +829,7 @@ function RecoveryBreakdownCard({ rows, summary, loading, barReady }: {
     ...rows.map((r) => Math.max(r.arrears_and_penal || 0, r.expected_recoverable_amount || 0)),
   );
   const money = (n: number) =>
-    n >= 1e7 ? `₹${(n / 1e7).toFixed(2)}Cr` : `₹${(n / 1e5).toFixed(1)}L`;
+    shortMoney(n);
 
   const arrearsTotal = rows.reduce((a, r) => a + (r.arrears_and_penal || 0), 0);
   const estTotal = rows.reduce((a, r) => a + (r.expected_recoverable_amount || 0), 0);

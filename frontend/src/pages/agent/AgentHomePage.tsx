@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
+import { shortMoney } from "@/lib/money";
 import type { NavigateFunction } from "react-router";
 import { Briefcase, CheckCircle, IndianRupee, Calendar, MapPin, Clock, Camera, X } from "lucide-react";
 import { toast } from "react-hot-toast";
@@ -227,7 +228,7 @@ function StatGrid({ beat, navigate }: { beat: BeatData; navigate: NavigateFuncti
     <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
       <StatCard label="Pending" value={animatedPending} subtext={`of ${totalCases} cases`} icon={<Briefcase className="w-5 h-5" />} colorClass="text-brand-600" onClick={() => navigate("/agent/cases")} />
       <StatCard label="Done" value={animatedDone} subtext="visits today" icon={<CheckCircle className="w-5 h-5" />} colorClass="text-success-600" onClick={() => navigate("/agent/cases?filter=visited_today")} />
-      <StatCard label="Collected" value={`₹${(collected / 1000).toFixed(0)}K`} subtext="today" icon={<IndianRupee className="w-5 h-5" />} colorClass="text-success-600" onClick={() => navigate("/agent/cases?filter=collected")} />
+      <StatCard label="Collected" value={shortMoney(collected)} subtext="today" icon={<IndianRupee className="w-5 h-5" />} colorClass="text-success-600" onClick={() => navigate("/agent/cases?filter=collected")} />
       <StatCard label="PTPs Due" value={animatedPtpsDue} subtext="today" icon={<Calendar className="w-5 h-5" />} colorClass={ptpsDue > 0 ? "text-warning-600" : "text-slate-400"} onClick={() => navigate("/agent/cases?filter=ptp_due")} />
     </div>
   );
@@ -263,7 +264,7 @@ function CollectionProgressBar({ collected, totalTarget, pct }: { collected: num
       </div>
       <div className="flex justify-between text-xs text-slate-400 mt-1.5">
         <span>₹{(collected / 1000).toFixed(1)}K collected</span>
-        <span>Target ₹{(totalTarget / 1000).toFixed(0)}K</span>
+        <span>Target {shortMoney(totalTarget)}</span>
       </div>
     </div>
   );

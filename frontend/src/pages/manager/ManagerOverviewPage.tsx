@@ -20,6 +20,7 @@ import { getDashboard, getAgents, getBriefing, getUnallocatedCases } from "@/api
 import type { BriefingData, UnallocatedReport } from "@/api/manager";
 import { StatCard } from "@/components/ui/Card";
 import { TierBadge } from "@/components/ui/Badge";
+import { exactRupees, shortMoney } from "@/lib/money";
 import type { DashboardSummary, Agent } from "@/types";
 
 const EASE = "cubic-bezier(0.16,1,0.3,1)";
@@ -417,15 +418,17 @@ export default function ManagerOverviewPage() {
 
 // ── Today's Collections helpers ────────────────────────────────────────────
 
-// Indian digit grouping (1,23,45,678) — the exact-rupee half of the toggle.
-const rupees = (n: number) => `₹${Math.round(n).toLocaleString("en-IN")}`;
-const bigMoney = (n: number, exact: boolean) => (exact ? rupees(n) : `₹${(n / 100000).toFixed(1)}L`);
+// The exact-rupee half of the toggle. Indian digit grouping (1,23,45,678),
+// which is itself lakh notation.
+const rupees = exactRupees;
 
-// Tile figures span two orders of magnitude (per-case is tens of thousands,
-// per-agent is lakhs), so the unit scales with the value rather than being
-// fixed at K — ₹414K is really ₹4.1L, and the rest of the card speaks lakhs.
-const tileMoney = (n: number, exact: boolean) =>
-  exact ? rupees(n) : n >= 100000 ? `₹${(n / 100000).toFixed(1)}L` : `₹${Math.round(n / 1000)}K`;
+// Both halves of the toggle now scale the unit with the value, via lib/money.
+// bigMoney used to force L on everything, so ₹8,400 read "₹0.1L"; the tile
+// figure below it carried its own copy of the scaling rule. That copy's comment
+// — "₹414K is really ₹4.1L, and the rest of the card speaks lakhs" — is the
+// reasoning the shared helper now applies app-wide.
+const bigMoney = (n: number, exact: boolean) => (exact ? rupees(n) : shortMoney(n));
+const tileMoney = (n: number, exact: boolean) => (exact ? rupees(n) : shortMoney(n));
 
 const paceVerdict = (pct: number) => (pct >= 75 ? "on track" : pct >= 40 ? "behind" : "well behind");
 
@@ -560,7 +563,7 @@ function AgentRow({ agent, rank, animated, delay, filterDate }: { agent: Agent; 
     animation: `enter 380ms cubic-bezier(0.16,1,0.3,1) ${delay}ms both`,
   } as CSSProperties;
 
-  const money = (n: number) => `₹${(n / 1000).toFixed(0)}K`;
+  const money = shortMoney;
 
   return (
     // flex-wrap, so on a phone the figures drop to a second line instead of
