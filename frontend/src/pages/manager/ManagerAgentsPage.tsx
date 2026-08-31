@@ -1260,7 +1260,6 @@ function ReallocationModal({ plan, onClose }: { plan: ReallocationPlan; onClose:
                   </div>
                   <div className="flex items-center gap-3 mt-1 text-xs" style={{ color: "#6B6D76" }}>
                     <span className="flex items-center gap-0.5"><IndianRupee className="w-3 h-3" />{shortAmount(r.target_amount)} target</span>
-                    <span>{r.priority} priority</span>
                     <span>DPD {r.dpd}</span>
                   </div>
                 </div>

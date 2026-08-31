@@ -43,19 +43,21 @@ import { useVoiceCall } from "@/hooks/useVoiceCall";
 import CallModal from "@/components/ui/CallModal";
 import { useBeat } from "@/contexts/BeatContext";
 import { useModalA11y } from "@/hooks/useModalA11y";
-import { DPDBadge, PriorityBadge, CaseStatusBadge } from "@/components/ui/Badge";
+import { DPDBadge, VisitPriorityBadge, CaseStatusBadge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import OtpInput from "@/components/ui/OtpInput";
 import { haversineM } from "@/lib/geo";
+import type { VisitPriority } from "@/types";
 
 interface CaseDetail {
   // Repayment likelihood, computed live per case by case_service.
   // Optional: the block degrades to null rather than failing the page.
   repayment?: RepaymentScoreData | null;
-  id: string; case_number: string; status: string; priority: string;
+  id: string; case_number: string; status: string;
   target_amount: number; collected_amount: number; visit_count: number;
   max_visits_allowed: number; is_escalated: boolean; allocation_date: string | null;
   handover_notes: string | null; collection_stage: string | null;
+  visit_priority?: VisitPriority | null;
   customer: {
     id: string; full_name: string; phone_primary: string; phone_alternate: string | null;
     address_line1: string | null; address_line2: string | null;
@@ -416,7 +418,7 @@ export default function AgentCaseDetailPage() {
                 <div className="min-w-0 flex-1 space-y-2.5">
                   <div className="flex flex-wrap gap-2 items-center">
                     <DPDBadge bucket={c.loan.dpd_bucket as any} />
-                    <PriorityBadge priority={c.priority as any} />
+                    <VisitPriorityBadge priority={c.visit_priority} />
                     <span className="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded-full">{c.loan.dpd} DPD</span>
                     <span className="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded-full">{c.loan.loan_type}</span>
                     <span className="text-xs bg-purple-50 text-purple-700 border border-purple-100 px-2 py-1 rounded-full font-medium">

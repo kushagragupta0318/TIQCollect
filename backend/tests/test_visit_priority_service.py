@@ -213,9 +213,8 @@ def test_only_the_newest_snapshot_per_loan_is_used(db):
     assert result["rate_as_of"] == TODAY.isoformat()
 
 
-def test_a_promise_due_soon_is_picked_up_and_a_distant_one_is_not(db):
-    """The PTP query is bounded to the protection window; a promise outside it
-    must not reach the scorer, or the exemption would apply to most of the book."""
+def test_an_imminent_ptp_is_scored_with_amount_and_a_distant_one_is_not(db):
+    """Only today/tomorrow PTPs receive a follow-up lift, never a penalty waiver."""
     _build(db, ptp_idx={0})
     db.add(PTP(id="pfar", case_id="c2", agent_id="ag0", committed_amount=1.0,
                committed_date=TODAY + timedelta(days=40),
@@ -227,8 +226,11 @@ def test_a_promise_due_soon_is_picked_up_and_a_distant_one_is_not(db):
     def effort(cid):
         return next(c for c in scored[cid]["components"] if c["code"] == "EFFORT")
 
-    assert effort("c0")["evidence"]["penalty_waived"] is True
+    assert effort("c0")["evidence"]["penalty_waived"] is False
+    assert effort("c0")["evidence"]["ptp_committed_amount"] == 10_000.0
+    assert effort("c0")["evidence"]["ptp_follow_up_points"] > 0
     assert effort("c2")["evidence"]["penalty_waived"] is False
+    assert "ptp_follow_up_points" not in effort("c2")["evidence"]
 
 
 # ── The allocator queue ─────────────────────────────────────────────────────

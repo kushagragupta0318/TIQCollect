@@ -24,7 +24,7 @@ import { toast } from "react-hot-toast";
 import { getCases, getCaseDetail, getCasesDateRange } from "@/api/manager";
 import type { ManagerCaseDetail, VisitRecord, VisitPriority } from "@/api/manager";
 import { Input } from "@/components/ui/Input";
-import { DPDBadge, PriorityBadge, CaseStatusBadge, RecoveryBadge } from "@/components/ui/Badge";
+import { DPDBadge, VisitPriorityBadge, CaseStatusBadge, RecoveryBadge } from "@/components/ui/Badge";
 import { lakhWords } from "@/lib/money";
 
 /**
@@ -48,7 +48,7 @@ const TABLE_COLS = [
   "minmax(0,1.8fr)",   // Customer
   "minmax(0,0.8fr)",   // Location — city names are short
   "minmax(0,0.9fr)",   // DPD
-  "minmax(0,0.85fr)",  // Priority
+  "minmax(0,1.25fr)",  // Visit priority — fits the fully named badge
   "minmax(0,0.85fr)",  // Outlook
   "minmax(0,0.9fr)",   // Status
   "minmax(0,1.15fr)",  // Target / Collected
@@ -766,7 +766,7 @@ function CaseRow({ c, onOpen }: { c: Case; onOpen: () => void }) {
             than as two measures. The band still drives the Sort and Priority
             filters above the table, and is shown with its three components in
             the case detail panel, where there is room to say what it means. */}
-        <div className="min-w-0"><PriorityBadge priority={c.priority} /></div>
+        <div className="min-w-0"><VisitPriorityBadge priority={c.visit_priority} /></div>
         {/* Outlook only. "Due now" (arrears + penal) was removed on 2026-08-27:
             sitting one column from "Target / Collected" it was the largest
             number on the row, so it read as the amount to collect. The two
@@ -809,7 +809,7 @@ function CaseRow({ c, onOpen }: { c: Case; onOpen: () => void }) {
             arrears + penal is not that. Target and collected follow below. */}
         <div className="flex flex-wrap items-center gap-1.5 mt-2">
           <DPDBadge bucket={c.loan.dpd_bucket} />
-          <PriorityBadge priority={c.priority} />
+          <VisitPriorityBadge priority={c.visit_priority} />
           <RecoveryBadge potential={c.recovery?.recovery_potential} />
           <CaseStatusBadge status={c.status} />
         </div>
@@ -962,15 +962,15 @@ export default function ManagerCasesPage() {
         // drop out of the priority view, so the row count changes and a
         // manager who did not read this would think cases had vanished.
         label: prioritySort === "priority_desc"
-          ? "Priority high → low (open cases only)"
-          : "Priority low → high (open cases only)",
+          ? "Visit priority high → low (open cases only)"
+          : "Visit priority low → high (open cases only)",
         clear: () => setPrioritySort("OFF"),
       });
     }
     if (priorityBand !== "ALL") {
       out.push({
         key: "priorityBand",
-        label: `Priority ${priorityBand}`,
+        label: `Visit priority ${priorityBand}`,
         clear: () => setPriorityBand("ALL"),
       });
     }
@@ -1113,16 +1113,16 @@ export default function ManagerCasesPage() {
                     onChange={(e) => setPrioritySort(e.target.value)}
                     aria-label="Sort by visit priority">
               <option value="OFF">Sort: Latest first</option>
-              <option value="priority_desc">Sort: Priority high → low</option>
-              <option value="priority_asc">Sort: Priority low → high</option>
+              <option value="priority_desc">Sort: Visit priority high → low</option>
+              <option value="priority_asc">Sort: Visit priority low → high</option>
             </select>
             <select className="input w-full lg:w-auto tap-target-h" value={priorityBand}
                     onChange={(e) => setPriorityBand(e.target.value)}
                     aria-label="Filter by visit priority band">
-              <option value="ALL">All Priority</option>
-              <option value="HIGH">Priority HIGH</option>
-              <option value="MEDIUM">Priority MEDIUM</option>
-              <option value="LOW">Priority LOW</option>
+              <option value="ALL">All visit priorities</option>
+              <option value="HIGH">Visit priority HIGH</option>
+              <option value="MEDIUM">Visit priority MEDIUM</option>
+              <option value="LOW">Visit priority LOW</option>
             </select>
             <select className="input w-full lg:w-auto tap-target-h" value={bucketFilter} onChange={(e) => setBucketFilter(e.target.value)} aria-label="Filter by DPD bucket">
               <option value="ALL">All Buckets</option>
@@ -1153,7 +1153,7 @@ export default function ManagerCasesPage() {
             <span>Customer</span>
             <span>Location</span>
             <span>DPD</span>
-            <span>Priority</span>
+            <span>Visit priority</span>
             <span>Outlook</span>
             <span>Status</span>
             <span>Target / Collected</span>

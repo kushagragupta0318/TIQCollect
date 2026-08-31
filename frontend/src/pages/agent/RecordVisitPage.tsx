@@ -567,7 +567,10 @@ export default function RecordVisitPage() {
   const loan = caseData?.loan;
   const totalOutstanding = loan?.total_outstanding ?? 0;
   const targetAmount = caseData?.target_amount ?? 0;
-  const remainingAfterPayment = Math.max(0, totalOutstanding - (Number(form.amount) || 0));
+  const collectedAmount = caseData?.collected_amount ?? 0;
+  const remainingTargetAmount = Math.max(0, targetAmount - collectedAmount);
+  const amountNum = Number(form.amount) || 0;
+  const remainingAfterPayment = Math.max(0, remainingTargetAmount - amountNum);
 
   const distanceM = (form.gpsLat && form.gpsLon && customer)
     ? Math.round(haversineM(form.gpsLat, form.gpsLon, customer.latitude, customer.longitude))
@@ -599,12 +602,11 @@ export default function RecordVisitPage() {
     ?? NOT_MET_OUTCOMES.find((o) => o.value === form.outcome);
 
   // Payment amount validation
-  const amountNum = Number(form.amount) || 0;
-  const amountExceedsTarget = amountNum > targetAmount && targetAmount > 0;
+  const amountExceedsRemainingTarget = amountNum > remainingTargetAmount;
 
   const paymentValid =
     !sel?.needsPayment ||
-    (amountNum > 0 && !amountExceedsTarget &&
+    (amountNum > 0 && !amountExceedsRemainingTarget &&
       (form.paymentMode !== "CASH" || form.cashCounted) &&
       // UPI needs a transaction ref — unless the QR demo has already shown
       // "Payment received", in which case the payment is treated as confirmed.
@@ -751,7 +753,7 @@ export default function RecordVisitPage() {
   // and reopening the QR always shows "Waiting…" again first. (qrPaidDemo is
   // intentionally NOT a dependency, so the flip-to-paid doesn't restart it.)
   useEffect(() => {
-    if (form.paymentMode !== "UPI" || !showQR || amountNum <= 0 || amountExceedsTarget) {
+    if (form.paymentMode !== "UPI" || !showQR || amountNum <= 0 || amountExceedsRemainingTarget) {
       setQrPaidDemo(false);
       return;
     }
@@ -762,7 +764,7 @@ export default function RecordVisitPage() {
       toast.success(`Payment received · ₹${amountNum.toLocaleString("en-IN")}`, { icon: "✅" });
     }, QR_DEMO_DELAY_MS);
     return () => clearTimeout(t);
-  }, [form.paymentMode, showQR, amountNum, amountExceedsTarget]);
+  }, [form.paymentMode, showQR, amountNum, amountExceedsRemainingTarget]);
 
   async function handleSendOtp() {
     if (!caseId || amountNum <= 0) return;
@@ -1470,7 +1472,7 @@ export default function RecordVisitPage() {
               {sel?.needsPayment && (
                 <Section title="Accept Payment" required badge="Required">
                   <Input
-                    label={`Amount Collected (₹) — Max ₹${targetAmount.toLocaleString("en-IN")}`}
+                    label={`Amount Collected (₹) — Max ₹${remainingTargetAmount.toLocaleString("en-IN")}`}
                     type="number"
                     placeholder="Enter exact amount received"
                     value={form.amount}
@@ -1484,8 +1486,13 @@ export default function RecordVisitPage() {
                       <Lock className="w-3 h-3 flex-shrink-0" /> Amount locked to the figure the borrower is confirming — it cannot be changed
                     </p>
                   )}
-                  {amountExceedsTarget && (
-                    <p className="text-xs text-danger-600 mt-1.5 font-medium">Amount cannot exceed the target amount (₹{targetAmount.toLocaleString("en-IN")})</p>
+                  {collectedAmount > 0 && (
+                    <p className="text-xs text-slate-500 mt-1.5">
+                      ₹{collectedAmount.toLocaleString("en-IN")} already collected. Remaining target: ₹{remainingTargetAmount.toLocaleString("en-IN")}
+                    </p>
+                  )}
+                  {amountExceedsRemainingTarget && (
+                    <p className="text-xs text-danger-600 mt-1.5 font-medium">Amount cannot exceed the remaining target amount (₹{remainingTargetAmount.toLocaleString("en-IN")})</p>
                   )}
 
                   {/* ── Step 1 · Borrower OTP — MUST pass before the payment channel appears (2026-07-30) ── */}
@@ -1510,7 +1517,7 @@ export default function RecordVisitPage() {
                           {!form.signatureUrl && <p className="text-xs text-danger-600 font-medium">• Signature required to submit an unverified payment</p>}
                           <button onClick={() => setOfflineAck(false)} className="text-xs text-brand-600 font-medium">← Use OTP instead</button>
                         </div>
-                      ) : amountNum <= 0 || amountExceedsTarget ? (
+                      ) : amountNum <= 0 || amountExceedsRemainingTarget ? (
                         <p className="text-xs text-slate-400">Enter a valid amount above, then send the borrower an OTP to unlock the payment options.</p>
                       ) : !otp ? (
                         <div className="space-y-3">
@@ -1580,8 +1587,8 @@ export default function RecordVisitPage() {
                       <div className="rounded-xl border border-brand-100 bg-brand-50 overflow-hidden">
                         <button
                           onClick={() => {
-                            if (amountExceedsTarget) {
-                              toast.error(`Amount cannot exceed the target amount (₹${targetAmount.toLocaleString("en-IN")})`);
+                            if (amountExceedsRemainingTarget) {
+                              toast.error(`Amount cannot exceed the remaining target amount (₹${remainingTargetAmount.toLocaleString("en-IN")})`);
                               setShowQR(false);
                               return;
                             }
@@ -1592,12 +1599,12 @@ export default function RecordVisitPage() {
                           <div className="flex items-center gap-2"><QrCode className="w-4 h-4" /> Show QR for Customer</div>
                           <span className="text-xs font-normal text-brand-400">{showQR ? "Hide" : "Show"}</span>
                         </button>
-                        {amountExceedsTarget && (
+                        {amountExceedsRemainingTarget && (
                           <div className="px-4 pb-4">
-                            <p className="text-xs text-danger-600 font-medium">Amount cannot exceed the target amount (₹{targetAmount.toLocaleString("en-IN")}) — QR unavailable</p>
+                            <p className="text-xs text-danger-600 font-medium">Amount cannot exceed the remaining target amount (₹{remainingTargetAmount.toLocaleString("en-IN")}) — QR unavailable</p>
                           </div>
                         )}
-                        {showQR && !amountExceedsTarget && form.amount && Number(form.amount) > 0 && (
+                        {showQR && !amountExceedsRemainingTarget && form.amount && Number(form.amount) > 0 && (
                           <div className="px-4 pb-4">
                             {qrPaidDemo ? (
                               // Payment received (auto-revealed a few seconds after the QR is shown).
@@ -1933,7 +1940,7 @@ export default function RecordVisitPage() {
               {form.meetingType === "THIRD_PARTY" && !form.outcome && <p>• Select outcome</p>}
               {form.meetingType === "NOT_MET" && !form.outcome && <p>• Select outcome</p>}
               {sel?.needsPayment && (!form.amount || amountNum <= 0) && <p>• Enter payment amount</p>}
-              {sel?.needsPayment && amountExceedsTarget && <p>• Payment amount exceeds target amount (max ₹{targetAmount.toLocaleString("en-IN")})</p>}
+              {sel?.needsPayment && amountExceedsRemainingTarget && <p>• Payment amount exceeds remaining target amount (max ₹{remainingTargetAmount.toLocaleString("en-IN")})</p>}
               {sel?.needsPayment && form.paymentMode === "CASH" && !form.cashCounted && <p>• Confirm cash counted</p>}
               {sel?.needsPayment && form.paymentMode === "UPI" && !form.upiRef && !qrPaidDemo && <p>• Enter UPI transaction ID (or show the QR and wait for "Payment received")</p>}
               {sel?.needsPayment && form.paymentMode === "CHEQUE" && (!form.chequeNumber || !form.chequeDate || !form.chequeBank) && <p>• Complete cheque details</p>}

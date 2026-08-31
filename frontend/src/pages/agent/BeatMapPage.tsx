@@ -4,7 +4,7 @@ import { shortMoney } from "@/lib/money";
 import { ArrowLeft, Navigation, CheckCircle, MapPin, ChevronRight, Zap, Route, RefreshCw } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { reoptimizeBeat } from "@/api/agent";
-import { DPDBadge, PriorityBadge, CaseStatusBadge } from "@/components/ui/Badge";
+import { DPDBadge, VisitPriorityBadge, CaseStatusBadge } from "@/components/ui/Badge";
 import { useBeat } from "@/contexts/BeatContext";
 import type { Case } from "@/types";
 import { useAnimatedValue } from "@/hooks/useAnimatedValue";
@@ -287,7 +287,7 @@ export default function BeatMapPage() {
                       <div className="flex items-center gap-2 mt-0.5">
                         <span className="text-xs text-slate-400">{c.customer.city}</span>
                         <DPDBadge bucket={c.loan.dpd_bucket} />
-                        <PriorityBadge priority={c.priority} />
+                        <VisitPriorityBadge priority={c.visit_priority} />
                       </div>
                     </div>
 

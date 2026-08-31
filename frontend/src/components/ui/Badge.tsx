@@ -1,5 +1,5 @@
 import { clsx } from "clsx";
-import type { DPDBucket, CasePriority, AgentTier, CaseStatus, RiskCategory, RecoveryPotential } from "@/types";
+import type { DPDBucket, AgentTier, CaseStatus, RiskCategory, RecoveryPotential, VisitPriority } from "@/types";
 
 interface BadgeProps {
   children: React.ReactNode;
@@ -32,9 +32,9 @@ export function DPDBadge({ bucket }: { bucket: DPDBucket }) {
  * is unknown, and a grey chip that reads as the worst band would quietly write
  * off money nobody has looked at.
  *
- * Deliberately NOT coloured on the same scale as PriorityBadge: there, HIGH is
- * bad and red. Here HIGH is good, so it is green. Sharing a palette across two
- * opposite meanings is how a manager ends up reading the wrong column.
+ * Deliberately not coloured on the same scale as visit priority: there, HIGH
+ * means work the case first; here HIGH means more money is likely to return.
+ * Sharing a palette across those opposite meanings would confuse managers.
  */
 export function RecoveryBadge({ potential, compact = false }: {
   potential: RecoveryPotential | null | undefined;
@@ -51,15 +51,17 @@ export function RecoveryBadge({ potential, compact = false }: {
   return <Badge variant={variant}>{compact ? short : label}</Badge>;
 }
 
-export function PriorityBadge({ priority }: { priority: CasePriority }) {
-  const map: Record<CasePriority, { label: string; variant: BadgeProps["variant"] }> = {
-    LOW: { label: "Low", variant: "green" },
-    MEDIUM: { label: "Medium", variant: "blue" },
-    HIGH: { label: "High", variant: "orange" },
-    CRITICAL: { label: "Critical", variant: "red" },
+export function VisitPriorityBadge({ priority }: {
+  priority: VisitPriority | null | undefined;
+}) {
+  if (!priority) return null;
+  const map: Record<VisitPriority["band"], { label: string; variant: BadgeProps["variant"] }> = {
+    HIGH: { label: "High", variant: "blue" },
+    MEDIUM: { label: "Medium", variant: "yellow" },
+    LOW: { label: "Low", variant: "gray" },
   };
-  const { label, variant } = map[priority];
-  return <Badge variant={variant}>{label}</Badge>;
+  const { label, variant } = map[priority.band];
+  return <Badge variant={variant}>{`Visit priority: ${label}`}</Badge>;
 }
 
 export function TierBadge({ tier }: { tier: AgentTier }) {

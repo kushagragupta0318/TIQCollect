@@ -506,7 +506,8 @@ class CaseService:
             return None
 
     def case_detail(self, agent: Agent, case_id: str) -> dict:
-        from app.api.v1.endpoints.agent import _format_case
+        from app.api.v1.endpoints.agent import _effective_day, _format_case
+        from app.services.visit_priority_service import score_cases
 
         case = (
             self.db.query(Case)
@@ -524,6 +525,13 @@ class CaseService:
             raise HTTPException(status_code=404, detail="Case not found or not assigned to you")
 
         base = _format_case(case)
+
+        # Keep the detail badge on the same live score and effective day as the
+        # agent's case list. Case.priority remains only for backwards-compatible
+        # storage; it is no longer decision-support data for the UI.
+        base["visit_priority"] = score_cases(
+            self.db, [case], today=_effective_day(agent.id, self.db)
+        ).get(case.id)
 
         # Repayment likelihood, computed live for this one loan rather than read
         # from the nightly snapshot. The snapshot is a point-in-time record for

@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { MapPin, Navigation, Phone, MessageCircle, ChevronRight, Search, Briefcase, Sparkles, RefreshCw, Loader2 } from "lucide-react";
-import { DPDBadge, PriorityBadge, CaseStatusBadge } from "@/components/ui/Badge";
+import { DPDBadge, VisitPriorityBadge, CaseStatusBadge } from "@/components/ui/Badge";
 import { Input } from "@/components/ui/Input";
 import { useBeat } from "@/contexts/BeatContext";
 import { getRankedCases, notifyVisit, type RankedCase } from "@/api/agent";
@@ -336,7 +336,6 @@ function CaseCard({ case_: c, rank, rankBadge, rankBadgeColor, rankReason, onNav
 
       <div className="flex flex-wrap gap-1.5 mb-2">
         <DPDBadge bucket={c.loan.dpd_bucket} />
-        <PriorityBadge priority={c.priority} />
         {(c.status !== "PTP_SET" || c.ptp_due_today) && (
           <CaseStatusBadge status={c.status} ptpDueToday={c.ptp_due_today} />
         )}
@@ -349,10 +348,7 @@ function CaseCard({ case_: c, rank, rankBadge, rankBadgeColor, rankReason, onNav
             is already the ordering on screen — two competing orderings on one
             card is how an agent stops trusting either. */}
         {rank === undefined && c.visit_priority && (
-          <span className="text-xs px-1.5 py-0.5 rounded-full border font-semibold bg-brand-50 text-brand-700 border-brand-200">
-            Priority {c.visit_priority.band === "HIGH" ? "high"
-                     : c.visit_priority.band === "MEDIUM" ? "med" : "low"}
-          </span>
+          <VisitPriorityBadge priority={c.visit_priority} />
         )}
       </div>
 

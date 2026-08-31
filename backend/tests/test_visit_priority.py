@@ -131,6 +131,7 @@ def test_the_npa_line_comes_from_the_shared_constant():
     at_line = _pts(score(features(dpd=90)), COMPONENT_URGENCY)
     past_line = _pts(score(features(dpd=91)), COMPONENT_URGENCY)
     assert at_line > past_line
+    assert at_line - past_line <= 1.0
 
 
 # ── Effort: subtracts, unless a promise is about to land ────────────────────
@@ -152,14 +153,25 @@ def test_exhausting_the_visit_allowance_counts_as_fully_worked():
                 COMPONENT_EFFORT) == MAX_EFFORT_PENALTY
 
 
-def test_a_promise_falling_due_overrides_the_effort_penalty():
-    """The one case where past effort genuinely predicts imminent money. Without
-    the exemption the score would deprioritise exactly the cases about to pay."""
+def test_an_imminent_meaningful_promise_lifts_but_does_not_erase_effort():
+    """A good PTP earns a follow-up, without pretending failed visits never happened."""
     worked = score(features(visit_count=3))
-    worked_with_promise = score(features(visit_count=3, ptp_due_in_days=1))
+    worked_with_promise = score(features(
+        visit_count=3, ptp_due_in_days=0, ptp_committed_amount=80_000.0,
+        remaining_target=100_000.0, ptp_resolved_count=2, ptp_kept_count=2,
+    ))
     assert _pts(worked, COMPONENT_EFFORT) == MAX_EFFORT_PENALTY
-    assert _pts(worked_with_promise, COMPONENT_EFFORT) > 0
+    assert _pts(worked_with_promise, COMPONENT_EFFORT) > _pts(worked, COMPONENT_EFFORT)
+    assert _pts(worked_with_promise, COMPONENT_EFFORT) < 0
     assert worked_with_promise["score"] > worked["score"]
+
+
+def test_a_broken_promise_history_reduces_the_follow_up_lift():
+    common = dict(ptp_due_in_days=0, ptp_committed_amount=80_000.0,
+                  remaining_target=100_000.0, ptp_resolved_count=2)
+    reliable = score(features(**common, ptp_kept_count=2))
+    unreliable = score(features(**common, ptp_kept_count=0))
+    assert _pts(reliable, COMPONENT_EFFORT) > _pts(unreliable, COMPONENT_EFFORT)
 
 
 def test_a_distant_promise_does_not_earn_the_exemption():
@@ -191,6 +203,14 @@ def test_an_unscored_loan_says_so_rather_than_claiming_a_low_balance():
     assert value["abstained"] is True
     assert "not yet estimated" in result["reason"].lower()
     assert "little or no" not in result["reason"].lower()
+
+
+def test_a_stale_recovery_estimate_is_discounted_and_flagged_for_rescore():
+    fresh = _component(score(features(recovery_rate_age_days=1)), COMPONENT_VALUE)
+    stale = _component(score(features(recovery_rate_age_days=8)), COMPONENT_VALUE)
+    assert stale["points"] < fresh["points"]
+    assert stale["evidence"]["needs_rescore"] is True
+    assert "needs rescore" in stale["summary"]
 
 
 def test_no_rupee_figure_escapes_on_the_payload():
@@ -331,14 +351,11 @@ def test_a_case_with_no_dpd_says_so_instead_of_guessing():
     assert urgency["points"] is not None       # still scored, still present
 
 
-def test_the_promise_countdown_reads_grammatically():
-    """"in 2 day" shipped because the plural tested the raw float while the
-    text printed the rounded one."""
-    assert "falls due today" in _component(
-        score(features(ptp_due_in_days=0)), COMPONENT_EFFORT)["summary"]
-    assert "in 1 day —" in _component(
-        score(features(ptp_due_in_days=1)), COMPONENT_EFFORT)["summary"]
-    assert "in 2 days" in _component(
-        score(features(ptp_due_in_days=1.5)), COMPONENT_EFFORT)["summary"]
-    assert "in 3 days" in _component(
-        score(features(ptp_due_in_days=3)), COMPONENT_EFFORT)["summary"]
+def test_only_today_and_tomorrow_promises_receive_a_follow_up_lift():
+    today = _component(score(features(ptp_due_in_days=0)), COMPONENT_EFFORT)
+    tomorrow = _component(score(features(ptp_due_in_days=1)), COMPONENT_EFFORT)
+    later = _component(score(features(ptp_due_in_days=2)), COMPONENT_EFFORT)
+    assert "PTP due today" in today["summary"]
+    assert "PTP due tomorrow" in tomorrow["summary"]
+    assert later["evidence"]["ptp_due_in_days"] == 2
+    assert "PTP due" not in later["summary"]

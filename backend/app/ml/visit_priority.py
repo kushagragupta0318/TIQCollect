@@ -57,7 +57,7 @@ from __future__ import annotations
 from app.ml.recovery_scorecard import expected_recoverable_amount
 from app.ml.repayment_scorecard import _DPD_NEUTRAL, _clamp, _f, _rupees
 
-SCORE_VERSION = "visit-priority-1.0.0"
+SCORE_VERSION = "visit-priority-1.1.0"
 
 # ── Component codes ─────────────────────────────────────────────────────────
 COMPONENT_VALUE = "RECOVERABLE_VALUE"
@@ -72,16 +72,24 @@ COMPONENT_ORDER = (COMPONENT_VALUE, COMPONENT_URGENCY, COMPONENT_EFFORT)
 # ── Weights ─────────────────────────────────────────────────────────────────
 # Value leads because it is the thing the current ordering lacks entirely, and
 # because the brief leads with it. Urgency is second, and deliberately smaller:
-# on its own it is what abandoned NPA last time. Effort only ever subtracts.
+# on its own it is what abandoned NPA last time. Effort normally subtracts;
+# a meaningful PTP due today or tomorrow can earn back a bounded amount.
 MAX_VALUE_POINTS = 50.0
 MAX_URGENCY_POINTS = 35.0
 MAX_EFFORT_PENALTY = -25.0
 
-# The best achievable total is 90, not 100. Left as 90 rather than rescaled: a
-# case that is large, about to tip into NPA and untouched still has no live
-# promise to its name, and pretending 100 is reachable would misrepresent the
-# ceiling.
-PTP_PROTECTION_BONUS = 5.0
+# A live promise can add at most 15 points to effort, making 100 reachable only
+# for a large, urgent case with a meaningful near-term promise.
+PTP_PROTECTION_BONUS = 15.0
+PTP_PROTECTION_DAYS = 1
+
+# Recovery estimates are normally refreshed nightly. Older estimates retain
+# some signal, but their value points are discounted instead of being trusted
+# as though last week's borrower behaviour were still current.
+RECOVERY_FRESH_DAYS = 2
+RECOVERY_STALE_DAYS = 7
+RECOVERY_STALE_FACTOR = 0.75
+RECOVERY_EXPIRED_FACTOR = 0.50
 
 # ── Value ladder ────────────────────────────────────────────────────────────
 # Thresholds roughly DOUBLE. The measured spread of expected_recoverable inside
@@ -101,7 +109,7 @@ _VALUE_LADDER = (
 _VALUE_FLOOR = 0.0
 
 # ── Urgency ladder ──────────────────────────────────────────────────────────
-# PEAKS AT 76-90 DPD AND FALLS PAST 90, on purpose.
+# PEAKS AT 76-90 DPD AND DECLINES SMOOTHLY PAST 90, on purpose.
 #
 # 90 days is the RBI line at which a loan is classified non-performing. The
 # fortnight before it is the last chance to prevent that classification, so it is
@@ -109,18 +117,9 @@ _VALUE_FLOOR = 0.0
 # behind us and the classification damage is done, so urgency genuinely falls.
 #
 # THIS DOES NOT ABANDON NPA. A large NPA case still outranks a small pre-NPA one
-# through the value component, which carries more weight than urgency. That is
-# the whole correction to the removed DPD policy, and
-# tests/test_visit_priority.py pins it.
-_URGENCY_LADDER = (
-    (180.0, 10.0),   # beyond here further ageing tells us little new
-    (120.0, 14.0),
-    (_DPD_NEUTRAL, 20.0),   # classified; worked on value, not on urgency
-    (75.0, 35.0),    # 76-90 — the peak, the last stretch before the line
-    (60.0, 31.0),
-    (45.0, 22.0),
-    (30.0, 12.0),
-)
+# through the value component, which carries more weight than urgency. The
+# post-NPA decline is continuous so crossing the line by one day cannot reshuffle
+# the day's queue by fifteen points.
 _URGENCY_FLOOR = 8.0        # under 30 DPD barely reaches field collections
 
 # ── Effort penalty ──────────────────────────────────────────────────────────
@@ -130,11 +129,9 @@ _URGENCY_FLOOR = 8.0        # under 30 DPD barely reaches field collections
 _EFFORT_PENALTIES = {0: 0.0, 1: -6.0, 2: -14.0}
 _EFFORT_EXHAUSTED = -25.0
 
-# A promise falling due is the one case where past effort genuinely predicts
-# imminent money, so it is exempted from the penalty entirely and given a small
-# push. Bounded deliberately: on the live book only 71 cases carry an active PTP
-# due inside three days, so the exemption cannot swamp the ranking.
-PTP_PROTECTION_DAYS = 3
+# An imminent PTP is a follow-up signal only when its amount is meaningful and
+# the customer's previous promise behaviour supports it. It adds to the effort
+# component; it never waives the penalty for prior visits.
 
 
 # ── Bands ───────────────────────────────────────────────────────────────────
@@ -168,6 +165,87 @@ def _ladder(value: float, ladder: tuple, floor: float) -> float:
         if value > edge:
             return points
     return floor
+
+
+def _recovery_freshness(age_days) -> tuple[float, str, bool]:
+    """(value factor, summary suffix, needs_rescore) for a snapshot's age."""
+    if age_days is None:
+        return 1.0, "", False
+    age = max(0.0, float(age_days))
+    if age <= RECOVERY_FRESH_DAYS:
+        return 1.0, "", False
+    if age <= RECOVERY_STALE_DAYS:
+        return (RECOVERY_STALE_FACTOR,
+                f"; estimate is {age:.0f} days old and discounted", True)
+    return (RECOVERY_EXPIRED_FACTOR,
+            f"; estimate is {age:.0f} days old and needs rescore", True)
+
+
+def _urgency_points(dpd: float) -> float:
+    """Urgency with a continuous decline after the 90-day NPA line."""
+    if dpd <= 30.0:
+        return _URGENCY_FLOOR
+    if dpd <= 45.0:
+        return 12.0
+    if dpd <= 60.0:
+        return 22.0
+    if dpd <= 75.0:
+        return 31.0
+    if dpd <= _DPD_NEUTRAL:
+        return MAX_URGENCY_POINTS
+    if dpd <= 120.0:
+        return round(MAX_URGENCY_POINTS - (dpd - _DPD_NEUTRAL) * 0.5, 1)
+    if dpd <= 180.0:
+        return round(20.0 - (dpd - 120.0) / 6.0, 1)
+    return 10.0
+
+
+def _effort_base(visits: int, allowed: int) -> tuple[float, str]:
+    exhausted = allowed > 0 and visits >= allowed
+    if visits >= 3 or exhausted:
+        summary = (f"{visits} visits already, against {allowed} allowed - "
+                   "further visits have returned little"
+                   if exhausted else
+                   f"{visits} visits already - further visits have returned little")
+        return _EFFORT_EXHAUSTED, summary
+    points = _EFFORT_PENALTIES.get(visits, _EFFORT_EXHAUSTED)
+    return points, ("Not visited yet" if visits == 0
+                    else f"{visits} visit{'s' if visits != 1 else ''} so far")
+
+
+def _ptp_follow_up(features, days: float) -> tuple[float, str, dict]:
+    """Bounded follow-up lift for a meaningful, imminent promise to pay."""
+    committed = max(0.0, float(_f(features, "ptp_committed_amount", 0.0) or 0.0))
+    remaining = max(1.0, float(_f(features, "remaining_target", 0.0) or 0.0))
+    resolved = max(0, int(_f(features, "ptp_resolved_count", 0) or 0))
+    kept = min(resolved, max(0, int(_f(features, "ptp_kept_count", 0) or 0)))
+    coverage = min(1.0, committed / remaining)
+
+    timing_points = 8.0 if days < 1.0 else 5.0
+    amount_points = 5.0 if coverage >= 0.75 else 3.0 if coverage >= 0.40 else 1.0
+    if not resolved:
+        reliability_points, history = 0.0, "no prior resolved promises"
+    else:
+        reliability = kept / resolved
+        if reliability >= 0.75:
+            reliability_points, history = 2.0, f"kept {kept}/{resolved} prior promises"
+        elif reliability >= 0.50:
+            reliability_points, history = 1.0, f"kept {kept}/{resolved} prior promises"
+        else:
+            reliability_points, history = -5.0, f"kept only {kept}/{resolved} prior promises"
+
+    points = min(PTP_PROTECTION_BONUS, timing_points + amount_points + reliability_points)
+    when = "today" if days < 1.0 else "tomorrow"
+    summary = f"PTP due {when}, covers {coverage:.0%} of the remaining target; {history}"
+    return points, summary, {
+        "ptp_due_in_days": days,
+        "ptp_committed_amount": round(committed, 2),
+        "remaining_target": round(remaining, 2),
+        "ptp_coverage": round(coverage, 4),
+        "ptp_resolved_count": resolved,
+        "ptp_kept_count": kept,
+        "ptp_follow_up_points": points,
+    }
 
 
 # ── Components ──────────────────────────────────────────────────────────────
@@ -204,15 +282,20 @@ def _value(features) -> dict:
     # a rate on TOTAL OUTSTANDING; multiplying it by arrears would be
     # arithmetically wrong and is grepped against in the manager test suite.
     amount = expected_recoverable_amount(rate_90, outstanding)
-    points = _ladder(amount, _VALUE_LADDER, _VALUE_FLOOR)
+    rate_age_days = _f(features, "recovery_rate_age_days")
+    freshness_factor, freshness_suffix, needs_rescore = _recovery_freshness(rate_age_days)
+    points = round(_ladder(amount, _VALUE_LADDER, _VALUE_FLOOR) * freshness_factor, 1)
     return {
         "code": COMPONENT_VALUE,
         "points": points,
         "abstained": False,
-        "summary": f"{_rupees(amount)} recoverable over 90 days",
+        "summary": f"{_rupees(amount)} recoverable over 90 days{freshness_suffix}",
         "evidence": {
             "rate_90": round(float(rate_90), 4),
             "total_outstanding": round(outstanding, 2),
+            "rate_age_days": rate_age_days,
+            "freshness_factor": freshness_factor,
+            "needs_rescore": needs_rescore,
         },
     }
 
@@ -232,7 +315,7 @@ def _urgency(features) -> dict:
             "evidence": {"dpd": None},
         }
     dpd = float(dpd)
-    points = _ladder(dpd, _URGENCY_LADDER, _URGENCY_FLOOR)
+    points = _urgency_points(dpd)
 
     if dpd > _DPD_NEUTRAL:
         summary = (f"{dpd:.0f} days late — past the {_DPD_NEUTRAL:.0f}-day NPA "
@@ -260,46 +343,35 @@ def _effort(features) -> dict:
     visits = int(_f(features, "visit_count", 0) or 0)
     allowed = int(_f(features, "max_visits_allowed", 0) or 0)
     ptp_due_in_days = _f(features, "ptp_due_in_days")
+    base_points, base_summary = _effort_base(visits, allowed)
 
     protected = (ptp_due_in_days is not None
                  and 0 <= float(ptp_due_in_days) <= PTP_PROTECTION_DAYS)
     if protected:
         days = float(ptp_due_in_days)
-        # Pluralise on the number actually PRINTED. 1.5 renders as "2" but
-        # 1.5 >= 2 is false, which used to print "in 2 day".
-        shown = round(days)
-        when = "today" if days < 1 else f"in {shown} day{'s' if shown != 1 else ''}"
+        ptp_points, ptp_summary, ptp_evidence = _ptp_follow_up(features, days)
         return {
             "code": COMPONENT_EFFORT,
-            "points": PTP_PROTECTION_BONUS,
+            "points": round(base_points + ptp_points, 1),
             "abstained": False,
-            "summary": (f"{visits} visit{'s' if visits != 1 else ''} so far, and a "
-                        f"promise falls due {when} — protected"),
-            "evidence": {"visit_count": visits,
-                         "max_visits_allowed": allowed,
-                         "ptp_due_in_days": days,
-                         "penalty_waived": True},
+            "summary": f"{base_summary}; {ptp_summary}",
+            "evidence": {
+                "visit_count": visits,
+                "max_visits_allowed": allowed,
+                "base_effort_points": base_points,
+                "penalty_waived": False,
+                **ptp_evidence,
+            },
         }
-
-    exhausted = allowed > 0 and visits >= allowed
-    if visits >= 3 or exhausted:
-        points = _EFFORT_EXHAUSTED
-        summary = (f"{visits} visits already, against {allowed} allowed — "
-                   f"further visits have returned little"
-                   if exhausted else
-                   f"{visits} visits already — further visits have returned little")
-    else:
-        points = _EFFORT_PENALTIES.get(visits, _EFFORT_EXHAUSTED)
-        summary = ("Not visited yet" if visits == 0
-                   else f"{visits} visit{'s' if visits != 1 else ''} so far")
     return {
         "code": COMPONENT_EFFORT,
-        "points": points,
+        "points": base_points,
         # Effort never abstains: "not visited yet" is a measurement, not a gap.
         "abstained": False,
-        "summary": summary,
+        "summary": base_summary,
         "evidence": {"visit_count": visits,
                      "max_visits_allowed": allowed,
+                     "base_effort_points": base_points,
                      "ptp_due_in_days": ptp_due_in_days,
                      "penalty_waived": False},
     }
@@ -354,7 +426,7 @@ def _reason(components: list[dict]) -> str:
     else:
         mid = "early-stage"
 
-    if effort["points"] > 0.0:
+    if effort.get("evidence", {}).get("ptp_follow_up_points") is not None:
         tail = "promise falling due"
     elif effort["points"] <= _EFFORT_EXHAUSTED:
         tail = "already visited repeatedly"

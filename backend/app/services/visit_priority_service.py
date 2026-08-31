@@ -44,6 +44,13 @@ if TYPE_CHECKING:
 # case_service, which withholds the repayment score on the same grounds.
 # Re-exported under the private name because manager.py imports it from here.
 _RESOLVED_STATUSES = RESOLVED_STATUSES
+_RESOLVED_PTP_STATUSES = frozenset({
+    PTPStatus.HONORED,
+    PTPStatus.BROKEN,
+    PTPStatus.PARTIALLY_HONORED,
+    PTPStatus.EXPIRED,
+})
+_KEPT_PTP_STATUSES = frozenset({PTPStatus.HONORED, PTPStatus.PARTIALLY_HONORED})
 
 
 def _latest_rate_by_loan(db: "Session", loan_ids: list[str]) -> dict[str, tuple]:
@@ -80,27 +87,44 @@ def _latest_rate_by_loan(db: "Session", loan_ids: list[str]) -> dict[str, tuple]
     return {r[0]: (r[1], r[2]) for r in rows}
 
 
-def _soonest_ptp_days(db: "Session", case_ids: list[str],
-                      today: date) -> dict[str, float]:
-    """Days until each case's soonest ACTIVE promise, for promises due soon.
-
-    One query. Necessary as a query at all because Case.ptps is lazy="noload"
-    (models/case.py:93) — walking case.ptps returns empty rather than loading,
-    so there is no cheaper path.
-    """
+def _ptp_context(db: "Session", case_ids: list[str], today: date) -> dict[str, dict]:
+    """Imminent active PTP plus prior PTP reliability, in one bounded query."""
     if not case_ids:
         return {}
     horizon = today + timedelta(days=PTP_PROTECTION_DAYS)
+    context = {
+        case_id: {
+            "ptp_due_in_days": None,
+            "ptp_committed_amount": 0.0,
+            "ptp_resolved_count": 0,
+            "ptp_kept_count": 0,
+        }
+        for case_id in case_ids
+    }
+    active_by_case: dict[str, tuple] = {}
     rows = (
-        db.query(PTP.case_id, func.min(PTP.committed_date))
-        .filter(PTP.case_id.in_(case_ids),
-                PTP.status == PTPStatus.ACTIVE,
-                PTP.committed_date >= today,
-                PTP.committed_date <= horizon)
-        .group_by(PTP.case_id)
+        db.query(PTP.case_id, PTP.committed_date, PTP.committed_amount, PTP.status)
+        .filter(PTP.case_id.in_(case_ids))
         .all()
     )
-    return {r[0]: float((r[1] - today).days) for r in rows if r[1] is not None}
+    for case_id, committed_date, committed_amount, status in rows:
+        entry = context[case_id]
+        if status in _RESOLVED_PTP_STATUSES:
+            entry["ptp_resolved_count"] += 1
+            if status in _KEPT_PTP_STATUSES:
+                entry["ptp_kept_count"] += 1
+        if status != PTPStatus.ACTIVE or not (today <= committed_date <= horizon):
+            continue
+        previous = active_by_case.get(case_id)
+        amount = float(committed_amount or 0.0)
+        if (previous is None or committed_date < previous[0]
+                or (committed_date == previous[0] and amount > previous[1])):
+            active_by_case[case_id] = (committed_date, amount)
+
+    for case_id, (committed_date, amount) in active_by_case.items():
+        context[case_id]["ptp_due_in_days"] = float((committed_date - today).days)
+        context[case_id]["ptp_committed_amount"] = amount
+    return context
 
 
 def score_cases(db: "Session", cases: Iterable["Case"], *,
@@ -132,7 +156,7 @@ def score_cases(db: "Session", cases: Iterable["Case"], *,
 
     loan_ids = [c.loan_id for c in cases if c.loan_id]
     rates = _latest_rate_by_loan(db, loan_ids)
-    ptp_days = _soonest_ptp_days(db, [c.id for c in cases], today)
+    ptps = _ptp_context(db, [c.id for c in cases], today)
 
     by_loan = dict(loans or {})
     missing = [lid for lid in loan_ids if lid not in by_loan]
@@ -147,13 +171,18 @@ def score_cases(db: "Session", cases: Iterable["Case"], *,
             continue
         loan = by_loan.get(case.loan_id) if case.loan_id else None
         rate_90, as_of = rates.get(case.loan_id, (None, None))
+        ptp = ptps.get(case.id, {})
+        rate_age_days = max(0, (today - as_of).days) if as_of else None
         result = _score_one({
             "recovery_rate_90": rate_90,
+            "recovery_rate_age_days": rate_age_days,
             "total_outstanding": getattr(loan, "total_outstanding", 0.0) or 0.0,
             "dpd": getattr(loan, "dpd", None),
             "visit_count": case.visit_count,
             "max_visits_allowed": case.max_visits_allowed,
-            "ptp_due_in_days": ptp_days.get(case.id),
+            "remaining_target": max(0.0, float(case.target_amount or 0.0)
+                                    - float(case.collected_amount or 0.0)),
+            **ptp,
         })
         # Stamped so a screen can say how fresh the recovery input was. The score
         # itself is computed now; the rate behind it is as old as the last
