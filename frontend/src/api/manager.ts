@@ -683,3 +683,73 @@ export async function reviewFraudAlert(
   });
   return data;
 }
+
+// ─── Smart Nightly Case Allocation & Beat Planning ───────────────────────────
+
+export interface AllocationBeatItem {
+  beat_id: string;
+  agent_id: string;
+  agent_name: string;
+  agent_code: string;
+  beat_number: string;
+  total_cases: number;
+  estimated_distance_km: number;
+  estimated_duration_minutes: number;
+  total_target_amount: number;
+  status: string;
+}
+
+export interface AllocationDecisionItem {
+  decision_id: string;
+  case_id: string;
+  case_number: string;
+  target_amount: number;
+  outcome: "ALLOCATED" | "DEFERRED" | "BLOCKED";
+  allocated_agent_id: string | null;
+  allocated_agent_name: string | null;
+  visit_priority_score: number;
+  fit_score: number;
+  reason: string;
+  score_breakdown: Record<string, unknown>;
+}
+
+export interface AllocationPlanReport {
+  has_plan: boolean;
+  run_id?: string;
+  plan_date?: string;
+  strategy?: string;
+  status?: string;
+  total_cases_evaluated?: number;
+  total_cases_allocated?: number;
+  total_cases_deferred?: number;
+  total_cases_blocked?: number;
+  total_agents_planned?: number;
+  expected_recovery_total?: number;
+  created_at?: string;
+  beats?: AllocationBeatItem[];
+  decisions?: AllocationDecisionItem[];
+  message?: string;
+}
+
+export async function getLatestAllocation(planDate?: string): Promise<AllocationPlanReport> {
+  const { data } = await api.get<AllocationPlanReport>("/manager/allocation/latest", {
+    params: planDate ? { plan_date: planDate } : {},
+  });
+  return data;
+}
+
+export async function triggerAllocationPlan(opts?: {
+  strategy?: "SMART" | "LEGACY";
+  plan_date?: string;
+  simulate?: boolean;
+  force_replan?: boolean;
+}) {
+  const { data } = await api.post("/manager/allocation/plan", opts ?? {});
+  return data;
+}
+
+export async function rollbackAllocationPlan(runId: string) {
+  const { data } = await api.post("/manager/allocation/rollback", { run_id: runId });
+  return data;
+}
+

@@ -1,4 +1,4 @@
-﻿// ─── CHANGELOG (prototype → product) ───────────────────────────────────────
+// ─── CHANGELOG (prototype → product) ───────────────────────────────────────
 // 2026-07-15 — SOS banner "Respond" button previously called toast.success()
 //   with no `toast` import in this file (a real bug — clicking it threw a
 //   ReferenceError, doing nothing) and claimed "emergency services notified"
@@ -15,9 +15,9 @@
 import { useCallback, useEffect, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { useNavigate } from "react-router";
-import { Users, Briefcase, IndianRupee, MapPin, Clock, AlertTriangle, Sparkles, RefreshCw, TrendingUp, TrendingDown, ShieldAlert } from "lucide-react";
-import { getDashboard, getAgents, getBriefing, getUnallocatedCases } from "@/api/manager";
-import type { BriefingData, UnallocatedReport } from "@/api/manager";
+import { Users, Briefcase, IndianRupee, MapPin, Clock, AlertTriangle, Sparkles, RefreshCw, TrendingUp, TrendingDown, ShieldAlert, Compass, Zap, RotateCcw } from "lucide-react";
+import { getDashboard, getAgents, getBriefing, getUnallocatedCases, getLatestAllocation, triggerAllocationPlan, rollbackAllocationPlan } from "@/api/manager";
+import type { BriefingData, UnallocatedReport, AllocationPlanReport, AllocationDecisionItem } from "@/api/manager";
 import { StatCard } from "@/components/ui/Card";
 import { TierBadge } from "@/components/ui/Badge";
 import { exactRupees, shortMoney } from "@/lib/money";
@@ -341,6 +341,9 @@ export default function ManagerOverviewPage() {
           </div>
         )}
       </div>
+
+      {/* Tomorrow's Field Allocation & Route Plan */}
+      <TomorrowAllocationCard />
 
       {/* AI Briefing + DPD Portfolio */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4" style={{ animation: `enter 420ms ${EASE} 360ms both` }}>
@@ -812,3 +815,294 @@ function WithheldCases() {
     </div>
   );
 }
+
+// ── Tomorrow's Field Work Plan & Smart Allocation Component ──────────────────
+
+function TomorrowAllocationCard() {
+  const [plan, setPlan] = useState<AllocationPlanReport | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [planning, setPlanning] = useState(false);
+  const [rollingBack, setRollingBack] = useState(false);
+  const [strategy, setStrategy] = useState<"SMART" | "LEGACY">("SMART");
+  const [showDecisions, setShowDecisions] = useState(false);
+  const [selectedDecision, setSelectedDecision] = useState<AllocationDecisionItem | null>(null);
+
+  const fetchPlan = useCallback(() => {
+    setLoading(true);
+    getLatestAllocation()
+      .then((data) => {
+        setPlan(data);
+        if (data.strategy === "LEGACY" || data.strategy === "SMART") {
+          setStrategy(data.strategy);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    fetchPlan();
+  }, [fetchPlan]);
+
+  const handleRunPlan = async (strat: "SMART" | "LEGACY") => {
+    setPlanning(true);
+    try {
+      await triggerAllocationPlan({ strategy: strat, force_replan: true });
+      fetchPlan();
+    } catch {
+      // ignore
+    } finally {
+      setPlanning(false);
+    }
+  };
+
+  const handleRollback = async () => {
+    if (!plan?.run_id) return;
+    setRollingBack(true);
+    try {
+      await rollbackAllocationPlan(plan.run_id);
+      fetchPlan();
+    } catch {
+      // ignore
+    } finally {
+      setRollingBack(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="card p-5 animate-pulse" style={{ height: 180, background: "#EFF0F4", border: "none" }} />
+    );
+  }
+
+  const isPlanned = plan?.has_plan && plan.status === "PLANNED";
+  const isRolledBack = plan?.has_plan && plan.status === "ROLLED_BACK";
+
+  return (
+    <div
+      className="card p-5 space-y-4"
+      style={{
+        border: "1px solid #E1E3E9",
+        background: "linear-gradient(180deg, #FFFFFF 0%, #F9FAFB 100%)",
+      }}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2.5">
+          <div
+            className="w-8 h-8 rounded-lg flex items-center justify-center"
+            style={{ background: "#EEF4FF", color: "#0C66E4" }}
+          >
+            <Compass className="w-4 h-4" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <h2 className="text-base font-bold text-slate-900">
+                Tomorrow's Field Beat Plan
+              </h2>
+              {plan?.plan_date && (
+                <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
+                  {plan.plan_date}
+                </span>
+              )}
+              {isPlanned && (
+                <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                  PLANNED
+                </span>
+              )}
+              {isRolledBack && (
+                <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+                  ROLLED BACK
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-slate-500">
+              Historical Competency Matching + OSRM & OR-Tools Route Optimizer
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Strategy Toggle */}
+          <div className="flex items-center bg-slate-100 p-0.5 rounded-lg text-xs font-semibold">
+            <button
+              onClick={() => { setStrategy("SMART"); handleRunPlan("SMART"); }}
+              disabled={planning}
+              className={`px-2.5 py-1 rounded-md transition-all ${
+                strategy === "SMART"
+                  ? "bg-white text-brand-600 shadow-sm"
+                  : "text-slate-500 hover:text-slate-800"
+              }`}
+            >
+              Smart ML
+            </button>
+            <button
+              onClick={() => { setStrategy("LEGACY"); handleRunPlan("LEGACY"); }}
+              disabled={planning}
+              className={`px-2.5 py-1 rounded-md transition-all ${
+                strategy === "LEGACY"
+                  ? "bg-white text-slate-800 shadow-sm"
+                  : "text-slate-500 hover:text-slate-800"
+              }`}
+            >
+              Legacy
+            </button>
+          </div>
+
+          <button
+            onClick={() => handleRunPlan(strategy)}
+            disabled={planning}
+            className="btn btn-primary text-xs flex items-center gap-1.5 px-3 py-1.5"
+          >
+            {planning ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+            <span>{isPlanned ? "Re-Plan & Sequence" : "Generate Plan"}</span>
+          </button>
+
+          {isPlanned && (
+            <button
+              onClick={handleRollback}
+              disabled={rollingBack}
+              title="Roll back tomorrow's planned beats"
+              className="btn btn-secondary text-xs flex items-center gap-1 px-2.5 py-1.5 text-slate-600 hover:text-rose-600"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Rollback</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {plan?.has_plan && (
+        <>
+          {/* Metric Tiles */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2">
+            <div className="p-3 bg-white rounded-xl border border-slate-200/80">
+              <span className="text-[11px] font-medium text-slate-500">Cases Assigned</span>
+              <p className="text-lg font-bold text-slate-900 mt-0.5">
+                {plan.total_cases_allocated ?? 0}
+                <span className="text-xs font-normal text-slate-400 ml-1">
+                  / {plan.total_cases_evaluated ?? 0} eval
+                </span>
+              </p>
+            </div>
+
+            <div className="p-3 bg-white rounded-xl border border-slate-200/80">
+              <span className="text-[11px] font-medium text-slate-500">Expected Recovery</span>
+              <p className="text-lg font-bold text-emerald-600 mt-0.5">
+                ₹{((plan.expected_recovery_total ?? 0) / 100000).toFixed(1)}L
+              </p>
+            </div>
+
+            <div className="p-3 bg-white rounded-xl border border-slate-200/80">
+              <span className="text-[11px] font-medium text-slate-500">Agents Planned</span>
+              <p className="text-lg font-bold text-slate-900 mt-0.5">
+                {plan.total_agents_planned ?? 0}
+                <span className="text-xs font-normal text-slate-400 ml-1">beats</span>
+              </p>
+            </div>
+
+            <div className="p-3 bg-white rounded-xl border border-slate-200/80">
+              <span className="text-[11px] font-medium text-slate-500">Compliance & Deferred</span>
+              <p className="text-lg font-bold text-slate-700 mt-0.5">
+                {plan.total_cases_blocked ?? 0}
+                <span className="text-xs font-normal text-amber-600 ml-1">
+                  blocked ({plan.total_cases_deferred ?? 0} cap)
+                </span>
+              </p>
+            </div>
+          </div>
+
+          {/* Planned Beats Pills */}
+          {plan.beats && plan.beats.length > 0 && (
+            <div className="space-y-2 pt-1">
+              <div className="flex items-center justify-between text-xs font-semibold text-slate-700">
+                <span>Planned Agent Beats ({plan.beats.length})</span>
+                <button
+                  onClick={() => setShowDecisions(!showDecisions)}
+                  className="text-brand-600 hover:text-brand-700 underline text-xs"
+                >
+                  {showDecisions ? "Hide Decision Explanations" : "View Explainable Decisions →"}
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                {plan.beats.map((b) => (
+                  <div
+                    key={b.beat_id}
+                    className="p-2.5 rounded-lg bg-white border border-slate-200 flex items-center justify-between gap-2 text-xs"
+                  >
+                    <div>
+                      <span className="font-bold text-slate-800">{b.agent_name}</span>
+                      <span className="text-slate-400 ml-1">({b.agent_code})</span>
+                      <div className="text-slate-500 text-[11px]">
+                        {b.total_cases} stops • ~{b.estimated_distance_km} km
+                      </div>
+                    </div>
+                    <span className="font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded">
+                      ₹{(b.total_target_amount / 1000).toFixed(0)}k
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Explainable Decision Drawer */}
+          {showDecisions && plan.decisions && (
+            <div
+              className="mt-3 p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2"
+              style={{ maxHeight: 260, overflowY: "auto" }}
+            >
+              <div className="flex items-center justify-between text-xs font-bold text-slate-800 sticky top-0 bg-slate-50 py-1 border-b border-slate-200">
+                <span>Case Assignment Audit Trail & Matching Factors</span>
+                <span className="text-slate-400 font-normal">{plan.decisions.length} recorded</span>
+              </div>
+              <div className="space-y-1.5">
+                {plan.decisions.map((d) => (
+                  <div
+                    key={d.decision_id}
+                    onClick={() => setSelectedDecision(d === selectedDecision ? null : d)}
+                    className="p-2 bg-white rounded-lg border border-slate-200/80 hover:border-brand-300 cursor-pointer text-xs space-y-1 transition-colors"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-slate-800">{d.case_number}</span>
+                      <div className="flex items-center gap-1.5">
+                        {d.outcome === "ALLOCATED" && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                            → {d.allocated_agent_name}
+                          </span>
+                        )}
+                        {d.outcome === "BLOCKED" && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-100 text-rose-800">
+                            BLOCKED
+                          </span>
+                        )}
+                        {d.outcome === "DEFERRED" && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800">
+                            DEFERRED
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <p className="text-slate-600 text-[11px] line-clamp-1">{d.reason}</p>
+                    {selectedDecision === d && d.score_breakdown && (
+                      <div className="mt-1 pt-1.5 border-t border-slate-100 text-[10.5px] text-slate-500 grid grid-cols-2 gap-1 bg-slate-50/70 p-1.5 rounded">
+                        <span>Prio Score: <strong>{d.visit_priority_score}</strong></span>
+                        <span>Fit Score: <strong>{d.fit_score}</strong></span>
+                        {Object.entries(d.score_breakdown).map(([k, v]) => (
+                          <span key={k} className="truncate">
+                            {k.replace("_", " ")}: <strong>{String(v)}</strong>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+

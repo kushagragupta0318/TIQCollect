@@ -11,3 +11,15 @@ class CaseFilterParams(BaseModel):
     date_to: Optional[str] = None
     limit: int = 50
     offset: int = 0
+
+
+class AllocationPlanRequest(BaseModel):
+    strategy: Optional[str] = "SMART"
+    plan_date: Optional[str] = None
+    simulate: bool = False
+    force_replan: bool = False
+
+
+class AllocationRollbackRequest(BaseModel):
+    run_id: str
+

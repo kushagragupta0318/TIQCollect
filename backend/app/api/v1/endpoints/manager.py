@@ -3356,3 +3356,197 @@ def get_monthly_report(
         "ai_model": _report_llm.model or None,
         "ai_provider": _report_llm.provider or None,
     }
+
+
+# ─── Smart Nightly Case Allocation Endpoints ─────────────────────────────────
+
+@router.get("/allocation/latest")
+def get_latest_allocation_plan(
+    current_user: ManagerOnly,
+    db: DbSession,
+    plan_date: Optional[str] = None,
+):
+    """Fetch the latest planned case allocation run and explainable decisions for tomorrow."""
+    from app.services.planner_service import PlannerService, get_target_plan_date
+    from app.models.allocation_run import AllocationRun
+    from app.models.allocation_decision import AllocationDecision
+    from app.models.beat import Beat
+
+    target_d = date.fromisoformat(plan_date) if plan_date else get_target_plan_date()
+    planner = PlannerService(db, manager_user_id=current_user.id)
+    run = planner.get_latest_plan(plan_date=target_d)
+
+    if not run:
+        return {
+            "has_plan": False,
+            "target_date": target_d.isoformat(),
+            "message": f"No allocation plan generated yet for {target_d.isoformat()}.",
+            "run": None,
+        }
+
+    # Fetch beats for this run
+    beats = (
+        db.query(Beat)
+        .options(joinedload(Beat.agent).joinedload(Agent.user))
+        .filter(Beat.allocation_run_id == run.id)
+        .all()
+    )
+
+    beat_list = []
+    for b in beats:
+        agent_name = b.agent.user.full_name if b.agent and b.agent.user else "Agent"
+        agent_code = b.agent.employee_code if b.agent else ""
+        beat_list.append({
+            "beat_id": b.id,
+            "agent_id": b.agent_id,
+            "agent_name": agent_name,
+            "agent_code": agent_code,
+            "beat_number": b.beat_number,
+            "total_cases": b.total_cases,
+            "estimated_distance_km": b.estimated_distance_km,
+            "estimated_duration_minutes": b.estimated_duration_minutes,
+            "total_target_amount": b.total_target_amount,
+            "status": b.status.value,
+        })
+
+    # Fetch decisions (sample first 100)
+    decisions = (
+        db.query(AllocationDecision)
+        .options(
+            joinedload(AllocationDecision.case),
+            joinedload(AllocationDecision.allocated_agent).joinedload(Agent.user),
+        )
+        .filter(AllocationDecision.run_id == run.id)
+        .limit(100)
+        .all()
+    )
+
+    decision_list = []
+    for d in decisions:
+        case_num = d.case.case_number if d.case else ""
+        target_amt = float(d.case.target_amount or 0) if d.case else 0.0
+        agent_name = (
+            d.allocated_agent.user.full_name
+            if d.allocated_agent and d.allocated_agent.user
+            else (d.allocated_agent.employee_code if d.allocated_agent else "")
+        )
+        decision_list.append({
+            "decision_id": d.id,
+            "case_id": d.case_id,
+            "case_number": case_num,
+            "target_amount": target_amt,
+            "outcome": d.outcome,
+            "allocated_agent_id": d.allocated_agent_id,
+            "allocated_agent_name": agent_name,
+            "visit_priority_score": d.visit_priority_score,
+            "fit_score": d.fit_score,
+            "reason": d.reason,
+            "score_breakdown": d.score_breakdown,
+        })
+
+    return {
+        "has_plan": True,
+        "run_id": run.id,
+        "plan_date": run.plan_date.isoformat(),
+        "strategy": run.strategy,
+        "status": run.status,
+        "total_cases_evaluated": run.total_cases_evaluated,
+        "total_cases_allocated": run.total_cases_allocated,
+        "total_cases_deferred": run.total_cases_deferred,
+        "total_cases_blocked": run.total_cases_blocked,
+        "total_agents_planned": run.total_agents_planned,
+        "expected_recovery_total": run.expected_recovery_total,
+        "created_at": run.created_at.isoformat() if run.created_at else "",
+        "beats": beat_list,
+        "decisions": decision_list,
+    }
+
+
+@router.post("/allocation/plan")
+def create_or_simulate_allocation_plan(
+    current_user: ManagerOnly,
+    db: DbSession,
+    req: Optional[dict] = None,
+):
+    """Trigger on-demand next-day planning, simulation, or replan."""
+    from app.services.planner_service import PlannerService, get_target_plan_date
+
+    req = req or {}
+    strategy = req.get("strategy", "SMART")
+    plan_date_str = req.get("plan_date")
+    simulate = bool(req.get("simulate", False))
+    force_replan = bool(req.get("force_replan", True))
+
+    target_d = date.fromisoformat(plan_date_str) if plan_date_str else get_target_plan_date()
+    planner = PlannerService(db, manager_user_id=current_user.id)
+
+    try:
+        run = planner.plan_next_day(
+            plan_date=target_d,
+            strategy=strategy,
+            simulate=simulate,
+            force_replan=force_replan,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return {
+        "run_id": run.id,
+        "plan_date": run.plan_date.isoformat(),
+        "strategy": run.strategy,
+        "status": run.status,
+        "total_cases_evaluated": run.total_cases_evaluated,
+        "total_cases_allocated": run.total_cases_allocated,
+        "total_cases_deferred": run.total_cases_deferred,
+        "total_cases_blocked": run.total_cases_blocked,
+        "total_agents_planned": run.total_agents_planned,
+        "expected_recovery_total": run.expected_recovery_total,
+        "is_simulated": simulate,
+    }
+
+
+@router.post("/allocation/rollback")
+def rollback_allocation_plan(
+    current_user: ManagerOnly,
+    db: DbSession,
+    req: dict,
+):
+    """Roll back an untouched future PLANNED allocation."""
+    from app.services.planner_service import PlannerService
+
+    run_id = req.get("run_id")
+    if not run_id:
+        raise HTTPException(status_code=422, detail="run_id is required.")
+
+    planner = PlannerService(db, manager_user_id=current_user.id)
+    try:
+        success = planner.rollback_plan(run_id=run_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return {
+        "success": success,
+        "run_id": run_id,
+        "message": "Allocation plan successfully rolled back.",
+    }
+
+
+@router.get("/allocation/export-decisions")
+def export_allocation_decisions_csv(
+    run_id: str,
+    current_user: ManagerOnly,
+    db: DbSession,
+):
+    """Export the explainable allocation decisions for a specific run as CSV."""
+    from fastapi.responses import Response
+    from app.services.planner_service import PlannerService
+
+    planner = PlannerService(db, manager_user_id=current_user.id)
+    csv_text = planner.export_decisions_csv(run_id=run_id)
+
+    return Response(
+        content=csv_text,
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=allocation_decisions_{run_id}.csv"},
+    )
+

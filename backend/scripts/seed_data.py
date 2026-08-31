@@ -1417,12 +1417,15 @@ def seed():
             is_active=True, is_verified=True,
         )
         db.add(u)
+        # Specific gender assignment (M/F)
+        agent_genders = ["M", "F", "M", "F", "M", "F", "M", "F", "M", "F", "M", "F", "M", "F", "M", "M", "F", "M"]
         a = Agent(
             id=_uid(), user_id=u.id,
             employee_code=f"EMP{i+1:04d}",
             id_card_number=f"TIQID{i+1:05d}",
             agency_id=AGENCY_ID,
             manager_user_id=assigned_manager.id,
+            gender=agent_genders[i % len(agent_genders)],
             base_latitude=base_lat, base_longitude=base_lon,
             territory=home_area,
             languages_spoken=random.sample(LANGUAGES, random.randint(1, 3)),
