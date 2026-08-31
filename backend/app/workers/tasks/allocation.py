@@ -24,7 +24,7 @@ def run_nightly_allocation(self, strategy: str = "SMART", plan_date_str: str | N
     try:
         managers = db.query(User).filter(
             User.role.in_([UserRole.AGENCY_MANAGER, UserRole.AGENCY_ADMIN]),
-            User.is_active == True,
+            User.is_active.is_(True),
         ).all()
 
         for manager in managers:

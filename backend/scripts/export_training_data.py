@@ -43,11 +43,11 @@ def export_dataset(output_path: Path):
         rs.features,
         c.loan_type,
         c.dpd_bucket,
-        c.total_outstanding_amount,
+        c.total_outstanding,
         c.bureau_score
     FROM repayment_snapshots rs
     LEFT JOIN (
-        SELECT l.id, l.loan_type, l.dpd_bucket, l.total_outstanding_amount, cust.bureau_score
+        SELECT l.id, l.loan_type, l.dpd_bucket, l.total_outstanding, cust.cibil_score AS bureau_score
         FROM loans l
         JOIN customers cust ON l.customer_id = cust.id
     ) c ON rs.loan_id = c.id

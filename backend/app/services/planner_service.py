@@ -250,7 +250,7 @@ class PlannerService:
                 continue
 
             # Gate B: Safety / Violent Risk Flag
-            if getattr(customer, "is_disputed", False) and getattr(customer, "dispute_type", "") == "HOSTILE_SAFETY_RISK":
+            if getattr(customer, "is_hostile", False):
                 blocked_count += 1
                 decisions.append(AllocationDecision(
                     id=str(uuid.uuid4()),
