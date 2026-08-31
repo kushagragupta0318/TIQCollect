@@ -27,7 +27,7 @@ class Payment(Base, UUIDPrimaryKey, TimestampMixin):
 
     case_id: Mapped[str] = mapped_column(ForeignKey("cases.id"), nullable=False, index=True)
     visit_id: Mapped[str | None] = mapped_column(ForeignKey("visits.id"), nullable=True)
-    agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"), nullable=False)
+    agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"), nullable=False, index=True)
 
     amount: Mapped[float] = mapped_column(Float, nullable=False)
     mode: Mapped[PaymentMode] = mapped_column(SAEnum(PaymentMode, name="payment_mode_enum"), nullable=False)
@@ -58,4 +58,6 @@ class Payment(Base, UUIDPrimaryKey, TimestampMixin):
     __table_args__ = (
         Index("ix_payment_case_status", "case_id", "status"),
         Index("ix_payment_date", "payment_date"),
+        Index("ix_payment_agent_date", "agent_id", "payment_date"),
+        Index("ix_payment_agent_status", "agent_id", "status"),
     )

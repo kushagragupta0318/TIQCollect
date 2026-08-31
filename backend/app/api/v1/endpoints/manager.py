@@ -1553,26 +1553,33 @@ def compliance_metrics(current_user: ManagerOnly, db: DbSession):
         a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()
     ]
 
+    if not my_agent_ids:
+        return {
+            "month": date.today().strftime("%Y-%m"),
+            "total_visits": 0,
+            "out_of_hours_visits": 0,
+            "geo_violations": 0,
+            "sos_active_count": 0,
+            "compliance_rate": 1.0,
+            "geo_verification_rate": 1.0,
+        }
+
     start_of_month = date.today().replace(day=1)
     start_of_month_dt = datetime.combine(start_of_month, datetime.min.time()).replace(tzinfo=timezone.utc)
 
-    total_visits = (
-        db.query(func.count(Visit.id))
+    stats = (
+        db.query(
+            func.count(Visit.id).label("total_visits"),
+            func.coalesce(func.sum(sa_case((Visit.within_contact_hours == False, 1), else_=0)), 0).label("out_of_hours"),
+            func.coalesce(func.sum(sa_case((Visit.geo_verified == False, 1), else_=0)), 0).label("geo_violations"),
+        )
         .filter(Visit.agent_id.in_(my_agent_ids), Visit.check_in_time >= start_of_month_dt)
-        .scalar() or 0
+        .one()
     )
-    out_of_hours = (
-        db.query(func.count(Visit.id))
-        .filter(Visit.agent_id.in_(my_agent_ids), Visit.check_in_time >= start_of_month_dt,
-                Visit.within_contact_hours == False)  # noqa: E712
-        .scalar() or 0
-    )
-    geo_violations = (
-        db.query(func.count(Visit.id))
-        .filter(Visit.agent_id.in_(my_agent_ids), Visit.check_in_time >= start_of_month_dt,
-                Visit.geo_verified == False)  # noqa: E712
-        .scalar() or 0
-    )
+    total_visits = stats.total_visits or 0
+    out_of_hours = int(stats.out_of_hours or 0)
+    geo_violations = int(stats.geo_violations or 0)
+
     sos_active = (
         db.query(func.count(Agent.id))
         .filter(Agent.id.in_(my_agent_ids), Agent.sos_active == True).scalar() or 0  # noqa: E712
@@ -2821,7 +2828,7 @@ def update_agent_status(
     agent = (
         db.query(Agent)
         .join(Agent.user)
-        .filter(Agent.id == agent_id)
+        .filter(Agent.id == agent_id, Agent.manager_user_id == current_user.id)
         .options(joinedload(Agent.user))
         .first()
     )
@@ -2907,7 +2914,7 @@ def manager_get_agent_availability_calendar(
     agent = (
         db.query(Agent)
         .options(joinedload(Agent.user))
-        .filter(Agent.id == agent_id)
+        .filter(Agent.id == agent_id, Agent.manager_user_id == current_user.id)
         .first()
     )
     if not agent:
@@ -3077,8 +3084,14 @@ def get_monthly_report(
     prev_dt = _date2(int(yr), int(mo), 1) - timedelta(days=1)
     prev_month = prev_dt.strftime("%Y-%m")
 
-    # All agent IDs
-    my_agent_ids = [r[0] for r in db.query(Agent.id).all()]
+    # Manager-owned agent IDs
+    my_agent_ids = [
+        r[0] for r in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()
+    ]
+    if agent_id:
+        if agent_id not in my_agent_ids:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        my_agent_ids = [agent_id]
 
     # DPD portfolio snapshot (current state of all cases)
     bucket_order = ["BUCKET_1", "BUCKET_2", "BUCKET_3", "NPA"]

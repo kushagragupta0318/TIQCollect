@@ -155,4 +155,5 @@ class Visit(Base, UUIDPrimaryKey, TimestampMixin):
         Index("ix_visit_agent_date", "agent_id", "check_in_time"),
         Index("ix_visit_case", "case_id", "check_in_time"),
         Index("ix_visit_outcome", "outcome"),
+        Index("ix_visit_check_in_time", "check_in_time"),
     )
