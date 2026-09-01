@@ -753,3 +753,12 @@ export async function rollbackAllocationPlan(runId: string) {
   return data;
 }
 
+export async function exportAllocationDecisions(runId: string): Promise<Blob> {
+  const response = await api.get("/manager/allocation/export-decisions", {
+    params: { run_id: runId },
+    responseType: "blob",
+  });
+  return response.data;
+}
+
+

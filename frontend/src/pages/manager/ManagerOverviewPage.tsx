@@ -17,7 +17,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { useNavigate } from "react-router";
 import { Users, Briefcase, IndianRupee, MapPin, Clock, AlertTriangle, Sparkles, RefreshCw, TrendingUp, TrendingDown, ShieldAlert, Compass, Zap, RotateCcw, Download } from "lucide-react";
 import { toast } from "react-hot-toast";
-import { getDashboard, getAgents, getBriefing, getUnallocatedCases, getLatestAllocation, triggerAllocationPlan, rollbackAllocationPlan } from "@/api/manager";
+import { getDashboard, getAgents, getBriefing, getUnallocatedCases, getLatestAllocation, triggerAllocationPlan, rollbackAllocationPlan, exportAllocationDecisions } from "@/api/manager";
 import type { BriefingData, UnallocatedReport, AllocationPlanReport, AllocationDecisionItem } from "@/api/manager";
 import { StatCard } from "@/components/ui/Card";
 import { TierBadge } from "@/components/ui/Badge";
@@ -872,9 +872,23 @@ function TomorrowAllocationCard() {
     }
   };
 
-  const handleExportCSV = () => {
+  const handleExportCSV = async () => {
     if (!plan?.run_id) return;
-    window.open(`/api/v1/manager/allocation/export-decisions?run_id=${plan.run_id}`, "_blank");
+    try {
+      toast.loading("Generating CSV export...", { id: "csv-export" });
+      const blob = await exportAllocationDecisions(plan.run_id);
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `allocation_decisions_${plan.plan_date || "plan"}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      toast.success("CSV exported successfully!", { id: "csv-export" });
+    } catch {
+      toast.error("Failed to export decisions CSV", { id: "csv-export" });
+    }
   };
 
   if (loading) {
