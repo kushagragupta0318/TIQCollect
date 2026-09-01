@@ -380,6 +380,7 @@ export default function RecordVisitPage() {
 
   // ── Borrower payment-verification OTP state (2026-07-30) ───────────────────
   const [otp, setOtp] = useState<{ id: string; maskedPhone: string; expiresAt: string } | null>(null);
+  const [demoOtp, setDemoOtp] = useState<string | null>(null);
   const [otpCode, setOtpCode] = useState("");
   const [otpSending, setOtpSending] = useState(false);
   const [otpVerifying, setOtpVerifying] = useState(false);
@@ -775,9 +776,14 @@ export default function RecordVisitPage() {
     try {
       const res = await sendPaymentOtp(caseId, { amount: amountNum });
       setOtp({ id: res.otp_id, maskedPhone: res.masked_phone, expiresAt: res.expires_at });
+      setDemoOtp(res.demo_otp || null);
       setOtpCode("");
       if (isResend) setResendsUsed((n) => n + 1);
-      toast.success(`OTP sent to borrower (${res.masked_phone})`);
+      if (res.demo_otp) {
+        toast.success(`Demo Borrower OTP: ${res.demo_otp}`, { duration: 8000, icon: "🔑" });
+      } else {
+        toast.success(`OTP sent to borrower (${res.masked_phone})`);
+      }
     } catch (err: any) {
       const detail = err?.response?.data?.detail;
       setOtpError(typeof detail === "string" ? detail : "Could not send OTP. Please retry.");
@@ -1534,6 +1540,18 @@ export default function RecordVisitPage() {
                         <div className="space-y-3">
                           <p className="text-xs text-slate-500 text-center">Enter the 4-digit OTP sent to <strong>{otp.maskedPhone}</strong></p>
                           <OtpInput value={otpCode} onChange={(v) => { setOtpCode(v); setOtpError(null); }} length={4} autoFocus disabled={otpVerifying} />
+                          {demoOtp && (
+                            <div className="flex items-center justify-center gap-1.5 text-xs text-brand-700 bg-brand-50 border border-brand-200 rounded-lg py-1.5 px-3">
+                              <span>Demo Borrower OTP: <strong className="font-mono tracking-wider text-brand-800">{demoOtp}</strong></span>
+                              <button
+                                type="button"
+                                onClick={() => { setOtpCode(demoOtp); setOtpError(null); }}
+                                className="underline font-bold text-brand-600 hover:text-brand-900 ml-1.5"
+                              >
+                                Auto-fill
+                              </button>
+                            </div>
+                          )}
                           {otpError && <p className="text-xs text-danger-600 font-medium text-center">{otpError}</p>}
                           <Button onClick={handleVerifyOtp} disabled={otpVerifying || otpCode.length < 4} className="w-full">
                             {otpVerifying ? "Verifying…" : "Verify OTP"}

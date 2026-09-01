@@ -64,8 +64,15 @@ class AgentService:
         from app.api.v1.endpoints.agent import _effective_day
 
         eff_day = _effective_day(agent.id, self.db)
-        start_of_day = datetime.combine(eff_day, datetime.min.time()).replace(tzinfo=timezone.utc)
-        end_of_day = datetime.combine(eff_day, datetime.max.time()).replace(tzinfo=timezone.utc)
+        from sqlalchemy import or_
+        days = {eff_day, date.today()}
+        visit_conditions = []
+        payment_conditions = []
+        for d in days:
+            start = datetime.combine(d, datetime.min.time()).replace(tzinfo=timezone.utc)
+            end = datetime.combine(d, datetime.max.time()).replace(tzinfo=timezone.utc)
+            visit_conditions.append((Visit.check_in_time >= start) & (Visit.check_in_time <= end))
+            payment_conditions.append((Payment.payment_date >= start) & (Payment.payment_date <= end))
 
         # Use beat as single source of truth for cases/target — same as beat map and my-cases
         beat = (
@@ -81,13 +88,13 @@ class AgentService:
             .scalar() or 0.0
         ) if beat_case_ids else 0.0
         visits_today = (
-            self.db.query(func.count(Visit.id))
-            .filter(Visit.agent_id == agent.id, Visit.check_in_time >= start_of_day, Visit.check_in_time <= end_of_day)
+            self.db.query(func.count(func.distinct(Visit.case_id)))
+            .filter(Visit.agent_id == agent.id, or_(*visit_conditions))
             .scalar() or 0
         )
         amount_today = (
-            self.db.query(func.sum(Payment.amount))
-            .filter(Payment.agent_id == agent.id, Payment.payment_date >= start_of_day, Payment.payment_date <= end_of_day)
+            self.db.query(func.coalesce(func.sum(Payment.amount), 0.0))
+            .filter(Payment.agent_id == agent.id, or_(*payment_conditions))
             .scalar() or 0.0
         )
         ptps_due = (

@@ -251,6 +251,7 @@ class OtpSendResponse(BaseModel):
     masked_phone: str
     expires_at: str            # ISO — already .isoformat()'d
     resend_available_at: str   # ISO — earliest a resend is allowed (throttle)
+    demo_otp: Optional[str] = None
 
 
 class OtpVerifyRequest(BaseModel):

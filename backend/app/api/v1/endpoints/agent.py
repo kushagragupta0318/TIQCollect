@@ -278,15 +278,19 @@ def _format_case(case: Case) -> dict:
 
 
 def _visited_today(agent_id: str, eff_day: date, db) -> set[str]:
-    """Return the set of case_ids that this agent has visited on eff_day."""
-    start = datetime.combine(eff_day, datetime.min.time()).replace(tzinfo=timezone.utc)
-    end   = datetime.combine(eff_day, time.max).replace(tzinfo=timezone.utc)
+    """Return the set of case_ids that this agent has visited on eff_day or today."""
+    from sqlalchemy import or_
+    days = {eff_day, date.today()}
+    conditions = []
+    for d in days:
+        start = datetime.combine(d, datetime.min.time()).replace(tzinfo=timezone.utc)
+        end = datetime.combine(d, time.max).replace(tzinfo=timezone.utc)
+        conditions.append((Visit.check_in_time >= start) & (Visit.check_in_time <= end))
+
     return {
         row[0] for row in
         db.query(Visit.case_id)
-        .filter(Visit.agent_id == agent_id,
-                Visit.check_in_time >= start,
-                Visit.check_in_time <= end)
+        .filter(Visit.agent_id == agent_id, or_(*conditions))
         .distinct().all()
     }
 

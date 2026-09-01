@@ -235,6 +235,7 @@ export interface OtpSendResult {
   masked_phone: string;
   expires_at: string;          // ISO
   resend_available_at: string; // ISO
+  demo_otp?: string;
 }
 
 // Send a 4-digit OTP to the borrower's registered phone to confirm a collection

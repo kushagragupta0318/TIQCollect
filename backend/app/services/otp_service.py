@@ -293,12 +293,15 @@ class OtpService:
         )
         NotificationService.send_sms(e164, sms_body)
 
-        return {
+        ret = {
             "otp_id": otp_id,
             "masked_phone": self._masked(e164),
             "expires_at": (now + timedelta(seconds=settings.OTP_TTL_SECONDS)).isoformat(),
             "resend_available_at": (now + timedelta(seconds=settings.OTP_RESEND_THROTTLE_SECONDS)).isoformat(),
         }
+        if getattr(settings, "DEMO_MODE", False) or getattr(settings, "ENVIRONMENT", "") == "development":
+            ret["demo_otp"] = code
+        return ret
 
     def _enforce_send_limits(self, case_id: str, amount: float) -> None:
         """Resend throttle + active-send cap for the same collection. A 4-digit
