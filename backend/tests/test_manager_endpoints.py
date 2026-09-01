@@ -225,7 +225,7 @@ def test_agent_ptp_rate_counts_verified_payment_evidence(client, seeded):
         case_id=c2.id,
         agent_id=ag1.id,
         committed_amount=1000.0,
-        committed_date=TODAY - timedelta(days=1),
+        committed_date=TODAY,
         status=PTPStatus.ACTIVE,
     )
     paid_on_time = Payment(
@@ -234,7 +234,7 @@ def test_agent_ptp_rate_counts_verified_payment_evidence(client, seeded):
         amount=1000.0,
         mode=PaymentMode.UPI,
         receipt_number="RCPT-PTP-EVIDENCE",
-        payment_date=NOW - timedelta(days=1),
+        payment_date=NOW,
         status=PaymentStatus.VERIFIED,
     )
     db.add_all([due_ptp, paid_on_time])

@@ -1,4 +1,4 @@
-﻿import { Shield, CheckCircle, AlertTriangle, Clock, FileText, ScanSearch, MapPin, Copy, Timer, Navigation, Route, X, Check } from "lucide-react";
+import { Shield, CheckCircle, AlertTriangle, Clock, FileText, ScanSearch, MapPin, Copy, Timer, Navigation, Route, X, Check, ChevronDown, ChevronUp } from "lucide-react";
 import { useEffect, useState } from "react";
 import { getFraudAlerts, reviewFraudAlert } from "@/api/manager";
 import type { FraudFinding, FraudReport } from "@/api/manager";
@@ -170,6 +170,7 @@ const SEV_STYLE: Record<string, { bg: string; fg: string; border: string }> = {
 function VisitAnomalies() {
   const [data, setData] = useState<FraudReport | null>(null);
   const [error, setError] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
   const [showAll, setShowAll] = useState(false);
   const [showDismissed, setShowDismissed] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -186,13 +187,50 @@ function VisitAnomalies() {
     const key = f.visit_id + "-" + f.type;
     if (busy) return;
     setBusy(key);
+
+    // Optimistically remove the finding from active list immediately so it vanishes without lag
+    setData((prev) => {
+      if (!prev) return prev;
+      const remaining = prev.findings.filter(
+        (item) => !(item.visit_id === f.visit_id && item.type === f.type)
+      );
+      const isHigh = f.severity === "HIGH";
+      return {
+        ...prev,
+        findings: remaining,
+        dismissed_hidden: prev.dismissed_hidden + 1,
+        counts: {
+          ...prev.counts,
+          [f.type]: Math.max(0, (prev.counts[f.type] || 1) - 1),
+        },
+        by_severity: {
+          ...prev.by_severity,
+          [f.severity]: Math.max(0, (prev.by_severity[f.severity] || 1) - 1),
+        },
+        by_agent: prev.by_agent.map((a) =>
+          a.agent_id === f.agent_id
+            ? {
+                ...a,
+                total: Math.max(0, a.total - 1),
+                high: isHigh ? Math.max(0, a.high - 1) : a.high,
+                confirmed: verdict === "CONFIRMED" ? a.confirmed + 1 : a.confirmed,
+              }
+            : a
+        ).filter((a) => a.total > 0 || showDismissed),
+      };
+    });
+
     try {
       await reviewFraudAlert(f.visit_id, f.type, verdict);
-      toast.success(verdict === "CONFIRMED" ? "Marked as confirmed" : "Dismissed");
+      toast.success(verdict === "CONFIRMED" ? "Marked as confirmed & recorded in audit log" : "Dismissed");
+      // Silently refresh backend payload
       const fresh = await getFraudAlerts({ includeDismissed: showDismissed });
       setData(fresh);
     } catch {
-      toast.error("Could not save - try again");
+      toast.error("Could not save — please try again");
+      // Rollback on error
+      const fresh = await getFraudAlerts({ includeDismissed: showDismissed });
+      setData(fresh);
     } finally {
       setBusy(null);
     }
@@ -204,81 +242,128 @@ function VisitAnomalies() {
   const high = data.by_severity.HIGH ?? 0;
 
   return (
-    <div className="card p-4 sm:p-6" style={{ animation: `enter 420ms ${EASE} 150ms both` }}>
-      <div className="flex items-center justify-between gap-3 mb-1">
-        <h2 className="text-base font-bold min-w-0 truncate flex items-center gap-2" style={{ color: "#1C1C1F" }}>
-          <ScanSearch className="w-4 h-4 flex-shrink-0" style={{ color: "#2563EB" }} />
-          Visit Anomalies
-        </h2>
-        {high > 0 && <span className="badge badge-red flex-shrink-0">{high} high</span>}
-      </div>
-      <p className="text-[13px] mb-4" style={{ color: "#6B6D76" }}>
-        {data.findings.length === 0
-          ? `No anomalies across ${data.visits_examined.toLocaleString()} visits since ${data.date_from}.`
-          : `${data.findings.length} found across ${data.visits_examined.toLocaleString()} visits since ${data.date_from}.`}
-        {data.dismissed_hidden > 0 && !showDismissed && (
-          <> {data.dismissed_hidden} dismissed and hidden.</>
-        )}
-      </p>
-
-      {data.findings.length === 0 && data.dismissed_hidden === 0 ? (
-        <div className="flex items-center gap-2 p-3 rounded-xl text-sm"
-             style={{ background: "rgba(15,123,79,0.07)", color: "#0F5132" }}>
-          <CheckCircle className="w-4 h-4 flex-shrink-0" />
-          Every visit in this period is consistent with the evidence recorded.
+    <div className="card p-4 sm:p-5 transition-all duration-200" style={{ animation: `enter 420ms ${EASE} 150ms both` }}>
+      {/* Clickable Header bar that toggles expand/collapse */}
+      <div
+        onClick={() => setIsExpanded((prev) => !prev)}
+        className="flex items-center justify-between gap-3 cursor-pointer select-none group"
+      >
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap mb-1">
+            <h2 className="text-base font-bold min-w-0 flex items-center gap-2" style={{ color: "#1C1C1F" }}>
+              <ScanSearch className="w-4 h-4 flex-shrink-0 text-brand-600" />
+              Visit Anomalies
+            </h2>
+            {high > 0 && <span className="badge badge-red flex-shrink-0">{high} high</span>}
+            {data.findings.length > 0 && (
+              <span className="badge badge-blue flex-shrink-0">{data.findings.length} active</span>
+            )}
+          </div>
+          <p className="text-[13px]" style={{ color: "#6B6D76" }}>
+            {data.findings.length === 0
+              ? `No anomalies across ${data.visits_examined.toLocaleString()} visits since ${data.date_from}.`
+              : `${data.findings.length} found across ${data.visits_examined.toLocaleString()} visits since ${data.date_from}.`}
+            {data.dismissed_hidden > 0 && !showDismissed && (
+              <> {data.dismissed_hidden} reviewed & archived.</>
+            )}
+          </p>
         </div>
-      ) : (
-        <>
-          {/* Which agents account for them. One agent with twelve findings is a
-              very different conversation from twelve agents with one each. */}
-          {data.by_agent.length > 0 && (
-            <div className="flex flex-wrap gap-2 mb-3">
-              {data.by_agent.slice(0, 6).map((a) => (
-                <span key={a.agent_id} className="text-[11.5px] font-semibold px-2.5 py-1 rounded-lg"
-                      style={{ background: a.high > 0 ? "rgba(220,38,38,0.08)" : "#F0F2F6",
-                               color: a.high > 0 ? "#991B1B" : "#3A4654",
-                               border: `1px solid ${a.high > 0 ? "rgba(220,38,38,0.20)" : "transparent"}` }}>
-                  {a.agent_name ?? a.employee_code} · {a.total}
-                  {a.confirmed > 0 && <> · {a.confirmed} confirmed</>}
-                </span>
-              ))}
+
+        {/* Expand / Collapse Action Button */}
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <span className="text-xs font-semibold text-brand-600 group-hover:text-brand-700 hidden sm:inline">
+            {isExpanded ? "Collapse" : "Review"}
+          </span>
+          <div className="w-8 h-8 rounded-lg flex items-center justify-center bg-slate-100 group-hover:bg-slate-200 transition-colors">
+            {isExpanded ? (
+              <ChevronUp className="w-4 h-4 text-slate-700" />
+            ) : (
+              <ChevronDown className="w-4 h-4 text-slate-700" />
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Expanded Content */}
+      {isExpanded && (
+        <div className="mt-4 pt-4 border-t border-slate-100 space-y-4">
+          {data.findings.length === 0 && data.dismissed_hidden === 0 ? (
+            <div className="flex items-center gap-2 p-3 rounded-xl text-sm"
+                 style={{ background: "rgba(15,123,79,0.07)", color: "#0F5132" }}>
+              <CheckCircle className="w-4 h-4 flex-shrink-0" />
+              Every visit in this period is consistent with the evidence recorded.
             </div>
+          ) : data.findings.length === 0 ? (
+            <div className="flex items-center justify-between gap-2 p-3.5 rounded-xl text-sm"
+                 style={{ background: "rgba(15,123,79,0.07)", color: "#0F5132" }}>
+              <div className="flex items-center gap-2">
+                <CheckCircle className="w-4 h-4 flex-shrink-0 text-success-600" />
+                <span>All active anomalies have been reviewed and archived!</span>
+              </div>
+              <button
+                onClick={() => setShowDismissed(true)}
+                className="text-xs font-semibold text-brand-600 hover:underline"
+              >
+                View Reviewed History ({data.dismissed_hidden})
+              </button>
+            </div>
+          ) : (
+            <>
+              {/* Agent breakdown */}
+              {data.by_agent.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {data.by_agent.slice(0, 6).map((a) => (
+                    <span key={a.agent_id} className="text-[11.5px] font-semibold px-2.5 py-1 rounded-lg"
+                          style={{ background: a.high > 0 ? "rgba(220,38,38,0.08)" : "#F0F2F6",
+                                   color: a.high > 0 ? "#991B1B" : "#3A4654",
+                                   border: `1px solid ${a.high > 0 ? "rgba(220,38,38,0.20)" : "transparent"}` }}>
+                      {a.agent_name ?? a.employee_code} · {a.total}
+                      {a.confirmed > 0 && <> · {a.confirmed} confirmed</>}
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {/* Anomaly type filters */}
+              <div className="flex flex-wrap gap-2">
+                {Object.entries(data.counts).map(([type, n]) => (
+                  <span key={type} className="text-[11.5px] font-semibold px-2.5 py-1 rounded-lg"
+                        style={{ background: "#F0F2F6", color: "#3A4654" }}
+                        title={TYPE_META[type]?.blurb}>
+                    {TYPE_META[type]?.label ?? type} · {n}
+                  </span>
+                ))}
+              </div>
+
+              {/* Anomaly Cards List */}
+              <div className="space-y-2">
+                {shown.map((f) => (
+                  <AnomalyRow key={f.visit_id + "-" + f.type} f={f}
+                              busy={busy === f.visit_id + "-" + f.type}
+                              onJudge={(v) => judge(f, v)} />
+                ))}
+              </div>
+
+              {/* Pagination & Toggle options */}
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+                <div>
+                  {data.findings.length > 8 && (
+                    <button onClick={() => setShowAll((v) => !v)}
+                            className="tap-target text-sm font-semibold text-brand-600 hover:text-brand-700 transition-colors">
+                      {showAll ? "Show fewer" : `Show all ${data.findings.length}`}
+                    </button>
+                  )}
+                </div>
+                {(data.dismissed_hidden > 0 || showDismissed) && (
+                  <button onClick={() => setShowDismissed((v) => !v)}
+                          className="tap-target text-xs font-semibold text-slate-500 hover:text-slate-700 transition-colors">
+                    {showDismissed ? "Hide reviewed history" : `Include reviewed history (${data.dismissed_hidden})`}
+                  </button>
+                )}
+              </div>
+            </>
           )}
-
-          <div className="flex flex-wrap gap-2 mb-4">
-            {Object.entries(data.counts).map(([type, n]) => (
-              <span key={type} className="text-[11.5px] font-semibold px-2.5 py-1 rounded-lg"
-                    style={{ background: "#F0F2F6", color: "#3A4654" }}
-                    title={TYPE_META[type]?.blurb}>
-                {TYPE_META[type]?.label ?? type} · {n}
-              </span>
-            ))}
-          </div>
-
-          <div className="space-y-2">
-            {shown.map((f) => (
-              <AnomalyRow key={f.visit_id + "-" + f.type} f={f}
-                          busy={busy === f.visit_id + "-" + f.type}
-                          onJudge={(v) => judge(f, v)} />
-            ))}
-          </div>
-
-          <div className="flex flex-wrap items-center gap-4 mt-3">
-            {data.findings.length > 8 && (
-              <button onClick={() => setShowAll((v) => !v)}
-                      className="tap-target text-sm font-semibold text-brand-600 hover:text-brand-700 transition-colors">
-                {showAll ? "Show fewer" : `Show all ${data.findings.length}`}
-              </button>
-            )}
-            {(data.dismissed_hidden > 0 || showDismissed) && (
-              <button onClick={() => setShowDismissed((v) => !v)}
-                      className="tap-target text-sm font-semibold transition-colors"
-                      style={{ color: "#6B6D76" }}>
-                {showDismissed ? "Hide dismissed" : "Include dismissed"}
-              </button>
-            )}
-          </div>
-        </>
+        </div>
       )}
     </div>
   );

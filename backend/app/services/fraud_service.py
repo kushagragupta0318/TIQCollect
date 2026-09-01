@@ -122,7 +122,7 @@ class FraudService:
                 "note": r.note,
                 "reviewed_at": r.reviewed_at.isoformat() if r.reviewed_at else None,
             }
-            if r is not None and r.verdict == ReviewVerdict.DISMISSED and not include_dismissed:
+            if r is not None and not include_dismissed:
                 dismissed_hidden += 1
                 continue
             kept.append(f)
