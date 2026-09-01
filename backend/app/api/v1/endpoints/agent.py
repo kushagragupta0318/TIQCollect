@@ -174,7 +174,7 @@ router = APIRouter(prefix="/agent", tags=["agent"])
 # ---------------------------------------------------------------------------
 
 def _effective_day(agent_id: str, db) -> date:
-    """Return the most recent beat date for this agent.
+    """Return the most recent active beat date on or before today for this agent.
 
     Falls back to today only when no beat exists at all (brand-new install).
     This lets the demo run without daily re-seeding: if the last seed was
@@ -182,7 +182,7 @@ def _effective_day(agent_id: str, db) -> date:
     """
     row = (
         db.query(Beat.beat_date)
-        .filter(Beat.agent_id == agent_id)
+        .filter(Beat.agent_id == agent_id, Beat.beat_date <= date.today())
         .order_by(Beat.beat_date.desc())
         .first()
     )

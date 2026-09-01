@@ -151,7 +151,11 @@ def _effective_window(db: Session) -> tuple[datetime, datetime, date]:
     wall clock is what keeps this populated on a seeded or demo database, where
     the literal today usually has no rows at all.
     """
-    latest: date | None = db.query(func.max(Beat.beat_date)).scalar()
+    latest: date | None = (
+        db.query(func.max(Beat.beat_date))
+        .filter(Beat.beat_date <= date.today())
+        .scalar()
+    )
     eff_date = latest or date.today()
     start = datetime.combine(eff_date, datetime.min.time()).replace(tzinfo=timezone.utc)
     end = datetime.combine(eff_date, datetime.max.time()).replace(tzinfo=timezone.utc)

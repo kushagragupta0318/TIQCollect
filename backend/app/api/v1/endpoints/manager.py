@@ -53,12 +53,12 @@ router = APIRouter(prefix="/manager", tags=["manager"])
 
 def _effective_today(agent_ids: list[str], db) -> tuple[datetime, datetime, date]:
     """Return (start_of_day, end_of_day, eff_date) scoped to the most recent
-    beat date across the given agents.  Falls back to date.today() when no
-    beats exist yet (fresh install without a seed).
+    beat date on or before today across the given agents. Falls back to date.today()
+    when no beats exist yet (fresh install without a seed).
     """
     row = (
         db.query(func.max(Beat.beat_date))
-        .filter(Beat.agent_id.in_(agent_ids))
+        .filter(Beat.agent_id.in_(agent_ids), Beat.beat_date <= date.today())
         .scalar()
     )
     eff_date: date = row if row else date.today()

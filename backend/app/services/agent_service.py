@@ -70,8 +70,7 @@ class AgentService:
         # Use beat as single source of truth for cases/target — same as beat map and my-cases
         beat = (
             self.db.query(Beat)
-            .filter(Beat.agent_id == agent.id)
-            .order_by(Beat.beat_date.desc())
+            .filter(Beat.agent_id == agent.id, Beat.beat_date == eff_day)
             .first()
         )
         beat_case_ids = beat.ordered_case_ids if beat else []
@@ -204,17 +203,16 @@ class AgentService:
     def get_beat(self, agent: Agent) -> dict | None:
         from app.api.v1.endpoints.agent import _effective_day, _visited_today, _format_case
 
+        eff_day = _effective_day(agent.id, self.db)
         beat = (
             self.db.query(Beat)
-            .filter(Beat.agent_id == agent.id)
-            .order_by(Beat.beat_date.desc())
+            .filter(Beat.agent_id == agent.id, Beat.beat_date == eff_day)
             .first()
         )
         if not beat:
             return None
 
         # Compute real-time today stats from DB (same window as home-summary)
-        eff_day = _effective_day(agent.id, self.db)
         # Scope visited IDs to cases in this beat — prevents off-beat visits from
         # inflating the "done" count on Home while the Cases page fades fewer cards.
         _all_visited = _visited_today(agent.id, eff_day, self.db)
