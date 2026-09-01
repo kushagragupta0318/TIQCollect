@@ -17,10 +17,12 @@ def run_migration():
     # 1. Create any missing tables (allocation_runs, allocation_decisions)
     Base.metadata.create_all(bind=engine)
     
-    # 2. Add column to beats if missing
+    # 2. Add column to beats if missing and alter column lengths
     with engine.connect() as conn:
         conn.execute(text("ALTER TABLE beats ADD COLUMN IF NOT EXISTS allocation_run_id VARCHAR(36) REFERENCES allocation_runs(id);"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_beats_allocation_run_id ON beats(allocation_run_id);"))
+        conn.execute(text("ALTER TABLE beats ALTER COLUMN beat_number TYPE VARCHAR(50);"))
+        conn.execute(text("ALTER TABLE beats ALTER COLUMN ml_model_version TYPE VARCHAR(50);"))
         conn.commit()
     print("✅ Database schema migration completed successfully!")
 

@@ -15,7 +15,8 @@
 import { useCallback, useEffect, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { useNavigate } from "react-router";
-import { Users, Briefcase, IndianRupee, MapPin, Clock, AlertTriangle, Sparkles, RefreshCw, TrendingUp, TrendingDown, ShieldAlert, Compass, Zap, RotateCcw } from "lucide-react";
+import { Users, Briefcase, IndianRupee, MapPin, Clock, AlertTriangle, Sparkles, RefreshCw, TrendingUp, TrendingDown, ShieldAlert, Compass, Zap, RotateCcw, Download } from "lucide-react";
+import { toast } from "react-hot-toast";
 import { getDashboard, getAgents, getBriefing, getUnallocatedCases, getLatestAllocation, triggerAllocationPlan, rollbackAllocationPlan } from "@/api/manager";
 import type { BriefingData, UnallocatedReport, AllocationPlanReport, AllocationDecisionItem } from "@/api/manager";
 import { StatCard } from "@/components/ui/Card";
@@ -848,9 +849,10 @@ function TomorrowAllocationCard() {
     setPlanning(true);
     try {
       await triggerAllocationPlan({ strategy: strat, force_replan: true });
+      toast.success("Tomorrow's beat plan generated & sequenced!");
       fetchPlan();
     } catch {
-      // ignore
+      toast.error("Failed to generate plan — please try again");
     } finally {
       setPlanning(false);
     }
@@ -861,12 +863,18 @@ function TomorrowAllocationCard() {
     setRollingBack(true);
     try {
       await rollbackAllocationPlan(plan.run_id);
+      toast.success("Allocation plan rolled back successfully");
       fetchPlan();
     } catch {
-      // ignore
+      toast.error("Failed to roll back plan");
     } finally {
       setRollingBack(false);
     }
+  };
+
+  const handleExportCSV = () => {
+    if (!plan?.run_id) return;
+    window.open(`/api/v1/manager/allocation/export-decisions?run_id=${plan.run_id}`, "_blank");
   };
 
   if (loading) {
@@ -958,15 +966,25 @@ function TomorrowAllocationCard() {
           </button>
 
           {isPlanned && (
-            <button
-              onClick={handleRollback}
-              disabled={rollingBack}
-              title="Roll back tomorrow's planned beats"
-              className="btn btn-secondary text-xs flex items-center gap-1 px-2.5 py-1.5 text-slate-600 hover:text-rose-600"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              <span>Rollback</span>
-            </button>
+            <>
+              <button
+                onClick={handleExportCSV}
+                title="Download decisions audit CSV"
+                className="btn btn-secondary text-xs flex items-center gap-1 px-2.5 py-1.5 text-slate-600 hover:text-slate-900"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Export CSV</span>
+              </button>
+              <button
+                onClick={handleRollback}
+                disabled={rollingBack}
+                title="Roll back tomorrow's planned beats"
+                className="btn btn-secondary text-xs flex items-center gap-1 px-2.5 py-1.5 text-slate-600 hover:text-rose-600"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Rollback</span>
+              </button>
+            </>
           )}
         </div>
       </div>

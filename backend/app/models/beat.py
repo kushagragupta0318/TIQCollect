@@ -18,7 +18,7 @@ class Beat(Base, UUIDPrimaryKey, TimestampMixin):
 
     agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"), nullable=False, index=True)
     beat_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
-    beat_number: Mapped[str] = mapped_column(String(20), unique=True, nullable=False)
+    beat_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
 
     # Ordered list of case IDs in visit sequence
     ordered_case_ids: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
@@ -38,7 +38,7 @@ class Beat(Base, UUIDPrimaryKey, TimestampMixin):
 
     # ML metadata
     is_ml_generated: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    ml_model_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    ml_model_version: Mapped[str | None] = mapped_column(String(50), nullable=True)
     geo_cluster_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # Override tracking
