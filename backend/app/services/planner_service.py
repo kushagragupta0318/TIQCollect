@@ -192,6 +192,8 @@ class PlannerService:
             joinedload(Case.loan),
         ).filter(
             Case.status.notin_(list(RESOLVED_STATUSES)),
+            Case.status != CaseStatus.PAID,
+            Case.collected_amount < Case.target_amount,
             Case.visit_count < Case.max_visits_allowed,
         ).all()
 

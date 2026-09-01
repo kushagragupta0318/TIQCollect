@@ -1176,16 +1176,16 @@ def reconcile_integrity(db, today: date) -> dict:
     visited_cases = {v.case_id for v in visits}
     for c in cases.values():
         collected = round(paid_total[c.id], 2)
-        if c.status in (CaseStatus.CLOSED, CaseStatus.WRITTEN_OFF, CaseStatus.ESCALATED):
+        if c.status in (CaseStatus.CLOSED, CaseStatus.WRITTEN_OFF):
             continue
-        if c.status == CaseStatus.PTP_SET and c.id not in live_ptp_cases:
-            c.status = (CaseStatus.PAID if collected >= (c.target_amount or 0) - 0.01 and collected > 0
-                        else CaseStatus.PARTIALLY_PAID if collected > 0
-                        else CaseStatus.IN_PROGRESS)
+        if collected >= (c.target_amount or 0) - 0.01 and collected > 0:
+            c.status = CaseStatus.PAID
+            fixed["fully_paid_promoted"] = fixed.get("fully_paid_promoted", 0) + 1
+        elif c.status == CaseStatus.PTP_SET and c.id not in live_ptp_cases:
+            c.status = (CaseStatus.PARTIALLY_PAID if collected > 0 else CaseStatus.IN_PROGRESS)
             fixed["ptp_set_without_promise"] += 1
         elif c.status == CaseStatus.ASSIGNED and c.id in visited_cases:
-            c.status = (CaseStatus.PARTIALLY_PAID if 0 < collected < (c.target_amount or 0)
-                        else CaseStatus.PAID if collected > 0 else CaseStatus.IN_PROGRESS)
+            c.status = (CaseStatus.PARTIALLY_PAID if collected > 0 else CaseStatus.IN_PROGRESS)
             fixed["assigned_but_visited"] += 1
         if abs((c.collected_amount or 0) - collected) > 0.01:
             c.collected_amount = collected
