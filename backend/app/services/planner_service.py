@@ -35,12 +35,12 @@ from app.services.visit_priority_service import score_cases as score_cases_prior
 
 logger = structlog.get_logger("planner_service")
 
-# Strategy weights for Smart Allocation
-W_AFFINITY = 0.35
-W_PROXIMITY = 0.30
-W_WORKLOAD = 0.20
+# Strategy weights for Smart Allocation (heavier weight on proximity to ensure 60-140 km daily routes)
+W_AFFINITY = 0.30
+W_PROXIMITY = 0.40
+W_WORKLOAD = 0.15
 W_SKILLS = 0.15
-INCUMBENT_CONTINUITY_BONUS = 0.15
+INCUMBENT_CONTINUITY_BONUS = 0.10
 
 
 def get_target_plan_date(reference_date: date | None = None) -> date:
@@ -328,14 +328,37 @@ class PlannerService:
                     lt_rec = ag_hist.get("loan_type_recovery", {}).get(loan_type_str, 0.40)
                     affinity_score = min(1.0, float(lt_rec))
 
-                    # 2. Proximity (Decay exponential over distance)
-                    dist_km = self._calc_distance_km(
+                    # 2. Proximity & Neighborhood Cluster
+                    base_dist = self._calc_distance_km(
                         getattr(customer, "latitude", ag.base_latitude),
                         getattr(customer, "longitude", ag.base_longitude),
                         ag.base_latitude,
                         ag.base_longitude,
                     )
-                    proximity_score = math.exp(-dist_km / 15.0)
+
+                    # Hard operating boundary gate: agents should not travel beyond their 15km city zone
+                    if base_dist > 16.0:
+                        continue
+                    
+                    # If agent already has cases assigned, measure distance to existing cluster
+                    existing_cases = assigned_cases_by_agent.get(ag.id, [])
+                    if existing_cases:
+                        min_stop_dist = min(
+                            self._calc_distance_km(
+                                getattr(customer, "latitude", ag.base_latitude),
+                                getattr(customer, "longitude", ag.base_longitude),
+                                getattr(ec.customer, "latitude", ag.base_latitude),
+                                getattr(ec.customer, "longitude", ag.base_longitude),
+                            )
+                            for ec in existing_cases if ec.customer
+                        )
+                        effective_dist = 0.3 * base_dist + 0.7 * min_stop_dist
+                    else:
+                        effective_dist = base_dist
+
+                    # Sharp exponential decay for tight 60-140 km daily beats
+                    dist_km = effective_dist
+                    proximity_score = math.exp(-effective_dist / 5.0)
 
                     # 3. Workload Balance
                     workload_score = capacity_remaining[ag.id] / max(1, ag.max_cases_per_day or 12)
@@ -468,7 +491,7 @@ class PlannerService:
                         nxt_pos = stops[idx]
                         tot_dist += self._calc_distance_km(curr_pos[0], curr_pos[1], nxt_pos[0], nxt_pos[1])
                         curr_pos = nxt_pos
-                    est_distance_km = tot_dist * 1.3  # road network factor
+                    est_distance_km = tot_dist * 1.15  # urban road network factor
                     est_duration_min = int(est_distance_km / 25 * 60) + len(stops) * 20
                 except Exception as e:
                     logger.warning("Routing optimization fallback used", agent_id=ag.id, error=str(e))
