@@ -402,9 +402,11 @@ class CaseService:
 
             return score, badge, badge_color
 
-        # Build scored list: pending cases first (by AI score), visited cases at bottom
-        pending_scored = []
+        # Build scored list: Active Pending (AI Score Desc) -> Done Visited -> Blocked / DNC Cases
+        pending_active = []
         done_scored = []
+        blocked_scored = []
+
         for c in cases:
             score, badge, badge_color = _score_case(c)
             row = _format_case(c)
@@ -414,20 +416,30 @@ class CaseService:
             row["rank_badge"] = badge
             row["rank_badge_color"] = badge_color
             row["rank_reason"] = ""
-            if row["is_visited_today"]:
+
+            is_blocked = (score <= -900) or getattr(c.customer, "do_not_contact", False)
+            row["is_blocked"] = is_blocked
+
+            if is_blocked:
+                blocked_scored.append(row)
+            elif row["is_visited_today"]:
                 done_scored.append(row)
             else:
-                pending_scored.append(row)
+                pending_active.append(row)
 
-        pending_scored.sort(key=lambda x: -x["rank_score"])
-        for i, row in enumerate(pending_scored, 1):
+        pending_active.sort(key=lambda x: -x["rank_score"])
+        for i, row in enumerate(pending_active, 1):
             row["rank"] = i
 
         done_scored.sort(key=lambda x: -x["rank_score"])
-        for i, row in enumerate(done_scored, len(pending_scored) + 1):
+        for i, row in enumerate(done_scored, len(pending_active) + 1):
             row["rank"] = i
 
-        scored = pending_scored + done_scored
+        blocked_scored.sort(key=lambda x: -x["rank_score"])
+        for i, row in enumerate(blocked_scored, len(pending_active) + len(done_scored) + 1):
+            row["rank"] = i
+
+        scored = pending_active + done_scored + blocked_scored
 
         # Single LLM call — one-line reason for top 8 non-blocked cases.
         # 2026-08-19 — routed through core/llm.py. These reasons are cosmetic, so
@@ -435,7 +447,7 @@ class CaseService:
         # returned either way and the reasons are simply absent.
         if True:
             try:
-                eligible = [r for r in pending_scored if r["rank_score"] > -999][:8]
+                eligible = [r for r in pending_active if r["rank_score"] > -999][:8]
                 if eligible:
                     lines = []
                     for i, r in enumerate(eligible, 1):

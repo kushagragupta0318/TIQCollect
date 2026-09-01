@@ -12,7 +12,7 @@
 //   fixed-width figure blocks overflow a 320px row — and its hover moved
 //   from mouseenter/mouseleave handlers to .row-lift.
 // ─────────────────────────────────────────────────────────────────────────
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { useNavigate } from "react-router";
 import { Users, Briefcase, IndianRupee, MapPin, Clock, AlertTriangle, Sparkles, RefreshCw, TrendingUp, TrendingDown, ShieldAlert, Compass, Zap, RotateCcw, Download } from "lucide-react";
@@ -827,6 +827,28 @@ function TomorrowAllocationCard() {
   const [objective, setObjective] = useState<"BALANCED" | "MAX_RECOVERY" | "MIN_DISTANCE">("BALANCED");
   const [showDecisions, setShowDecisions] = useState(false);
   const [selectedDecision, setSelectedDecision] = useState<AllocationDecisionItem | null>(null);
+  const [decisionFilter, setDecisionFilter] = useState<"ALL" | "ALLOCATED" | "DEFERRED" | "BLOCKED">("ALL");
+
+  const sortedDecisions = useMemo(() => {
+    if (!plan?.decisions) return [];
+    const outcomeOrder: Record<string, number> = {
+      ALLOCATED: 1,
+      DEFERRED: 2,
+      DEFERRED_ROUTE_INFEASIBLE: 2,
+      BLOCKED: 3,
+    };
+    const list = [...plan.decisions].sort((a, b) => {
+      const rankA = outcomeOrder[a.outcome] ?? 2;
+      const rankB = outcomeOrder[b.outcome] ?? 2;
+      if (rankA !== rankB) return rankA - rankB;
+      return (b.visit_priority_score ?? 0) - (a.visit_priority_score ?? 0);
+    });
+    if (decisionFilter === "ALL") return list;
+    if (decisionFilter === "DEFERRED") {
+      return list.filter((d) => d.outcome === "DEFERRED" || d.outcome === "DEFERRED_ROUTE_INFEASIBLE");
+    }
+    return list.filter((d) => d.outcome === decisionFilter);
+  }, [plan?.decisions, decisionFilter]);
 
   const fetchPlan = useCallback(() => {
     setLoading(true);
@@ -1111,14 +1133,51 @@ function TomorrowAllocationCard() {
           {showDecisions && plan.decisions && (
             <div
               className="mt-3 p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2"
-              style={{ maxHeight: 260, overflowY: "auto" }}
+              style={{ maxHeight: 360, overflowY: "auto" }}
             >
-              <div className="flex items-center justify-between text-xs font-bold text-slate-800 sticky top-0 bg-slate-50 py-1 border-b border-slate-200">
-                <span>Case Assignment Audit Trail & Matching Factors</span>
-                <span className="text-slate-400 font-normal">{plan.decisions.length} recorded</span>
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-slate-800 sticky top-0 bg-slate-50 py-1.5 border-b border-slate-200 z-10">
+                <div className="flex items-center gap-2">
+                  <span>Case Assignment Audit Trail & Matching Factors</span>
+                  <span className="text-slate-400 font-normal">({plan.decisions.length} recorded)</span>
+                </div>
+                {/* Outcome Filter Pills */}
+                <div className="flex items-center gap-1 bg-white p-0.5 rounded-lg border border-slate-200 text-[11px] font-semibold">
+                  <button
+                    onClick={() => setDecisionFilter("ALL")}
+                    className={`px-2 py-0.5 rounded transition-colors ${
+                      decisionFilter === "ALL" ? "bg-slate-800 text-white font-bold" : "text-slate-600 hover:text-slate-900"
+                    }`}
+                  >
+                    All ({plan.decisions.length})
+                  </button>
+                  <button
+                    onClick={() => setDecisionFilter("ALLOCATED")}
+                    className={`px-2 py-0.5 rounded transition-colors ${
+                      decisionFilter === "ALLOCATED" ? "bg-emerald-600 text-white font-bold" : "text-slate-600 hover:text-slate-900"
+                    }`}
+                  >
+                    Allocated ({plan.decisions.filter((d: AllocationDecisionItem) => d.outcome === "ALLOCATED").length})
+                  </button>
+                  <button
+                    onClick={() => setDecisionFilter("DEFERRED")}
+                    className={`px-2 py-0.5 rounded transition-colors ${
+                      decisionFilter === "DEFERRED" ? "bg-amber-600 text-white font-bold" : "text-slate-600 hover:text-slate-900"
+                    }`}
+                  >
+                    Deferred ({plan.decisions.filter((d: AllocationDecisionItem) => d.outcome.startsWith("DEFERRED")).length})
+                  </button>
+                  <button
+                    onClick={() => setDecisionFilter("BLOCKED")}
+                    className={`px-2 py-0.5 rounded transition-colors ${
+                      decisionFilter === "BLOCKED" ? "bg-rose-600 text-white font-bold" : "text-slate-600 hover:text-slate-900"
+                    }`}
+                  >
+                    Blocked ({plan.decisions.filter((d: AllocationDecisionItem) => d.outcome === "BLOCKED").length})
+                  </button>
+                </div>
               </div>
               <div className="space-y-1.5">
-                {plan.decisions.map((d) => (
+                {sortedDecisions.map((d: AllocationDecisionItem) => (
                   <div
                     key={d.decision_id}
                     onClick={() => setSelectedDecision(d === selectedDecision ? null : d)}
@@ -1137,9 +1196,9 @@ function TomorrowAllocationCard() {
                             BLOCKED
                           </span>
                         )}
-                        {d.outcome === "DEFERRED" && (
+                        {(d.outcome === "DEFERRED" || d.outcome === "DEFERRED_ROUTE_INFEASIBLE") && (
                           <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800">
-                            DEFERRED
+                            {d.outcome === "DEFERRED_ROUTE_INFEASIBLE" ? "ROUTE OUTLIER" : "DEFERRED"}
                           </span>
                         )}
                       </div>

@@ -112,6 +112,7 @@ export interface Customer {
   _fraud_flag?: boolean;
   cibil_score: number | null;
   is_hostile: boolean;
+  do_not_contact?: boolean;
   language_preference: string;
 }
 
@@ -193,6 +194,8 @@ export interface Case {
   handover_notes: string | null;
   is_visited_today?: boolean;
   ptp_due_today?: boolean;
+  is_blocked?: boolean;
+  rank_badge?: string;
   /** Why this case is worth visiting, and how much. See
    *  backend/app/ml/visit_priority.py. Null when the loan carried no balance to
    *  score — such a case sorts last, never first. */

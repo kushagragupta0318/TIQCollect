@@ -62,36 +62,60 @@ export default function AgentCasesPage() {
   const cases = useMemo<Case[]>(() => {
     if (!beat) return [];
     const visitedSet = new Set(beat.visited_today_ids ?? []);
-    const all = (beat.cases ?? []).map((c) => ({ ...c, is_visited_today: visitedSet.has(c.id) }));
-    const pending = all.filter((c) => !c.is_visited_today);
+    const isBlocked = (c: Case) =>
+      Boolean(
+        c.customer?.do_not_contact ||
+        c.is_blocked ||
+        (c.rank_badge && (c.rank_badge.startsWith("BLOCKED") || c.rank_badge === "DO NOT VISIT"))
+      );
+
+    const all = (beat.cases ?? []).map((c) => ({
+      ...c,
+      is_visited_today: visitedSet.has(c.id),
+      is_blocked: isBlocked(c),
+    }));
+
+    const active = all.filter((c) => !c.is_visited_today && !c.is_blocked);
+    const done = all.filter((c) => c.is_visited_today && !c.is_blocked);
+    const blocked = all.filter((c) => c.is_blocked);
+
     const score = (c: Case) => c.visit_priority?.score ?? -1;
 
     if (here) {
       const distOf = new Map<string, number>();
-      for (const c of pending) {
+      for (const c of active) {
         distOf.set(c.id, haversineM(here.lat, here.lon, c.customer.latitude, c.customer.longitude));
       }
       const bucket = (c: Case) => Math.round((distOf.get(c.id) ?? Infinity) / SORT_BUCKET_M);
-      pending.sort(
+      active.sort(
         (a, b) =>
           bucket(a) - bucket(b) ||
           score(b) - score(a) ||
           a.id.localeCompare(b.id),
       );
     } else {
-      pending.sort((a, b) => score(b) - score(a) || a.id.localeCompare(b.id));
+      active.sort((a, b) => score(b) - score(a) || a.id.localeCompare(b.id));
     }
 
-    const done = all.filter((c) => c.is_visited_today);
-    return [...pending, ...done];
+    return [...active, ...done, ...blocked];
   }, [beat, here]);
 
   const activeList = useMemo<(Case | RankedCase)[]>(() => {
     if (smartOrder && rankedCases) {
       const visitedSet = new Set(beat?.visited_today_ids ?? []);
-      const pending = rankedCases.filter((c) => !c.is_visited_today && !visitedSet.has(c.id));
-      const done = rankedCases.filter((c) => c.is_visited_today || visitedSet.has(c.id));
-      return [...pending, ...done];
+      const isBlocked = (c: RankedCase) =>
+        Boolean(
+          c.is_blocked ||
+          c.customer?.do_not_contact ||
+          (c.rank_badge && (c.rank_badge.startsWith("BLOCKED") || c.rank_badge === "DO NOT VISIT")) ||
+          (c.rank_score !== undefined && c.rank_score <= -900)
+        );
+
+      const active = rankedCases.filter((c) => !c.is_visited_today && !visitedSet.has(c.id) && !isBlocked(c));
+      const done = rankedCases.filter((c) => (c.is_visited_today || visitedSet.has(c.id)) && !isBlocked(c));
+      const blocked = rankedCases.filter((c) => isBlocked(c));
+
+      return [...active, ...done, ...blocked];
     }
     return cases;
   }, [smartOrder, rankedCases, cases, beat]);

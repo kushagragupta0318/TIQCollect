@@ -704,7 +704,7 @@ export interface AllocationDecisionItem {
   case_id: string;
   case_number: string;
   target_amount: number;
-  outcome: "ALLOCATED" | "DEFERRED" | "BLOCKED";
+  outcome: "ALLOCATED" | "DEFERRED" | "DEFERRED_ROUTE_INFEASIBLE" | "BLOCKED" | string;
   allocated_agent_id: string | null;
   allocated_agent_name: string | null;
   visit_priority_score: number;

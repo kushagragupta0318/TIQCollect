@@ -3409,7 +3409,7 @@ def get_latest_allocation_plan(
             "status": b.status.value,
         })
 
-    # Fetch decisions (sample first 100)
+    # Fetch all decisions for this run: ALLOCATED first, DEFERRED second, BLOCKED at bottom
     decisions = (
         db.query(AllocationDecision)
         .options(
@@ -3417,9 +3417,16 @@ def get_latest_allocation_plan(
             joinedload(AllocationDecision.allocated_agent).joinedload(Agent.user),
         )
         .filter(AllocationDecision.run_id == run.id)
-        .limit(100)
         .all()
     )
+
+    outcome_order = {
+        "ALLOCATED": 1,
+        "DEFERRED": 2,
+        "DEFERRED_ROUTE_INFEASIBLE": 2,
+        "BLOCKED": 3,
+    }
+    decisions.sort(key=lambda d: (outcome_order.get(str(d.outcome), 2), -(float(d.visit_priority_score or 0))))
 
     decision_list = []
     for d in decisions:
