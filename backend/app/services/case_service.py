@@ -402,8 +402,9 @@ class CaseService:
 
             return score, badge, badge_color
 
-        # Build scored list
-        scored = []
+        # Build scored list: pending cases first (by AI score), visited cases at bottom
+        pending_scored = []
+        done_scored = []
         for c in cases:
             score, badge, badge_color = _score_case(c)
             row = _format_case(c)
@@ -413,11 +414,20 @@ class CaseService:
             row["rank_badge"] = badge
             row["rank_badge_color"] = badge_color
             row["rank_reason"] = ""
-            scored.append(row)
+            if row["is_visited_today"]:
+                done_scored.append(row)
+            else:
+                pending_scored.append(row)
 
-        scored.sort(key=lambda x: -x["rank_score"])
-        for i, row in enumerate(scored, 1):
+        pending_scored.sort(key=lambda x: -x["rank_score"])
+        for i, row in enumerate(pending_scored, 1):
             row["rank"] = i
+
+        done_scored.sort(key=lambda x: -x["rank_score"])
+        for i, row in enumerate(done_scored, len(pending_scored) + 1):
+            row["rank"] = i
+
+        scored = pending_scored + done_scored
 
         # Single LLM call — one-line reason for top 8 non-blocked cases.
         # 2026-08-19 — routed through core/llm.py. These reasons are cosmetic, so
@@ -425,7 +435,7 @@ class CaseService:
         # returned either way and the reasons are simply absent.
         if True:
             try:
-                eligible = [r for r in scored if r["rank_score"] > -999][:8]
+                eligible = [r for r in pending_scored if r["rank_score"] > -999][:8]
                 if eligible:
                     lines = []
                     for i, r in enumerate(eligible, 1):
@@ -518,11 +528,26 @@ class CaseService:
                 joinedload(Case.payments),
                 joinedload(Case.ptps),
             )
-            .filter(Case.id == case_id, Case.agent_id == agent.id)
+            .filter(Case.id == case_id)
             .first()
         )
         if not case:
-            raise HTTPException(status_code=404, detail="Case not found or not assigned to you")
+            raise HTTPException(status_code=404, detail="Case not found")
+
+        authorized = (case.agent_id == agent.id)
+        if not authorized:
+            beats = self.db.query(Beat).filter(Beat.agent_id == agent.id).all()
+            if any(case_id in (b.ordered_case_ids or []) for b in beats):
+                authorized = True
+            elif agent.manager_user_id and case.agent_id:
+                curr_ag = self.db.query(Agent).filter(Agent.id == case.agent_id).first()
+                if curr_ag and curr_ag.manager_user_id == agent.manager_user_id:
+                    authorized = True
+            elif case.agent_id is None:
+                authorized = True
+
+        if not authorized:
+            raise HTTPException(status_code=403, detail="Case not found or not assigned to you")
 
         base = _format_case(case)
 

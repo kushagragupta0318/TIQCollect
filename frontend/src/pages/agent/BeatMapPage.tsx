@@ -95,35 +95,60 @@ export default function BeatMapPage() {
     }
   }
 
-  const cases = beat?.cases ?? [];
-  const visitedTodaySet = new Set(beat?.visited_today_ids ?? []);
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-screen">
+        <div className="w-8 h-8 border-4 border-brand-500 border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (!beat) {
+    return (
+      <div className="min-h-svh bg-slate-50 flex flex-col">
+        <div className="bg-white border-b border-slate-100 sticky top-0 z-20">
+          <div className="flex items-center gap-3 p-4">
+            <button onClick={() => navigate(-1)} className="tap-target -ml-1 text-slate-400 flex items-center justify-center">
+              <ArrowLeft className="w-5 h-5" />
+            </button>
+            <div className="flex-1">
+              <h1 className="font-bold text-slate-900">Beat Map</h1>
+              <p className="text-xs text-slate-400">Today's Field Route</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex-1 flex flex-col items-center justify-center p-6 text-center">
+          <div className="w-16 h-16 rounded-2xl bg-indigo-50 flex items-center justify-center text-brand-600 mb-4 shadow-sm border border-indigo-100">
+            <MapPin className="w-8 h-8 opacity-80" />
+          </div>
+          <h2 className="text-base font-bold text-slate-800 mb-1">No Field Route Scheduled</h2>
+          <p className="text-xs text-slate-500 max-w-xs mb-6">
+            You do not have an active beat route assigned for today. When your manager sequences your queue, your map stops will appear here.
+          </p>
+          <button
+            onClick={() => refresh()}
+            className="btn btn-primary text-xs flex items-center gap-2 px-4 py-2"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>Check For Updates</span>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const cases = beat.cases ?? [];
+  const visitedTodaySet = new Set(beat.visited_today_ids ?? []);
   const completedCount = visitedTodaySet.size;
   const progressPct = Math.round((completedCount / Math.max(cases.length, 1)) * 100);
   const animatedProgressPct = useAnimatedValue(progressPct);
 
-  if (loading) return (
-    <div className="flex items-center justify-center h-screen">
-      <div className="w-8 h-8 border-4 border-brand-500 border-t-transparent rounded-full animate-spin" />
-    </div>
-  );
-
-  if (!beat) return (
-    <div className="flex flex-col items-center justify-center h-screen gap-4 text-slate-500">
-      <MapPin className="w-12 h-12 opacity-40" />
-      <p>No beat plan for today</p>
-    </div>
-  );
-
-  const startLat = userLoc?.lat ?? START_LAT;
-  const startLon = userLoc?.lon ?? START_LON;
-
   // Done = visited today only. Pending = everything else.
-  // This guarantees: pending + done = total (no overlap, no gaps).
   const _pending = cases.filter((c) => !visitedTodaySet.has(c.id));
 
   // All stats from real-time server values — identical source as home-summary
   const collectedAmt = beat.amount_collected_today ?? 0;
-  // Use server-computed ptps_due_today — same source as Home page stat.
   const ptpCount = beat.ptps_due_today ?? 0;
   const nextUnvisited = _pending[0] ?? null;
 
@@ -178,9 +203,6 @@ export default function BeatMapPage() {
           {/* Open in Google Maps — uses current server-optimized order */}
           <button
             onClick={() => openOptimizedRoute(cases)}
-            // Explicit property list, not transition-colors: that utility
-            // outranks .card and would narrow the transition to colour alone,
-            // leaving the hover lift to snap with nothing to ease it.
             className="flex-1 card flex items-center gap-3 bg-brand-600 border-brand-600 text-white hover:bg-brand-700 transition-[background-color,border-color,box-shadow,transform]"
           >
             <div className="w-9 h-9 rounded-xl bg-brand-500 flex items-center justify-center flex-shrink-0">
@@ -218,12 +240,6 @@ export default function BeatMapPage() {
               <span className="text-xs font-semibold text-warning-700">NEXT STOP</span>
             </div>
             <div className="flex items-center justify-between">
-              {/* The street address, not just the city. Tapping Go hands raw
-                  coordinates to Google Maps, which relabels them with whatever
-                  business it finds nearest — an agent heading to a house in
-                  Sector 44 was being shown a corporate office name instead. The
-                  pin is right; the name is not. Showing the real address here
-                  means they leave the app already knowing where they are going. */}
               <div className="min-w-0 pr-3">
                 <p className="font-semibold text-slate-900">{nextUnvisited.customer.full_name}</p>
                 {nextUnvisited.customer.address_line1 && (
@@ -271,14 +287,12 @@ export default function BeatMapPage() {
                   onClick={() => setActiveStop(isActive ? null : c.id)}
                 >
                   <div className="flex items-center gap-3">
-                    {/* Stop number */}
                     <div className={`w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-bold ${
                       isPTP ? "bg-warning-100 text-warning-700" : "bg-brand-100 text-brand-700"
                     }`}>
                       {idx + 1}
                     </div>
 
-                    {/* Info */}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-1.5">
                         <p className="text-sm font-medium truncate text-slate-900">{c.customer.full_name}</p>
@@ -298,7 +312,6 @@ export default function BeatMapPage() {
                   </div>
                 </button>
 
-                {/* Expanded actions */}
                 {isActive && (
                   <div className="px-3 pb-3 flex gap-2">
                     <button
@@ -332,7 +345,7 @@ export default function BeatMapPage() {
           })}
         </div>
 
-        {/* Route visualization (simple) — pending stops only */}
+        {/* Route visualization */}
         {_pending.length > 0 && (
           <div className="card">
             <p className="text-sm font-semibold text-slate-700 mb-3">Remaining Route</p>

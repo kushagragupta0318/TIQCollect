@@ -22,13 +22,8 @@ const STATUS_FILTERS: { label: string; value: CaseStatus | "ALL" | "PTP_TODAY" }
   { label: "Paid", value: "PAID" },
 ];
 
-
-// 2026-08-27 - _PRIORITY_ORDER removed. Case.priority is frozen at case
-// creation and knew nothing about effort spent or what is recoverable;
-// visit priority (server-computed) replaced it as the ordering here.
-
 export default function AgentCasesPage() {
-  const { beat, loading } = useBeat();
+  const { beat, loading, refresh } = useBeat();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<CaseStatus | "ALL" | "PTP_TODAY">("ALL");
   const [searchParams] = useSearchParams();
@@ -62,45 +57,21 @@ export default function AgentCasesPage() {
     }
   }
 
-  // Derive cases from beat: visited-today → done (bottom), rest → pending (sorted by priority)
   const here = liveLoc.coords;
 
   const cases = useMemo<Case[]>(() => {
     if (!beat) return [];
     const visitedSet = new Set(beat.visited_today_ids ?? []);
     const all = (beat.cases ?? []).map((c) => ({ ...c, is_visited_today: visitedSet.has(c.id) }));
-
     const pending = all.filter((c) => !c.is_visited_today);
-    // Visit priority, server-computed. See backend/app/ml/visit_priority.py —
-    // recoverable value, urgency around the 90-day NPA line, effort already
-    // spent. Absent means the loan carried no balance to score; such a case
-    // sorts last rather than first.
     const score = (c: Case) => c.visit_priority?.score ?? -1;
+
     if (here) {
-      // Nearest first — the cases the agent can actually reach right now.
-      //
-      // Distance is computed once per case and sorted on the cached value.
-      // Calling haversineM inside the comparator instead ran it twice per
-      // comparison, i.e. ~2·n·log(n) trig-heavy calls per sort rather than n.
-      //
-      // Sorted on the distance rounded to SORT_BUCKET_M, not the raw metres.
-      // Consumer GPS wanders a few metres while standing still, and two cases
-      // 3m apart would otherwise trade places every fix — rows visibly
-      // swapping under the agent's thumb.
-      //
-      // 2026-08-27 — the bucket widened from 10m to 1km, and visit priority
-      // replaced Case.priority as the tie-break inside it. At 10m the tie-break
-      // essentially never fired, so the score would have been invisible in the
-      // one place it matters. At ~1km the agent works the most valuable case in
-      // the neighbourhood they are standing in, while the nearest neighbourhood
-      // still wins overall — so travel stays controlled rather than the score
-      // sending them across the city.
       const distOf = new Map<string, number>();
       for (const c of pending) {
         distOf.set(c.id, haversineM(here.lat, here.lon, c.customer.latitude, c.customer.longitude));
       }
-      const bucket = (c: Case) =>
-        Math.round((distOf.get(c.id) ?? Infinity) / SORT_BUCKET_M);
+      const bucket = (c: Case) => Math.round((distOf.get(c.id) ?? Infinity) / SORT_BUCKET_M);
       pending.sort(
         (a, b) =>
           bucket(a) - bucket(b) ||
@@ -108,7 +79,6 @@ export default function AgentCasesPage() {
           a.id.localeCompare(b.id),
       );
     } else {
-      // No GPS fix yet: order by visit priority alone.
       pending.sort((a, b) => score(b) - score(a) || a.id.localeCompare(b.id));
     }
 
@@ -116,10 +86,15 @@ export default function AgentCasesPage() {
     return [...pending, ...done];
   }, [beat, here]);
 
-  // Use ranked list when smart order is on, otherwise use beat order
   const activeList = useMemo<(Case | RankedCase)[]>(() => {
-    return smartOrder && rankedCases ? rankedCases : cases;
-  }, [smartOrder, rankedCases, cases]);
+    if (smartOrder && rankedCases) {
+      const visitedSet = new Set(beat?.visited_today_ids ?? []);
+      const pending = rankedCases.filter((c) => !c.is_visited_today && !visitedSet.has(c.id));
+      const done = rankedCases.filter((c) => c.is_visited_today || visitedSet.has(c.id));
+      return [...pending, ...done];
+    }
+    return cases;
+  }, [smartOrder, rankedCases, cases, beat]);
 
   const filtered = useMemo(() => {
     let list = activeList;
@@ -220,9 +195,27 @@ export default function AgentCasesPage() {
 
       <div className="flex-1 overflow-y-auto divide-y divide-slate-100 lg:divide-y-0 lg:grid lg:grid-cols-2 xl:grid-cols-3 lg:gap-4 lg:p-6 lg:content-start">
         {filtered.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-16 text-slate-400 lg:col-span-full">
-            <Briefcase className="w-10 h-10 mb-3 opacity-40" />
-            <p className="text-sm">No cases found</p>
+          <div className="flex flex-col items-center justify-center py-16 text-slate-400 lg:col-span-full text-center px-4">
+            <div className="w-14 h-14 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400 mb-3">
+              <Briefcase className="w-7 h-7 opacity-60" />
+            </div>
+            <p className="text-sm font-semibold text-slate-700 mb-1">
+              {!beat ? "No Active Beat Assigned Today" : "No Cases Found"}
+            </p>
+            <p className="text-xs text-slate-500 max-w-xs mb-4">
+              {!beat
+                ? "Your manager hasn't published a beat route for you today. When cases are assigned, they will appear here."
+                : "No cases match your active search or status filter."}
+            </p>
+            {!beat && (
+              <button
+                onClick={() => refresh()}
+                className="btn btn-secondary text-xs flex items-center gap-1.5 px-3 py-1.5"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Refresh Queue</span>
+              </button>
+            )}
           </div>
         )}
         {filtered.map((c) => {
@@ -248,21 +241,7 @@ export default function AgentCasesPage() {
   );
 }
 
-// Hidden for now, on request — both are computed and styled exactly as before,
-// so flipping either back to true restores it with no other change.
-//   SLA badge:     "10h left" / "OVERDUE" / "3d SLA" beside the customer name.
-//   In-range pill: the green "In range · 30 m" chip. With this off the distance
-//                  still shows, just as plain grey text like every other row —
-//                  it is what the list is sorted by, so dropping it entirely
-//                  would leave the ordering unexplained.
-// Distance-sort granularity, in metres. See the sort in `cases` below.
-//
-// 1km, not 10m. This is the knob that decides whether visit priority means
-// anything on the agent's screen: at 10m almost no two cases share a bucket, so
-// the score never breaks a tie. At 1km the score orders the neighbourhood the
-// agent is standing in, and distance still decides which neighbourhood.
 const SORT_BUCKET_M = 1000;
-
 const SHOW_SLA_BADGE = false;
 const SHOW_IN_RANGE_PILL = false;
 
@@ -300,14 +279,9 @@ function CaseCard({ case_: c, rank, rankBadge, rankBadgeColor, rankReason, onNav
   const sla = getSLAInfo(c.allocation_date);
   const isBlocked = rankBadge?.startsWith("BLOCKED") || rankBadge === "DO NOT VISIT";
   return (
-    // .tap-card carries the white background and the hover: a tint while this
-    // is a flat list row, the card lift once lg turns it into one. It cannot be
-    // a bg-white utility — utilities outrank the components layer, so the hover
-    // background would never paint over it.
     <div onClick={onOpen} className={`tap-card p-4 active:bg-slate-50 cursor-pointer lg:rounded-2xl lg:border lg:border-slate-100 lg:h-full lg:flex lg:flex-col ${isDone || isBlocked ? "opacity-60" : ""}`}>
       <div className="flex items-start justify-between mb-2">
         <div className="flex items-start gap-2.5 flex-1 min-w-0">
-          {/* Rank number OR done tick */}
           {rank !== undefined ? (
             <div className={`w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5 text-xs font-bold ${isDone ? "bg-success-100 text-success-600 border-2 border-success-400" : "bg-purple-100 text-purple-700"}`}>
               {isDone ? "✓" : rank}
@@ -344,28 +318,21 @@ function CaseCard({ case_: c, rank, rankBadge, rankBadgeColor, rankReason, onNav
             {rankBadge}
           </span>
         )}
-        {/* Visit priority. Hidden in smart-order mode, where the rank pill above
-            is already the ordering on screen — two competing orderings on one
-            card is how an agent stops trusting either. */}
         {rank === undefined && c.visit_priority && (
           <VisitPriorityBadge priority={c.visit_priority} />
         )}
       </div>
 
-      {/* Why this case is worth the visit. Plain language, no score jargon —
-          the three components with their points live on the manager's case
-          detail, not at the doorstep. */}
       {rank === undefined && c.visit_priority && !isDone && (
         <div className="flex items-start gap-1.5 mb-2 bg-brand-50 rounded-lg px-2.5 py-1.5">
-          <Briefcase className="w-3 h-3 text-brand-400 mt-0.5 flex-shrink-0" />
+          <Briefcase className="w-3.5 h-3.5 text-brand-400 mt-0.5 flex-shrink-0" />
           <p className="text-xs text-brand-700 leading-snug">{c.visit_priority.reason}</p>
         </div>
       )}
 
-      {/* AI reason chip — shown in smart order mode */}
       {rankReason && (
         <div className="flex items-start gap-1.5 mb-2 bg-purple-50 rounded-lg px-2.5 py-1.5">
-          <Sparkles className="w-3 h-3 text-purple-400 mt-0.5 flex-shrink-0" />
+          <Sparkles className="w-3.5 h-3.5 text-purple-400 mt-0.5 flex-shrink-0" />
           <p className="text-xs text-purple-700 leading-snug">{rankReason}</p>
         </div>
       )}

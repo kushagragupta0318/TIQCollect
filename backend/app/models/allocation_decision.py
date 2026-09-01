@@ -7,6 +7,7 @@ from app.models.base import Base, TimestampMixin, UUIDPrimaryKey
 class AllocationOutcome(str, enum.Enum):
     ALLOCATED = "ALLOCATED"
     DEFERRED = "DEFERRED"
+    DEFERRED_ROUTE_INFEASIBLE = "DEFERRED_ROUTE_INFEASIBLE"
     BLOCKED = "BLOCKED"
 
 

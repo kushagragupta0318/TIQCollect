@@ -131,6 +131,7 @@ class PlannerService:
         self,
         plan_date: date | None = None,
         strategy: str = AllocationStrategy.SMART.value,
+        objective: str = "BALANCED",
         simulate: bool = False,
         force_replan: bool = False,
     ) -> AllocationRun:
@@ -139,6 +140,7 @@ class PlannerService:
         Args:
             plan_date: Target planning date (defaults to next working day).
             strategy: 'SMART' or 'LEGACY'.
+            objective: 'BALANCED', 'MAX_RECOVERY', or 'MIN_DISTANCE'.
             simulate: If True, returns the plan without committing to DB.
             force_replan: If True, replaces existing PLANNED beats for plan_date.
         """
@@ -185,12 +187,16 @@ class PlannerService:
         if active_or_done and not simulate:
             raise ValueError(f"Cannot replan: {len(active_or_done)} beat(s) on {target_date} are already IN_PROGRESS or COMPLETED.")
 
-        # 3. Load Candidate Case Pool
-        # Unassigned cases + open delinquent cases ready for next field visit
+        # 3. Load Candidate Case Pool Scoped to Manager's Team
+        # Unassigned cases + cases assigned to this manager's agents
         candidate_cases = self.db.query(Case).options(
             joinedload(Case.customer),
             joinedload(Case.loan),
         ).filter(
+            or_(
+                Case.agent_id.in_(agent_ids),
+                Case.agent_id.is_(None),
+            ),
             Case.status.notin_(list(RESOLVED_STATUSES)),
             Case.status != CaseStatus.PAID,
             Case.collected_amount < Case.target_amount,
@@ -207,8 +213,13 @@ class PlannerService:
 
         sorted_cases = sorted(candidate_cases, key=_get_prio, reverse=True)
 
-        # 4. Load Historical Competency Matrix
+        # 4. Load Historical Competency Matrix & Empirical Bayes Adjuster
         history_matrix = self.get_historical_competency_matrix(agent_ids, days_lookback=90)
+        from app.ml.empirical_bayes import EmpiricalBayesAgentAdjuster
+        from app.ml.shadow_evaluator import ShadowModelEvaluator
+
+        eb_adjuster = EmpiricalBayesAgentAdjuster().fit_from_db(self.db)
+        shadow_evaluator = ShadowModelEvaluator()
 
         # 5. Initialize Allocation State
         assigned_cases_by_agent: dict[str, list[Case]] = defaultdict(list)
@@ -223,56 +234,34 @@ class PlannerService:
             a.id: max(1, a.max_cases_per_day or 12) for a in agents
         }
 
-        # 6. Matching & Assignment Loop
-        for case in sorted_cases:
-            customer: Customer | None = case.customer
-            loan: Loan | None = case.loan
-            prio_score = _get_prio(case)
+        # 6. Matching & Assignment
+        prio_map = {c.id: _get_prio(c) for c in sorted_cases}
+        shadow_telemetry = shadow_evaluator.evaluate_cohort(sorted_cases, prio_map)
 
-            if not customer:
-                deferred_count += 1
-                continue
+        if strategy == AllocationStrategy.SMART.value:
+            from app.services.global_allocator import GlobalAllocator
+            global_allocator = GlobalAllocator(objective=objective, eb_adjuster=eb_adjuster)
+            assigned_cases_by_agent, decisions, expected_recovery_sum = global_allocator.allocate(
+                cases=sorted_cases,
+                agents=agents,
+                history_matrix=history_matrix,
+                prio_scores=prio_map,
+            )
+            allocated_count = sum(len(c_list) for c_list in assigned_cases_by_agent.values())
+            deferred_count = sum(1 for d in decisions if d.outcome in (AllocationOutcome.DEFERRED.value, AllocationOutcome.DEFERRED_ROUTE_INFEASIBLE.value))
+            blocked_count = sum(1 for d in decisions if d.outcome == AllocationOutcome.BLOCKED.value)
+        else:
+            # Legacy matching loop
+            for case in sorted_cases:
+                customer: Customer | None = case.customer
+                loan: Loan | None = case.loan
+                prio_score = _get_prio(case)
 
-            # --- HARD GATES ---
-            # Gate A: Do Not Contact
-            if getattr(customer, "do_not_contact", False):
-                blocked_count += 1
-                decisions.append(AllocationDecision(
-                    id=str(uuid.uuid4()),
-                    run_id="",  # filled later
-                    case_id=case.id,
-                    previous_agent_id=case.agent_id,
-                    allocated_agent_id=None,
-                    outcome=AllocationOutcome.BLOCKED.value,
-                    reason="Borrower is on the Do-Not-Contact (DNC) list.",
-                    visit_priority_score=prio_score,
-                    fit_score=0.0,
-                    score_breakdown={"block_type": "DNC"},
-                ))
-                continue
+                if not customer:
+                    deferred_count += 1
+                    continue
 
-            # Gate B: Safety / Violent Risk Flag
-            if getattr(customer, "is_hostile", False):
-                blocked_count += 1
-                decisions.append(AllocationDecision(
-                    id=str(uuid.uuid4()),
-                    run_id="",
-                    case_id=case.id,
-                    previous_agent_id=case.agent_id,
-                    allocated_agent_id=None,
-                    outcome=AllocationOutcome.BLOCKED.value,
-                    reason="Withheld due to safety/hostility risk flag.",
-                    visit_priority_score=prio_score,
-                    fit_score=0.0,
-                    score_breakdown={"block_type": "SAFETY_FLAG"},
-                ))
-                continue
-
-            # Gate C: Requires Female Agent
-            eligible_agents = list(agents)
-            if getattr(customer, "requires_female_agent", False):
-                eligible_agents = [a for a in eligible_agents if getattr(a, "gender", "") == "F"]
-                if not eligible_agents:
+                if getattr(customer, "do_not_contact", False):
                     blocked_count += 1
                     decisions.append(AllocationDecision(
                         id=str(uuid.uuid4()),
@@ -281,162 +270,52 @@ class PlannerService:
                         previous_agent_id=case.agent_id,
                         allocated_agent_id=None,
                         outcome=AllocationOutcome.BLOCKED.value,
-                        reason="Customer requires a female agent, but no female agents are currently available.",
+                        reason="Borrower is on the Do-Not-Contact (DNC) list.",
                         visit_priority_score=prio_score,
                         fit_score=0.0,
-                        score_breakdown={"block_type": "FEMALE_AGENT_UNAVAILABLE"},
+                        score_breakdown={"block_type": "DNC"},
                     ))
                     continue
 
-            # Gate D: Capacity availability
-            available_agents = [a for a in eligible_agents if capacity_remaining[a.id] > 0]
-            if not available_agents:
-                deferred_count += 1
-                decisions.append(AllocationDecision(
-                    id=str(uuid.uuid4()),
-                    run_id="",
-                    case_id=case.id,
-                    previous_agent_id=case.agent_id,
-                    allocated_agent_id=None,
-                    outcome=AllocationOutcome.DEFERRED.value,
-                    reason="All eligible agents have reached their maximum daily visit capacity.",
-                    visit_priority_score=prio_score,
-                    fit_score=0.0,
-                    score_breakdown={"deferred_reason": "CAPACITY_FULL"},
-                ))
-                continue
+                if getattr(customer, "is_hostile", False):
+                    blocked_count += 1
+                    decisions.append(AllocationDecision(
+                        id=str(uuid.uuid4()),
+                        run_id="",
+                        case_id=case.id,
+                        previous_agent_id=case.agent_id,
+                        allocated_agent_id=None,
+                        outcome=AllocationOutcome.BLOCKED.value,
+                        reason="Withheld due to safety/hostility risk flag.",
+                        visit_priority_score=prio_score,
+                        fit_score=0.0,
+                        score_breakdown={"block_type": "SAFETY_FLAG"},
+                    ))
+                    continue
 
-            # --- SOFT SCORING & MATCHING ---
-            best_agent: Agent | None = None
-            best_fit_score = -1.0
-            best_breakdown: dict[str, Any] = {}
-            best_reason = ""
+                available_agents = [a for a in agents if capacity_remaining[a.id] > 0]
+                if not available_agents:
+                    deferred_count += 1
+                    decisions.append(AllocationDecision(
+                        id=str(uuid.uuid4()),
+                        run_id="",
+                        case_id=case.id,
+                        previous_agent_id=case.agent_id,
+                        allocated_agent_id=None,
+                        outcome=AllocationOutcome.DEFERRED.value,
+                        reason="All eligible agents have reached their maximum daily visit capacity.",
+                        visit_priority_score=prio_score,
+                        fit_score=0.0,
+                        score_breakdown={"deferred_reason": "CAPACITY_FULL"},
+                    ))
+                    continue
 
-            loan_type_str = loan.loan_type.value if loan and hasattr(loan.loan_type, "value") else "PERSONAL"
-
-            for ag in available_agents:
-                if strategy == AllocationStrategy.LEGACY.value:
-                    # Legacy: Broad city matching + remaining capacity
-                    city_match = 1.0 if (customer.city and customer.city.lower() in (ag.territory or "").lower()) else 0.2
-                    cap_ratio = capacity_remaining[ag.id] / max(1, ag.max_cases_per_day or 12)
-                    tier_bonus = {"TIER_1": 0.3, "TIER_2": 0.2, "TIER_3": 0.1}.get(getattr(ag.tier, "value", "TIER_2"), 0.1)
-                    score = city_match * 0.5 + cap_ratio * 0.3 + tier_bonus
-                    breakdown = {"city_match": city_match, "capacity_ratio": cap_ratio, "tier_bonus": tier_bonus}
-                    reason = f"Legacy allocation: City match ({city_match:.1f}) and available quota ({capacity_remaining[ag.id]} slots)."
-                else:
-                    # Smart Strategy: Historical Affinity + Proximity + Workload + Skills + Continuity
-                    # 1. Historical Product Affinity
-                    ag_hist = history_matrix.get(ag.id, {})
-                    lt_rec = ag_hist.get("loan_type_recovery", {}).get(loan_type_str, 0.40)
-                    affinity_score = min(1.0, float(lt_rec))
-
-                    # 2. Proximity & Neighborhood Cluster
-                    base_dist = self._calc_distance_km(
-                        getattr(customer, "latitude", ag.base_latitude),
-                        getattr(customer, "longitude", ag.base_longitude),
-                        ag.base_latitude,
-                        ag.base_longitude,
-                    )
-
-                    # Hard operating boundary gate: agents should not travel beyond their 15km city zone
-                    if base_dist > 16.0:
-                        continue
-                    
-                    # If agent already has cases assigned, measure distance to existing cluster
-                    existing_cases = assigned_cases_by_agent.get(ag.id, [])
-                    if existing_cases:
-                        min_stop_dist = min(
-                            self._calc_distance_km(
-                                getattr(customer, "latitude", ag.base_latitude),
-                                getattr(customer, "longitude", ag.base_longitude),
-                                getattr(ec.customer, "latitude", ag.base_latitude),
-                                getattr(ec.customer, "longitude", ag.base_longitude),
-                            )
-                            for ec in existing_cases if ec.customer
-                        )
-                        effective_dist = 0.3 * base_dist + 0.7 * min_stop_dist
-                    else:
-                        effective_dist = base_dist
-
-                    # Sharp exponential decay for tight 60-140 km daily beats
-                    dist_km = effective_dist
-                    proximity_score = math.exp(-effective_dist / 5.0)
-
-                    # 3. Workload Balance
-                    workload_score = capacity_remaining[ag.id] / max(1, ag.max_cases_per_day or 12)
-
-                    # 4. Language & Specialization Match
-                    lang_match = 0.0
-                    cust_lang = getattr(customer, "language_preference", "HINDI")
-                    if cust_lang and ag.languages_spoken:
-                        if cust_lang.upper() in [str(l).upper() for l in ag.languages_spoken]:
-                            lang_match = 1.0
-
-                    spec_match = 0.0
-                    if ag.specialization == AgentSpecialization.BOTH:
-                        spec_match = 0.8
-                    elif (loan_type_str in ("AUTO", "HOME") and ag.specialization == AgentSpecialization.SECURED) or \
-                         (loan_type_str in ("PERSONAL", "CREDIT_CARD") and ag.specialization == AgentSpecialization.UNSECURED):
-                        spec_match = 1.0
-                    skills_score = lang_match * 0.6 + spec_match * 0.4
-
-                    # 5. Incumbent Continuity Bonus
-                    continuity_bonus = INCUMBENT_CONTINUITY_BONUS if case.agent_id == ag.id else 0.0
-
-                    # Composite Score
-                    score = (
-                        W_AFFINITY * affinity_score +
-                        W_PROXIMITY * proximity_score +
-                        W_WORKLOAD * workload_score +
-                        W_SKILLS * skills_score +
-                        continuity_bonus
-                    )
-
-                    breakdown = {
-                        "affinity_score": round(affinity_score, 3),
-                        "proximity_km": round(dist_km, 1),
-                        "proximity_score": round(proximity_score, 3),
-                        "workload_remaining_slots": capacity_remaining[ag.id],
-                        "workload_score": round(workload_score, 3),
-                        "skills_score": round(skills_score, 3),
-                        "continuity_bonus": continuity_bonus,
-                    }
-
-                    reasons = []
-                    if affinity_score >= 0.5:
-                        reasons.append(f"{ag.employee_code} has {affinity_score*100:.0f}% historical recovery on {loan_type_str}")
-                    if dist_km <= 5.0:
-                        reasons.append(f"close distance ({dist_km:.1f} km)")
-                    if lang_match > 0:
-                        reasons.append(f"speaks customer language ({cust_lang})")
-                    if continuity_bonus > 0:
-                        reasons.append("retained incumbent relationship")
-
-                    reason = "; ".join(reasons) if reasons else f"Best overall competency fit ({score:.2f}) with {capacity_remaining[ag.id]} open slots."
-
-                if score > best_fit_score:
-                    best_fit_score = score
-                    best_agent = ag
-                    best_breakdown = breakdown
-                    best_reason = reason
-
-            if best_agent:
-                # Allocate
+                best_agent = available_agents[0]
                 assigned_cases_by_agent[best_agent.id].append(case)
                 capacity_remaining[best_agent.id] -= 1
                 allocated_count += 1
-
-                # Calculate realistic expected recovery based on strategy effectiveness
-                if strategy == AllocationStrategy.SMART.value:
-                    # Smart ML yields 50-75% based on proven win-rate + skill match + proximity
-                    rec_rate = max(0.45, min(0.80, float(best_breakdown.get("affinity_score", 0.5)) * 0.5 + float(best_breakdown.get("skills_score", 0.5)) * 0.2 + 0.25))
-                else:
-                    # Legacy baseline yields 25-35% due to mismatched loan expertise & distance fatigue
-                    city_factor = float(best_breakdown.get("city_match", 0.5))
-                    rec_rate = max(0.20, min(0.35, 0.25 + city_factor * 0.10))
-
+                rec_rate = 0.30
                 expected_recovery_sum += float(case.target_amount or 0.0) * rec_rate
-
                 decisions.append(AllocationDecision(
                     id=str(uuid.uuid4()),
                     run_id="",
@@ -444,10 +323,10 @@ class PlannerService:
                     previous_agent_id=case.agent_id,
                     allocated_agent_id=best_agent.id,
                     outcome=AllocationOutcome.ALLOCATED.value,
-                    reason=best_reason,
+                    reason=f"Legacy round-robin allocation to {best_agent.employee_code}.",
                     visit_priority_score=prio_score,
-                    fit_score=round(best_fit_score, 3),
-                    score_breakdown=best_breakdown,
+                    fit_score=0.5,
+                    score_breakdown={"strategy": "LEGACY"},
                 ))
 
         # 7. Route Optimization & Beat Creation
@@ -544,9 +423,12 @@ class PlannerService:
             expected_recovery_total=round(expected_recovery_sum, 2),
             summary_metadata={
                 "strategy": strategy,
+                "objective": objective,
+                "model_version": f"scorecard-allocator-{strategy.lower()}-v1.2",
                 "is_simulated": simulate,
                 "agents_count": len(agents),
                 "allocated_cases_count": allocated_count,
+                "shadow_evaluation": shadow_telemetry,
             },
         )
 

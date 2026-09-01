@@ -15,6 +15,7 @@ from app.models.fraud_review import FraudReview, ReviewVerdict
 from app.models.repayment_snapshot import RepaymentSnapshot
 from app.models.allocation_run import AllocationRun, AllocationStrategy, AllocationRunStatus
 from app.models.allocation_decision import AllocationDecision, AllocationOutcome
+from app.models.allocation_setting import AllocationSetting, AllocationObjective
 
 __all__ = [
     "User", "UserRole",
@@ -34,4 +35,5 @@ __all__ = [
     "RepaymentSnapshot",
     "AllocationRun", "AllocationStrategy", "AllocationRunStatus",
     "AllocationDecision", "AllocationOutcome",
+    "AllocationSetting", "AllocationObjective",
 ]

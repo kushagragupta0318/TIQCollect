@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
-import { getBeat } from "@/api/agent";
+import { getBeat, getHomeSummary } from "@/api/agent";
 import type { Case } from "@/types";
 
 export interface BeatData {
@@ -16,45 +16,78 @@ export interface BeatData {
   visited_today_ids: string[];
   amount_collected_today: number;
   cases: Case[];
-  // consolidated from /home-summary
   ptps_due_today: number;
   check_in_status: string;
   sos_active: boolean;
 }
 
+export interface HomeSummaryData {
+  cases_today: number;
+  visits_done: number;
+  amount_collected_today: number;
+  total_target_today: number;
+  ptps_due_today: number;
+  check_in_status: string;
+  beat_status: string | null;
+  sos_active: boolean;
+}
+
 interface BeatCtxValue {
   beat: BeatData | null;
+  summary: HomeSummaryData | null;
   loading: boolean;
   refresh: () => Promise<void>;
   patch: (partial: Partial<BeatData>) => void;
+  patchSummary: (partial: Partial<HomeSummaryData>) => void;
 }
 
 const BeatContext = createContext<BeatCtxValue>({
   beat: null,
+  summary: null,
   loading: true,
   refresh: async () => {},
   patch: () => {},
+  patchSummary: () => {},
 });
 
 export function BeatProvider({ children }: { children: ReactNode }) {
   const [beat, setBeat] = useState<BeatData | null>(null);
+  const [summary, setSummary] = useState<HomeSummaryData | null>(null);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
-    const data = await getBeat();
-    setBeat(data as BeatData);
+    try {
+      const [beatRes, summaryRes] = await Promise.allSettled([
+        getBeat(),
+        getHomeSummary(),
+      ]);
+
+      if (beatRes.status === "fulfilled" && beatRes.value) {
+        setBeat(beatRes.value as BeatData);
+      } else {
+        setBeat(null);
+      }
+
+      if (summaryRes.status === "fulfilled" && summaryRes.value) {
+        setSummary(summaryRes.value as HomeSummaryData);
+      }
+    } catch {
+      // best-effort handling
+    }
   }, []);
 
   const patch = useCallback((partial: Partial<BeatData>) => {
     setBeat((prev) => (prev ? { ...prev, ...partial } : prev));
   }, []);
 
+  const patchSummary = useCallback((partial: Partial<HomeSummaryData>) => {
+    setSummary((prev) => (prev ? { ...prev, ...partial } : prev));
+  }, []);
+
   useEffect(() => {
     refresh().finally(() => setLoading(false));
   }, [refresh]);
 
-  // Re-sync whenever the user switches back to the tab — keeps Home, Cases,
-  // and Beat Map consistent without requiring a manual page refresh.
   useEffect(() => {
     const handleVisible = () => {
       if (document.visibilityState === "visible") refresh();
@@ -64,7 +97,7 @@ export function BeatProvider({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   return (
-    <BeatContext.Provider value={{ beat, loading, refresh, patch }}>
+    <BeatContext.Provider value={{ beat, summary, loading, refresh, patch, patchSummary }}>
       {children}
     </BeatContext.Provider>
   );

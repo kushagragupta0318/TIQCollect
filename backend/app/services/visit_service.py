@@ -85,11 +85,32 @@ class VisitService:
         case = (
             self.db.query(Case)
             .options(joinedload(Case.customer), joinedload(Case.loan))
-            .filter(Case.id == case_id, Case.agent_id == agent.id)
+            .filter(Case.id == case_id)
             .first()
         )
         if not case:
-            raise HTTPException(status_code=404, detail="Case not found or not assigned to you")
+            raise HTTPException(status_code=404, detail="Case not found")
+
+        authorized = (case.agent_id == agent.id)
+        if not authorized:
+            from app.models.beat import Beat
+            beats = self.db.query(Beat).filter(Beat.agent_id == agent.id).all()
+            if any(case_id in (b.ordered_case_ids or []) for b in beats):
+                authorized = True
+            elif agent.manager_user_id and case.agent_id:
+                curr_ag = self.db.query(Agent).filter(Agent.id == case.agent_id).first()
+                if curr_ag and curr_ag.manager_user_id == agent.manager_user_id:
+                    authorized = True
+            elif case.agent_id is None:
+                authorized = True
+
+        if not authorized:
+            raise HTTPException(status_code=403, detail="Case not found or not assigned to you")
+
+        # Sync case agent if working on assigned beat case
+        if case.agent_id != agent.id:
+            case.agent_id = agent.id
+
         if case.customer.do_not_contact:
             raise HTTPException(status_code=403, detail="Customer is marked Do Not Contact")
 

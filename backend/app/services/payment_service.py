@@ -64,13 +64,37 @@ class PaymentService:
         token = uuid.uuid4().hex[:8].upper()
         return f"TIQ-{year}-{token}"
 
+    def _get_accessible_case(self, agent, case_id: str) -> Case:
+        case = self.db.query(Case).filter(Case.id == case_id).first()
+        if not case:
+            raise AppException(404, ErrorCode.CASE_NOT_FOUND, "Case not found")
+
+        authorized = (case.agent_id == agent.id)
+        if not authorized:
+            from app.models.beat import Beat
+            beats = self.db.query(Beat).filter(Beat.agent_id == agent.id).all()
+            if any(case_id in (b.ordered_case_ids or []) for b in beats):
+                authorized = True
+            elif agent.manager_user_id and case.agent_id:
+                curr_ag = self.db.query(Agent).filter(Agent.id == case.agent_id).first()
+                if curr_ag and curr_ag.manager_user_id == agent.manager_user_id:
+                    authorized = True
+            elif case.agent_id is None:
+                authorized = True
+
+        if not authorized:
+            raise AppException(403, ErrorCode.FORBIDDEN, "Case not assigned to you")
+
+        if case.agent_id != agent.id:
+            case.agent_id = agent.id
+
+        return case
+
     # -----------------------------------------------------------------
     # POST /agent/cases/{case_id}/payment
     # -----------------------------------------------------------------
     def collect_payment(self, agent, case_id: str, req) -> dict:
-        case = self.db.query(Case).filter(Case.id == case_id, Case.agent_id == agent.id).first()
-        if not case:
-            raise AppException(404, ErrorCode.CASE_NOT_FOUND, "Case not found or not assigned to you")
+        case = self._get_accessible_case(agent, case_id)
 
         existing = self._find_recent_duplicate(case.id, agent.id, req)
         if existing:
@@ -283,9 +307,7 @@ class PaymentService:
     # POST /agent/cases/{case_id}/ptp
     # -----------------------------------------------------------------
     def set_ptp(self, agent, case_id: str, req) -> dict:
-        case = self.db.query(Case).filter(Case.id == case_id, Case.agent_id == agent.id).first()
-        if not case:
-            raise AppException(404, ErrorCode.CASE_NOT_FOUND, "Case not found or not assigned to you")
+        case = self._get_accessible_case(agent, case_id)
 
         existing = self._find_recent_duplicate_ptp(case.id, agent.id, req)
         if existing:

@@ -3473,6 +3473,7 @@ def create_or_simulate_allocation_plan(
 
     req = req or {}
     strategy = req.get("strategy", "SMART")
+    objective = req.get("objective", "BALANCED")
     plan_date_str = req.get("plan_date")
     simulate = bool(req.get("simulate", False))
     force_replan = bool(req.get("force_replan", True))
@@ -3484,6 +3485,7 @@ def create_or_simulate_allocation_plan(
         run = planner.plan_next_day(
             plan_date=target_d,
             strategy=strategy,
+            objective=objective,
             simulate=simulate,
             force_replan=force_replan,
         )
@@ -3494,6 +3496,7 @@ def create_or_simulate_allocation_plan(
         "run_id": run.id,
         "plan_date": run.plan_date.isoformat(),
         "strategy": run.strategy,
+        "objective": objective,
         "status": run.status,
         "total_cases_evaluated": run.total_cases_evaluated,
         "total_cases_allocated": run.total_cases_allocated,
@@ -3502,6 +3505,59 @@ def create_or_simulate_allocation_plan(
         "total_agents_planned": run.total_agents_planned,
         "expected_recovery_total": run.expected_recovery_total,
         "is_simulated": simulate,
+    }
+
+
+@router.get("/allocation/settings")
+def get_allocation_settings(current_user: ManagerOnly, db: DbSession):
+    """Retrieve active allocation policy and objective settings."""
+    from app.models.allocation_setting import AllocationSetting
+    setting = db.query(AllocationSetting).filter(AllocationSetting.manager_user_id == current_user.id).first()
+    if not setting:
+        return {
+            "objective": "BALANCED",
+            "max_territory_radius_km": 16.0,
+            "max_daily_stops_per_agent": 12,
+        }
+    return {
+        "objective": setting.objective,
+        "max_territory_radius_km": setting.max_territory_radius_km,
+        "max_daily_stops_per_agent": setting.max_daily_stops_per_agent,
+    }
+
+
+@router.post("/allocation/settings")
+def update_allocation_settings(req: dict, current_user: ManagerOnly, db: DbSession):
+    """Update active allocation policy settings."""
+    from app.models.allocation_setting import AllocationSetting
+    import uuid
+
+    objective = req.get("objective", "BALANCED")
+    radius = float(req.get("max_territory_radius_km", 16.0))
+    max_stops = int(req.get("max_daily_stops_per_agent", 12))
+
+    setting = db.query(AllocationSetting).filter(AllocationSetting.manager_user_id == current_user.id).first()
+    if not setting:
+        setting = AllocationSetting(
+            id=str(uuid.uuid4()),
+            manager_user_id=current_user.id,
+            objective=objective,
+            max_territory_radius_km=radius,
+            max_daily_stops_per_agent=max_stops,
+            custom_weights={},
+        )
+        db.add(setting)
+    else:
+        setting.objective = objective
+        setting.max_territory_radius_km = radius
+        setting.max_daily_stops_per_agent = max_stops
+
+    db.commit()
+    return {
+        "success": True,
+        "objective": setting.objective,
+        "max_territory_radius_km": setting.max_territory_radius_km,
+        "max_daily_stops_per_agent": setting.max_daily_stops_per_agent,
     }
 
 

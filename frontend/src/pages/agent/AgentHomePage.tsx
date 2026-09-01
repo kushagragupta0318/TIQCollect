@@ -14,7 +14,7 @@ import { useAnimatedValue, useCountUp } from "@/hooks/useAnimatedValue";
 export default function AgentHomePage() {
   const { user } = useAuthStore();
   const navigate = useNavigate();
-  const { beat, loading, patch } = useBeat();
+  const { beat, summary, loading, refresh, patch, patchSummary } = useBeat();
 
   const [checkingIn, setCheckingIn] = useState(false);
   const [selfieModal, setSelfieModal] = useState(false);
@@ -24,12 +24,14 @@ export default function AgentHomePage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
-  const checkedIn = beat?.check_in_status === "ON_DUTY";
-  const collected = beat?.amount_collected_today ?? 0;
-  const totalTarget = beat?.total_target_amount ?? 0;
-  const ptpsDue = beat?.ptps_due_today ?? 0;
-  const collectionPct = Math.min(Math.round((collected / Math.max(totalTarget, 1)) * 100), 100);
-  const pendingCases = Math.max((beat?.total_cases ?? 0) - (beat?.cases_visited_today ?? 0), 0);
+  const checkedIn = summary?.check_in_status === "ON_DUTY" || beat?.check_in_status === "ON_DUTY";
+  const collected = beat?.amount_collected_today ?? summary?.amount_collected_today ?? 0;
+  const totalTarget = beat?.total_target_amount ?? summary?.total_target_today ?? 0;
+  const ptpsDue = beat?.ptps_due_today ?? summary?.ptps_due_today ?? 0;
+  const totalCases = beat?.total_cases ?? summary?.cases_today ?? 0;
+  const doneCases = beat?.cases_visited_today ?? summary?.visits_done ?? 0;
+  const collectionPct = totalTarget > 0 ? Math.min(Math.round((collected / totalTarget) * 100), 100) : 0;
+  const pendingCases = Math.max(totalCases - doneCases, 0);
 
   async function startSelfieCapture() {
     setSelfieModal(true);
@@ -72,6 +74,7 @@ export default function AgentHomePage() {
       await apiCheckIn(coords.lat, coords.lon);
       closeSelfie();
       patch({ check_in_status: "ON_DUTY" });
+      patchSummary({ check_in_status: "ON_DUTY" });
       toast.success("✅ Checked in! Have a safe day, " + user?.full_name.split(" ")[0] + "!");
     } catch {
       toast.error("Check-in failed");
@@ -81,8 +84,7 @@ export default function AgentHomePage() {
   }
 
   // Auto re-anchor: whenever the home page opens while on duty, silently push
-  // the agent's current live GPS so the demo customers (Balraj + anchors) snap
-  // to wherever the agent physically is — no button tap. Runs once per mount.
+  // the agent's current live GPS so the demo customers snap to wherever the agent is
   const autoAnchoredRef = useRef(false);
   useEffect(() => {
     if (!checkedIn || autoAnchoredRef.current || !navigator.geolocation) return;
@@ -113,8 +115,30 @@ export default function AgentHomePage() {
         )}
       </div>
 
+      {/* No beat banner if not assigned for today */}
+      {!loading && !beat && (
+        <div className="card p-4 sm:p-5 bg-gradient-to-r from-blue-50/70 to-indigo-50/70 border border-blue-100/80">
+          <div className="flex items-start gap-3">
+            <div className="w-9 h-9 rounded-xl bg-blue-100 text-blue-700 flex items-center justify-center flex-shrink-0 mt-0.5">
+              <Briefcase className="w-4 h-4" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <h3 className="text-sm font-semibold text-slate-900">No Field Beat Assigned Today</h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Your Agency Manager has not scheduled an active route for today yet. You can still record direct collections or PTP follow-ups.
+              </p>
+              <div className="flex items-center gap-2 mt-3">
+                <Button variant="secondary" size="sm" onClick={() => refresh()}>
+                  Check For Updates
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Collection progress */}
-      {!beat ? (
+      {loading ? (
         <div className="card animate-pulse space-y-2">
           <div className="flex justify-between">
             <div className="h-3.5 w-36 bg-slate-200 rounded" />
@@ -126,16 +150,16 @@ export default function AgentHomePage() {
             <div className="h-3 w-20 bg-slate-100 rounded" />
           </div>
         </div>
-      ) : (
+      ) : totalTarget > 0 ? (
         <CollectionProgressBar
           collected={collected}
           totalTarget={totalTarget}
           pct={collectionPct}
         />
-      )}
+      ) : null}
 
       {/* Stats */}
-      {loading || !beat ? (
+      {loading ? (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           {[0, 1, 2, 3].map((i) => (
             <div key={i} className="card animate-pulse space-y-2">
@@ -146,21 +170,31 @@ export default function AgentHomePage() {
           ))}
         </div>
       ) : (
-        <StatGrid beat={beat} navigate={navigate} />
+        <StatGrid
+          totalCases={totalCases}
+          doneCases={doneCases}
+          collected={collected}
+          ptpsDue={ptpsDue}
+          navigate={navigate}
+        />
       )}
 
       {/* Quick actions */}
       <div className="space-y-2">
         <h2 className="text-sm font-semibold text-slate-700">Quick Actions</h2>
         <div className="space-y-2 lg:space-y-0 lg:grid lg:grid-cols-2 lg:gap-3">
-        <QuickAction icon={<MapPin className="w-5 h-5 text-brand-600" />} label="Open Beat Map" sub="View today's optimised route" onClick={() => navigate("/agent/beat")} color="bg-brand-50" />
-        <QuickAction icon={<Briefcase className="w-5 h-5 text-slate-600" />} label="All My Cases" sub={`${pendingCases} pending · ${beat?.cases_visited_today ?? 0} done`} onClick={() => navigate("/agent/cases")} color="bg-slate-50" />
-        {ptpsDue > 0 && (
-          <QuickAction icon={<Calendar className="w-5 h-5 text-warning-600" />} label={`${ptpsDue} PTPs Due Today`} sub="Follow up before 7 PM" onClick={() => navigate("/agent/cases?filter=ptp_due")} color="bg-warning-50" />
-        )}
-        {checkedIn && (
-          <QuickAction icon={<Clock className="w-5 h-5 text-success-600" />} label="Next Case on Beat" sub="Navigate to nearest unvisited" onClick={() => navigate("/agent/beat")} color="bg-success-50" />
-        )}
+          {beat ? (
+            <QuickAction icon={<MapPin className="w-5 h-5 text-brand-600" />} label="Open Beat Map" sub="View today's optimised route" onClick={() => navigate("/agent/beat")} color="bg-brand-50" />
+          ) : (
+            <QuickAction icon={<MapPin className="w-5 h-5 text-slate-400" />} label="No Route Active" sub="Beat map will appear when scheduled" onClick={() => {}} color="bg-slate-50 opacity-60" />
+          )}
+          <QuickAction icon={<Briefcase className="w-5 h-5 text-slate-600" />} label="All My Cases" sub={`${pendingCases} pending · ${doneCases} done`} onClick={() => navigate("/agent/cases")} color="bg-slate-50" />
+          {ptpsDue > 0 && (
+            <QuickAction icon={<Calendar className="w-5 h-5 text-warning-600" />} label={`${ptpsDue} PTPs Due Today`} sub="Follow up before 7 PM" onClick={() => navigate("/agent/cases?filter=ptp_due")} color="bg-warning-50" />
+          )}
+          {checkedIn && beat && (
+            <QuickAction icon={<Clock className="w-5 h-5 text-success-600" />} label="Next Case on Beat" sub="Navigate to nearest unvisited" onClick={() => navigate("/agent/beat")} color="bg-success-50" />
+          )}
         </div>
       </div>
 
@@ -213,12 +247,20 @@ export default function AgentHomePage() {
   );
 }
 
-function StatGrid({ beat, navigate }: { beat: BeatData; navigate: NavigateFunction }) {
-  const totalCases = beat.total_cases;
-  const doneCases = beat.cases_visited_today;
+function StatGrid({
+  totalCases,
+  doneCases,
+  collected,
+  ptpsDue,
+  navigate,
+}: {
+  totalCases: number;
+  doneCases: number;
+  collected: number;
+  ptpsDue: number;
+  navigate: NavigateFunction;
+}) {
   const pendingCases = Math.max(totalCases - doneCases, 0);
-  const collected = beat.amount_collected_today;
-  const ptpsDue = beat.ptps_due_today;
 
   const animatedPending = useCountUp(pendingCases);
   const animatedDone = useCountUp(doneCases);

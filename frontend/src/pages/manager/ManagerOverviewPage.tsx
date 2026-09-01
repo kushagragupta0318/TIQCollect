@@ -17,7 +17,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { useNavigate } from "react-router";
 import { Users, Briefcase, IndianRupee, MapPin, Clock, AlertTriangle, Sparkles, RefreshCw, TrendingUp, TrendingDown, ShieldAlert, Compass, Zap, RotateCcw, Download } from "lucide-react";
 import { toast } from "react-hot-toast";
-import { getDashboard, getAgents, getBriefing, getUnallocatedCases, getLatestAllocation, triggerAllocationPlan, rollbackAllocationPlan, exportAllocationDecisions } from "@/api/manager";
+import { getDashboard, getAgents, getBriefing, getUnallocatedCases, getLatestAllocation, triggerAllocationPlan, rollbackAllocationPlan, exportAllocationDecisions, getAllocationSettings, updateAllocationSettings } from "@/api/manager";
 import type { BriefingData, UnallocatedReport, AllocationPlanReport, AllocationDecisionItem } from "@/api/manager";
 import { StatCard } from "@/components/ui/Card";
 import { TierBadge } from "@/components/ui/Badge";
@@ -824,7 +824,7 @@ function TomorrowAllocationCard() {
   const [loading, setLoading] = useState(true);
   const [planning, setPlanning] = useState(false);
   const [rollingBack, setRollingBack] = useState(false);
-  const [strategy, setStrategy] = useState<"SMART" | "LEGACY">("SMART");
+  const [objective, setObjective] = useState<"BALANCED" | "MAX_RECOVERY" | "MIN_DISTANCE">("BALANCED");
   const [showDecisions, setShowDecisions] = useState(false);
   const [selectedDecision, setSelectedDecision] = useState<AllocationDecisionItem | null>(null);
 
@@ -833,9 +833,6 @@ function TomorrowAllocationCard() {
     getLatestAllocation()
       .then((data) => {
         setPlan(data);
-        if (data.strategy === "LEGACY" || data.strategy === "SMART") {
-          setStrategy(data.strategy);
-        }
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -843,12 +840,24 @@ function TomorrowAllocationCard() {
 
   useEffect(() => {
     fetchPlan();
+    getAllocationSettings()
+      .then((settings) => {
+        if (settings?.objective) setObjective(settings.objective);
+      })
+      .catch(() => {});
   }, [fetchPlan]);
 
-  const handleRunPlan = async (strat: "SMART" | "LEGACY") => {
+  const handleRunPlan = async (
+    obj?: "BALANCED" | "MAX_RECOVERY" | "MIN_DISTANCE"
+  ) => {
+    const activeObj = obj || objective;
     setPlanning(true);
     try {
-      await triggerAllocationPlan({ strategy: strat, force_replan: true });
+      await triggerAllocationPlan({
+        strategy: "SMART",
+        objective: activeObj,
+        force_replan: true,
+      });
       toast.success("Tomorrow's beat plan generated & sequenced!");
       fetchPlan();
     } catch {
@@ -856,6 +865,12 @@ function TomorrowAllocationCard() {
     } finally {
       setPlanning(false);
     }
+  };
+
+  const handleSelectObjective = (obj: "BALANCED" | "MAX_RECOVERY" | "MIN_DISTANCE") => {
+    setObjective(obj);
+    updateAllocationSettings({ objective: obj }).catch(() => {});
+    handleRunPlan(obj);
   };
 
   const handleRollback = async () => {
@@ -938,40 +953,54 @@ function TomorrowAllocationCard() {
               )}
             </div>
             <p className="text-xs text-slate-500">
-              Historical Competency Matching + OSRM & OR-Tools Route Optimizer
+              Global Bipartite Optimization + OR-Tools VRPTW Route Sequencing
             </p>
           </div>
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
-          {/* Strategy Toggle */}
+          {/* Allocation Objective Selector */}
           <div className="flex items-center bg-slate-100 p-0.5 rounded-lg text-xs font-semibold">
             <button
-              onClick={() => { setStrategy("SMART"); handleRunPlan("SMART"); }}
+              onClick={() => handleSelectObjective("BALANCED")}
               disabled={planning}
               className={`px-2.5 py-1 rounded-md transition-all ${
-                strategy === "SMART"
-                  ? "bg-white text-brand-600 shadow-sm"
+                objective === "BALANCED"
+                  ? "bg-white text-brand-600 shadow-sm font-bold"
                   : "text-slate-500 hover:text-slate-800"
               }`}
+              title="Balanced trade-off between recovery and travel distance"
             >
-              Smart ML
+              ⚖️ Balanced
             </button>
             <button
-              onClick={() => { setStrategy("LEGACY"); handleRunPlan("LEGACY"); }}
+              onClick={() => handleSelectObjective("MAX_RECOVERY")}
               disabled={planning}
               className={`px-2.5 py-1 rounded-md transition-all ${
-                strategy === "LEGACY"
-                  ? "bg-white text-slate-800 shadow-sm"
+                objective === "MAX_RECOVERY"
+                  ? "bg-white text-emerald-700 shadow-sm font-bold"
                   : "text-slate-500 hover:text-slate-800"
               }`}
+              title="Prioritize high cash recovery yield"
             >
-              Legacy
+              💰 Max Recovery
+            </button>
+            <button
+              onClick={() => handleSelectObjective("MIN_DISTANCE")}
+              disabled={planning}
+              className={`px-2.5 py-1 rounded-md transition-all ${
+                objective === "MIN_DISTANCE"
+                  ? "bg-white text-blue-700 shadow-sm font-bold"
+                  : "text-slate-500 hover:text-slate-800"
+              }`}
+              title="Minimize total travel distance & fuel costs"
+            >
+              ⚡ Min Distance
             </button>
           </div>
 
           <button
-            onClick={() => handleRunPlan(strategy)}
+            onClick={() => handleRunPlan()}
             disabled={planning}
             className="btn btn-primary text-xs flex items-center gap-1.5 px-3 py-1.5"
           >

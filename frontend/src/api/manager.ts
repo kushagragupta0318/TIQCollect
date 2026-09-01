@@ -740,11 +740,30 @@ export async function getLatestAllocation(planDate?: string): Promise<Allocation
 
 export async function triggerAllocationPlan(opts?: {
   strategy?: "SMART" | "LEGACY";
+  objective?: "BALANCED" | "MAX_RECOVERY" | "MIN_DISTANCE";
   plan_date?: string;
   simulate?: boolean;
   force_replan?: boolean;
 }) {
   const { data } = await api.post("/manager/allocation/plan", opts ?? {});
+  return data;
+}
+
+export async function getAllocationSettings(): Promise<{
+  objective: "BALANCED" | "MAX_RECOVERY" | "MIN_DISTANCE";
+  max_territory_radius_km: number;
+  max_daily_stops_per_agent: number;
+}> {
+  const { data } = await api.get("/manager/allocation/settings");
+  return data;
+}
+
+export async function updateAllocationSettings(settings: {
+  objective?: "BALANCED" | "MAX_RECOVERY" | "MIN_DISTANCE";
+  max_territory_radius_km?: number;
+  max_daily_stops_per_agent?: number;
+}) {
+  const { data } = await api.post("/manager/allocation/settings", settings);
   return data;
 }
 

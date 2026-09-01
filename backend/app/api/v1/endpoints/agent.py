@@ -467,6 +467,33 @@ def create_payment_link(case_id: str, req: PaymentLinkRequest, current_user: Age
     return PaymentService(db).create_payment_link(case_id, req.amount)
 
 
+def _get_accessible_case_or_404(db: DbSession, agent: Agent, case_id: str) -> Case:
+    case = (
+        db.query(Case)
+        .options(joinedload(Case.customer), joinedload(Case.loan))
+        .filter(Case.id == case_id)
+        .first()
+    )
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    if case.agent_id == agent.id:
+        return case
+
+    beats = db.query(Beat).filter(Beat.agent_id == agent.id).all()
+    if any(case_id in (b.ordered_case_ids or []) for b in beats):
+        return case
+
+    if agent.manager_user_id and case.agent_id:
+        curr_ag = db.query(Agent).filter(Agent.id == case.agent_id).first()
+        if curr_ag and curr_ag.manager_user_id == agent.manager_user_id:
+            return case
+    elif case.agent_id is None:
+        return case
+
+    raise HTTPException(status_code=403, detail="Case not found or not assigned to you")
+
+
 # ---------------------------------------------------------------------------
 # POST /agent/cases/{case_id}/notify-visit  (pre-visit WhatsApp + SMS)
 # ---------------------------------------------------------------------------
@@ -474,9 +501,7 @@ def create_payment_link(case_id: str, req: PaymentLinkRequest, current_user: Age
 @router.post("/cases/{case_id}/notify-visit")
 def notify_visit(case_id: str, current_user: AgentOnly, db: DbSession):
     agent = _get_agent_or_404(current_user, db)
-    case = db.query(Case).filter(Case.id == case_id, Case.agent_id == agent.id).first()
-    if not case:
-        raise HTTPException(status_code=404, detail="Case not found or not assigned to you")
+    case = _get_accessible_case_or_404(db, agent, case_id)
 
     customer = db.query(Customer).filter(Customer.id == case.customer_id).first()
     if not customer or not customer.phone_primary:
@@ -518,9 +543,7 @@ class NotifyCaseRequest(BaseModel):
 @router.post("/cases/{case_id}/notify")
 def notify_case(case_id: str, req: NotifyCaseRequest, current_user: AgentOnly, db: DbSession):
     agent = _get_agent_or_404(current_user, db)
-    case = db.query(Case).filter(Case.id == case_id, Case.agent_id == agent.id).first()
-    if not case:
-        raise HTTPException(status_code=404, detail="Case not found or not assigned to you")
+    case = _get_accessible_case_or_404(db, agent, case_id)
 
     customer = db.query(Customer).filter(Customer.id == case.customer_id).first()
     if not customer or not customer.phone_primary:
@@ -682,9 +705,7 @@ def log_call(case_id: str, req: LogCallRequest, current_user: AgentOnly, db: DbS
     from app.models.call_log import CallLog
 
     agent = _get_agent_or_404(current_user, db)
-    case = db.query(Case).filter(Case.id == case_id, Case.agent_id == agent.id).first()
-    if not case:
-        raise HTTPException(status_code=404, detail="Case not found or not assigned to you")
+    case = _get_accessible_case_or_404(db, agent, case_id)
 
     log = CallLog(
         case_id=case_id,
@@ -835,14 +856,7 @@ def get_visit_strategy(case_id: str, current_user: AgentOnly, db: DbSession):
     from datetime import datetime as _dt
 
     agent = _get_agent_or_404(current_user, db)
-    case = (
-        db.query(Case)
-        .options(joinedload(Case.customer), joinedload(Case.loan))
-        .filter(Case.id == case_id, Case.agent_id == agent.id)
-        .first()
-    )
-    if not case:
-        raise HTTPException(status_code=404, detail="Case not found")
+    case = _get_accessible_case_or_404(db, agent, case_id)
 
     customer = case.customer
     loan = case.loan
