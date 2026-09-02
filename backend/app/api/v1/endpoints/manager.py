@@ -62,8 +62,8 @@ def _effective_today(agent_ids: list[str], db) -> tuple[datetime, datetime, date
         .scalar()
     )
     eff_date: date = row if row else date.today()
-    start = datetime.combine(eff_date, datetime.min.time()).replace(tzinfo=timezone.utc)
-    end   = datetime.combine(eff_date, datetime.max.time()).replace(tzinfo=timezone.utc)
+    start = datetime.combine(min(eff_date, date.today()), datetime.min.time()).replace(tzinfo=timezone.utc)
+    end   = datetime.combine(max(eff_date, date.today()), datetime.max.time()).replace(tzinfo=timezone.utc)
     return start, end, eff_date
 
 
