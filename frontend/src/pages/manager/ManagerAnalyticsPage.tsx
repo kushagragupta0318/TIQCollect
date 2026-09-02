@@ -1010,6 +1010,17 @@ function DPDBreakdownCard({ rows, loading, barReady, agentName, selMonth }: {
   );
 }
 
+// Calendar grey — future days, no-data days, weekday headers and the legend
+// dots that stand for them.
+//
+// 2026-09-02 — was #E2E8F0 for the day numbers and #CBD5E1 for the weekday
+// headers: about 1.3:1 and 1.7:1 against the card. At the 9-11px these render
+// at that is not "subtle", it is invisible — the whole month past today read as
+// blank on screen. Slate-500 clears 4.5:1 while staying desaturated, so future
+// days still recede next to the saturated on/off-duty green and red instead of
+// competing with them. Both calendars read it from here so they cannot drift.
+const CAL_MUTED = "#64748B";
+
 // ── Agent Duty Calendar — proper month calendar with navigation ────────────────
 
 function DutyCalendarCard({ cal, loading, jumpToMonth }: { cal: AgentAvailabilityCalendar; loading: boolean; jumpToMonth?: string }) {
@@ -1116,7 +1127,7 @@ function DutyCalendarCard({ cal, loading, jumpToMonth }: { cal: AgentAvailabilit
           {/* Calendar grid */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: "2px 0" }}>
             {DOW_LABELS.map((lbl) => (
-              <div key={lbl} style={{ textAlign: "center", fontSize: "var(--cal-dow)", fontWeight: 600, color: "#CBD5E1", paddingBottom: 3 }}>
+              <div key={lbl} style={{ textAlign: "center", fontSize: "var(--cal-dow)", fontWeight: 600, color: CAL_MUTED, paddingBottom: 3 }}>
                 {lbl}
               </div>
             ))}
@@ -1124,7 +1135,7 @@ function DutyCalendarCard({ cal, loading, jumpToMonth }: { cal: AgentAvailabilit
               row.map((cell, ci) => {
                 if (!cell) return <div key={`${ri}-${ci}`} style={{ height: "var(--cal-cell-agent)" }} />;
                 const hasData = !!cell.data;
-                const numColor = cell.isFuture ? "#E2E8F0" : hasData ? "#16a34a" : "#ef4444";
+                const numColor = cell.isFuture ? CAL_MUTED : hasData ? "#16a34a" : "#ef4444";
 
                 return (
                   <div
@@ -1150,7 +1161,7 @@ function DutyCalendarCard({ cal, loading, jumpToMonth }: { cal: AgentAvailabilit
             {[
               { label: "On Duty",  color: "#16a34a" },
               { label: "Off Duty", color: "#ef4444" },
-              { label: "Upcoming", color: "#CBD5E1" },
+              { label: "Upcoming", color: CAL_MUTED },
             ].map(({ label, color: c }) => (
               <div key={label} className="flex items-center gap-1">
                 <span style={{ fontSize: 11, fontWeight: 600, color: c }}>●</span>
@@ -1210,7 +1221,7 @@ function AgencyDutyOverview({ months }: { months: string[] }) {
   const hdr = `${monthLabel(visibleMonth)} '${y.slice(2)}`;
 
   function countColor(count: number, isFuture: boolean) {
-    if (isFuture || total === 0) return "#E2E8F0";
+    if (isFuture || total === 0) return CAL_MUTED;
     const pct = count / total;
     return pct >= 0.75 ? "#16a34a" : pct >= 0.4 ? "#d97706" : "#dc2626";
   }
@@ -1241,7 +1252,7 @@ function AgencyDutyOverview({ months }: { months: string[] }) {
       {/* Calendar */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: "2px 0" }}>
         {DOW_TEAM.map((lbl) => (
-          <div key={lbl} style={{ textAlign: "center", fontSize: "var(--cal-dow)", fontWeight: 600, color: "#CBD5E1", paddingBottom: 3 }}>{lbl}</div>
+          <div key={lbl} style={{ textAlign: "center", fontSize: "var(--cal-dow)", fontWeight: 600, color: CAL_MUTED, paddingBottom: 3 }}>{lbl}</div>
         ))}
         {calRows.flatMap((row, ri) =>
           row.map((cell, ci) => {
@@ -1267,7 +1278,7 @@ function AgencyDutyOverview({ months }: { months: string[] }) {
           { label: "≥75%", color: "#16a34a" },
           { label: "40–75%", color: "#d97706" },
           { label: "<40%", color: "#dc2626" },
-          { label: "Future", color: "#CBD5E1" },
+          { label: "Future", color: CAL_MUTED },
         ].map(({ label, color: c }) => (
           <div key={label} className="flex items-center gap-1">
             <span style={{ fontSize: 11, fontWeight: 600, color: c }}>●</span>

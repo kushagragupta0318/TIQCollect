@@ -32,6 +32,42 @@ const STALE_AFTER_S = 600;
 // position for any agent.
 const DEFAULT_CENTRE: [number, number] = [28.6139, 77.209];
 
+const AGENT_COLORS = [
+  "#2563EB", // Royal Blue
+  "#059669", // Emerald Green
+  "#D97706", // Amber Gold
+  "#7C3AED", // Violet Purple
+  "#DB2777", // Pink Rose
+  "#0891B2", // Cyan Teal
+  "#EA580C", // Vibrant Orange
+  "#4F46E5", // Indigo
+  "#16A34A", // Forest Green
+  "#9333EA", // Purple
+  "#0284C7", // Sky Blue
+  "#E11D48", // Crimson Red
+  "#D946EF", // Fuchsia
+  "#0D9488", // Teal
+  "#CA8A04", // Gold
+];
+
+export function getAgentColor(agentId: string, employeeCode?: string): string {
+  const seed = employeeCode || agentId || "";
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) {
+    hash = (hash << 5) - hash + seed.charCodeAt(i);
+    hash |= 0;
+  }
+  const idx = Math.abs(hash) % AGENT_COLORS.length;
+  return AGENT_COLORS[idx];
+}
+
+export function getAgentInitials(name: string): string {
+  if (!name) return "AG";
+  const parts = name.trim().split(/\s+/);
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
 function ageLabel(seconds: number | null): string {
   if (seconds == null) return "no fix yet";
   if (seconds < 60) return "just now";
@@ -41,25 +77,48 @@ function ageLabel(seconds: number | null): string {
   return h < 24 ? `${h} hr ago` : `${Math.round(h / 24)} d ago`;
 }
 
-/** Coloured dot for one agent. Built as a divIcon so state is expressed in CSS
- *  rather than by swapping image files. */
-function agentIcon(a: LiveAgentPosition): L.DivIcon {
-  const stale = (a.age_seconds ?? Infinity) > STALE_AFTER_S;
+/** Distinct vibrant colored marker with initials & pin pointer for each agent */
+function agentIcon(a: LiveAgentPosition, isSelected: boolean = false): L.DivIcon {
   const sos = a.sos_active;
-  const colour = sos ? "#DC2626" : stale ? "#8A8C94" : "#2563EB";
-  const size = sos ? 22 : 16;
+  const color = sos ? "#DC2626" : getAgentColor(a.agent_id, a.employee_code);
+  const initials = getAgentInitials(a.full_name);
+  const size = sos ? 36 : isSelected ? 34 : 28;
+
   return L.divIcon({
-    className: "",
-    iconSize: [size, size],
-    iconAnchor: [size / 2, size / 2],
+    className: "custom-agent-marker",
+    iconSize: [size, size + 8],
+    iconAnchor: [size / 2, size + 4],
+    popupAnchor: [0, -size],
     html: `
-      <div style="
-        width:${size}px;height:${size}px;border-radius:50%;
-        background:${stale && !sos ? "transparent" : colour};
-        border:${stale && !sos ? `2px dashed ${colour}` : `2px solid #fff`};
-        box-shadow:0 1px 6px rgba(0,0,0,0.35);
-        ${sos ? "animation:sospulse 1.1s ease-in-out infinite;" : ""}
-      "></div>`,
+      <div style="position:relative;width:${size}px;height:${size + 8}px;display:flex;flex-direction:column;align-items:center;cursor:pointer;">
+        ${(sos || isSelected) ? `
+          <div style="
+            position:absolute;top:-4px;left:-4px;width:${size + 8}px;height:${size + 8}px;border-radius:50%;
+            background:${color};opacity:0.35;animation:sospulse 1.4s ease-in-out infinite;pointer-events:none;
+          "></div>
+        ` : ""}
+        <div style="
+          width:${size}px;height:${size}px;border-radius:50%;
+          background:${color};
+          color:#ffffff;
+          display:flex;align-items:center;justify-content:center;
+          font-weight:700;font-size:${size > 30 ? "11px" : "10px"};
+          font-family:system-ui,-apple-system,sans-serif;
+          border:2.5px solid #ffffff;
+          box-shadow:0 3px 10px rgba(0,0,0,0.35), 0 0 0 1px ${color}40;
+          transition:transform 0.15s ease;
+          ${isSelected ? "transform:scale(1.15);" : ""}
+        ">
+          ${sos ? "⚠️" : initials}
+        </div>
+        <div style="
+          width:0;height:0;
+          border-left:5px solid transparent;
+          border-right:5px solid transparent;
+          border-top:6px solid ${color};
+          margin-top:-1px;
+        "></div>
+      </div>`,
   });
 }
 
@@ -153,12 +212,15 @@ export default function ManagerLiveMapPage() {
       if (a.latitude == null || a.longitude == null) continue;
       seen.add(a.agent_id);
       const pos: [number, number] = [a.latitude, a.longitude];
+      const isSel = a.agent_id === selected;
       const existing = markersRef.current.get(a.agent_id);
       if (existing) {
         existing.setLatLng(pos);
-        existing.setIcon(agentIcon(a));
+        existing.setIcon(agentIcon(a, isSel));
+        if (isSel) existing.setZIndexOffset(1000);
+        else existing.setZIndexOffset(0);
       } else {
-        const m = L.marker(pos, { icon: agentIcon(a), title: a.full_name })
+        const m = L.marker(pos, { icon: agentIcon(a, isSel), title: a.full_name, zIndexOffset: isSel ? 1000 : 0 })
           .addTo(map)
           .on("click", () => setSelected(a.agent_id));
         markersRef.current.set(a.agent_id, m);
@@ -166,7 +228,7 @@ export default function ManagerLiveMapPage() {
       markersRef.current.get(a.agent_id)!.bindTooltip(
         `<b>${a.full_name}</b><br/>${a.employee_code} · ${ageLabel(a.age_seconds)}` +
         (a.sos_active ? "<br/><b style='color:#DC2626'>SOS ACTIVE</b>" : ""),
-        { direction: "top", offset: [0, -10] },
+        { direction: "top", offset: [0, -16] },
       );
     }
 
@@ -185,7 +247,7 @@ export default function ManagerLiveMapPage() {
       map.fitBounds(bounds, { padding: [48, 48], maxZoom: 15 });
       fittedRef.current = true;
     }
-  }, [agents]);
+  }, [agents, selected]);
 
   const sosAgents = useMemo(() => agents.filter((a) => a.sos_active), [agents]);
 
@@ -203,9 +265,11 @@ export default function ManagerLiveMapPage() {
     getAgentTrail(selected).then((t) => {
       if (cancelled || !trailRef.current) return;
       setTrail(t);
+      const selAgent = agents.find((ag) => ag.agent_id === selected);
+      const selColor = selAgent ? getAgentColor(selAgent.agent_id, selAgent.employee_code) : "#2563EB";
       const pts = t.points.map((p) => [p.latitude, p.longitude] as [number, number]);
       if (pts.length > 1) {
-        L.polyline(pts, { color: "#2563EB", weight: 3, opacity: 0.65 }).addTo(trailRef.current);
+        L.polyline(pts, { color: selColor, weight: 3.5, opacity: 0.8 }).addTo(trailRef.current);
       }
       for (const p of t.points) {
         if (p.source === "HEARTBEAT") continue;
@@ -213,8 +277,8 @@ export default function ManagerLiveMapPage() {
         // visits, SOS. Drawing every heartbeat would bury them.
         L.circleMarker([p.latitude, p.longitude], {
           radius: p.is_sos ? 8 : 5,
-          color: p.is_sos ? "#DC2626" : "#0F7B4F",
-          fillColor: p.is_sos ? "#DC2626" : "#0F7B4F",
+          color: p.is_sos ? "#DC2626" : selColor,
+          fillColor: p.is_sos ? "#DC2626" : selColor,
           fillOpacity: 0.9, weight: 2,
         })
           .bindTooltip(`${p.source} · ${new Date(p.recorded_at).toLocaleTimeString()}`,
@@ -224,7 +288,7 @@ export default function ManagerLiveMapPage() {
     }).catch(() => { if (!cancelled) setTrail(null); });
 
     return () => { cancelled = true; };
-  }, [selected]);
+  }, [selected, agents]);
 
   const tracked = agents.filter((a) => a.latitude != null).length;
   const selectedAgent = agents.find((a) => a.agent_id === selected) || null;
@@ -273,7 +337,7 @@ export default function ManagerLiveMapPage() {
       )}
 
       <div className="grid gap-4" style={{ gridTemplateColumns: "minmax(0,1fr)" }}>
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
           {/* Map */}
           <div className="rounded-card overflow-hidden"
                style={{ border: "1px solid rgba(0,0,0,0.07)", animation: `enter 420ms ${EASE} 60ms both` }}>
@@ -281,7 +345,7 @@ export default function ManagerLiveMapPage() {
           </div>
 
           {/* Roster */}
-          <div className="rounded-card p-3 space-y-1.5"
+          <div className="rounded-card p-3 space-y-2"
                style={{ border: "1px solid rgba(0,0,0,0.07)", maxHeight: "clamp(380px, 62vh, 720px)", overflowY: "auto",
                         animation: `enter 420ms ${EASE} 120ms both` }}>
             {agents.length === 0 && !loading && (
@@ -294,6 +358,8 @@ export default function ManagerLiveMapPage() {
               .map((a) => {
                 const stale = (a.age_seconds ?? Infinity) > STALE_AFTER_S;
                 const isSel = a.agent_id === selected;
+                const color = a.sos_active ? "#DC2626" : getAgentColor(a.agent_id, a.employee_code);
+                const initials = getAgentInitials(a.full_name);
                 return (
                   <button
                     key={a.agent_id}
@@ -303,26 +369,51 @@ export default function ManagerLiveMapPage() {
                         mapRef.current.setView([a.latitude, a.longitude as number], 15, { animate: true });
                       }
                     }}
-                    className="w-full text-left rounded-xl px-3 py-2.5 transition-colors"
+                    className="w-full text-left rounded-xl p-2.5 transition-all flex items-center justify-between gap-2.5 group"
                     style={{
-                      background: a.sos_active ? "rgba(220,38,38,0.07)" : isSel ? "rgba(37,99,235,0.08)" : "transparent",
-                      border: `1px solid ${a.sos_active ? "rgba(220,38,38,0.22)" : isSel ? "rgba(37,99,235,0.25)" : "transparent"}`,
+                      background: a.sos_active ? "rgba(220,38,38,0.08)" : isSel ? `${color}15` : "rgba(0,0,0,0.02)",
+                      border: `1.5px solid ${a.sos_active ? "rgba(220,38,38,0.35)" : isSel ? color : "rgba(0,0,0,0.06)"}`,
+                      boxShadow: isSel ? `0 2px 8px ${color}25` : "none",
                     }}
                   >
-                    <div className="flex items-center gap-2 min-w-0">
-                      {a.sos_active
-                        ? <AlertTriangle className="w-4 h-4 animate-pulse flex-shrink-0" style={{ color: "#DC2626" }} />
-                        : <MapPin className="w-4 h-4 flex-shrink-0" style={{ color: stale ? "#8A8C94" : "#2563EB" }} />}
-                      <span className="font-semibold text-sm truncate" style={{ color: "#1C1C1F" }}>{a.full_name}</span>
-                      {a.battery_pct != null && a.battery_pct <= 20 && (
-                        <BatteryLow className="w-3.5 h-3.5 flex-shrink-0" style={{ color: "#B45309" }} />
-                      )}
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div
+                        className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs flex-shrink-0 text-white shadow-sm transition-transform group-hover:scale-105"
+                        style={{ background: color }}
+                      >
+                        {a.sos_active ? "⚠️" : initials}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-bold text-xs text-slate-900 truncate">{a.full_name}</span>
+                          {a.battery_pct != null && a.battery_pct <= 20 && (
+                            <BatteryLow className="w-3.5 h-3.5 flex-shrink-0 text-amber-600" />
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
+                          <span className="font-mono text-slate-600 font-semibold">{a.employee_code}</span>
+                          <span>•</span>
+                          <span className={stale ? "text-amber-600 font-medium" : "text-slate-500"}>
+                            {ageLabel(a.age_seconds)}
+                          </span>
+                          {a.battery_pct != null && (
+                            <>
+                              <span>•</span>
+                              <span>{a.battery_pct}%</span>
+                            </>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2 mt-0.5 text-[11.5px]" style={{ color: "#6B6D76" }}>
-                      <span>{a.employee_code}</span>
-                      <span>·</span>
-                      <span style={{ color: stale ? "#B45309" : "#6B6D76" }}>{ageLabel(a.age_seconds)}</span>
-                      {a.battery_pct != null && <><span>·</span><span>{a.battery_pct}%</span></>}
+
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      <div
+                        className="w-2.5 h-2.5 rounded-full"
+                        style={{
+                          background: color,
+                          boxShadow: `0 0 0 2px ${color}30`,
+                        }}
+                      />
                     </div>
                   </button>
                 );

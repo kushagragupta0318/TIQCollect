@@ -707,23 +707,31 @@ function CaseRow({ c, onOpen }: { c: Case; onOpen: () => void }) {
   // Hover, base tint and the dimmed visited-today state all come from
   // .row-accent in index.css, shared with the Field Agents table. Real CSS
   // :hover rather than mouseenter/mouseleave writing inline styles: a row that
-  // scrolls out from under a stationary cursor never fires mouseleave and stays
-  // stuck lit. Nothing here may set background inline — an inline value would
-  // outrank the class rules and :hover would never paint.
-  const accent = c.is_visited_today
+  const isPaid = c.status === "PAID" || (c.target_amount > 0 && c.collected_amount >= c.target_amount);
+  const isPartial = c.status === "PARTIALLY_PAID" || (c.collected_amount > 0 && c.collected_amount < c.target_amount);
+  const hasVisited = c.visit_count > 0 || c.is_visited_today;
+
+  const accent = isPaid
     ? " row-accent-done"
     : c.is_escalated
     ? " row-accent-danger"
     : "";
 
-  const visitedChip = c.is_visited_today && (
+  const statusChip = isPaid ? (
     <span
       className="font-semibold px-1.5 py-0.5 rounded-full flex-shrink-0"
       style={{ background: "rgba(34,197,94,0.15)", color: "#15803D", fontSize: 10 }}
     >
+      ✓ Resolved
+    </span>
+  ) : isPartial || hasVisited ? (
+    <span
+      className="font-semibold px-1.5 py-0.5 rounded-full flex-shrink-0"
+      style={{ background: "rgba(37,99,235,0.12)", color: "#1D4ED8", fontSize: 10 }}
+    >
       ✓ Visited
     </span>
-  );
+  ) : null;
 
   return (
     <div
@@ -739,14 +747,8 @@ function CaseRow({ c, onOpen }: { c: Case; onOpen: () => void }) {
            style={{ gridTemplateColumns: TABLE_COLS }}>
         <div className="min-w-0">
           <p className="text-xs font-mono font-medium truncate" style={{ color: "#6B6D76" }}>{c.case_number}</p>
-          {/* The bank's short name used to sit under the case number. Dropped
-              here: every case in this list belongs to the same agency, so it
-              repeated on every row without separating anything. The phone card
-              below still shows it, where the row has space to spare. The
-              visited chip keeps this line, rendered only when set so unvisited
-              rows don't carry a blank one. */}
-          {visitedChip && (
-            <div className="flex items-center gap-1.5 mt-0.5 text-xs">{visitedChip}</div>
+          {statusChip && (
+            <div className="flex items-center gap-1.5 mt-0.5 text-xs">{statusChip}</div>
           )}
         </div>
         <div className="min-w-0">
@@ -795,7 +797,7 @@ function CaseRow({ c, onOpen }: { c: Case; onOpen: () => void }) {
         <div className="flex items-center gap-2 text-xs mb-1.5">
           <span className="font-mono font-medium truncate" style={{ color: "#6B6D76" }}>{c.case_number}</span>
           <span className="truncate" style={{ color: "#94a3b8" }}>{c.loan.bank_name?.split(" ")[0]}</span>
-          {visitedChip}
+          {statusChip}
           <ChevronRight className="w-4 h-4 ml-auto flex-shrink-0" style={{ color: "#C4C6CF" }} />
         </div>
 

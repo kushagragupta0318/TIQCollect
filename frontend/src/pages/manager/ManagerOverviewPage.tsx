@@ -11,11 +11,10 @@
 //   leaderboard row keeps that design but wraps below sm — rank plus three
 //   fixed-width figure blocks overflow a 320px row — and its hover moved
 //   from mouseenter/mouseleave handlers to .row-lift.
-// ─────────────────────────────────────────────────────────────────────────
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { useNavigate } from "react-router";
-import { Users, Briefcase, IndianRupee, MapPin, Clock, AlertTriangle, Sparkles, RefreshCw, TrendingUp, TrendingDown, ShieldAlert, Compass, Zap, RotateCcw, Download } from "lucide-react";
+import { Users, Briefcase, IndianRupee, MapPin, Clock, AlertTriangle, Sparkles, RefreshCw, TrendingUp, TrendingDown, ShieldAlert, Compass, Zap, RotateCcw, Download, ChevronDown, ChevronUp } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { getDashboard, getAgents, getBriefing, getUnallocatedCases, getLatestAllocation, triggerAllocationPlan, rollbackAllocationPlan, exportAllocationDecisions, getAllocationSettings, updateAllocationSettings } from "@/api/manager";
 import type { BriefingData, UnallocatedReport, AllocationPlanReport, AllocationDecisionItem } from "@/api/manager";
@@ -161,15 +160,15 @@ export default function ManagerOverviewPage() {
       <div className="overview-kpi-grid grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         {[
           { label: "Agents On Duty",  value: `${s.agents_on_duty}/${s.total_agents}`, icon: <Users className="w-5 h-5" />,       colorClass: "text-brand-600",   subtext: "active today" },
-          // "cases visited", not "allocated": the backend derives cases_today
-          // from distinct Visit.case_id for today, so it counts cases actually
-          // reached. Allocation is a separate figure (cases_assigned).
-          { label: "Cases Today",     value: s.cases_today,                            icon: <Briefcase className="w-5 h-5" />,   colorClass: "text-brand-600",   subtext: "cases visited" },
-          // Displays 60% of cases_today, NOT the API's visits_today. This is a
-          // derived display figure fixed at 60% of cases visited — it does not
-          // track the real visit count (s.visits_today), which is currently 141
-          // against the 82 shown here.
-          { label: "Visits Done",     value: Math.round(s.cases_today * 0.6),          icon: <MapPin className="w-5 h-5" />,      colorClass: "text-success-600", subtext: "field visits" },
+          // Allocated, not visited: the backend sets cases_today from the distinct
+          // case ids across each agent's latest beat (manager.py:329), so this is
+          // today's planned workload. Visits are counted separately (visits_today).
+          { label: "Cases Today",     value: s.cases_today,                            icon: <Briefcase className="w-5 h-5" />,   colorClass: "text-brand-600",   subtext: "allocated today" },
+          // The real count, from the API (Visit.check_in_time today, manager.py:309).
+          // This was Math.round(cases_today * 0.6) — a display figure pinned at 60%
+          // of the allocation, so it tracked the beat plan rather than the field and
+          // never matched visits_today. Corrected 2026-09-02.
+          { label: "Visits Done",     value: s.visits_today,                           icon: <MapPin className="w-5 h-5" />,      colorClass: "text-success-600", subtext: "field visits" },
           { label: "PTPs Due",        value: s.ptps_due_today,                         icon: <Clock className="w-5 h-5" />,       colorClass: s.ptps_due_today > 5 ? "text-warning-600" : "text-slate-500", subtext: "today" },
         ].map((item, i) => (
           <div
@@ -819,6 +818,116 @@ function WithheldCases() {
 
 // ── Tomorrow's Field Work Plan & Smart Allocation Component ──────────────────
 
+/**
+ * Ranked reasons for the case-assignment audit panel.
+ *
+ * The panel used to render Object.entries(score_breakdown) verbatim, so a manager
+ * read internal key names and raw decimals — "affinity score: 0.804", and
+ * "expected case_inn: 49631.54", that one severed by a replace("_", " ") that
+ * only ever replaced the first underscore, then clipped by a CSS truncate.
+ *
+ * But formatting was never the real problem: ten unlabelled numbers is not an
+ * explanation. Without a reference point a score says nothing about why this
+ * case went to this agent.
+ *
+ * The allocator utility is a weighted sum, so weight x score is each factor's
+ * literal share of the decision. global_allocator.py now keeps those shares as
+ * score_breakdown.contributions instead of discarding them; this ranks them and
+ * names them in English. No model and no generated prose — it is the same
+ * arithmetic that made the decision, stated rather than dumped.
+ *
+ * Decisions written before 2026-09-02 carry no `contributions` key and fall back
+ * to the old raw dump, so an existing plan stays readable until it is re-planned.
+ */
+type Reason = { key: string; label: string; share: string };
+
+// Loan type as a manager says it, not as the enum spells it.
+const loanTypeWords = (b: Record<string, unknown>): string => {
+  const lt = typeof b.loan_type === "string" ? b.loan_type : "";
+  return lt ? `${lt.replace(/_/g, " ").toLowerCase()} loans` : "this loan type";
+};
+
+// TIER_1/2/3 map to 1.0/0.8/0.6 in global_allocator; 0.7 is the unknown-tier
+// default, which has no tier to name.
+const tierWords = (b: Record<string, unknown>): string => {
+  const w = Number(b.tier_weight ?? 0);
+  if (w >= 1.0) return "Tier 1";
+  if (w === 0.8) return "Tier 2";
+  if (w === 0.6) return "Tier 3";
+  return "";
+};
+
+const FACTOR_LABEL: Record<string, (b: Record<string, unknown>) => string> = {
+  // affinity_score is this agent's measured recovery rate on this loan type —
+  // the competency matrix that global_allocator was failing to read until
+  // 2026-09-02. It is not a weighted term of its own: it feeds prob_recovery,
+  // which produces expected_case_inr. So it is shown as the basis for the rupee
+  // figure rather than as a separate reason, which is what it actually is.
+  expected_recovery: (b) => {
+    const rupees = `₹${Math.round(Number(b.expected_case_inr ?? 0)).toLocaleString("en-IN")} expected recovery`;
+    const rate = Number(b.affinity_score ?? 0);
+    return rate > 0
+      ? `${rupees} — recovers ${Math.round(rate * 100)}% on ${loanTypeWords(b)}`
+      : rupees;
+  },
+  proximity: (b) => `${b.proximity_km ?? "?"} km from the agent's base`,
+  // 0.6 x tier + 0.4 x spec_match. Seniority and a DECLARED specialisation —
+  // not experience. Whether they have actually worked this loan type is the
+  // recovery rate above.
+  skills: (b) => {
+    const tier = tierWords(b);
+    return Number(b.spec_match ?? 0) >= 1
+      ? [tier, `specialises in ${loanTypeWords(b)}`].filter(Boolean).join(" · ")
+      : tier ? `${tier} agent` : "Agent tier";
+  },
+  workload: () => "Had capacity free",
+  continuity: () => "Already their case",
+  language: () => "Speaks the borrower's language",
+};
+
+function rankedReasons(breakdown: Record<string, unknown>): Reason[] {
+  const contributions = breakdown.contributions as Record<string, number> | undefined;
+
+  if (!contributions) {
+    return Object.entries(breakdown)
+      .filter(([k]) => k !== "contributions")
+      .map(([k, v]) => ({ key: k, label: k.replace(/_/g, " "), share: String(v) }));
+  }
+
+  const total = Object.values(contributions).reduce((a, b) => a + b, 0);
+
+  // A term can be present and still not be a reason. continuity_bonus is 0.10
+  // weighted at 0.05, so it contributes exactly 0.005 to every row it fires on —
+  // and it fires on nearly all of them, because the nightly plan re-plans cases
+  // that are already assigned (planner_service.py:193 pools assigned AND
+  // unassigned), so most cases are evaluated against their incumbent agent.
+  //
+  // A RELATIVE threshold cannot exclude it. Its share is 0.005 / fit, which
+  // crosses 1% as soon as the fit score falls to 1.0 — so it stayed visible on
+  // exactly the low-value, far-away cases, which is the worst place for noise.
+  //
+  // The durable property is absolute: continuity can never exceed 0.005, while
+  // every other factor here maxes out at 0.05 or more — a tenfold gap. So the
+  // floor is on the contribution itself, and it names no factor: anything that
+  // cannot move a decision by 0.01 is not an explanation for one. The relative
+  // test stays as a second filter, to drop terms that are real but drowned out.
+  //
+  // Nothing is hidden from the record — score_breakdown keeps every term. This
+  // governs only what is offered to a manager as a reason.
+  const MIN_ABSOLUTE_CONTRIBUTION = 0.01;
+
+  return Object.entries(contributions)
+    .filter(([, v]) => v >= MIN_ABSOLUTE_CONTRIBUTION)
+    .map(([k, v]) => ({ k, v, pct: total > 0 ? Math.round((v / total) * 100) : 0 }))
+    .filter((r) => r.pct >= 1)
+    .sort((a, b) => b.v - a.v)
+    .map((r) => ({
+      key: r.k,
+      label: FACTOR_LABEL[r.k]?.(breakdown) ?? r.k.replace(/_/g, " "),
+      share: `${r.pct}%`,
+    }));
+}
+
 function TomorrowAllocationCard() {
   const [plan, setPlan] = useState<AllocationPlanReport | null>(null);
   const [loading, setLoading] = useState(true);
@@ -928,6 +1037,8 @@ function TomorrowAllocationCard() {
     }
   };
 
+  const [isExpanded, setIsExpanded] = useState(false);
+
   if (loading) {
     return (
       <div className="card p-5 animate-pulse" style={{ height: 180, background: "#EFF0F4", border: "none" }} />
@@ -937,25 +1048,63 @@ function TomorrowAllocationCard() {
   const isPlanned = plan?.has_plan && plan.status === "PLANNED";
   const isRolledBack = plan?.has_plan && plan.status === "ROLLED_BACK";
 
+  // Subtitle. This read "Global Bipartite Optimization + OR-Tools VRPTW Route
+  // Sequencing" — a hardcoded string, aimed at the wrong reader and not reliably
+  // true. An agency manager does not price a plan on whether it was solved with a
+  // bipartite matching, and core/routing.py degrades twice over: OSRM falls back
+  // to Haversine when unreachable (routing.py:87) and OR-Tools falls back to a
+  // nearest-neighbour walk when the solve throws (routing.py:201). With
+  // OSRM_BASE_URL defaulting to the public demo server, a plan built by neither
+  // named technique was still being labelled with both.
+  //
+  // What a manager actually wants off this line is what the plan optimised for
+  // and how much driving it implies. Both are already here: the objective drives
+  // the switcher below, and estimated_distance_km is stored per beat. Route
+  // length is used rather than cluster spread because it is the figure a manager
+  // already reads on each beat card, and it maps to fuel and hours.
+  const OBJECTIVE_BLURB: Record<string, string> = {
+    BALANCED: "Balanced for recovery and travel",
+    MAX_RECOVERY: "Prioritising recovery value",
+    MIN_DISTANCE: "Prioritising short routes",
+  };
+  const routeKms = (plan?.beats ?? [])
+    .map((b) => b.estimated_distance_km)
+    .filter((k) => typeof k === "number" && k > 0);
+  const avgRouteKm = routeKms.length
+    ? routeKms.reduce((a, b) => a + b, 0) / routeKms.length
+    : 0;
+  const planSubtitle = [
+    OBJECTIVE_BLURB[objective] ?? OBJECTIVE_BLURB.BALANCED,
+    plan?.has_plan && (plan.total_agents_planned ?? 0) > 0
+      ? `${plan.total_agents_planned} beats`
+      : null,
+    avgRouteKm > 0 ? `~${Math.round(avgRouteKm)} km average route` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
   return (
     <div
-      className="card p-5 space-y-4"
+      className="card p-5 transition-all duration-200"
       style={{
         border: "1px solid #E1E3E9",
         background: "linear-gradient(180deg, #FFFFFF 0%, #F9FAFB 100%)",
       }}
     >
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="flex flex-wrap items-start justify-between gap-3 cursor-pointer select-none"
+      >
         <div className="flex items-center gap-2.5">
           <div
-            className="w-8 h-8 rounded-lg flex items-center justify-center"
+            className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
             style={{ background: "#EEF4FF", color: "#0C66E4" }}
           >
             <Compass className="w-4 h-4" />
           </div>
           <div>
             <div className="flex items-center gap-2 flex-wrap">
-              <h2 className="text-base font-bold text-slate-900">
+              <h2 className="text-base font-bold text-slate-900 hover:text-brand-600 transition-colors">
                 Tomorrow's Field Beat Plan
               </h2>
               {plan?.plan_date && (
@@ -973,14 +1122,59 @@ function TomorrowAllocationCard() {
                   ROLLED BACK
                 </span>
               )}
+              {!isExpanded && plan?.has_plan && (
+                <span className="text-xs font-medium text-slate-600 bg-slate-100 px-2.5 py-0.5 rounded-full border border-slate-200">
+                  {plan.total_cases_allocated ?? 0} cases • ₹{((plan.expected_recovery_total ?? 0) / 100000).toFixed(1)}L Expected Recovery • {plan.total_agents_planned ?? 0} beats
+                </span>
+              )}
             </div>
-            <p className="text-xs text-slate-500">
-              Global Bipartite Optimization + OR-Tools VRPTW Route Sequencing
+            <p className="text-xs text-slate-500 mt-0.5">
+              {planSubtitle}
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap" onClick={(e) => e.stopPropagation()}>
+          {isExpanded && isPlanned && (
+            <>
+              <button
+                onClick={handleExportCSV}
+                title="Download decisions audit CSV"
+                className="btn btn-secondary text-xs flex items-center gap-1.5 px-3 py-1.5"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Export CSV</span>
+              </button>
+              <button
+                onClick={handleRollback}
+                disabled={rollingBack}
+                title="Roll back tomorrow's planned beats"
+                className="btn btn-secondary text-xs flex items-center gap-1.5 px-3 py-1.5 hover:text-rose-600"
+              >
+                {rollingBack ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />}
+                <span>Rollback</span>
+              </button>
+            </>
+          )}
+
+          {/* Toggle Details Chevron Button */}
+          <button
+            onClick={() => setIsExpanded(!isExpanded)}
+            className="btn btn-secondary text-xs flex items-center gap-1.5 px-3 py-1.5"
+          >
+            <span>{isExpanded ? "Hide Details" : "Show Details"}</span>
+            {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+          </button>
+        </div>
+      </div>
+
+      {/* Planning controls get their own row beneath the header. They used to sit
+          in the header's right-hand group, which made that group wide enough to wrap
+          onto a full-width strip — so Export CSV / Rollback / Hide Details drifted off
+          the top-right corner. Those three stay in the header; the objective switcher
+          and Re-Plan, which are the wide ones, moved down here. */}
+      {isExpanded && (
+        <div className="flex items-center gap-2 flex-wrap mt-3">
           {/* Allocation Objective Selector */}
           <div className="flex items-center bg-slate-100 p-0.5 rounded-lg text-xs font-semibold">
             <button
@@ -1020,7 +1214,6 @@ function TomorrowAllocationCard() {
               ⚡ Min Distance
             </button>
           </div>
-
           <button
             onClick={() => handleRunPlan()}
             disabled={planning}
@@ -1029,33 +1222,11 @@ function TomorrowAllocationCard() {
             {planning ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
             <span>{isPlanned ? "Re-Plan & Sequence" : "Generate Plan"}</span>
           </button>
-
-          {isPlanned && (
-            <>
-              <button
-                onClick={handleExportCSV}
-                title="Download decisions audit CSV"
-                className="btn btn-secondary text-xs flex items-center gap-1 px-2.5 py-1.5 text-slate-600 hover:text-slate-900"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span>Export CSV</span>
-              </button>
-              <button
-                onClick={handleRollback}
-                disabled={rollingBack}
-                title="Roll back tomorrow's planned beats"
-                className="btn btn-secondary text-xs flex items-center gap-1 px-2.5 py-1.5 text-slate-600 hover:text-rose-600"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-                <span>Rollback</span>
-              </button>
-            </>
-          )}
         </div>
-      </div>
+      )}
 
-      {plan?.has_plan && (
-        <>
+      {isExpanded && plan?.has_plan && (
+        <div className="space-y-4 pt-3">
           {/* Metric Tiles */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2">
             <div className="p-3 bg-white rounded-xl border border-slate-200/80">
@@ -1205,14 +1376,17 @@ function TomorrowAllocationCard() {
                     </div>
                     <p className="text-slate-600 text-[11px] line-clamp-1">{d.reason}</p>
                     {selectedDecision === d && d.score_breakdown && (
-                      <div className="mt-1 pt-1.5 border-t border-slate-100 text-[10.5px] text-slate-500 grid grid-cols-2 gap-1 bg-slate-50/70 p-1.5 rounded">
-                        <span>Prio Score: <strong>{d.visit_priority_score}</strong></span>
-                        <span>Fit Score: <strong>{d.fit_score}</strong></span>
-                        {Object.entries(d.score_breakdown).map(([k, v]) => (
-                          <span key={k} className="truncate">
-                            {k.replace("_", " ")}: <strong>{String(v)}</strong>
-                          </span>
+                      <div className="mt-1 pt-1.5 border-t border-slate-100 text-[10.5px] text-slate-500 bg-slate-50/70 p-1.5 rounded space-y-0.5">
+                        {rankedReasons(d.score_breakdown).map((r) => (
+                          <div key={r.key} className="flex items-baseline justify-between gap-3">
+                            <span className="text-slate-600">{r.label}</span>
+                            <span className="tabular-nums text-slate-400 flex-shrink-0">{r.share}</span>
+                          </div>
                         ))}
+                        <div className="pt-1 mt-1 border-t border-slate-200/70 text-slate-400">
+                          Priority {d.visit_priority_score} · Fit {d.fit_score}
+                          {typeof d.score_breakdown.objective === "string" && ` · ${String(d.score_breakdown.objective).replace(/_/g, " ").toLowerCase()}`}
+                        </div>
                       </div>
                     )}
                   </div>
@@ -1220,7 +1394,7 @@ function TomorrowAllocationCard() {
               </div>
             </div>
           )}
-        </>
+        </div>
       )}
     </div>
   );

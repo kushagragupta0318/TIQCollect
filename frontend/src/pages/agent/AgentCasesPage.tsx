@@ -69,14 +69,24 @@ export default function AgentCasesPage() {
         (c.rank_badge && (c.rank_badge.startsWith("BLOCKED") || c.rank_badge === "DO NOT VISIT"))
       );
 
+    const isDone = (c: Case) =>
+      Boolean(
+        visitedSet.has(c.id) ||
+        c.is_visited_today ||
+        c.status === "PAID" ||
+        c.status === "CLOSED" ||
+        c.status === "WRITTEN_OFF" ||
+        (c.target_amount > 0 && c.collected_amount >= c.target_amount)
+      );
+
     const all = (beat.cases ?? []).map((c) => ({
       ...c,
-      is_visited_today: visitedSet.has(c.id),
+      is_visited_today: isDone(c),
       is_blocked: isBlocked(c),
     }));
 
-    const active = all.filter((c) => !c.is_visited_today && !c.is_blocked);
-    const done = all.filter((c) => c.is_visited_today && !c.is_blocked);
+    const active = all.filter((c) => !isDone(c) && !c.is_blocked);
+    const done = all.filter((c) => isDone(c) && !c.is_blocked);
     const blocked = all.filter((c) => c.is_blocked);
 
     const score = (c: Case) => c.visit_priority?.score ?? -1;
