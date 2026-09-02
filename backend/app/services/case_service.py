@@ -248,7 +248,12 @@ class CaseService:
         )
 
         def _is_done(c: Case) -> bool:
-            return c.id in visited_today_ids
+            return (
+                c.id in visited_today_ids
+                or c.status in _RESOLVED_STATUSES
+                or c.status == CaseStatus.PAID
+                or (c.target_amount > 0 and c.collected_amount >= c.target_amount)
+            )
 
         pending = [c for c in cases if not _is_done(c)]
         done = [c for c in cases if _is_done(c)]
@@ -420,9 +425,16 @@ class CaseService:
             is_blocked = (score <= -900) or getattr(c.customer, "do_not_contact", False)
             row["is_blocked"] = is_blocked
 
+            is_done = (
+                row["is_visited_today"]
+                or (c.status in _RESOLVED_STATUSES)
+                or (c.status == CaseStatus.PAID)
+                or (c.target_amount > 0 and c.collected_amount >= c.target_amount)
+            )
+
             if is_blocked:
                 blocked_scored.append(row)
-            elif row["is_visited_today"]:
+            elif is_done:
                 done_scored.append(row)
             else:
                 pending_active.append(row)

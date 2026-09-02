@@ -15,16 +15,16 @@ from collections import defaultdict
 from math import cos, radians
 
 from fastapi import HTTPException
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import settings
 from app.core.security import create_agent_verify_token
 from app.models.agent import Agent, AgentStatus
 from app.models.beat import Beat
-from app.models.case import Case
+from app.models.case import Case, CaseStatus, RESOLVED_STATUSES
 from app.models.customer import Customer
-from app.models.payment import Payment
+from app.models.payment import Payment, PaymentStatus
 from app.models.ptp import PTP, PTPStatus
 from app.models.user import User
 from app.models.visit import Visit
@@ -99,7 +99,15 @@ class AgentService:
         )
         ptps_due = (
             self.db.query(func.count(PTP.id))
-            .filter(PTP.agent_id == agent.id, PTP.committed_date == eff_day, PTP.status == PTPStatus.ACTIVE)
+            .join(Case, Case.id == PTP.case_id)
+            .filter(
+                PTP.agent_id == agent.id,
+                PTP.committed_date == eff_day,
+                PTP.status == PTPStatus.ACTIVE,
+                Case.status.notin_(list(RESOLVED_STATUSES)),
+                Case.status != CaseStatus.PAID,
+                Case.collected_amount < Case.target_amount,
+            )
             .scalar() or 0
         )
 
@@ -251,7 +259,15 @@ class AgentService:
         ptp_due_today_ids: set[str] = set(
             row[0] for row in
             self.db.query(PTP.case_id)
-            .filter(PTP.agent_id == agent.id, PTP.committed_date == eff_day, PTP.status == PTPStatus.ACTIVE)
+            .join(Case, Case.id == PTP.case_id)
+            .filter(
+                or_(PTP.agent_id == agent.id, PTP.case_id.in_(beat.ordered_case_ids or [])),
+                PTP.committed_date == eff_day,
+                PTP.status == PTPStatus.ACTIVE,
+                Case.status.notin_(list(RESOLVED_STATUSES)),
+                Case.status != CaseStatus.PAID,
+                Case.collected_amount < Case.target_amount,
+            )
             .all()
         )
 
@@ -312,7 +328,51 @@ class AgentService:
         if not agent:
             raise HTTPException(status_code=404, detail="Agent profile not found")
 
-        beat = self.db.query(Beat).filter(Beat.agent_id == agent.id).order_by(Beat.beat_date.desc()).first()
+        today = date.today()
+        start_of_month = datetime(today.year, today.month, 1, tzinfo=timezone.utc)
+
+        current_month_visits = (
+            self.db.query(func.count(Visit.id))
+            .filter(Visit.agent_id == agent.id, Visit.check_in_time >= start_of_month)
+            .scalar() or 0
+        )
+        current_month_collections = (
+            self.db.query(func.coalesce(func.sum(Payment.amount), 0.0))
+            .filter(
+                Payment.agent_id == agent.id,
+                Payment.payment_date >= start_of_month,
+                Payment.status == PaymentStatus.VERIFIED,
+            )
+            .scalar() or 0.0
+        )
+        if current_month_visits == 0:
+            current_month_ptps_set = 0
+            current_month_ptps_honored = 0
+        else:
+            current_month_ptps_set = (
+                self.db.query(func.count(PTP.id))
+                .filter(
+                    PTP.agent_id == agent.id,
+                    PTP.created_at >= start_of_month,
+                )
+                .scalar() or 0
+            )
+            current_month_ptps_honored = (
+                self.db.query(func.count(PTP.id))
+                .filter(
+                    PTP.agent_id == agent.id,
+                    PTP.created_at >= start_of_month,
+                    PTP.status.in_([PTPStatus.HONORED, PTPStatus.PARTIALLY_HONORED]),
+                )
+                .scalar() or 0
+            )
+
+        beat = (
+            self.db.query(Beat)
+            .filter(Beat.agent_id == agent.id)
+            .order_by(Beat.beat_date.desc())
+            .first()
+        )
         cases_today = len(beat.ordered_case_ids) if beat and beat.ordered_case_ids else 0
 
         return {
@@ -332,10 +392,10 @@ class AgentService:
             "ranking_score": agent.ranking_score,
             "lifetime_collection_rate": agent.lifetime_collection_rate,
             "max_cases_per_day": agent.max_cases_per_day,
-            "current_month_visits": agent.current_month_visits,
-            "current_month_collections": agent.current_month_collections,
-            "current_month_ptps_set": agent.current_month_ptps_set,
-            "current_month_ptps_honored": agent.current_month_ptps_honored,
+            "current_month_visits": current_month_visits,
+            "current_month_collections": round(float(current_month_collections), 2),
+            "current_month_ptps_set": current_month_ptps_set,
+            "current_month_ptps_honored": current_month_ptps_honored,
             "last_known_latitude": agent.last_known_latitude,
             "last_known_longitude": agent.last_known_longitude,
             "sos_active": agent.sos_active,

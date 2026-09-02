@@ -1854,7 +1854,7 @@ def seed():
                         id=_uid(),
                         case_id=c.id, visit_id=v.id,
                         agent_id=c.agent_id,
-                        committed_amount=round(loan.overdue_amount * random.uniform(0.5, 1.0), 2),
+                        committed_amount=round(min(float(c.target_amount or loan.overdue_amount), loan.overdue_amount * random.uniform(0.5, 1.0)), 2),
                         committed_date=committed_date,
                         status=ptp_status,
                         actual_paid_amount=_hist_ptp_paid,

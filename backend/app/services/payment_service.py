@@ -313,10 +313,15 @@ class PaymentService:
         if existing:
             return self._ptp_response(existing)
 
+        remaining_target = max(0.0, case.target_amount - case.collected_amount)
+        amt = req.committed_amount
+        if remaining_target > 0 and amt > remaining_target:
+            amt = remaining_target
+
         ptp = PTP(
             case_id=case.id,
             agent_id=agent.id,
-            committed_amount=req.committed_amount,
+            committed_amount=amt,
             committed_date=req.committed_date,
             customer_reason=req.customer_reason,
             agent_notes=req.agent_notes,

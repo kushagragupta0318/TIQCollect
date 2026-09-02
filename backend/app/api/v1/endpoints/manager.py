@@ -311,20 +311,53 @@ def dashboard(current_user: ManagerOnly, db: DbSession):
         .filter(Visit.agent_id.in_(my_agent_ids), Visit.check_in_time >= start_of_day)
         .scalar() or 0
     )
-    # Distinct cases visited today
-    visited_case_ids = [
-        row[0] for row in
-        db.query(Visit.case_id)
-        .filter(Visit.agent_id.in_(my_agent_ids), Visit.check_in_time >= start_of_day)
-        .distinct()
+    # Beats FOR THE EFFECTIVE DAY. This query had no date filter and the loop
+    # below kept each agent's LATEST beat, so as soon as a plan existed for
+    # tomorrow the dashboard silently switched to describing tomorrow: the
+    # target, the case count and the per-agent goals all came from the planned
+    # beat while the money came from today. On 2026-09-02 that put today's
+    # Rs 81.6L against tomorrow's book and rendered "102% achieved" with agents
+    # showing more collected than they had been given.
+    #
+    # Only 142 of the two days' 214 cases overlapped, so it was not a rounding
+    # artefact — it was two different case sets either side of one division.
+    #
+    # _effective_today already resolves this (max beat_date <= today, added by
+    # commit 6eeb48c for exactly this reason); the beat query just never used
+    # its answer. Fixed 2026-09-02.
+    active_beats = (
+        db.query(Beat)
+        .filter(Beat.agent_id.in_(my_agent_ids), Beat.beat_date == today_date)
         .all()
-    ]
-    cases_today = len(visited_case_ids)
+    )
+    latest_beat_by_agent: dict[str, Beat] = {}
+    for b in active_beats:
+        if b.agent_id not in latest_beat_by_agent or b.beat_date > latest_beat_by_agent[b.agent_id].beat_date:
+            latest_beat_by_agent[b.agent_id] = b
+
+    all_beat_case_ids: list[str] = []
+    for b in latest_beat_by_agent.values():
+        all_beat_case_ids.extend(b.ordered_case_ids or [])
+
+    cases_today = len(set(all_beat_case_ids)) if all_beat_case_ids else cases_assigned
+    # The FULL assigned collection target for today's beat cases.
+    #
+    # Not Loan.total_outstanding (the borrower's whole bill, Rs 30.36 Cr across
+    # these same cases), and not target-less-what-was-already-collected. It is
+    # the amount the agency was given to recover, which is what a manager is
+    # held to.
+    #
+    # Consequence, stated plainly because it otherwise reads as a fault: the
+    # gauge cannot reach 100% on a book carrying prior collections, because part
+    # of the target was banked in earlier months and cannot be collected twice.
+    # On 2026-09-02, Rs 74.5L of the Rs 1.77 Cr was already paid, putting the
+    # ceiling for a single day at 58%. That is a property of measuring one day
+    # against a multi-month target, not a defect in the arithmetic.
     amount_target_today = (
         db.query(func.coalesce(func.sum(Case.target_amount), 0.0))
-        .filter(Case.id.in_(visited_case_ids))
+        .filter(Case.id.in_(all_beat_case_ids))
         .scalar() or 0.0
-    ) if visited_case_ids else 0.0
+    ) if all_beat_case_ids else 0.0
 
     # Return as percentage (0-100) so the frontend doesn't need to multiply
     collection_rate_pct = (
@@ -655,7 +688,7 @@ def list_agents(current_user: ManagerOnly, db: DbSession):
               .order_by(Agent.employee_code)
               .all())
     agent_ids = [a.id for a in agents]
-    start_of_day, _, eff_date = _effective_today(agent_ids, db)
+    start_of_day, end_of_day, eff_date = _effective_today(agent_ids, db)
     eff_date_str = eff_date.isoformat()
 
     # ── Today's figures: three grouped queries for the WHOLE team ────────────
@@ -675,31 +708,53 @@ def list_agents(current_user: ManagerOnly, db: DbSession):
     #                    visits to one case must not count its target twice,
     #                    while two AGENTS visiting the same case each count it,
     #                    exactly as before.
-    cases_today_by_agent = dict(
-        db.query(Case.agent_id, func.count(Case.id))
-        .filter(Case.agent_id.in_(agent_ids), Case.allocation_date == eff_date_str)
-        .group_by(Case.agent_id)
+    # Beats FOR THE EFFECTIVE DAY. This query had no date filter and the loop
+    # below kept each agent's LATEST beat, so as soon as a plan existed for
+    # tomorrow the dashboard silently switched to describing tomorrow: the
+    # target, the case count and the per-agent goals all came from the planned
+    # beat while the money came from today. On 2026-09-02 that put today's
+    # Rs 81.6L against tomorrow's book and rendered "102% achieved" with agents
+    # showing more collected than they had been given.
+    #
+    # Only 142 of the two days' 214 cases overlapped, so it was not a rounding
+    # artefact — it was two different case sets either side of one division.
+    #
+    # _effective_today already resolves this (max beat_date <= today, added by
+    # commit 6eeb48c for exactly this reason); the beat query just never used
+    # its answer. Fixed 2026-09-02.
+    active_beats = (
+        db.query(Beat)
+        .filter(Beat.agent_id.in_(agent_ids), Beat.beat_date == eff_date)
         .all()
     )
+    latest_beat_by_agent: dict[str, Beat] = {}
+    for b in active_beats:
+        if b.agent_id not in latest_beat_by_agent or b.beat_date > latest_beat_by_agent[b.agent_id].beat_date:
+            latest_beat_by_agent[b.agent_id] = b
+
+    cases_today_by_agent: dict[str, int] = {}
+    target_by_agent: dict[str, float] = {}
+    for aid, b in latest_beat_by_agent.items():
+        c_ids = b.ordered_case_ids or []
+        cases_today_by_agent[aid] = len(c_ids)
+        if c_ids:
+            # The FULL assigned target for this agent's beat, matching the team
+            # figure in dashboard(). Both are Case.target_amount summed over the
+            # day's cases, so the agent rows add up to the headline exactly — if
+            # those two ever diverge again, one of them has drifted.
+            t_sum = (
+                db.query(func.coalesce(func.sum(Case.target_amount), 0.0))
+                .filter(Case.id.in_(c_ids))
+                .scalar() or 0.0
+            )
+            target_by_agent[aid] = float(t_sum)
+
     collected_by_agent = dict(
         db.query(Payment.agent_id, func.coalesce(func.sum(Payment.amount), 0.0))
         .filter(Payment.agent_id.in_(agent_ids),
                 Payment.payment_date >= start_of_day,
                 Payment.status == PaymentStatus.VERIFIED)
         .group_by(Payment.agent_id)
-        .all()
-    )
-    _visited_today = (
-        db.query(Visit.agent_id.label("agent_id"), Visit.case_id.label("case_id"))
-        .filter(Visit.agent_id.in_(agent_ids), Visit.check_in_time >= start_of_day)
-        .distinct()
-        .subquery()
-    )
-    target_by_agent = dict(
-        db.query(_visited_today.c.agent_id,
-                 func.coalesce(func.sum(Case.target_amount), 0.0))
-        .join(Case, Case.id == _visited_today.c.case_id)
-        .group_by(_visited_today.c.agent_id)
         .all()
     )
 
