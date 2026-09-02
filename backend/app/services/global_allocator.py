@@ -29,6 +29,49 @@ class GlobalAllocator:
     MAX_BEAT_ROUTE_KM = 120.0
     MAX_DETOUR_MARGINAL_KM = 22.0
 
+    # Value-term scaling. See _value_score.
+    VALUE_KNEE_INR = 25_000.0
+    VALUE_REFERENCE_INR = 300_000.0
+
+    # Indicator value for "this agent already holds this case". 0/1 like
+    # lang_match; the objective table supplies the weight. See where it is used.
+    CONTINUITY_BONUS = 1.0
+
+    @classmethod
+    def _value_score(cls, expected_inr: float) -> float:
+        """Expected rupees -> a 0-1 term, comparable to the other five factors.
+
+        2026-09-02 — this was `expected_case_inr / 25000.0`, which is unbounded.
+        Every other term in the utility is 0-1, so the stated weights did not
+        describe the actual influence. Measured on the live book (426 open cases):
+
+            target      old inr_score   contribution @0.45   vs proximity max 0.40
+            Rs   7,031       0.17              0.08
+            Rs  25,901       0.62              0.28           (median)
+            Rs  66,700       1.60              0.72
+            Rs 211,701       5.08              2.29           5.7x proximity's RANGE
+            Rs 500,000      12.00              5.40          13.5x
+
+        So "Balanced" (0.45 value / 0.40 proximity) actually ran at roughly 65/25
+        on a median-ish case and 15:1 on a large one — and switching the objective
+        to Min Distance barely moved a big case, because 0.05 x 12.0 still beats
+        0.80 x 1.0. The manager's objective switch was being overruled by case size.
+
+        Log rather than linear because the book has a heavy right tail (median
+        Rs 25,901, max Rs 500,000). Dividing by the max would collapse the median
+        to 0.05 and destroy discrimination across the bulk of the portfolio; the
+        log keeps p25/median/p75/p95 spread over 0.06/0.19/0.37/0.70.
+
+        The reference is a fixed rupee figure, deliberately NOT derived from the
+        pool: a pool-relative scale would make the same case score differently
+        depending on what else happened to be planned that night, which is not a
+        property you want in something labelled an audit trail.
+        """
+        if expected_inr <= 0:
+            return 0.0
+        ceiling = math.log1p(cls.VALUE_REFERENCE_INR / cls.VALUE_KNEE_INR)
+        return min(1.0, math.log1p(expected_inr / cls.VALUE_KNEE_INR) / ceiling)
+
     def __init__(
         self,
         objective: str = AllocationObjective.BALANCED.value,
@@ -38,6 +81,39 @@ class GlobalAllocator:
         self.objective = objective
         self.territory_radius_km = territory_radius_km
         self.eb_adjuster = eb_adjuster or EmpiricalBayesAgentAdjuster()
+
+    @classmethod
+    def _work_anchor(cls, base_km: float, centroid: tuple[float, float] | None,
+                     cust_lat: float, cust_lon: float) -> float:
+        """Distance used for the proximity SCORE: nearer of base or current book.
+
+        2026-09-02 — proximity was scored purely as crow-flies from the agent's
+        home base, which cannot express clustering: two cases 15 km apart on
+        opposite sides of the base score identically, so the assignment had no
+        reason to prefer the one sitting beside six cases the agent is already
+        visiting. Stage 2 then had to sequence a set that was chosen with no
+        regard for how it routes.
+
+        The obvious fix — score from the previous stop — is circular: the route
+        does not exist until after the assignment. The obvious other fix, real
+        OSRM road distances, means an O(N^2) table (319 cases x 15 bases is 334
+        points) on an external service in the middle of the solve; core/routing
+        falls back to Haversine when OSRM is down, but the latency and the demo
+        server's own limits make that a poor thing to depend on here.
+
+        This uses an anchor that is known BEFORE the solve and needs no network:
+        the centroid of the open cases the agent already holds. A case is cheap
+        to reach if it is near where they start OR near where they are already
+        working, so the score takes the smaller of the two.
+
+        The territory gate is deliberately NOT changed — it still tests base
+        distance against territory_radius_km, so eligibility is identical and the
+        16 km zone keeps the calibration it was tuned with. Only the ranking of
+        eligible pairs moves.
+        """
+        if centroid is None:
+            return base_km
+        return min(base_km, cls.haversine_km(centroid[0], centroid[1], cust_lat, cust_lon))
 
     @staticmethod
     def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -51,13 +127,30 @@ class GlobalAllocator:
         return r * 2.0 * math.atan2(math.sqrt(a), math.sqrt(1.0 - a))
 
     def get_objective_weights(self) -> dict[str, float]:
-        """Return parameter weights for the selected manager allocation objective."""
+        """Weight per utility term for the selected manager objective.
+
+        2026-09-02 — these are now the weights the allocator actually uses.
+        This method previously returned a four-key table (w_affinity /
+        w_proximity / w_workload / w_skills) that allocate() read into locals
+        and then never touched: the utility was built from a SECOND set of
+        weights hardcoded inline, once per objective branch. The two disagreed
+        — BALANCED was 0.35/0.35 here against the 0.45/0.40 that actually ran —
+        and because nothing read this one, nothing ever surfaced the conflict.
+
+        The live values are reproduced exactly, so no allocation changes. What
+        changes is that there is one table instead of four, and the per-factor
+        explanation on the audit panel reads it. A weight edit now moves the
+        decision and the reason given for it together, rather than leaving the
+        stated reason describing weights that were retired.
+        """
         if self.objective == AllocationObjective.MAX_RECOVERY.value:
-            return {"w_affinity": 0.55, "w_proximity": 0.15, "w_workload": 0.15, "w_skills": 0.15}
-        elif self.objective == AllocationObjective.MIN_DISTANCE.value:
-            return {"w_affinity": 0.15, "w_proximity": 0.65, "w_workload": 0.10, "w_skills": 0.10}
-        else:  # BALANCED
-            return {"w_affinity": 0.35, "w_proximity": 0.35, "w_workload": 0.15, "w_skills": 0.15}
+            return {"expected_recovery": 0.70, "proximity": 0.10, "skills": 0.10,
+                    "workload": 0.05, "continuity": 0.05, "language": 0.05}
+        if self.objective == AllocationObjective.MIN_DISTANCE.value:
+            return {"expected_recovery": 0.05, "proximity": 0.80, "skills": 0.05,
+                    "workload": 0.05, "continuity": 0.05, "language": 0.05}
+        return {"expected_recovery": 0.45, "proximity": 0.40, "skills": 0.05,
+                "workload": 0.05, "continuity": 0.05, "language": 0.05}
 
     def allocate(
         self,
@@ -65,6 +158,7 @@ class GlobalAllocator:
         agents: Sequence[Agent],
         history_matrix: dict,
         prio_scores: dict[str, float],
+        ptp_fatigue: dict[str, set[str]] | None = None,
     ) -> tuple[dict[str, list[Case]], list[AllocationDecision], float]:
         """
         Execute Two-Stage Global Case Allocation:
@@ -72,10 +166,6 @@ class GlobalAllocator:
           Stage 2: Route Feasibility & Outlier Deferral
         """
         weights = self.get_objective_weights()
-        w_affinity = weights["w_affinity"]
-        w_proximity = weights["w_proximity"]
-        w_workload = weights["w_workload"]
-        w_skills = weights["w_skills"]
 
         # Flatten agent capacity into discrete virtual capacity slots
         slots: list[tuple[Agent, int]] = []
@@ -100,6 +190,22 @@ class GlobalAllocator:
         PENALTY_INELIGIBLE = 1e6
         cost_matrix = np.full((num_cases, num_slots), PENALTY_INELIGIBLE, dtype=np.float64)
         decision_cache: dict[tuple[int, int], tuple[float, str, dict]] = {}
+
+        # Where each agent is ALREADY working — the centroid of the open cases
+        # they currently hold. See _work_anchor for why this exists.
+        work_centroids: dict[str, tuple[float, float]] = {}
+        for ag in agents:
+            pts = [
+                (c.customer.latitude, c.customer.longitude)
+                for c in cases
+                if c.agent_id == ag.id and c.customer
+                and c.customer.latitude is not None and c.customer.longitude is not None
+            ]
+            if pts:
+                work_centroids[ag.id] = (
+                    sum(p[0] for p in pts) / len(pts),
+                    sum(p[1] for p in pts) / len(pts),
+                )
 
         for c_idx, case in enumerate(cases):
             customer: Customer | None = case.customer
@@ -147,10 +253,25 @@ class GlobalAllocator:
             cust_lon = customer.longitude or 77.2090
             cust_lang = (customer.language_preference or "").lower()
 
+            # Agents this borrower has already promised, and not paid, three
+            # times. Built by PlannerService; see _ptp_fatigue_map there for why
+            # the threshold is per (case, agent) rather than per case.
+            fatigued = (ptp_fatigue or {}).get(case.id) or frozenset()
+
             for s_idx, (ag, slot_num) in enumerate(slots):
                 # Hard Gate: Female agent constraint
                 is_female_ag = str(getattr(ag, "gender", "")).upper() in ("F", "FEMALE")
                 if getattr(customer, "requires_female_agent", False) and not is_female_ag:
+                    continue
+
+                # Hard Gate: PTP fatigue. Three promises to the same agent with
+                # nothing collected means the pairing is not working, whatever the
+                # score says. Barring the agent rather than the case is deliberate:
+                # the borrower still owes the money and should still be visited,
+                # just by somebody else. Because this only removes one column from
+                # the row, the bipartite solve then picks that case's next best
+                # agent by itself — no reassignment pass, no special casing.
+                if ag.id in fatigued:
                     continue
 
                 # Hard Gate: Territory Radius Boundary
@@ -163,11 +284,31 @@ class GlobalAllocator:
                     ag.id, loan_type_str, dpd_str
                 )
 
+                # 2026-09-02 — this read ag_matrix.get(loan_type_str, prior_win),
+                # but get_historical_competency_matrix nests the rates one level
+                # down under "loan_type_recovery" (planner_service.py:113). The
+                # top level holds only that dict plus total_collected and
+                # overall_recovery_rate, so a loan type could never match and the
+                # lookup ALWAYS took the fallback. A 90-day query over every
+                # payment, grouped per agent per loan type, ran nightly and was
+                # discarded: every agent scored the segment prior, and the only
+                # agent-specific signal left was the EB multiplier's +/-25%.
+                #
+                # That made "Historical Competency Matching" — objective 2 in
+                # docs/PLAN.md, and the heaviest term in the utility at 0.45-0.70
+                # — a segment average wearing an agent's name.
                 ag_matrix = history_matrix.get(ag.id, {})
-                base_affinity = float(ag_matrix.get(loan_type_str, prior_win))
+                lt_rates = ag_matrix.get("loan_type_recovery", {}) or {}
+                base_affinity = float(lt_rates.get(loan_type_str, prior_win))
                 affinity_score = min(1.0, base_affinity * eb_multiplier)
 
-                proximity_score = math.exp(-dist_km / 5.5)
+                # Travel cost is scored from the NEARER of two anchors: the
+                # agent's base, and the centroid of the cases they already hold.
+                # The gate above still uses base distance alone, so the 16 km
+                # operating zone (commit 51fc4e7) keeps the exact meaning it was
+                # calibrated with and the same cases remain eligible.
+                effective_km = self._work_anchor(dist_km, work_centroids.get(ag.id), cust_lat, cust_lon)
+                proximity_score = math.exp(-effective_km / 5.5)
 
                 tier_weight = {"TIER_1": 1.0, "TIER_2": 0.8, "TIER_3": 0.6}.get(
                     ag.tier.value if hasattr(ag.tier, "value") else str(ag.tier), 0.7
@@ -176,43 +317,51 @@ class GlobalAllocator:
                 skills_score = 0.6 * tier_weight + 0.4 * spec_match
 
                 workload_score = max(0.1, 1.0 - (slot_num / max(1, ag.max_cases_per_day or 12)))
-                continuity_bonus = 0.10 if case.agent_id == ag.id else 0.0
+                # 2026-09-02 — was 0.10, which the 0.05 objective weight then
+                # multiplied down to 0.005: about a third of one percent of a
+                # typical fit score, so a borrower was moved to a different agent
+                # for a few hundred metres of proximity, discarding whatever the
+                # previous agent knew about the household. Every other indicator
+                # in this block is 0/1 (lang_match) or 0.5/1.0 (spec_match) and
+                # carries its weight in the objective table; 0.10 was a second
+                # weight applied on top of the first. Now consistent: the term is
+                # the indicator, the table holds the weight.
+                continuity_bonus = self.CONTINUITY_BONUS if case.agent_id == ag.id else 0.0
                 lang_match = 1.0 if (ag.languages_spoken and cust_lang in [l.lower() for l in ag.languages_spoken]) else 0.0
 
-                # Expected rupee recovery for this case-agent pairing
-                target_inr = float(case.target_amount or 25000.0)
+                # Expected rupee recovery for this case-agent pairing, over what is
+                # STILL COLLECTABLE.
+                #
+                # 2026-09-02 — this was case.target_amount, the lifetime target, so a
+                # case 95% collected was valued at the same rupees as an untouched one
+                # of equal size. That feeds inr_score, which carries 45-70% of the
+                # utility, so the allocator was spending its most heavily weighted term
+                # on money already banked and not collectable again. Invisible while the
+                # pool was mostly untouched cases; obvious the moment a day of
+                # collections left 202 partially paid cases in it.
+                target_inr = max(0.0, float(case.target_amount or 0.0)
+                                 - float(case.collected_amount or 0.0))
                 prob_recovery = min(0.85, max(0.20, affinity_score * (0.80 + 0.20 * tier_weight)))
                 expected_case_inr = target_inr * prob_recovery
-                inr_score = expected_case_inr / 25000.0
+                inr_score = self._value_score(expected_case_inr)
 
-                # Match objective weights
-                if self.objective == AllocationObjective.MAX_RECOVERY.value:
-                    utility = (
-                        0.70 * inr_score +
-                        0.10 * proximity_score +
-                        0.10 * skills_score +
-                        0.05 * workload_score +
-                        0.05 * continuity_bonus +
-                        0.05 * lang_match
-                    )
-                elif self.objective == AllocationObjective.MIN_DISTANCE.value:
-                    utility = (
-                        0.80 * proximity_score +
-                        0.05 * inr_score +
-                        0.05 * skills_score +
-                        0.05 * workload_score +
-                        0.05 * continuity_bonus +
-                        0.05 * lang_match
-                    )
-                else:  # BALANCED
-                    utility = (
-                        0.45 * inr_score +
-                        0.40 * proximity_score +
-                        0.05 * skills_score +
-                        0.05 * workload_score +
-                        0.05 * continuity_bonus +
-                        0.05 * lang_match
-                    )
+                # The utility is a weighted sum, so each term's weight x score IS
+                # its share of the decision. Recording those shares is what lets
+                # the audit panel rank the reasons this case went to this agent,
+                # rather than dumping the raw factors and leaving a manager to
+                # guess which of them mattered. Nothing is recomputed for the
+                # explanation — it is the same arithmetic, kept instead of thrown
+                # away. Added 2026-09-02.
+                terms = {
+                    "expected_recovery": inr_score,
+                    "proximity": proximity_score,
+                    "skills": skills_score,
+                    "workload": workload_score,
+                    "continuity": continuity_bonus,
+                    "language": lang_match,
+                }
+                contributions = {k: round(weights[k] * v, 4) for k, v in terms.items()}
+                utility = sum(weights[k] * v for k, v in terms.items())
 
                 weighted_utility = utility * (1.0 + (prio / 100.0) * 0.25)
                 cost_matrix[c_idx, s_idx] = -weighted_utility
@@ -227,6 +376,18 @@ class GlobalAllocator:
                         "proximity_score": round(proximity_score, 3),
                         "skills_score": round(skills_score, 3),
                         "expected_case_inr": round(expected_case_inr, 2),
+                        # Three factors that were computed and discarded. They are
+                        # the most legible reasons on the list — "speaks the
+                        # borrower's language", "was already his case" — and the
+                        # panel could not state them because nothing stored them.
+                        "lang_match": round(lang_match, 2),
+                        "workload_score": round(workload_score, 3),
+                        "continuity_bonus": round(continuity_bonus, 2),
+                        "spec_match": round(spec_match, 2),
+                        # Named so the audit panel can say "specialises in personal
+                        # loans" rather than "in this loan type".
+                        "loan_type": loan_type_str,
+                        "contributions": contributions,
                         "objective": self.objective,
                     }
                 )
@@ -297,7 +458,12 @@ class GlobalAllocator:
                 aff_score = bdown.get("affinity_score", 0.5)
                 t_weight = bdown.get("tier_weight", 0.8)
                 prob_rec = min(0.85, max(0.20, aff_score * (0.80 + 0.20 * t_weight)))
-                expected_recovery_sum += float(c.target_amount or 0.0) * prob_rec
+                # Same correction as target_inr above: forecast what can still be
+                # collected. Summing full targets had the plan predicting Rs 48.5L
+                # against Rs 16.4L of collectable balance — 296% of the possible.
+                c_remaining = max(0.0, float(c.target_amount or 0.0)
+                                  - float(c.collected_amount or 0.0))
+                expected_recovery_sum += c_remaining * prob_rec
 
                 decisions.append(AllocationDecision(
                     id=str(uuid.uuid4()),

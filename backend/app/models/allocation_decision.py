@@ -9,6 +9,13 @@ class AllocationOutcome(str, enum.Enum):
     DEFERRED = "DEFERRED"
     DEFERRED_ROUTE_INFEASIBLE = "DEFERRED_ROUTE_INFEASIBLE"
     BLOCKED = "BLOCKED"
+    # Held until a promised date. The borrower committed to pay on a future
+    # day, so sending an agent before then is a wasted visit and a nuisance
+    # call on someone who is already cooperating.
+    DEFERRED_PTP = "DEFERRED_PTP"
+    # This month's visit budget for the case is spent (Case.max_visits_allowed
+    # counted within the calendar month, not over the case's lifetime).
+    DEFERRED_VISIT_CAP = "DEFERRED_VISIT_CAP"
 
 
 class AllocationDecision(Base, UUIDPrimaryKey, TimestampMixin):
@@ -20,7 +27,11 @@ class AllocationDecision(Base, UUIDPrimaryKey, TimestampMixin):
     previous_agent_id: Mapped[str | None] = mapped_column(ForeignKey("agents.id"), nullable=True, index=True)
     allocated_agent_id: Mapped[str | None] = mapped_column(ForeignKey("agents.id"), nullable=True, index=True)
 
-    outcome: Mapped[str] = mapped_column(String(20), nullable=False, index=True)  # ALLOCATED / DEFERRED / BLOCKED
+    # 32, not 20. DEFERRED_ROUTE_INFEASIBLE is 25 characters and would have
+    # raised a StringDataRightTruncation the first time an unroutable outlier
+    # appeared — it never has (only ALLOCATED, BLOCKED and DEFERRED are present
+    # across 26,841 rows), so the fault sat unexercised rather than fixed.
+    outcome: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
 
     visit_priority_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)

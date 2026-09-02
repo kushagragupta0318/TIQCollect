@@ -43,6 +43,26 @@ W_SKILLS = 0.15
 INCUMBENT_CONTINUITY_BONUS = 0.10
 
 
+# A borrower may promise the same agent this many times before that pairing is
+# treated as not working. Three, per the operating decision on 2026-09-02.
+PTP_FATIGUE_THRESHOLD = 3
+
+# Promises that did NOT turn into money. HONORED and PARTIALLY_HONORED are
+# excluded deliberately: a promise that was kept is the process working, and
+# counting it as fatigue would punish the agent who got the borrower to pay.
+_FAILED_PTP_STATUSES = (PTPStatus.BROKEN, PTPStatus.EXPIRED, PTPStatus.RESCHEDULED)
+
+# Every way a case can be held back rather than allocated. Kept in one place
+# because the run's deferred_count is read straight onto the manager's dashboard,
+# and a new outcome that is not listed here silently stops being counted.
+_DEFERRED_OUTCOMES = frozenset({
+    AllocationOutcome.DEFERRED.value,
+    AllocationOutcome.DEFERRED_ROUTE_INFEASIBLE.value,
+    AllocationOutcome.DEFERRED_PTP.value,
+    AllocationOutcome.DEFERRED_VISIT_CAP.value,
+})
+
+
 def get_target_plan_date(reference_date: date | None = None) -> date:
     """Calculate the target execution date for next working day.
     
@@ -64,6 +84,38 @@ class PlannerService:
     def __init__(self, db: Session, manager_user_id: str):
         self.db = db
         self.manager_user_id = manager_user_id
+
+    def _ptp_fatigue_map(self, case_ids: list[str]) -> dict[str, set[str]]:
+        """case_id -> agents this borrower has promised, and not paid, too often.
+
+        Returned to GlobalAllocator, which drops those agents from that case's row
+        in the cost matrix. Barring the AGENT and not the CASE is the whole point:
+        the money is still owed and the borrower should still be visited, just by
+        somebody else. Because only one column is removed, the bipartite solve
+        picks the next best agent on its own — there is no reassignment pass and
+        no ordering to get wrong.
+
+        Counted per (case, agent), not per case: a borrower who has broken three
+        promises to three different agents is a difficult borrower, not evidence
+        that any one agent should be taken off them.
+        """
+        if not case_ids:
+            return {}
+        rows = (
+            self.db.query(PTP.case_id, PTP.agent_id, func.count(PTP.id))
+            .filter(
+                PTP.case_id.in_(case_ids),
+                PTP.status.in_(_FAILED_PTP_STATUSES),
+            )
+            .group_by(PTP.case_id, PTP.agent_id)
+            .having(func.count(PTP.id) >= PTP_FATIGUE_THRESHOLD)
+            .all()
+        )
+        out: dict[str, set[str]] = {}
+        for case_id, agent_id, _n in rows:
+            if agent_id:
+                out.setdefault(case_id, set()).add(agent_id)
+        return out
 
     def get_historical_competency_matrix(self, agent_ids: list[str], days_lookback: int = 90) -> dict[str, dict[str, Any]]:
         """Compute each agent's historical recovery rate per loan type and DPD band.
@@ -200,8 +252,81 @@ class PlannerService:
             Case.status.notin_(list(RESOLVED_STATUSES)),
             Case.status != CaseStatus.PAID,
             Case.collected_amount < Case.target_amount,
-            Case.visit_count < Case.max_visits_allowed,
         ).all()
+
+        # ── Who is workable TOMORROW ─────────────────────────────────────────
+        # 2026-09-02 — the filter above used to end with
+        #   Case.visit_count < Case.max_visits_allowed
+        # which counts visits over the case's ENTIRE LIFE. A borrower repaying
+        # in five instalments needs five visits, so on the third one the case
+        # left the pool and never came back: 104 open cases were sitting in that
+        # state with Rs 26.1L still owed, 79 of them PARTIALLY_PAID — people who
+        # were actively paying. Nothing recorded it and no screen listed them.
+        #
+        # The cap is a CONTACT-FREQUENCY control, not a lifetime budget, so it is
+        # now counted within the calendar month and resets on the 1st.
+        #
+        # Two exclusions are applied here rather than in the allocator, because a
+        # case that must not be visited tomorrow should never enter the matrix at
+        # all — scoring it and then discarding it would spend a slot and muddy the
+        # decision audit. Both are recorded as decisions so the manager sees WHY a
+        # case is absent instead of it silently disappearing.
+        month_start = datetime(plan_date.year, plan_date.month, 1, tzinfo=timezone.utc)
+        case_ids = [c.id for c in candidate_cases]
+
+        visits_this_month: dict[str, int] = {}
+        if case_ids:
+            visits_this_month = {
+                cid: n for cid, n in self.db.query(Visit.case_id, func.count(Visit.id))
+                .filter(Visit.case_id.in_(case_ids), Visit.check_in_time >= month_start)
+                .group_by(Visit.case_id).all()
+            }
+
+        # An ACTIVE promise for a future date. The borrower has committed to pay
+        # on a named day; arriving before it collects nothing and harasses someone
+        # who is cooperating. On the promised day the case simply becomes eligible
+        # again and goes to whichever agent is the best match then — which may be
+        # the agent who took the promise, but is not forced to be.
+        ptp_hold: dict[str, date] = {}
+        if case_ids:
+            for cid, due in (
+                self.db.query(PTP.case_id, func.min(PTP.committed_date))
+                .filter(PTP.case_id.in_(case_ids), PTP.status == PTPStatus.ACTIVE,
+                        PTP.committed_date > plan_date)
+                .group_by(PTP.case_id).all()
+            ):
+                ptp_hold[cid] = due
+
+        pool_decisions: list[AllocationDecision] = []
+        workable: list[Case] = []
+        for c in candidate_cases:
+            due = ptp_hold.get(c.id)
+            if due is not None:
+                pool_decisions.append(AllocationDecision(
+                    id=str(uuid.uuid4()), run_id="", case_id=c.id,
+                    previous_agent_id=c.agent_id, allocated_agent_id=None,
+                    outcome=AllocationOutcome.DEFERRED_PTP.value,
+                    reason=f"Promise to pay due {due.isoformat()}; held until then.",
+                    visit_priority_score=0.0, fit_score=0.0,
+                    score_breakdown={"ptp_due": due.isoformat()},
+                ))
+                continue
+            spent = visits_this_month.get(c.id, 0)
+            allowed = int(c.max_visits_allowed or 3)
+            if spent >= allowed:
+                pool_decisions.append(AllocationDecision(
+                    id=str(uuid.uuid4()), run_id="", case_id=c.id,
+                    previous_agent_id=c.agent_id, allocated_agent_id=None,
+                    outcome=AllocationOutcome.DEFERRED_VISIT_CAP.value,
+                    reason=(f"{spent} of {allowed} visits already used this month; "
+                            f"the budget resets on the 1st."),
+                    visit_priority_score=0.0, fit_score=0.0,
+                    score_breakdown={"visits_this_month": spent, "max_visits_allowed": allowed},
+                ))
+                continue
+            workable.append(c)
+
+        candidate_cases = workable
 
         # Score cases for visit priority
         scored_priorities = score_cases_priority(self.db, candidate_cases, today=date.today())
@@ -220,6 +345,7 @@ class PlannerService:
 
         eb_adjuster = EmpiricalBayesAgentAdjuster().fit_from_db(self.db)
         shadow_evaluator = ShadowModelEvaluator()
+        ptp_fatigue = self._ptp_fatigue_map([c.id for c in candidate_cases])
 
         # 5. Initialize Allocation State
         assigned_cases_by_agent: dict[str, list[Case]] = defaultdict(list)
@@ -246,9 +372,10 @@ class PlannerService:
                 agents=agents,
                 history_matrix=history_matrix,
                 prio_scores=prio_map,
+                ptp_fatigue=ptp_fatigue,
             )
             allocated_count = sum(len(c_list) for c_list in assigned_cases_by_agent.values())
-            deferred_count = sum(1 for d in decisions if d.outcome in (AllocationOutcome.DEFERRED.value, AllocationOutcome.DEFERRED_ROUTE_INFEASIBLE.value))
+            deferred_count = sum(1 for d in decisions if d.outcome in _DEFERRED_OUTCOMES)
             blocked_count = sum(1 for d in decisions if d.outcome == AllocationOutcome.BLOCKED.value)
         else:
             # Legacy matching loop
@@ -315,7 +442,12 @@ class PlannerService:
                 capacity_remaining[best_agent.id] -= 1
                 allocated_count += 1
                 rec_rate = 0.30
-                expected_recovery_sum += float(case.target_amount or 0.0) * rec_rate
+                # Collectable balance, not lifetime target — matching the SMART path
+                # in global_allocator, so both strategies report the same quantity and
+                # a manager comparing them compares like with like.
+                _remaining = max(0.0, float(case.target_amount or 0.0)
+                                 - float(case.collected_amount or 0.0))
+                expected_recovery_sum += _remaining * rec_rate
                 decisions.append(AllocationDecision(
                     id=str(uuid.uuid4()),
                     run_id="",
@@ -328,6 +460,15 @@ class PlannerService:
                     fit_score=0.5,
                     score_breakdown={"strategy": "LEGACY"},
                 ))
+
+        # Pool-level holds belong to the run whichever strategy produced it: SMART
+        # replaces `decisions` wholesale with the allocator's list, the legacy loop
+        # appends to its own. Folding them in once, here, is the only version that
+        # cannot double-count or silently drop them — an earlier attempt inferred
+        # "already added?" from the outcomes present, which happened to work but
+        # would have quietly broken the day a pool hold arrived from somewhere else.
+        decisions.extend(pool_decisions)
+        deferred_count += len(pool_decisions)
 
         # 7. Route Optimization & Beat Creation
         run_id = str(uuid.uuid4())

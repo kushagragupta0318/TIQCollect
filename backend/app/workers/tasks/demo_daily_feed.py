@@ -46,8 +46,35 @@ from app.workers.celery_app import celery_app
 logger = structlog.get_logger()
 
 # How many fresh pool cases the "bank" sends each day.
-NEW_CASES_MIN = 2
-NEW_CASES_MAX = 4
+# Sized to the team's daily capacity, not to a token trickle.
+#
+# 2026-09-02 — this was 2..4 a day. The book was seeded with 743 cases on
+# 2026-08-27 and then fed a handful daily, so the pool only ever drained: after
+# one day of real collections it was down to 246 mostly part-worked cases and
+# tomorrow's plan looked anaemic for want of anything to plan. That is not what
+# an agency's morning looks like — the bank hands over a fresh batch each day.
+#
+# 15 agents x 10-15 cases is 150-225, and capacity is 15 x max_cases_per_day
+# (12 by default) = 180 slots. The range below straddles that on purpose: some
+# days the pool exceeds capacity and the overflow carries to tomorrow, some days
+# it does not fill. Both are real states the planner already handles (unallocated
+# cases stay in the pool and return the next night), and a feed that always
+# exactly matched capacity would never exercise either.
+# Monthly instalment bands by product. Must stay in step with EMI_BANDS in
+# scripts/rescale_to_realistic_emi.py, which put the existing book on this scale.
+_EMI_BANDS = {
+    "MICROFINANCE": (1_200, 5_000),
+    "CREDIT_CARD":  (1_500, 12_000),
+    "GOLD":         (3_000, 18_000),
+    "EDUCATION":    (4_000, 22_000),
+    "PERSONAL":     (5_000, 30_000),
+    "AUTO":         (8_000, 32_000),
+    "BUSINESS":     (10_000, 55_000),
+    "HOME":         (12_000, 70_000),
+}
+
+NEW_CASES_MIN = 150
+NEW_CASES_MAX = 210
 
 # Gurugram-ish spread for new accounts (out of the agent's fence — these are new
 # pool cases, not demo-anchor customers; they get allocated and travelled to).
@@ -90,8 +117,27 @@ def _seed_day(db, day: date) -> int:
     new_loan_ids: list[str] = []
     for i in range(n):
         dpd = random.choice([32, 47, 65, 88, 95, 120, 155])
-        outstanding = round(random.uniform(35_000, 320_000), 2)
         loan_type = random.choice(list(LoanType))
+        # EMI first, then the loan derived from it — the opposite of how this
+        # used to work, and the reason it has to change.
+        #
+        # 2026-09-02 — this drew `outstanding` at random and set
+        # emi = outstanding / 36 with target_amount = outstanding * 0.30, which
+        # made every fresh case a target of up to Rs 96,000 against an EMI of
+        # Rs 8,900: a "case" worth six and a half instalments, and no relation to
+        # the product. The seeded book had the same fault at larger scale and was
+        # rescaled in scripts/rescale_to_realistic_emi.py; a feed that kept the
+        # old shape would have quietly walked the book back to it, one morning at
+        # a time.
+        #
+        # A case is one instalment, so the EMI is chosen from the product's band
+        # and the balance follows from the tenure left, rather than the other way
+        # round. Bands match EMI_BANDS in that script; changing one means changing
+        # both.
+        emi = float(random.randint(*_EMI_BANDS.get(loan_type.value, (5_000, 30_000))))
+        emi = round(emi, -1)
+        months_left = random.randint(14, 60)
+        outstanding = round(emi * months_left, 2)
         priority = (CasePriority.CRITICAL if dpd > 90 else
                     CasePriority.HIGH if dpd > 60 else
                     CasePriority.MEDIUM if dpd > 30 else CasePriority.LOW)
@@ -126,8 +172,10 @@ def _seed_day(db, day: date) -> int:
             outstanding_interest=round(outstanding * 0.06, 2),
             penal_charges=round(outstanding * 0.01, 2),
             total_outstanding=round(outstanding * 1.07, 2),
-            overdue_amount=round(outstanding * 0.30, 2),
-            emi_amount=round(outstanding / 36, 2),
+            # Arrears are missed instalments, so they are a whole number of EMIs
+            # matched to how late the account is — not a flat share of the balance.
+            overdue_amount=round(emi * max(1, dpd // 30), 2),
+            emi_amount=emi,
             disbursement_date="2022-01-15", maturity_date="2025-01-15",
             last_payment_date="2025-11-10", next_due_date=day.strftime("%Y-%m-%d"),
             dpd=dpd,
@@ -146,7 +194,7 @@ def _seed_day(db, day: date) -> int:
             customer_id=cust.id, loan_id=loan.id,
             agent_id=None, status=CaseStatus.UNASSIGNED,
             priority=priority,
-            target_amount=round(outstanding * 0.30, 2), collected_amount=0.0,
+            target_amount=emi, collected_amount=0.0,
             allocation_date=day.strftime("%Y-%m-%d"),
             allocation_score=float({"CRITICAL": 95, "HIGH": 75, "MEDIUM": 45, "LOW": 20}[priority.value]),
             is_ml_allocated=False, visit_count=0, max_visits_allowed=5,

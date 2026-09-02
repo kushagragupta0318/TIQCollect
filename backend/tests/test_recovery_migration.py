@@ -113,7 +113,15 @@ def test_there_is_exactly_one_head():
         if module.down_revision:
             parents.add(module.down_revision)
     heads = revisions - parents
-    assert heads == {REVISION}, f"expected a single head, found {sorted(heads)}"
+    # ONE head, whatever it happens to be. This asserted heads == {REVISION},
+    # which held only while this was the newest migration: the next one to land
+    # failed a test about ambiguity on a chain that was not ambiguous. Identity
+    # of this particular revision is already covered by
+    # test_it_revises_the_snapshot_table_migration.
+    assert len(heads) == 1, f"expected a single head, found {sorted(heads)}"
+    # ...and this migration is still on the chain rather than orphaned by a
+    # later one rewriting its own down_revision.
+    assert REVISION in revisions
 
 
 # ── Round trip against a real database ──────────────────────────────────────
