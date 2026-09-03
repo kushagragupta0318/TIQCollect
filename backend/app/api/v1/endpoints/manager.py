@@ -51,6 +51,28 @@ from app.services.notification_service import NotificationService
 router = APIRouter(prefix="/manager", tags=["manager"])
 
 
+def _require_own_agent(db, current_user, agent_id: str) -> Agent:
+    """The agent, if this manager owns them. 404 otherwise — never 403.
+
+    404 rather than 403 deliberately: a 403 confirms the id exists, which
+    turns this into an enumeration oracle for another agency's roster.
+
+    Tenant scoping in this router is hand-repeated at every call site, and
+    that is precisely why two endpoints shipped without it. New scoped
+    endpoints should call this; the existing ones can migrate to it, but
+    that is a separate change from closing the leaks.
+    """
+    agent = (
+        db.query(Agent)
+        .filter(Agent.id == agent_id, Agent.manager_user_id == current_user.id)
+        .first()
+    )
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return agent
+
+
+
 def _effective_today(agent_ids: list[str], db) -> tuple[datetime, datetime, date]:
     """Return (start_of_day, end_of_day, eff_date) scoped to the most recent
     beat date on or before today across the given agents. Falls back to date.today()
@@ -2139,7 +2161,19 @@ def get_team_dpd_breakdown(
 
 @router.get("/visits/{visit_id}/media-urls")
 def get_visit_media_urls(visit_id: str, current_user: ManagerOnly, db: DbSession):
-    visit = db.query(Visit).filter(Visit.id == visit_id).first()
+    # Ownership is checked BEFORE any presigned URL is minted, and that
+    # ordering is the whole point: these URLs carry borrower photographs and
+    # call recordings, and once issued they are valid for an hour WITHOUT
+    # authentication. A leak here is not a read of someone else's row, it is a
+    # bearer token for another agency's biometric evidence.
+    #
+    # This endpoint had no check at all: any manager could pass any visit id.
+    visit = (
+        db.query(Visit)
+        .join(Agent, Visit.agent_id == Agent.id)
+        .filter(Visit.id == visit_id, Agent.manager_user_id == current_user.id)
+        .first()
+    )
     if not visit:
         raise HTTPException(status_code=404, detail="Visit not found")
 
@@ -2455,8 +2489,11 @@ def agent_trail(
     from app.services.location_service import LocationService
 
     # Ownership is checked before any location is read. An agent's movement
-    # history is the most sensitive data this API serves — see the unscoped
-    # PUT /agents/{agent_id}/status for the pattern this deliberately avoids.
+    # history is the most sensitive data this API serves.
+    #
+    # This comment used to cite PUT /agents/{agent_id}/status as the unscoped
+    # counter-example. That endpoint has since been fixed, so the citation was
+    # pointing at nothing — see _require_own_agent above for the shared form.
     agent = (
         db.query(Agent)
         .join(Agent.user)
@@ -3073,6 +3110,9 @@ def manager_get_agent_dpd_breakdown(
     """DPD collection breakdown for a specific agent.
     Without month: all-time portfolio totals.
     With month: only payments collected in that calendar month per DPD bucket."""
+    # Was unscoped: any manager could read any other manager's agent's
+    # portfolio and collections by guessing an id.
+    _require_own_agent(db, current_user, agent_id)
     bucket_order = ["BUCKET_1", "BUCKET_2", "BUCKET_3", "NPA"]
 
     if month:
@@ -3447,12 +3487,36 @@ def get_latest_allocation_plan(
     planner = PlannerService(db, manager_user_id=current_user.id)
     run = planner.get_latest_plan(plan_date=target_d)
 
+    # A failed nightly run is reported alongside the plan, never as one. Before
+    # 2026-09-03 a crash in the 20:00 task wrote nothing at all, so the manager
+    # saw the same 'no plan generated yet' as on a quiet night and had no way to
+    # tell 'nothing to do' from 'the job died'. get_last_failure() returns None
+    # once a later successful run exists, so a manager who re-planned by hand is
+    # not chased by a resolved error.
+    failure = planner.get_last_failure(plan_date=target_d)
+    failure_payload = None
+    if failure is not None:
+        meta = failure.summary_metadata or {}
+        failure_payload = {
+            "run_id": failure.id,
+            "failed_at": failure.created_at.isoformat() if failure.created_at else None,
+            "error_type": meta.get("error_type"),
+            "error": meta.get("error"),
+            "trigger": meta.get("trigger"),
+        }
+
     if not run:
         return {
             "has_plan": False,
             "target_date": target_d.isoformat(),
-            "message": f"No allocation plan generated yet for {target_d.isoformat()}.",
+            "message": (
+                f"The {target_d.isoformat()} allocation run failed and no plan "
+                f"was created. Re-plan to try again."
+            ) if failure_payload else (
+                f"No allocation plan generated yet for {target_d.isoformat()}."
+            ),
             "run": None,
+            "last_failure": failure_payload,
         }
 
     # Fetch beats for this run
@@ -3524,6 +3588,12 @@ def get_latest_allocation_plan(
 
     return {
         "has_plan": True,
+        # Carried on the success path too. A plan can exist AND the most recent
+        # attempt have failed — a manager who re-plans by hand after a failed
+        # nightly still wants to know the nightly is broken, because tomorrow it
+        # will fail again. get_last_failure() suppresses it once a successful run
+        # is newer than the failure, so this is only ever a live problem.
+        "last_failure": failure_payload,
         "run_id": run.id,
         "plan_date": run.plan_date.isoformat(),
         "strategy": run.strategy,

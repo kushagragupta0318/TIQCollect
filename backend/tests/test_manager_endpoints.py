@@ -144,7 +144,21 @@ def seeded():
               distance_from_customer_metres=20.0, geo_verified=True,
               within_contact_hours=True, customer_met=True,
               outcome=VisitOutcome.PTP, person_met=PersonMet.BORROWER,
-              visit_number=1)
+              visit_number=1,
+              borrower_photo_key='mine/borrower.jpg',
+              agent_recording_key='mine/agent.webm')
+    # A visit belonging to the OTHER manager's agent, carrying media. This is
+    # the row the media-urls scoping test tries to reach. Deliberately NOT
+    # ag1's: adding an ag1 visit here would change the compliance counts the
+    # tests above assert on.
+    v_other = Visit(case_id=c1.id, agent_id=ag2.id, check_in_latitude=28.6315,
+                    check_in_longitude=77.2167, check_in_time=NOW - timedelta(hours=3),
+                    distance_from_customer_metres=25.0, geo_verified=True,
+                    within_contact_hours=True, customer_met=True,
+                    outcome=VisitOutcome.PTP, person_met=PersonMet.BORROWER,
+                    visit_number=1,
+                    borrower_photo_key='theirs/borrower.jpg',
+                    agent_recording_key='theirs/agent.webm')
     p = Payment(case_id=c1.id, agent_id=ag1.id, amount=3000.0,
                 mode=PaymentMode.UPI, receipt_number="RCPT1",
                 payment_date=NOW - timedelta(hours=1))
@@ -152,11 +166,11 @@ def seeded():
             committed_date=TODAY - timedelta(days=3), status=PTPStatus.BROKEN)
     b = Beat(agent_id=ag1.id, beat_date=TODAY, beat_number="BEAT1",
              ordered_case_ids=[c1.id], status=BeatStatus.PLANNED)
-    db.add_all([v, p, t, b])
+    db.add_all([v, v_other, p, t, b])
     db.commit()
 
     yield {"db": db, "manager": mgr, "other": other, "agents": [ag1, ag2],
-           "cases": [c1, c2], "visit": v}
+           "cases": [c1, c2], "visit": v, "visit_other": v_other}
 
 
 @pytest.fixture(scope="module")
@@ -415,3 +429,96 @@ def test_recent_months_returns_exactly_count_distinct_values():
 
 def test_recent_months_single_month():
     assert _recent_months(date(2026, 8, 26), 1) == ["2026-08"]
+
+
+# ─ Tenant scoping on the two endpoints that shipped without it ─────────────
+# Both were found by auditing every route in the router rather than by any
+# test failing, which is the point: an unscoped endpoint returns 200 and
+# correct-looking data. Nothing is wrong until it is someone else's data.
+
+@pytest.fixture()
+def _no_minio(monkeypatch):
+    """presigned_download_url talks to MinIO. The scoping decision happens
+    before it is ever called, so stubbing it keeps these tests about
+    ownership rather than about object storage."""
+    from app.api.v1.endpoints import manager as mod
+    monkeypatch.setattr(mod.storage, 'presigned_download_url',
+                        lambda key, expires_minutes=60: f'https://signed.invalid/{key}')
+
+
+def test_media_urls_returns_media_for_own_agents_visit(client, seeded, _no_minio):
+    r = client.get(f"/api/v1/manager/visits/{seeded['visit'].id}/media-urls",
+                   headers=auth_headers(seeded['manager']))
+    assert r.status_code == 200
+    body = r.json()
+    assert 'mine/borrower.jpg' in body['photos']['borrower']
+    assert 'mine/agent.webm' in body['recordings']['agent']
+
+
+def test_media_urls_refuses_another_managers_visit(client, seeded, _no_minio):
+    """The leak this closes. A presigned URL is a bearer token: once minted it
+    grants an hour of unauthenticated access to a borrower's photograph and
+    the call recording. Before the fix any manager could mint one for any
+    visit id in the system."""
+    r = client.get(f"/api/v1/manager/visits/{seeded['visit_other'].id}/media-urls",
+                   headers=auth_headers(seeded['manager']))
+    assert r.status_code == 404
+    assert 'theirs' not in r.text
+
+
+def test_media_urls_hides_existence_rather_than_forbidding(client, seeded, _no_minio):
+    """404, never 403. A 403 confirms the id is real, which turns the endpoint
+    into an enumeration oracle for another agency's visit history — the same
+    reason the response body must not echo the key."""
+    real = client.get(f"/api/v1/manager/visits/{seeded['visit_other'].id}/media-urls",
+                      headers=auth_headers(seeded['manager']))
+    fake = client.get('/api/v1/manager/visits/does-not-exist/media-urls',
+                      headers=auth_headers(seeded['manager']))
+    assert real.status_code == fake.status_code == 404
+
+
+def test_dpd_breakdown_refuses_another_managers_agent(client, seeded):
+    r = client.get(f"/api/v1/manager/agents/{seeded['agents'][1].id}/dpd-breakdown",
+                   headers=auth_headers(seeded['manager']))
+    assert r.status_code == 404
+
+
+def test_dpd_breakdown_allows_own_agent(client, seeded):
+    """The check must not have closed the endpoint to its legitimate caller."""
+    r = client.get(f"/api/v1/manager/agents/{seeded['agents'][0].id}/dpd-breakdown",
+                   headers=auth_headers(seeded['manager']))
+    assert r.status_code == 200
+
+
+def test_every_manager_route_that_reads_tenant_data_is_scoped():
+    """A structural sweep, because both leaks were found this way and neither
+    would have failed a behavioural test. An unscoped endpoint returns 200
+    and correct-looking data; nothing is wrong until it is someone else's.
+
+    Any new route in this router must either scope by manager_user_id /
+    current_user.id / _require_own_agent, or be listed in tenant_free with a
+    reason it holds no tenant data."""
+    import re
+    from pathlib import Path
+    src = Path('app/api/v1/endpoints/manager.py').read_text(
+        encoding='utf-8').splitlines()
+    # /ai/health reports LLM reachability only: it takes no db session and
+    # reads no row belonging to anyone.
+    tenant_free = {'/ai/health'}
+    pattern = re.compile(r'@router\.(get|post|put|patch|delete)\("([^"]+)"')
+    marks = []
+    for i, ln in enumerate(src):
+        m = pattern.match(ln.strip())
+        if m:
+            marks.append((i, m.group(2)))
+    assert marks, 'no routes found — did the router move?'
+    marks.append((len(src), ''))
+    unscoped = []
+    for (start, path), (end, _) in zip(marks, marks[1:]):
+        if path in tenant_free:
+            continue
+        chunk = ' '.join(src[start:end])
+        if not ('manager_user_id' in chunk or 'current_user.id' in chunk
+                or '_require_own_agent' in chunk):
+            unscoped.append(path)
+    assert unscoped == [], f'unscoped manager routes: {unscoped}'
