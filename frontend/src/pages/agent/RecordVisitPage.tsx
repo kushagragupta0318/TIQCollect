@@ -101,6 +101,60 @@ interface DocUpload { category: string; url: string; name: string }
 
 type MeetingType = "BORROWER" | "THIRD_PARTY" | "NOT_MET" | null;
 
+// ─── Offline draft ───────────────────────────────────────────────────────────
+// The layout used to claim offline visits 'will sync when reconnected'. Nothing
+// implemented that: no service worker, no outbox, no background sync. A visit
+// filled in without signal was lost, and the banner was the reason the agent
+// kept working instead of walking to find a bar of signal.
+//
+// Submission is now blocked while offline (see canSubmit), which stops the
+// silent loss but would throw away the typing on a page refresh or a phone
+// that backgrounds and gets reaped. So the TEXT of the form is mirrored to
+// localStorage, keyed per case, and restored on mount.
+//
+// ONLY the serialisable fields. Photos, the signature and the two audio
+// recordings are Blobs and object URLs — they cannot be JSON'd, an object URL
+// is dead after a reload anyway, and localStorage's ~5MB budget would be gone
+// in one photo. Recapturing those needs the borrower present, so the UI says
+// so rather than implying the whole visit survived. Storing blobs properly
+// means IndexedDB, which is the real outbox and a much larger piece of work.
+const DRAFT_PREFIX = "tiq.visitDraft.";
+const DRAFT_FIELDS = [
+  "meetingType", "personMet", "thirdPartyName", "customerMet", "notMetReason",
+  "outcome", "defaultReason",
+  "amount", "paymentMode", "upiRef", "chequeNumber", "chequeDate", "chequeBank",
+  "neftRef", "cashCounted",
+  "ptpAmount", "ptpDate", "ptpReason",
+  "escalationNotes", "witnessPresent", "witnessName",
+  "propertyType", "occupancyStatus", "vehiclePresent", "businessRunning",
+  "borrowerTone", "informantName", "informantRelation",
+  "notes", "customerStatement",
+] as const;
+
+function saveDraft(caseId: string, form: FormState) {
+  try {
+    const slice: Record<string, unknown> = {};
+    for (const k of DRAFT_FIELDS) slice[k] = (form as Record<string, unknown>)[k];
+    localStorage.setItem(DRAFT_PREFIX + caseId, JSON.stringify(slice));
+  } catch {
+    // Quota exceeded, private mode, or storage disabled. A draft is a
+    // convenience; failing to save one must never break the visit in progress.
+  }
+}
+
+function loadDraft(caseId: string): Partial<FormState> | null {
+  try {
+    const raw = localStorage.getItem(DRAFT_PREFIX + caseId);
+    return raw ? (JSON.parse(raw) as Partial<FormState>) : null;
+  } catch {
+    return null;
+  }
+}
+
+function clearDraft(caseId: string) {
+  try { localStorage.removeItem(DRAFT_PREFIX + caseId); } catch { /* see saveDraft */ }
+}
+
 interface FormState {
   meetingType: MeetingType;
   // Person details
@@ -399,7 +453,13 @@ export default function RecordVisitPage() {
 
   const fileRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
-  const [form, setForm] = useState<FormState>({
+  // Lazy initialiser, so a restored draft is part of the FIRST render rather
+  // than a setState from an effect — which costs a second render pass and is
+  // the one lint error this change introduced.
+  const [restoredDraft] = useState<Partial<FormState> | null>(
+    () => (caseId ? loadDraft(caseId) : null),
+  );
+  const [form, setForm] = useState<FormState>(() => ({
     meetingType: null,
     personMet: null, thirdPartyName: "", customerMet: null, notMetReason: "",
     outcome: null, defaultReason: null,
@@ -418,9 +478,48 @@ export default function RecordVisitPage() {
     borrowerRecordingBlob: null, borrowerRecordingDuration: 0,
     signatureUrl: null,
     consentGiven: false, gpsLat: null, gpsLon: null, gpsAccuracy: null, gpsAltitude: null,
-  });
+    // Text fields only; photos, signature and recordings are never persisted.
+    ...(restoredDraft ?? {}),
+  }));
 
   const upd = (patch: Partial<FormState>) => setForm((f) => ({ ...f, ...patch }));
+
+  // Connectivity, tracked here rather than read from AgentLayout because the
+  // submit gate needs it and a page can be open across a signal drop.
+  const [isOnline, setIsOnline] = useState(
+    typeof navigator === "undefined" ? true : navigator.onLine,
+  );
+  useEffect(() => {
+    const on = () => setIsOnline(true);
+    const off = () => setIsOnline(false);
+    window.addEventListener("online", on);
+    window.addEventListener("offline", off);
+    return () => {
+      window.removeEventListener("online", on);
+      window.removeEventListener("offline", off);
+    };
+  }, []);
+
+  // Derived, not state: the draft was already merged into the first render
+  // above, so this is a fact about that render rather than something to set.
+  // Photos and recordings are deliberately absent from a draft — see
+  // DRAFT_FIELDS — so the agent is told what still needs recapturing instead
+  // of discovering it at the borrower's door.
+  const draftRestored = Boolean(
+    restoredDraft &&
+      Object.values(restoredDraft).some((v) => v !== "" && v !== null && v !== false),
+  );
+  useEffect(() => {
+    if (draftRestored) toast("Restored your unsent notes for this visit", { icon: "📝" });
+    // Once per mount. draftRestored cannot change without a remount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Mirror on every change. Cheap: a few hundred bytes of text, and it means a
+  // phone reaped in the background loses nothing that was typed.
+  useEffect(() => {
+    if (caseId) saveDraft(caseId, form);
+  }, [caseId, form]);
 
   // ── Camera helpers ─────────────────────────────────────────────────────────
 
@@ -644,6 +743,11 @@ export default function RecordVisitPage() {
   const splitLayout = Boolean(form.meetingType);
 
   const canSubmit = (() => {
+    // Offline is a HARD gate. Every path out of handleSubmit is a network
+    // call — photo uploads, the visit POST, the payment POST — and none of
+    // them is queued anywhere. Letting the button through offline is what
+    // silently destroyed field work.
+    if (!isOnline) return false;
     if (!form.meetingType) return false;
     if (!locationReady) return false;
     if (form.meetingType === "BORROWER")
@@ -964,6 +1068,11 @@ export default function RecordVisitPage() {
 
       // Refresh beat context so My Cases and Beat Map reflect this visit immediately
       await refreshBeat();
+
+      // The visit is on the server, so the local draft has served its purpose.
+      // Cleared HERE and not in `finally`: a failed submit must keep the draft,
+      // which is the whole reason it exists.
+      if (caseId) clearDraft(caseId);
 
       if (receiptData) {
         setReceipt(receiptData);
@@ -1978,6 +2087,20 @@ export default function RecordVisitPage() {
             the bar 220px right of the content it belongs to. */}
         <div className="fixed bottom-0 left-0 right-0 z-20 pointer-events-none">
           <div className="max-w-md md:max-w-none mx-auto pointer-events-auto bg-white border-t border-slate-100 p-4 lg:px-6">
+            {draftRestored && (
+              // Says exactly what came back and what did not. A generic
+              // "draft restored" would let the agent assume the photos
+              // survived, and they would find out at the borrower's door.
+              <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5 mb-2">
+                Your notes were restored. Photos, signature and recordings are not
+                saved on the device — those still need capturing.
+              </div>
+            )}
+            {!isOnline && (
+              <div className="text-[11px] text-slate-600 bg-slate-100 border border-slate-200 rounded px-2 py-1.5 mb-2">
+                You are offline. Notes are kept on this device; reconnect to submit.
+              </div>
+            )}
             <div className="flex items-center justify-between text-xs text-slate-400 mb-2">
               <span>{withinFence ? "✓ GPS verified" : distanceM !== null ? `⚠ ${distanceM}m (unverified)` : "Getting GPS…"}</span>
               {form.outcome && <span className="font-mono font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded">{sel?.tag ?? form.outcome}</span>}
@@ -1992,9 +2115,11 @@ export default function RecordVisitPage() {
               {canSubmit ? <CheckCircle className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
               {submitting
                 ? "Submitting…"
-                : !locationReady
-                  ? (locationCaptured ? `Move within 100m (${distanceM}m away)` : "Waiting for GPS…")
-                  : "Submit Visit Record"}
+                : !isOnline
+                  ? "Offline — reconnect to submit"
+                  : !locationReady
+                    ? (locationCaptured ? `Move within 100m (${distanceM}m away)` : "Waiting for GPS…")
+                    : "Submit Visit Record"}
             </Button>
           </div>
         </div>

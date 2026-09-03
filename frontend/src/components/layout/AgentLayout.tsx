@@ -140,8 +140,18 @@ function AgentLayoutInner() {
   }, [onDuty]);
 
   useEffect(() => {
-    const onOnline  = () => { setIsOnline(true);  toast.success("Back online — syncing data"); };
-    const onOffline = () => { setIsOnline(false); toast.error("You're offline — actions will queue"); };
+    const onOnline  = () => { setIsOnline(true);  toast.success("Back online — you can submit now"); };
+    // The copy here used to promise "actions will queue" and "visits will sync
+    // when reconnected". Neither was true: there is no service worker, no
+    // outbox and no background sync anywhere in this app, so a visit submitted
+    // on a dead connection was simply lost — while the banner told the agent it
+    // was safe. A false reassurance is worse than no banner at all, because it
+    // is the reason someone keeps working instead of walking to find signal.
+    //
+    // RecordVisitPage now also blocks submission while offline and keeps the
+    // typed part of the form on the device, so the promise below is one the app
+    // can actually keep.
+    const onOffline = () => { setIsOnline(false); toast.error("You're offline — you can't submit visits until you reconnect"); };
     window.addEventListener("online",  onOnline);
     window.addEventListener("offline", onOffline);
     return () => {
@@ -292,7 +302,7 @@ function AgentLayoutInner() {
           {!isOnline && (
             <div className="bg-slate-800 text-white text-xs text-center py-1.5 px-4 font-medium flex items-center justify-center gap-1.5">
               <WifiOff className="w-3 h-3" />
-              Offline — visits will sync when reconnected
+              Offline — notes are saved on this device. Reconnect to submit.
             </div>
           )}
         </header>
