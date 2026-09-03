@@ -734,20 +734,36 @@ def list_agents(current_user: ManagerOnly, db: DbSession):
 
     cases_today_by_agent: dict[str, int] = {}
     target_by_agent: dict[str, float] = {}
+
+    # One query for the whole team, not one per agent.
+    #
+    # 2026-09-03 — this summed Case.target_amount inside the loop below, so a
+    # 15-agent team cost 15 round trips and the endpoint ran 23 statements. That
+    # is the same fault the comment above records fixing on 2026-08-28: the four
+    # per-agent queries were consolidated, and a fifth was later added back
+    # underneath. This endpoint is the leaderboard and it is polled, so the cost
+    # is paid on every refresh by every manager.
+    #
+    # set() is load-bearing. SQL's SUM ... WHERE id IN (...) counts a case ONCE
+    # however many times the beat lists it; summing a Python list would count it
+    # twice. No beat holds a duplicate today and nothing enforces that, so the
+    # rewrite matches SQL's semantics rather than relying on the data staying
+    # clean.
+    _beat_case_ids = {
+        cid for b in latest_beat_by_agent.values() for cid in (b.ordered_case_ids or [])
+    }
+    _target_of: dict[str, float] = {}
+    if _beat_case_ids:
+        _target_of = {
+            cid: float(amt or 0.0) for cid, amt in
+            db.query(Case.id, Case.target_amount).filter(Case.id.in_(_beat_case_ids)).all()
+        }
+
     for aid, b in latest_beat_by_agent.items():
         c_ids = b.ordered_case_ids or []
         cases_today_by_agent[aid] = len(c_ids)
         if c_ids:
-            # The FULL assigned target for this agent's beat, matching the team
-            # figure in dashboard(). Both are Case.target_amount summed over the
-            # day's cases, so the agent rows add up to the headline exactly — if
-            # those two ever diverge again, one of them has drifted.
-            t_sum = (
-                db.query(func.coalesce(func.sum(Case.target_amount), 0.0))
-                .filter(Case.id.in_(c_ids))
-                .scalar() or 0.0
-            )
-            target_by_agent[aid] = float(t_sum)
+            target_by_agent[aid] = sum(_target_of.get(cid, 0.0) for cid in set(c_ids))
 
     collected_by_agent = dict(
         db.query(Payment.agent_id, func.coalesce(func.sum(Payment.amount), 0.0))
@@ -879,24 +895,24 @@ def _cases_payload(db, cases: list, my_agent_ids: list[str], total: int,
     # Compute which cases on this page carry the "Visited" chip.
     page_case_ids = {c.id for c in cases}
     visited_today_ids: set[str] = set()
-    if page_case_ids and settings.DEMO_VISITED_BY_ALLOCATION_DATE:
-        # Demo seam: match each visit against its own case's allocation_date —
-        # the value the list shows in its Date column — instead of the wall
-        # clock. Seeded activity is stamped with the day the seed ran, so by
-        # the day of the demo nothing matches "today" and every chip vanishes.
-        #
-        # Compared in Python rather than SQL: allocation_date is a plain
-        # "YYYY-MM-DD" string column, so a date_trunc/cast comparison would be
-        # dialect-specific for no gain over a page's worth of rows.
-        allocation_of = {c.id: c.allocation_date for c in cases}
-        visited_today_ids = {
-            case_id for case_id, check_in in
-            db.query(Visit.case_id, Visit.check_in_time)
-            .filter(Visit.case_id.in_(page_case_ids))
-            .all()
-            if check_in and allocation_of.get(case_id) == check_in.date().isoformat()
-        }
-    elif page_case_ids:
+    # The wall clock, and only the wall clock.
+    #
+    # 2026-09-03 — a DEMO_VISITED_BY_ALLOCATION_DATE branch used to sit here,
+    # matching each visit against its own case's allocation_date instead of
+    # today. It existed because the seed ran once and its visits aged out, so a
+    # demo given weeks later showed no chips at all.
+    #
+    # It was on in backend/.env AND in .env.example, so every new deployment
+    # inherited it — the code default of False was never the effective value.
+    # And once allocation_date was corrected to mean "the day this case was last
+    # worked", the comparison became circular: a visit's date matches the date
+    # derived from that visit. Measured before removal, it marked 617 cases as
+    # visited today on a day when 0 had been visited.
+    #
+    # A stale demo is fixed by generating today's activity — the daily feed and
+    # scripts/demo_collect_to_target.py both do — not by relabelling last
+    # month's as today's.
+    if page_case_ids:
         today = date.today()
         day_start = datetime.combine(today, datetime.min.time()).replace(tzinfo=timezone.utc)
         day_end   = datetime.combine(today, datetime.max.time()).replace(tzinfo=timezone.utc)

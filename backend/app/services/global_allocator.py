@@ -11,6 +11,7 @@ from __future__ import annotations
 import math
 import uuid
 from typing import Sequence
+import structlog
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
@@ -22,6 +23,8 @@ from app.models.allocation_decision import AllocationDecision, AllocationOutcome
 from app.models.allocation_setting import AllocationObjective
 from app.ml.empirical_bayes import EmpiricalBayesAgentAdjuster
 
+logger = structlog.get_logger()
+
 
 class GlobalAllocator:
     """Solves portfolio-wide case allocation using Two-Stage Bipartite Optimization + Route Validation."""
@@ -32,6 +35,52 @@ class GlobalAllocator:
     # Value-term scaling. See _value_score.
     VALUE_KNEE_INR = 25_000.0
     VALUE_REFERENCE_INR = 300_000.0
+
+    # Scoring constants. These were inline literals scattered through the pair
+    # loop: an operator could not see what the allocator was tuned to without
+    # reading the arithmetic, and two of them appeared twice. Values are
+    # unchanged — this names them, it does not retune anything.
+    #
+    # Not in config.py deliberately. They are a scoring MODEL, versioned with
+    # the code that reads them, in the same spirit as the scorecards' weights:
+    # a plan is only reproducible if the numbers that produced it travel with
+    # the release. Promote to settings if operators ever need to tune them
+    # without a deploy, but that is a different decision from removing magic
+    # numbers.
+    PROXIMITY_DECAY_KM = 5.5      # exp(-km / this); 5.5km -> 0.37
+    TIER_WEIGHTS = {"TIER_1": 1.0, "TIER_2": 0.8, "TIER_3": 0.6}
+    TIER_WEIGHT_DEFAULT = 0.7     # unrecognised tier
+    SKILLS_TIER_SHARE = 0.6       # skills = this x tier + (1-this) x spec_match
+    SPEC_MATCH_HIT = 1.0
+    SPEC_MATCH_MISS = 0.5
+    PRIORITY_UPLIFT = 0.25        # a top-priority case gets up to +25% utility
+    PROB_RECOVERY_FLOOR = 0.20
+    PROB_RECOVERY_CEIL = 0.85
+    TIER_UPLIFT = 0.20            # prob = affinity x ((1-this) + this x tier)
+
+    # Where a borrower or an agent base sits when the record has no coordinates.
+    # Nothing in the book is missing them today (checked: 0 customers, 0 agents),
+    # so this is a guard, not a code path in use. It is named rather than inline
+    # because silently placing someone in central Delhi corrupts distance, the
+    # territory gate and the route in one go, and a literal 28.6139 buried in an
+    # `or` reads like a real coordinate.
+    FALLBACK_LAT = 28.6139
+    FALLBACK_LON = 77.2090
+
+    @classmethod
+    def _prob_recovery(cls, affinity: float, tier_weight: float) -> float:
+        """Chance this agent recovers on this case, bounded.
+
+        ONE definition. This formula was written out twice — once in the pair
+        loop where it decides WHICH AGENT GETS THE CASE, and again when the run
+        totals up Expected Recovery for the manager's dashboard. Identical then,
+        but nothing held them together: changing the clamp in one and not the
+        other would have left the plan quietly disagreeing with its own forecast,
+        with no test to catch it. Merged 2026-09-03, values unchanged.
+        """
+        uplift = (1.0 - cls.TIER_UPLIFT) + cls.TIER_UPLIFT * tier_weight
+        return min(cls.PROB_RECOVERY_CEIL,
+                   max(cls.PROB_RECOVERY_FLOOR, affinity * uplift))
 
     # Indicator value for "this agent already holds this case". 0/1 like
     # lang_match; the objective table supplies the weight. See where it is used.
@@ -249,8 +298,17 @@ class GlobalAllocator:
 
             loan_type_str = loan.loan_type.value if (loan and loan.loan_type) else "PERSONAL"
             dpd_str = loan.dpd_bucket.value if (loan and loan.dpd_bucket) else "CURRENT"
-            cust_lat = customer.latitude or 28.6139
-            cust_lon = customer.longitude or 77.2090
+            # `or` here would also swallow a genuine 0.0. None-checked instead,
+            # and logged: a borrower with no coordinates is silently relocated to
+            # central Delhi, which corrupts the distance, the territory gate and
+            # the route in one step. Nothing in the book is missing them today, so
+            # this warns rather than defers; if it ever fires, deferring the case
+            # is the better answer than routing an agent to a guess.
+            cust_lat, cust_lon = customer.latitude, customer.longitude
+            if cust_lat is None or cust_lon is None:
+                logger.warning("allocator.customer_missing_coordinates",
+                               case_id=case.id, customer_id=customer.id)
+                cust_lat, cust_lon = self.FALLBACK_LAT, self.FALLBACK_LON
             cust_lang = (customer.language_preference or "").lower()
 
             # Agents this borrower has already promised, and not paid, three
@@ -275,7 +333,9 @@ class GlobalAllocator:
                     continue
 
                 # Hard Gate: Territory Radius Boundary
-                dist_km = self.haversine_km(ag.base_latitude or 28.6139, ag.base_longitude or 77.2090, cust_lat, cust_lon)
+                base_lat = ag.base_latitude if ag.base_latitude is not None else self.FALLBACK_LAT
+                base_lon = ag.base_longitude if ag.base_longitude is not None else self.FALLBACK_LON
+                dist_km = self.haversine_km(base_lat, base_lon, cust_lat, cust_lon)
                 if dist_km > self.territory_radius_km:
                     continue
 
@@ -284,23 +344,39 @@ class GlobalAllocator:
                     ag.id, loan_type_str, dpd_str
                 )
 
-                # 2026-09-02 — this read ag_matrix.get(loan_type_str, prior_win),
-                # but get_historical_competency_matrix nests the rates one level
-                # down under "loan_type_recovery" (planner_service.py:113). The
-                # top level holds only that dict plus total_collected and
-                # overall_recovery_rate, so a loan type could never match and the
-                # lookup ALWAYS took the fallback. A 90-day query over every
-                # payment, grouped per agent per loan type, ran nightly and was
-                # discarded: every agent scored the segment prior, and the only
-                # agent-specific signal left was the EB multiplier's +/-25%.
+                # How much of a target this agent recovers on work like this —
+                # ONE estimator, taken at its own grain.
                 #
-                # That made "Historical Competency Matching" — objective 2 in
-                # docs/PLAN.md, and the heaviest term in the utility at 0.45-0.70
-                # — a segment average wearing an agent's name.
-                ag_matrix = history_matrix.get(ag.id, {})
-                lt_rates = ag_matrix.get("loan_type_recovery", {}) or {}
-                base_affinity = float(lt_rates.get(loan_type_str, prior_win))
-                affinity_score = min(1.0, base_affinity * eb_multiplier)
+                # shrunk_win is the Empirical Bayes estimate for exactly this
+                # (agent, loan_type, DPD bucket): the agent's own observed rate
+                # pulled toward the segment prior in proportion to how little
+                # evidence there is. Where an agent has history it differentiates
+                # them; where they have none it degrades to the segment average
+                # rather than inventing a number. On this book 297 of 315
+                # (agent, segment) pairs hold fewer than the 5 observations the
+                # adjuster requires, so that fallback is the common path, not an
+                # edge case.
+                #
+                # 2026-09-03 — this was `base_affinity * eb_multiplier`, which
+                # multiplied TWO DIFFERENT ESTIMATORS of the same quantity:
+                #
+                #   base_affinity  competency matrix, 90-day window, grouped by
+                #                  (agent, loan_type), collected / target
+                #   eb_multiplier  Empirical Bayes, 180-day window, grouped by
+                #                  (agent, loan_type, DPD), shrunk to a 0.861 prior
+                #
+                # Different windows, different groupings, different denominators.
+                # Their product is not a correction; it is two incompatible
+                # measurements of agent skill stacked on each other, and wherever
+                # the multiplier is not 1.0 it counts that skill twice, being
+                # itself the agent-versus-prior ratio. Measured across 468
+                # (agent, loan_type, DPD) combinations, the product and the EB
+                # estimate disagreed by a median of 38%.
+                #
+                # history_matrix stays in the signature: PlannerService still
+                # builds it for the manager surface, and it is the raw material
+                # the adjuster fits from. It is simply no longer read twice.
+                affinity_score = min(1.0, max(0.0, float(shrunk_win)))
 
                 # Travel cost is scored from the NEARER of two anchors: the
                 # agent's base, and the centroid of the cases they already hold.
@@ -308,13 +384,14 @@ class GlobalAllocator:
                 # operating zone (commit 51fc4e7) keeps the exact meaning it was
                 # calibrated with and the same cases remain eligible.
                 effective_km = self._work_anchor(dist_km, work_centroids.get(ag.id), cust_lat, cust_lon)
-                proximity_score = math.exp(-effective_km / 5.5)
+                proximity_score = math.exp(-effective_km / self.PROXIMITY_DECAY_KM)
 
-                tier_weight = {"TIER_1": 1.0, "TIER_2": 0.8, "TIER_3": 0.6}.get(
+                tier_weight = self.TIER_WEIGHTS.get(
                     ag.tier.value if hasattr(ag.tier, "value") else str(ag.tier), 0.7
                 )
                 spec_match = 1.0 if getattr(ag, "specialization", None) and str(ag.specialization.value).upper() == loan_type_str.upper() else 0.5
-                skills_score = 0.6 * tier_weight + 0.4 * spec_match
+                skills_score = (self.SKILLS_TIER_SHARE * tier_weight
+                                + (1.0 - self.SKILLS_TIER_SHARE) * spec_match)
 
                 workload_score = max(0.1, 1.0 - (slot_num / max(1, ag.max_cases_per_day or 12)))
                 # 2026-09-02 — was 0.10, which the 0.05 objective weight then
@@ -341,7 +418,7 @@ class GlobalAllocator:
                 # collections left 202 partially paid cases in it.
                 target_inr = max(0.0, float(case.target_amount or 0.0)
                                  - float(case.collected_amount or 0.0))
-                prob_recovery = min(0.85, max(0.20, affinity_score * (0.80 + 0.20 * tier_weight)))
+                prob_recovery = self._prob_recovery(affinity_score, tier_weight)
                 expected_case_inr = target_inr * prob_recovery
                 inr_score = self._value_score(expected_case_inr)
 
@@ -363,7 +440,7 @@ class GlobalAllocator:
                 contributions = {k: round(weights[k] * v, 4) for k, v in terms.items()}
                 utility = sum(weights[k] * v for k, v in terms.items())
 
-                weighted_utility = utility * (1.0 + (prio / 100.0) * 0.25)
+                weighted_utility = utility * (1.0 + (prio / 100.0) * self.PRIORITY_UPLIFT)
                 cost_matrix[c_idx, s_idx] = -weighted_utility
                 decision_cache[(c_idx, s_idx)] = (
                     utility,
@@ -418,8 +495,8 @@ class GlobalAllocator:
             if not ag_cases:
                 continue
 
-            base_lat = ag.base_latitude or 28.6139
-            base_lon = ag.base_longitude or 77.2090
+            base_lat = ag.base_latitude if ag.base_latitude is not None else self.FALLBACK_LAT
+            base_lon = ag.base_longitude if ag.base_longitude is not None else self.FALLBACK_LON
 
             # Calculate cluster centroid
             valid_stops = [c for c in ag_cases if c.customer]
@@ -457,7 +534,7 @@ class GlobalAllocator:
                 _, util, reason, bdown = assigned_case_to_decision[c.id]
                 aff_score = bdown.get("affinity_score", 0.5)
                 t_weight = bdown.get("tier_weight", 0.8)
-                prob_rec = min(0.85, max(0.20, aff_score * (0.80 + 0.20 * t_weight)))
+                prob_rec = self._prob_recovery(aff_score, t_weight)
                 # Same correction as target_inr above: forecast what can still be
                 # collected. Summing full targets had the plan predicting Rs 48.5L
                 # against Rs 16.4L of collectable balance — 296% of the possible.

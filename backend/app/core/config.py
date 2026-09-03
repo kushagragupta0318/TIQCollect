@@ -172,21 +172,6 @@ class Settings(BaseSettings):
     # Max spread (metres) of that cluster around the agent's live GPS.
     DEMO_ANCHOR_RADIUS_M: int = 80
 
-    # How the manager's case list decides a case shows its "Visited" chip.
-    #
-    #   false (default) — a visit whose check_in_time falls on the wall-clock
-    #                     day. Correct for a live deployment.
-    #   true            — a visit whose check_in_time falls on the case's OWN
-    #                     allocation_date, i.e. the value in the list's Date
-    #                     column.
-    #
-    # The seed is run once and its activity is stamped with that day's date, so
-    # by the day of the demo nothing matches "today" any more and every row
-    # loses its chip. Matching the row's own date keeps the seeded story intact
-    # however long after seeding it is shown. It reads the same on screen —
-    # "this case was visited on the day it was allocated" — but it is a demo
-    # seam, not the real rule, so it stays off unless asked for.
-    DEMO_VISITED_BY_ALLOCATION_DATE: bool = False
 
     # Rehearsal mode. The demo is one case, and showing it records a visit that
     # moves it to Done — so the next audience finds nothing to demonstrate.
