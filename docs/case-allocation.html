@@ -1,0 +1,725 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="How TIQCollect assigns tomorrow's cases to field agents.">
+<title>Nightly Case Allocation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:wght@400;500;600&family=Source+Sans+3:ital,wght@0,400;0,600;1,400&family=JetBrains+Mono:wght@400;500;700&display=swap">
+
+<style>
+  :root {
+    --ground:      #FBFBFC;
+    --surface:     #F3F4F8;
+    --surface-2:   #EAECF2;
+    --ink:         #14181F;
+    --ink-soft:    #4A515E;
+    --ink-faint:   #767E8D;
+    --rule:        #DDE0E8;
+    --rule-strong: #C4C9D5;
+    --accent:      #2F4A8C;
+    --accent-soft: #E5EAF6;
+    --ok:          #1B6B50;
+    --ok-soft:     #E0F0E9;
+    --warn:        #8A5D0A;
+    --warn-soft:   #F7EDD8;
+    --bad:         #963232;
+    --bad-soft:    #F8E4E4;
+    --shadow:      0 1px 2px rgba(20,24,31,.05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:      #0F1217;
+      --surface:     #171B22;
+      --surface-2:   #1E232C;
+      --ink:         #E7E9EE;
+      --ink-soft:    #A7AEBC;
+      --ink-faint:   #7C8492;
+      --rule:        #262C36;
+      --rule-strong: #38404E;
+      --accent:      #90AEEC;
+      --accent-soft: #1B2740;
+      --ok:          #6FCFA8;
+      --ok-soft:     #14291F;
+      --warn:        #DCB260;
+      --warn-soft:   #2A2213;
+      --bad:         #E58C8C;
+      --bad-soft:    #2C1919;
+      --shadow:      0 1px 2px rgba(0,0,0,.3);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground:      #0F1217;
+    --surface:     #171B22;
+    --surface-2:   #1E232C;
+    --ink:         #E7E9EE;
+    --ink-soft:    #A7AEBC;
+    --ink-faint:   #7C8492;
+    --rule:        #262C36;
+    --rule-strong: #38404E;
+    --accent:      #90AEEC;
+    --accent-soft: #1B2740;
+    --ok:          #6FCFA8;
+    --ok-soft:     #14291F;
+    --warn:        #DCB260;
+    --warn-soft:   #2A2213;
+    --bad:         #E58C8C;
+    --bad-soft:    #2C1919;
+    --shadow:      0 1px 2px rgba(0,0,0,.3);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "Source Sans 3", ui-sans-serif, system-ui, sans-serif;
+    font-size: 16.5px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: 61rem; margin: 0 auto; padding: 4rem 1.5rem 6rem; }
+
+  /* ── Masthead ─────────────────────────────────────────────── */
+  .masthead { border-bottom: 2px solid var(--ink); padding-bottom: 1.5rem; margin-bottom: 2.25rem; }
+  .kicker {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: .7rem; font-weight: 500; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--accent); margin-bottom: .9rem;
+  }
+  h1 {
+    font-family: Spectral, Georgia, serif; font-weight: 600;
+    font-size: clamp(2.1rem, 5vw, 3.05rem); line-height: 1.08;
+    letter-spacing: -.018em; margin: 0 0 .7rem; text-wrap: balance;
+  }
+  .standfirst {
+    font-size: 1.1rem; color: var(--ink-soft); max-width: 62ch; margin: 0;
+  }
+  .provenance {
+    margin-top: 1.4rem; display: flex; flex-wrap: wrap; gap: .45rem .5rem;
+    font-family: "JetBrains Mono", ui-monospace, monospace; font-size: .715rem;
+  }
+  .provenance span {
+    background: var(--surface); border: 1px solid var(--rule);
+    padding: .22rem .5rem; border-radius: 3px; color: var(--ink-soft);
+  }
+
+  /* ── Sections ──────────────────────────────────────────────── */
+  section { margin-top: 3.4rem; }
+  h2 {
+    font-family: Spectral, Georgia, serif; font-weight: 600;
+    font-size: 1.62rem; letter-spacing: -.012em; line-height: 1.2;
+    margin: 0 0 .35rem; text-wrap: balance;
+  }
+  h2 + .lede { color: var(--ink-soft); margin: 0 0 1.5rem; max-width: 66ch; }
+  h3 {
+    font-family: "Source Sans 3", sans-serif; font-weight: 600;
+    font-size: 1rem; letter-spacing: .005em; margin: 2rem 0 .5rem;
+  }
+  p { max-width: 68ch; margin: 0 0 1rem; }
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  strong { font-weight: 600; }
+  code, .mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
+  p code, li code, td code, .mono-inline {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: .84em; background: var(--surface-2);
+    padding: .08em .34em; border-radius: 3px; overflow-wrap: anywhere;
+  }
+
+  /* ── Stage rail — genuine sequence, so it is numbered ──────── */
+  .stage { display: grid; grid-template-columns: 3.1rem 1fr; gap: 0 1.15rem; margin-bottom: 2.1rem; }
+  .stage-num {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: .78rem; font-weight: 700; color: var(--accent);
+    border-top: 2px solid var(--accent); padding-top: .5rem;
+  }
+  .stage-body { border-top: 1px solid var(--rule); padding-top: .5rem; }
+  .stage-body h3 { margin-top: 0; font-size: 1.08rem; }
+  .stage-body > p:last-child { margin-bottom: 0; }
+
+  /* ── Formula blocks ────────────────────────────────────────── */
+  .formula {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: .82rem; line-height: 1.75; white-space: pre;
+    overflow-x: auto; background: var(--surface);
+    border-left: 3px solid var(--accent); border-radius: 0 4px 4px 0;
+    padding: .95rem 1.1rem; margin: 1rem 0 1.35rem; color: var(--ink);
+  }
+  .formula .cm { color: var(--ink-faint); }
+
+  /* ── Tables ────────────────────────────────────────────────── */
+  .twrap { overflow-x: auto; margin: 1.1rem 0 1.5rem; }
+  table { border-collapse: collapse; width: 100%; font-size: .875rem; min-width: 30rem; }
+  caption {
+    caption-side: top; text-align: left; font-size: .74rem;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    letter-spacing: .09em; text-transform: uppercase;
+    color: var(--ink-faint); padding-bottom: .55rem;
+  }
+  th, td { text-align: left; padding: .5rem .7rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  thead th {
+    font-size: .715rem; letter-spacing: .07em; text-transform: uppercase;
+    color: var(--ink-faint); font-weight: 600; border-bottom: 1px solid var(--rule-strong);
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  .num { text-align: right; font-family: "JetBrains Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+  .term { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: .82rem; }
+  .lead-w { color: var(--accent); font-weight: 700; }
+
+  /* ── Outcome chips — the system's own vocabulary ───────────── */
+  .chip {
+    display: inline-block; font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: .68rem; font-weight: 500; letter-spacing: .04em;
+    padding: .14rem .45rem; border-radius: 3px; white-space: nowrap;
+  }
+  .chip.ok   { background: var(--ok-soft);   color: var(--ok);   }
+  .chip.warn { background: var(--warn-soft); color: var(--warn); }
+  .chip.bad  { background: var(--bad-soft);  color: var(--bad);  }
+
+  /* ── Findings — severity stripe, not a uniform card ────────── */
+  .finding { border-left: 3px solid var(--rule-strong); padding: .1rem 0 .1rem 1.05rem; margin-bottom: 1.7rem; }
+  .finding.high { border-left-color: var(--bad); }
+  .finding.med  { border-left-color: var(--warn); }
+  .finding h3 { margin-top: 0; }
+  .finding p:last-child { margin-bottom: 0; }
+  .measured {
+    font-family: "JetBrains Mono", ui-monospace, monospace; font-size: .78rem;
+    color: var(--ink-soft); background: var(--surface); border: 1px solid var(--rule);
+    border-radius: 4px; padding: .55rem .75rem; margin: .7rem 0 .8rem;
+    white-space: pre; overflow-x: auto;
+  }
+
+  ul, ol { max-width: 68ch; padding-left: 1.15rem; margin: 0 0 1rem; }
+  li { margin-bottom: .4rem; }
+
+  .note {
+    background: var(--surface); border: 1px solid var(--rule);
+    border-radius: 4px; padding: 1rem 1.15rem; margin: 1.5rem 0;
+    font-size: .93rem; color: var(--ink-soft); max-width: 68ch;
+  }
+  .note strong { color: var(--ink); }
+
+  footer {
+    margin-top: 4rem; padding-top: 1.25rem; border-top: 1px solid var(--rule);
+    font-size: .8rem; color: var(--ink-faint); max-width: 68ch;
+  }
+
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+  @media (max-width: 34rem) {
+    .stage { grid-template-columns: 1fr; gap: 0; }
+    .stage-num { border-top: none; padding-top: 0; }
+    .stage-body { border-top: none; padding-top: .15rem; }
+  }
+</style>
+<style>
+  /* ── Print / PDF ────────────────────────────────────────────────────────
+     The PDF is paper, so it always renders the light palette regardless of
+     the machine's OS theme — a dark-mode host would otherwise emit white
+     text on a white page. Tokens are re-declared rather than the dark block
+     being disabled, so this holds even if the theme rules change. */
+  @page { size: A4; margin: 16mm 14mm 18mm; }
+
+  @media print {
+    :root, :root[data-theme="dark"], :root:not([data-theme="light"]) {
+      --ground: #FFFFFF; --surface: #F5F6F9; --surface-2: #ECEEF3;
+      --ink: #14181F; --ink-soft: #454C58; --ink-faint: #6B7280;
+      --rule: #DADDE5; --rule-strong: #BFC5D1;
+      --accent: #2F4A8C; --accent-soft: #E5EAF6;
+      --ok: #1B6B50; --ok-soft: #E2F1EB;
+      --warn: #8A5D0A; --warn-soft: #F8EEDB;
+      --bad: #963232; --bad-soft: #F9E6E6;
+      --shadow: none;
+    }
+    body { font-size: 10.2pt; line-height: 1.5; background: #FFFFFF; }
+    .wrap { max-width: none; padding: 0; }
+
+    /* Keep a stage, a finding or a table from splitting across a page turn —
+       half a formula at the foot of a page is unreadable. */
+    .stage, .finding, .formula, .note, .measured, .twrap, table { break-inside: avoid; }
+    h2, h3 { break-after: avoid; }
+    section { break-before: auto; }
+    h1 { font-size: 24pt; }
+    h2 { font-size: 14pt; margin-top: 0; }
+    .masthead { margin-bottom: 1.4rem; }
+    .formula, .measured { font-size: 8.1pt; line-height: 1.6; }
+    table { font-size: 8.6pt; min-width: 0; }
+    .twrap { overflow-x: visible; }
+
+    /* Printed pages have no hover state and no browser chrome, so a bare URL
+       is the only way a reader gets back to the source. */
+    a { color: var(--ink); text-decoration: none; }
+    footer { break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="masthead">
+    <div class="kicker">TIQCollect · Field Collections</div>
+    <h1>How tomorrow's cases get allocated</h1>
+    <p class="standfirst">
+      Every night at 8 PM IST the planner decides which borrowers each field agent
+      will visit tomorrow, and in what order. This is what it actually does — read
+      off the code, not the roadmap.
+    </p>
+    <div class="provenance">
+      <span>planner_service.py</span>
+      <span>global_allocator.py</span>
+      <span>ml/visit_priority.py</span>
+      <span>ml/empirical_bayes.py</span>
+      <span>core/routing.py</span>
+      <span>verified 2026-09-03</span>
+    </div>
+  </header>
+
+  <section>
+    <h2>What runs, and when</h2>
+    <p class="lede">One scheduled task per night, plus a manual trigger for managers.</p>
+
+    <div class="formula">celery beat  "nightly-ml-allocation"   20:00 IST daily
+  └─ tasks.allocation.run_nightly_allocation(strategy="SMART")
+       └─ PlannerService.plan_next_day(plan_date=<next working day>)
+
+manual   POST /api/v1/manager/allocation/plan</div>
+
+    <p>
+      It runs after the evening data ingest (~7:30 PM) and after repayment scoring,
+      so it reads the day's fresh DPD and payment state. Planning is scoped to one
+      manager's team: their agents, and cases either already held by those agents or
+      unassigned.
+    </p>
+    <p>
+      The manager picks one of three objectives — <code>BALANCED</code>,
+      <code>MAX_RECOVERY</code>, <code>MIN_DISTANCE</code> — which changes the
+      scoring weights and nothing else.
+    </p>
+  </section>
+
+  <section>
+    <h2>The pipeline</h2>
+    <p class="lede">
+      Three stages, in this order. The numbering is the actual sequence — each stage
+      consumes the previous one's output.
+    </p>
+
+    <div class="stage">
+      <div class="stage-num">01</div>
+      <div class="stage-body">
+        <h3>Build the pool, then rank it</h3>
+        <p>
+          Candidate cases are open (not <code>PAID</code>, <code>CLOSED</code> or
+          <code>WRITTEN_OFF</code>) with <code>collected_amount &lt; target_amount</code>.
+          Two filters then remove cases that must not be visited tomorrow, each
+          recorded as a decision so the manager sees why a case is absent rather than
+          it silently disappearing:
+        </p>
+        <ul>
+          <li>
+            <span class="chip warn">DEFERRED_PTP</span> — an active promise to pay
+            falls due after tomorrow. Arriving early collects nothing and harasses
+            someone who is cooperating.
+          </li>
+          <li>
+            <span class="chip warn">DEFERRED_VISIT_CAP</span> — the case has already
+            used <code>max_visits_allowed</code> visits <em>this calendar month</em>.
+            A contact-frequency control, reset on the 1st, not a lifetime budget.
+          </li>
+        </ul>
+        <p>
+          Survivors are scored 0–100 for visit priority and sorted highest first.
+          That score is a hand-weighted scorecard of three components — value,
+          urgency, effort — described below.
+        </p>
+      </div>
+    </div>
+
+    <div class="stage">
+      <div class="stage-num">02</div>
+      <div class="stage-body">
+        <h3>Assign cases to agents — globally, in one solve</h3>
+        <p>
+          Each agent is expanded into <code>max_cases_per_day</code> discrete slots,
+          giving a cases × slots matrix. Every eligible pair gets a utility score;
+          ineligible pairs get a <code>1e6</code> penalty. The matrix is then solved
+          by the <strong>Hungarian algorithm</strong>
+          (<code>scipy.optimize.linear_sum_assignment</code>) for the assignment that
+          maximises total utility across the whole team at once.
+        </p>
+        <p>
+          Cases that end up assigned but sit more than 22 km from their agent's base
+          are pulled back out as <span class="chip warn">DEFERRED_ROUTE_INFEASIBLE</span>.
+          Anything left with no slot becomes <span class="chip warn">DEFERRED</span>.
+        </p>
+      </div>
+    </div>
+
+    <div class="stage">
+      <div class="stage-num">03</div>
+      <div class="stage-body">
+        <h3>Sequence each agent's day into a beat</h3>
+        <p>
+          Per agent, the assigned stops are ordered by <code>optimize_route()</code>:
+          a travel-time matrix from <strong>OSRM</strong> (real road times) fed into
+          an <strong>OR-Tools</strong> routing solver using
+          <code>PATH_CHEAPEST_ARC</code>. If OSRM is unreachable it falls back to a
+          Haversine time estimate; if OR-Tools fails, to nearest-neighbour.
+        </p>
+        <p>
+          The result is a <code>Beat</code> row with an ordered case list, estimated
+          distance (crow-flies × 1.15 for urban road network) and duration
+          (25 km/h + 20 min per stop).
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>The scoring function</h2>
+    <p class="lede">
+      One weighted sum decides every case–agent pairing. Six terms, each scaled 0–1,
+      weights set by the manager's objective.
+    </p>
+
+    <div class="formula">utility = Σ  weight[term] × score[term]
+
+weighted_utility = utility × (1 + priority/100 × 0.25)   <span class="cm">← PRIORITY_UPLIFT</span>
+cost_matrix[case, slot] = −weighted_utility</div>
+
+    <div class="twrap">
+      <table>
+        <caption>Objective weight table — get_objective_weights()</caption>
+        <thead>
+          <tr>
+            <th>Term</th>
+            <th class="num">Balanced</th>
+            <th class="num">Max recovery</th>
+            <th class="num">Min distance</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td class="term">expected_recovery</td><td class="num lead-w">0.45</td><td class="num lead-w">0.70</td><td class="num">0.05</td></tr>
+          <tr><td class="term">proximity</td><td class="num">0.40</td><td class="num">0.10</td><td class="num lead-w">0.80</td></tr>
+          <tr><td class="term">skills</td><td class="num">0.05</td><td class="num">0.10</td><td class="num">0.05</td></tr>
+          <tr><td class="term">workload</td><td class="num">0.05</td><td class="num">0.05</td><td class="num">0.05</td></tr>
+          <tr><td class="term">continuity</td><td class="num">0.05</td><td class="num">0.05</td><td class="num">0.05</td></tr>
+          <tr><td class="term">language</td><td class="num">0.05</td><td class="num">0.05</td><td class="num">0.05</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>How each term is computed</h3>
+
+    <div class="formula"><span class="cm">expected_recovery</span>
+  collectable = target_amount − collected_amount
+  prob        = clamp(affinity × (0.80 + 0.20 × tier_weight), 0.20, 0.85)
+  score       = log1p(collectable × prob / 25,000) / log1p(300,000 / 25,000)
+
+<span class="cm">proximity</span>
+  effective_km = min(km from agent base, km from centroid of agent's open cases)
+  score        = exp(−effective_km / 5.5)
+
+<span class="cm">skills</span>
+  score = 0.6 × tier_weight + 0.4 × spec_match
+          tier_weight  TIER_1 1.0 · TIER_2 0.8 · TIER_3 0.6
+          spec_match   1.0 if agent specialisation == loan type, else 0.5
+
+<span class="cm">workload</span>
+  score = max(0.1, 1 − slot_index / max_cases_per_day)
+
+<span class="cm">continuity</span>
+  score = 1.0 if the case is already this agent's, else 0.0
+
+<span class="cm">language</span>
+  score = 1.0 if borrower's language ∈ agent.languages_spoken, else 0.0</div>
+
+    <p>
+      <code>affinity</code> is the Empirical Bayes estimate — the only fitted
+      quantity in the whole function. The value term is <em>logarithmic</em> because
+      the book has a heavy right tail; a linear scale let one large case outrank
+      everything else and effectively overrode the manager's objective switch.
+    </p>
+
+    <div class="note">
+      <strong>Each term's weight × score is its share of the decision.</strong> Those
+      products are stored on the <code>AllocationDecision</code> row, which is what
+      lets the audit panel rank the reasons a case went to a particular agent instead
+      of dumping raw factors and leaving the manager to guess.
+    </div>
+  </section>
+
+  <section>
+    <h2>Hard gates</h2>
+    <p class="lede">
+      Applied before scoring. A gate either removes the case entirely, or removes one
+      agent from that case's row — which lets the solve pick the next best agent on
+      its own, with no reassignment pass.
+    </p>
+
+    <div class="twrap">
+      <table>
+        <caption>Gates, in evaluation order</caption>
+        <thead>
+          <tr><th>Gate</th><th>Effect</th><th>Outcome recorded</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Borrower on Do-Not-Contact</td>
+            <td>Removes the case</td>
+            <td><span class="chip bad">BLOCKED</span></td>
+          </tr>
+          <tr>
+            <td>Borrower flagged hostile</td>
+            <td>Removes the case</td>
+            <td><span class="chip bad">BLOCKED</span></td>
+          </tr>
+          <tr>
+            <td>Borrower requires a female agent</td>
+            <td>Removes non-female agents from the row</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td>PTP fatigue — 3 broken promises to the same agent</td>
+            <td>Removes that agent from the row</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td>Borrower beyond the 16 km territory radius from agent base</td>
+            <td>Removes that agent from the row</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td>Assigned stop &gt; 22 km from base (checked after the solve)</td>
+            <td>Pulls the case back out</td>
+            <td><span class="chip warn">DEFERRED_ROUTE_INFEASIBLE</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>What is a model, and what isn't</h2>
+    <p class="lede">
+      Three techniques are in the loop. Only one of them is fitted from data.
+    </p>
+
+    <h3>Hungarian bipartite assignment — combinatorial optimisation</h3>
+    <p>
+      Not machine learning. It is an exact algorithm that finds the globally optimal
+      assignment in polynomial time. It is used because the alternative — walking the
+      priority-sorted list and giving each case its best available agent — is greedy:
+      an early case takes an agent a later, better-matched case needed, and the total
+      is worse. Solving all pairs at once removes the ordering effect entirely.
+    </p>
+
+    <h3>Empirical Bayes shrinkage — a fitted statistical model</h3>
+    <p>
+      This is the one model in the allocation path. It estimates how well each agent
+      recovers within a <em>segment</em>, where a segment is
+      (loan type × DPD bucket), and shrinks that estimate toward the segment average
+      in proportion to how little evidence supports it:
+    </p>
+    <div class="formula">ŵ = (n / (n + k)) × w̄ + (k / (n + k)) × μ_segment      k = 10
+
+n   distinct (agent, case) observations in the last 180 days
+w̄   that agent's own recovered ÷ target in the segment
+μ   the segment's own average across all agents</div>
+    <p>
+      It is used because agents have very few observations per segment, and a raw
+      recovery rate over three cases is noise. Shrinkage means an agent with real
+      history is differentiated, and an agent without one degrades to the segment
+      average instead of being scored on an accident. Below 5 observations the
+      estimate <em>is</em> the segment average, by design.
+    </p>
+
+    <h3>Visit priority — a scorecard, not a model</h3>
+    <p>
+      Three hand-weighted components summed to 0–100: <strong>value</strong>
+      (a doubling ladder on recoverable amount), <strong>urgency</strong> (peaks in
+      the fortnight before the 90-day NPA line, then declines — the classification
+      damage is already done), and <strong>effort</strong> (a penalty that grows with
+      visits already spent, since a first visit historically returned ~₹6,667 against
+      ~₹2,872 by the third).
+    </p>
+    <p>
+      The weights were chosen by hand and were never fitted. The file says so itself,
+      returning <code>"is_modelled": False</code> on every score.
+    </p>
+  </section>
+
+  <section>
+    <h2>Limitations</h2>
+    <p class="lede">
+      Measured against the live book on 2026-09-03, not estimated.
+    </p>
+
+    <div class="finding high">
+      <h3>No agent has a recorded gender, so 30 cases can never be allocated</h3>
+      <p>
+        The female-agent gate tests <code>agent.gender</code>. The column exists and
+        is nullable — and every agent row is null, so the test is never true. Every
+        agent is therefore removed from the row of any borrower who requires a female
+        agent, and the case falls through to the end of the solve.
+      </p>
+      <div class="measured">agents with gender set          0 of 18
+borrowers requiring female     31
+their open cases               30</div>
+      <p>
+        Those cases are recorded as <span class="chip warn">DEFERRED</span> with the
+        reason <em>"all nearby agents reached daily capacity limit"</em> — which is
+        not what happened. This is a data-completeness problem being reported as a
+        capacity problem.
+      </p>
+    </div>
+
+    <div class="finding high">
+      <h3>The affinity term barely differentiates agents</h3>
+      <p>
+        Empirical Bayes needs 5 observations in a segment before it returns anything
+        other than the segment average. On the current book almost nothing clears
+        that bar:
+      </p>
+      <div class="measured">(agent, segment) cells         315
+  with n ≥ 5                     7   (2.2%)
+  with n ≥ 20                    0
+segment prior (global)        0.8194</div>
+      <p>
+        So for roughly 98% of pairings, <code>affinity</code> is the segment average —
+        identical for every agent in that segment. The term carrying 45–70% of the
+        utility is, in practice, mostly ranking cases rather than distinguishing
+        agents. That is the estimator behaving correctly with thin data, not a bug,
+        but it should be understood before anyone reads agent-fit into the output.
+      </p>
+    </div>
+
+    <div class="finding med">
+      <h3>Distance in the assignment is crow-flies, not road</h3>
+      <p>
+        Both the territory gate and the proximity score use Haversine. Real road
+        distance enters only at stage 3, when the route is sequenced — by which point
+        the set of cases has already been chosen. A river or a railway line between
+        agent and borrower is invisible to the decision that matters.
+      </p>
+    </div>
+
+    <div class="finding med">
+      <h3>The 22 km check runs after the solve, so it wastes a slot</h3>
+      <p>
+        A case beyond the route-feasibility boundary is scored, assigned a slot, and
+        only then pulled back out. The slot is not returned to the pool, so another
+        case that could have been visited is not.
+      </p>
+    </div>
+
+    <div class="finding med">
+      <h3>Every beat is stamped as ML-generated</h3>
+      <p>
+        Beat rows are written with <code>is_ml_generated=True</code> and
+        <code>ml_model_version="planner-smart-v1.0"</code> regardless of what
+        produced them. There is no trained model in this path — the naming implies
+        one, and the legacy strategy gets the same stamp.
+      </p>
+    </div>
+
+    <div class="finding">
+      <h3>Smaller things worth knowing</h3>
+      <ul>
+        <li>
+          <strong>Off-duty agents are planned for.</strong> The pool excludes only
+          <code>SUSPENDED</code> and <code>ON_LEAVE</code>; <code>OFF_DUTY</code>
+          agents still receive beats.
+        </li>
+        <li>
+          <strong>Hostile borrowers are dropped, not routed differently.</strong>
+          <code>BLOCKED</code> means nobody visits them, indefinitely — there is no
+          escalation path out of that state in the planner.
+        </li>
+        <li>
+          <strong>Recovery probability has a floor of 0.20.</strong> No pairing is
+          ever forecast to recover less than a fifth of the outstanding balance, so
+          expected-recovery totals are optimistic by construction.
+        </li>
+        <li>
+          <strong>Language matching is exact string membership.</strong> No dialect
+          or script normalisation.
+        </li>
+        <li>
+          <strong>OSRM defaults to the public demo server.</strong> Fine for a demo;
+          rate-limited and unsuitable for production volume.
+        </li>
+        <li>
+          <strong>Nothing learns from the outcome.</strong> Whether yesterday's plan
+          actually collected is never fed back into the weights. The only adaptive
+          element is Empirical Bayes, which updates as payments accumulate.
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <h2>How to improve it</h2>
+    <p class="lede">Ordered by cost against benefit, cheapest first.</p>
+
+    <h3>Populate agent gender</h3>
+    <p>
+      A data fix, not a code change. It unblocks 30 cases immediately. Separately,
+      the fallthrough reason should distinguish "no eligible agent" from "capacity
+      full" — reporting the wrong cause is how this stayed invisible.
+    </p>
+
+    <h3>Move the 22 km check before the solve</h3>
+    <p>
+      Fold the route-feasibility boundary into the eligibility gates alongside the
+      16 km territory radius. Infeasible pairs then never consume a slot, and the
+      audit trail gains nothing it did not already record.
+    </p>
+
+    <h3>Give the value term road distance</h3>
+    <p>
+      A cached OSRM matrix between agent bases and borrower coordinates, refreshed
+      periodically rather than inside the solve, would make proximity mean travel
+      time instead of straight-line kilometres — with no change to the solver.
+    </p>
+
+    <h3>Replace the fixed probability with a calibrated one</h3>
+    <p>
+      <code>prob_recovery</code> is currently agent skill × tier, clamped. A trained
+      borrower-side model would replace it with a per-case probability that knows the
+      borrower's DPD, arrears ratio, payment recency and promise history — none of
+      which the current term sees. The pipeline for this is built and validated end
+      to end on synthetic data; it is blocked on real labels, which arrive 30 days
+      after the first scored snapshots.
+    </p>
+    <div class="note">
+      <strong>A caveat on that last one, from the validation run:</strong> on
+      synthetic data the trained model did <em>not</em> beat the existing scorecard at
+      ranking — ROC 0.6355 against 0.6312, identical lift. Its clear advantage was
+      calibration. So the honest first use of a borrower model here is improving the
+      <em>expected-recovery forecast</em>, not reordering the visit queue.
+    </div>
+
+    <h3>Close the feedback loop</h3>
+    <p>
+      Every allocation decision is already stored with its full score breakdown, and
+      every visit outcome is recorded against the case. Joining the two would show
+      which weights actually correlate with collection — turning the objective table
+      from a set of chosen constants into something measured. Nothing in the schema
+      prevents this today; it simply has not been done.
+    </p>
+  </section>
+
+  <footer>
+    Every figure and formula on this page was read from the source or measured against
+    the live database on 2026-09-03. Where a number is a threshold or a weight, it is
+    the constant in the code, not a target. Nothing here describes planned work except
+    where the section says so explicitly.
+  </footer>
+
+</div>
+</body>
+</html>
