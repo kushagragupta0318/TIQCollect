@@ -688,3 +688,94 @@ def test_neither_score_is_a_transform_of_the_other():
         enumerate(scored), key=lambda t: t[1][1]["recovery_rate_90"])]
     assert by_likelihood != by_recovery
     assert by_likelihood != list(reversed(by_recovery))
+
+
+# ── The outcome denominator (2026-09-03) ─────────────────────────────────────
+# _infer_outcome used to divide by every case the loan had ever had. A case is
+# ONE collection cycle, so the bar for REPAID grew with every cycle a borrower
+# completed, and after a few it could not be cleared at all. These pin the
+# corrected denominator: what was still owed on as_of_date.
+
+def _snap(as_of=AS_OF):
+    return NS(as_of_date=as_of, loan_id="loan-1")
+
+
+def _pay_on(day, amount):
+    return NS(payment_date=datetime.combine(day, datetime.min.time()) + timedelta(hours=12),
+              amount=amount, status="VERIFIED", case_id=None)
+
+
+def test_a_cycle_settled_before_the_score_is_not_in_the_denominator():
+    """The regression. Two closed cycles plus one open one used to demand
+    3 x 10,000 in 30 days; only the open 10,000 was ever collectable."""
+    closed_a = NS(id="c1", target_amount=10000.0, status="PAID")
+    closed_b = NS(id="c2", target_amount=10000.0, status="PAID")
+    live = NS(id="c3", target_amount=10000.0, status="ASSIGNED")
+    payments = {
+        "c1": [_pay_on(AS_OF - timedelta(days=90), 10000.0)],
+        "c2": [_pay_on(AS_OF - timedelta(days=45), 10000.0)],
+        "c3": [_pay_on(AS_OF + timedelta(days=5), 9500.0)],
+    }
+    outcome, amount = SVC._infer_outcome(_snap(), [closed_a, closed_b, live], payments)
+
+    # 9,500 against the 10,000 actually outstanding is 95% -> REPAID.
+    # Under the old denominator it was 9,500/30,000 = 32% -> PARTIAL.
+    assert outcome == "REPAID"
+    assert amount == pytest.approx(9500.0)
+
+
+def test_a_part_paid_cycle_contributes_only_its_remainder():
+    case = NS(id="c1", target_amount=10000.0, status="PARTIALLY_PAID")
+    payments = {"c1": [_pay_on(AS_OF - timedelta(days=10), 7000.0),
+                       _pay_on(AS_OF + timedelta(days=3), 2900.0)]}
+    outcome, amount = SVC._infer_outcome(_snap(), [case], payments)
+
+    # 2,900 against the 3,000 still owed is 97% -> REPAID.
+    assert outcome == "REPAID"
+    assert amount == pytest.approx(2900.0)
+
+
+def test_short_of_the_outstanding_balance_is_still_partial():
+    """The fix must not turn every payment into a REPAID."""
+    case = NS(id="c1", target_amount=10000.0, status="ASSIGNED")
+    payments = {"c1": [_pay_on(AS_OF + timedelta(days=4), 2000.0)]}
+    outcome, amount = SVC._infer_outcome(_snap(), [case], payments)
+    assert outcome == "PARTIAL"
+    assert amount == pytest.approx(2000.0)
+
+
+def test_the_denominator_is_read_from_the_ledger_not_from_collected_amount():
+    """Case.collected_amount is overwritten in place and holds TODAY's total,
+    so on a historical row it has already absorbed the label's own payments.
+    Setting it to a contradictory value must change nothing."""
+    honest = NS(id="c1", target_amount=10000.0, status="ASSIGNED", collected_amount=0.0)
+    lying = NS(id="c1", target_amount=10000.0, status="ASSIGNED", collected_amount=9999.0)
+    payments = {"c1": [_pay_on(AS_OF - timedelta(days=5), 6000.0),
+                       _pay_on(AS_OF + timedelta(days=5), 3800.0)]}
+
+    assert (SVC._infer_outcome(_snap(), [honest], payments)
+            == SVC._infer_outcome(_snap(), [lying], payments))
+
+
+def test_payments_on_the_as_of_day_count_as_already_collected():
+    """Same boundary as everywhere else: as_of belongs to the past. A payment
+    on the day reduces the outstanding balance; it is not a future recovery."""
+    case = NS(id="c1", target_amount=10000.0, status="ASSIGNED")
+    payments = {"c1": [_pay_on(AS_OF, 4000.0),
+                       _pay_on(AS_OF + timedelta(days=1), 5800.0)]}
+    outcome, amount = SVC._infer_outcome(_snap(), [case], payments)
+
+    # The as_of-day 4,000 is not in `received`...
+    assert amount == pytest.approx(5800.0)
+    # ...but it did reduce the target to 6,000, so 5,800 is 97% -> REPAID.
+    assert outcome == "REPAID"
+
+
+def test_a_fully_settled_loan_with_no_further_money_is_not_repaid():
+    """Nothing outstanding and nothing received is NO_PAYMENT, not a division
+    by zero and not a free REPAID."""
+    case = NS(id="c1", target_amount=10000.0, status="ASSIGNED")
+    payments = {"c1": [_pay_on(AS_OF - timedelta(days=20), 10000.0)]}
+    outcome, amount = SVC._infer_outcome(_snap(), [case], payments)
+    assert outcome == "NO_PAYMENT"
+    assert amount is None

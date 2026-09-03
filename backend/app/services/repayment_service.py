@@ -1039,13 +1039,43 @@ class RepaymentService:
         start = row.as_of_date
         end = start + timedelta(days=settings.REPAYMENT_OUTCOME_HORIZON_DAYS)
 
+        # ── The denominator is what was STILL OWED on as_of_date ────────────
+        # 2026-09-03. This used to be `sum(case.target_amount)` across every
+        # case the loan had ever had, settled ones included. A case is one
+        # collection cycle, so a loan accumulates them: after six cycles the
+        # bar for REPAID was 90% of six instalments inside a 30-day window,
+        # which no borrower on schedule can clear. REPAID became unreachable
+        # and every positive collapsed to PARTIAL.
+        #
+        # That was invisible on the demo book, where loans average 1.3 cases.
+        # The synthetic longitudinal run is the first dataset here with real
+        # cycle depth — 5.6 cases per loan — and it produced 6,619 PARTIAL
+        # against 0 REPAID out of 13,802 labelled rows.
+        #
+        # What was already collected is read from the LEDGER, not from
+        # Case.collected_amount, for the reason that column is not usable in a
+        # labeller at all: it is overwritten in place and holds today's total,
+        # so on any historical row it has already absorbed the payments that
+        # form the label. Payment rows carry payment_date and are append-only,
+        # so `<= start` reconstructs the balance as it genuinely stood.
+        #
+        # A cycle settled before the score contributes zero: it was not being
+        # collected during the window and cannot be repaid again. A cycle
+        # opened during the window contributes in full, which is correct —
+        # it was live demand while the horizon ran.
         target = 0.0
         received = 0.0
         for case in cases:
-            target += float(case.target_amount or 0.0)
-            for pay in payments_by_case.get(case.id, []):
-                if pay.payment_date and start < pay.payment_date.date() <= end:
-                    received += float(pay.amount or 0.0)
+            case_payments = payments_by_case.get(case.id, [])
+            paid_by_start = sum(
+                float(p.amount or 0.0) for p in case_payments
+                if p.payment_date and p.payment_date.date() <= start)
+            outstanding = float(case.target_amount or 0.0) - paid_by_start
+            if outstanding > 0:
+                target += outstanding
+            received += sum(
+                float(p.amount or 0.0) for p in case_payments
+                if p.payment_date and start < p.payment_date.date() <= end)
 
         if received > 0:
             if target > 0 and received >= target * settings.REPAYMENT_FULL_RATIO:
