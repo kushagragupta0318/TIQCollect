@@ -708,8 +708,18 @@ function CaseRow({ c, onOpen }: { c: Case; onOpen: () => void }) {
   // .row-accent in index.css, shared with the Field Agents table. Real CSS
   // :hover rather than mouseenter/mouseleave writing inline styles: a row that
   const isPaid = c.status === "PAID" || (c.target_amount > 0 && c.collected_amount >= c.target_amount);
-  const isPartial = c.status === "PARTIALLY_PAID" || (c.collected_amount > 0 && c.collected_amount < c.target_amount);
-  const hasVisited = c.visit_count > 0 || c.is_visited_today;
+  // 2026-09-03 — this was `c.visit_count > 0 || c.is_visited_today`, and the
+  // chip below fired on `isPartial || hasVisited`. Three faults in one line:
+  // visit_count counts EVER, not today; isPartial forced the chip on its own,
+  // though a part payment is already reported by the STATUS column and the
+  // collected figure; and is_visited_today — which the API computes correctly —
+  // was OR'd away to nothing.
+  //
+  // Measured on the live book the day this was found: 0 cases had been visited
+  // that day and 421 were wearing the chip. Every one of them was telling a
+  // manager that work had happened today when it had happened weeks earlier.
+  const visitedToday = !!c.is_visited_today;
+  const visitCount = c.visit_count ?? 0;
 
   const accent = isPaid
     ? " row-accent-done"
@@ -724,14 +734,26 @@ function CaseRow({ c, onOpen }: { c: Case; onOpen: () => void }) {
     >
       ✓ Resolved
     </span>
-  ) : isPartial || hasVisited ? (
+  ) : visitedToday ? (
+    // Today only. The one state a manager scanning this list is actually
+    // asking about: has someone been to this door yet today.
     <span
       className="font-semibold px-1.5 py-0.5 rounded-full flex-shrink-0"
       style={{ background: "rgba(37,99,235,0.12)", color: "#1D4ED8", fontSize: 10 }}
     >
-      ✓ Visited
+      ✓ Visited today
     </span>
-  ) : null;
+  ) : visitCount > 0 ? (
+    // Worked before, not today. Deliberately quieter than the blue: it is
+    // history, not progress. The count is the useful part — it separates a case
+    // seen once from one that has absorbed four visits and still owes money.
+    <span
+      className="font-semibold px-1.5 py-0.5 rounded-full flex-shrink-0"
+      style={{ background: "rgba(100,116,139,0.12)", color: "#475569", fontSize: 10 }}
+    >
+      Visited ×{visitCount}
+    </span>
+  ) : null;   // never visited — no chip, which is what makes fresh work obvious
 
   return (
     <div
