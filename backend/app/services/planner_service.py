@@ -549,6 +549,39 @@ class PlannerService:
                     c.status = CaseStatus.ASSIGNED if c.status == CaseStatus.UNASSIGNED else c.status
                 self.db.add(beat)
 
+        # A case that is no longer in this plan must stop claiming its date.
+        #
+        # 2026-09-02 — allocation_date was stamped on allocation and never
+        # cleared, so every re-plan left the cases it dropped still carrying the
+        # plan date. The stamps accumulated across runs: 602 cases claimed
+        # 2026-09-03 while only 230 were in a 3-Sep beat, and 50 of the strays
+        # were already settled. On screen that read as a case resolved on 2 Sep
+        # displaying 3 Sep, and 94 cases whose allocation_date preceded their own
+        # resolved_at.
+        #
+        # Cleared back to the day the case was last actually worked, so the date
+        # column keeps meaning "when this was last touched" — which is what sorts
+        # Case Management, and what leaves genuinely new, never-visited cases at
+        # the top with no visited or resolved tag against them.
+        if not simulate:
+            allocated_ids = {c.id for lst in assigned_cases_by_agent.values() for c in lst}
+            stamp = target_date.strftime("%Y-%m-%d")
+            stale = [
+                c for c in self.db.query(Case)
+                .filter(Case.allocation_date == stamp).all()
+                if c.id not in allocated_ids
+            ]
+            if stale:
+                last_visit = dict(
+                    self.db.query(Visit.case_id, func.max(Visit.check_in_time))
+                    .filter(Visit.case_id.in_([c.id for c in stale]))
+                    .group_by(Visit.case_id).all()
+                )
+                for c in stale:
+                    when = last_visit.get(c.id)
+                    if when is not None:
+                        c.allocation_date = when.date().strftime("%Y-%m-%d")
+
         # 8. Create and Persist AllocationRun
         run = AllocationRun(
             id=run_id,
