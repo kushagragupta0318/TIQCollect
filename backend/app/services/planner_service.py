@@ -343,7 +343,11 @@ class PlannerService:
         from app.ml.empirical_bayes import EmpiricalBayesAgentAdjuster
         from app.ml.shadow_evaluator import ShadowModelEvaluator
 
-        eb_adjuster = EmpiricalBayesAgentAdjuster().fit_from_db(self.db)
+        # as_of is mandatory on fit_from_db so that no caller can build a
+        # historical feature by accident. Live allocation is the one place
+        # where "now" is the right answer, and it says so explicitly.
+        eb_adjuster = EmpiricalBayesAgentAdjuster().fit_from_db(
+            self.db, as_of=date.today())
         shadow_evaluator = ShadowModelEvaluator()
         ptp_fatigue = self._ptp_fatigue_map([c.id for c in candidate_cases])
 

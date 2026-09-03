@@ -795,7 +795,17 @@ class RepaymentService:
             .all()
         )
         if not due:
-            return {"examined": 0, "labelled": 0, "by_outcome": {}}
+            # The recovery pass still runs. Its work queue is a DIFFERENT one —
+            # `recovery_labelled_through_days < 90` against three horizons,
+            # where this one is `outcome IS NULL` against a single 30-day
+            # horizon — so a row can owe its 60- and 90-day recovery figures
+            # long after its repayment outcome has been filled in. Returning
+            # here skipped it entirely, which made the nesting below a lie:
+            # the nightly task would have stopped labelling recovery the
+            # first day it found no repayment work, and nothing would have
+            # said so.
+            return {"examined": 0, "labelled": 0, "by_outcome": {},
+                    "recovery": self.attach_recovery_outcomes(as_of=as_of)}
 
         # One query for every payment that could matter, rather than one per row.
         case_ids = {r.case_id for r in due if r.case_id}

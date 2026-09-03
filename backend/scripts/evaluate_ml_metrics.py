@@ -1,4 +1,5 @@
 import math
+from datetime import date
 from sqlalchemy.orm import joinedload
 from app.core.database import SessionLocal
 from app.models.case import Case, CaseStatus
@@ -13,7 +14,7 @@ def run_evaluation():
     
     # 1. Fit Empirical Bayes Estimator
     eb = EmpiricalBayesAgentAdjuster(smoothing_k=10.0)
-    eb.fit_from_db(db)
+    eb.fit_from_db(db, as_of=date.today())
     
     # 2. Evaluate Cases with Shadow Evaluator
     evaluator = ShadowModelEvaluator()
