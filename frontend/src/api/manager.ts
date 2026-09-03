@@ -729,6 +729,19 @@ export interface AllocationPlanReport {
   beats?: AllocationBeatItem[];
   decisions?: AllocationDecisionItem[];
   message?: string;
+  // Set when the most recent allocation attempt for this date failed and has
+  // not since been superseded by a successful run. Present on BOTH the
+  // has_plan and no-plan responses: a manager who re-planned by hand still
+  // needs to know the nightly job is broken, because tomorrow it breaks again.
+  last_failure?: AllocationFailure | null;
+}
+
+export interface AllocationFailure {
+  run_id: string;
+  failed_at: string | null;
+  error_type: string | null;
+  error: string | null;
+  trigger: string | null;
 }
 
 export async function getLatestAllocation(planDate?: string): Promise<AllocationPlanReport> {

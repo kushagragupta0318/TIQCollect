@@ -14,6 +14,17 @@ class AllocationRunStatus(str, enum.Enum):
     PLANNED = "PLANNED"
     APPLIED = "APPLIED"
     ROLLED_BACK = "ROLLED_BACK"
+    # 2026-09-03. The nightly task planned for every manager inside one
+    # try/except, so a single manager raising aborted the run for all of them
+    # AND left no trace in the database — the only record was a stack trace in
+    # the worker's container logs. On 2026-09-02 the 20:00 task died 131ms in
+    # on a stale-import AttributeError and nobody knew until the logs were read
+    # a day later.
+    #
+    # A FAILED row is how a failed run becomes a fact in the product rather
+    # than an absence. status is String(20), not a Postgres enum, so adding
+    # this needs no migration.
+    FAILED = "FAILED"
 
 
 class AllocationRun(Base, UUIDPrimaryKey, TimestampMixin):

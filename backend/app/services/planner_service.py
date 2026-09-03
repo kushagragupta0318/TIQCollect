@@ -658,17 +658,45 @@ class PlannerService:
         return True
 
     def get_latest_plan(self, plan_date: date | None = None) -> AllocationRun | None:
-        """Retrieve the latest allocation run for this manager and target date."""
+        """The latest SUCCESSFUL allocation run for this manager and date.
+
+        FAILED runs are excluded deliberately. This method feeds the manager's
+        plan view, and a failure row carries zeroes for every count — surfaced
+        here it would render as a plan that legitimately found no work, which
+        is the opposite of what happened. The caller asks for the failure
+        separately via get_last_failure(); an absent plan plus a visible
+        failure is honest, a zeroed plan is not."""
         query = self.db.query(AllocationRun).options(
             joinedload(AllocationRun.decisions),
             joinedload(AllocationRun.beats),
         ).filter(
             AllocationRun.manager_user_id == self.manager_user_id,
+            AllocationRun.status != AllocationRunStatus.FAILED.value,
         )
         if plan_date:
             query = query.filter(AllocationRun.plan_date == plan_date)
 
         return query.order_by(AllocationRun.created_at.desc()).first()
+
+    def get_last_failure(self, plan_date: date | None = None) -> AllocationRun | None:
+        """The most recent FAILED run, if the last attempt did not complete.
+
+        Returns None when a successful run for the same date came AFTER the
+        failure — a manager who re-planned by hand has already resolved it, and
+        showing a stale error would send them chasing something fixed."""
+        query = self.db.query(AllocationRun).filter(
+            AllocationRun.manager_user_id == self.manager_user_id,
+            AllocationRun.status == AllocationRunStatus.FAILED.value,
+        )
+        if plan_date:
+            query = query.filter(AllocationRun.plan_date == plan_date)
+        failure = query.order_by(AllocationRun.created_at.desc()).first()
+        if failure is None:
+            return None
+        latest_ok = self.get_latest_plan(plan_date=plan_date)
+        if latest_ok is not None and latest_ok.created_at > failure.created_at:
+            return None
+        return failure
 
     def export_decisions_csv(self, run_id: str) -> str:
         """Export allocation decisions for a run to a CSV string."""

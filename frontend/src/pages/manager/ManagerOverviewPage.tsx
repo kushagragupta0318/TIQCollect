@@ -1225,6 +1225,42 @@ function TomorrowAllocationCard() {
         </div>
       )}
 
+      {/* The nightly run failed and nothing has replaced it since.
+
+          Shown whether or not a plan exists. Until 2026-09-03 a crash in the
+          20:00 task wrote nothing at all, so this panel looked identical to a
+          quiet night and the failure lived only in container logs. The message
+          says what to do, not just that something broke. */}
+      {plan?.last_failure && (
+        <div
+          className="mt-3 flex items-start gap-2.5 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2.5"
+          role="status"
+        >
+          <AlertTriangle className="w-4 h-4 text-rose-600 flex-shrink-0 mt-0.5" />
+          <div className="min-w-0">
+            <p className="text-xs font-bold text-rose-900">
+              {plan.has_plan
+                ? "The scheduled 8 PM plan failed — this plan was generated manually"
+                : "The scheduled 8 PM plan failed. No beats were created."}
+            </p>
+            <p className="text-[11px] text-rose-800/90 mt-0.5 break-words">
+              {plan.last_failure.error_type}
+              {plan.last_failure.error ? `: ${plan.last_failure.error}` : ""}
+            </p>
+            <p className="text-[11px] text-rose-700/80 mt-1">
+              {plan.last_failure.failed_at
+                ? `Failed ${new Date(plan.last_failure.failed_at).toLocaleString("en-IN", {
+                    dateStyle: "medium", timeStyle: "short",
+                  })}. `
+                : ""}
+              {plan.has_plan
+                ? "Tomorrow's run will fail the same way until it is fixed."
+                : "Use Generate Plan to create today's beats now."}
+            </p>
+          </div>
+        </div>
+      )}
+
       {isExpanded && plan?.has_plan && (
         <div className="space-y-4 pt-3">
           {/* Metric Tiles */}

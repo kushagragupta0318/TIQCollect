@@ -329,3 +329,144 @@ def test_manager_allocation_endpoints(client, db_session, test_data):
     resp_rb = client.post("/api/v1/manager/allocation/rollback", json={"run_id": run_id}, headers=headers)
     assert resp_rb.status_code == 200
     assert resp_rb.json()["success"] is True
+
+
+# ─── Failure visibility (2026-09-03) ─────────────────────────────────────────
+# The 20:00 run on 2026-09-02 died 131ms after dispatch and wrote nothing, so
+# the only evidence was a stack trace in the worker's container logs. These pin
+# the two halves of the fix: a failed run becomes a row, and that row is never
+# mistaken for a plan.
+
+@pytest.fixture
+def planner_env(db_session, test_data):
+    """A manager, a planner bound to them, and the date the nightly targets."""
+    from app.services.planner_service import PlannerService, get_target_plan_date
+    mgr = test_data["manager"] if isinstance(test_data, dict) else test_data
+    return (db_session, PlannerService(db_session, manager_user_id=mgr.id),
+            mgr, get_target_plan_date())
+
+
+def _mk_run(db, manager_id, plan_date, status, created_at, **over):
+    from app.models.allocation_run import AllocationRun
+    import uuid as _uuid
+    row = AllocationRun(
+        id=str(_uuid.uuid4()), manager_user_id=manager_id, plan_date=plan_date,
+        strategy="SMART", status=status,
+        total_cases_evaluated=over.get("evaluated", 0),
+        total_cases_allocated=over.get("allocated", 0),
+        total_cases_deferred=0, total_cases_blocked=0,
+        total_agents_planned=over.get("agents", 0),
+        expected_recovery_total=0.0,
+        summary_metadata=over.get("meta", {}),
+    )
+    db.add(row)
+    db.flush()
+    row.created_at = created_at
+    db.flush()
+    return row
+
+
+def test_failed_run_is_not_returned_as_a_plan(planner_env):
+    """A FAILED row carries zeroes for every count. Surfaced as the latest plan
+    it would read as a night that legitimately found no work — the opposite of
+    what happened."""
+    from datetime import datetime, timedelta, timezone
+    db, planner, mgr, target = planner_env
+    _mk_run(db, mgr.id, target, "FAILED",
+            datetime.now(timezone.utc) - timedelta(minutes=5),
+            meta={"error_type": "AttributeError", "error": "boom", "trigger": "nightly"})
+
+    assert planner.get_latest_plan(plan_date=target) is None
+
+
+def test_the_failure_is_still_retrievable(planner_env):
+    """Excluded from the plan, but not hidden — otherwise the fix would just be
+    a quieter version of the same silence."""
+    from datetime import datetime, timedelta, timezone
+    db, planner, mgr, target = planner_env
+    _mk_run(db, mgr.id, target, "FAILED",
+            datetime.now(timezone.utc) - timedelta(minutes=5),
+            meta={"error_type": "AttributeError", "error": "boom", "trigger": "nightly"})
+
+    failure = planner.get_last_failure(plan_date=target)
+    assert failure is not None
+    assert failure.summary_metadata["error_type"] == "AttributeError"
+
+
+def test_a_later_successful_run_clears_the_failure(planner_env):
+    """A manager who re-planned by hand has already resolved it. Continuing to
+    report the error would send them chasing something fixed."""
+    from datetime import datetime, timedelta, timezone
+    db, planner, mgr, target = planner_env
+    now = datetime.now(timezone.utc)
+    _mk_run(db, mgr.id, target, "FAILED", now - timedelta(minutes=30), meta={"error": "boom"})
+    _mk_run(db, mgr.id, target, "PLANNED", now - timedelta(minutes=5), allocated=12, agents=3)
+
+    assert planner.get_last_failure(plan_date=target) is None
+    plan = planner.get_latest_plan(plan_date=target)
+    assert plan is not None and plan.total_cases_allocated == 12
+
+
+def test_a_failure_after_a_success_still_reports(planner_env):
+    """Order matters, not mere presence. Tonight's run breaking after
+    yesterday's succeeded is a live problem."""
+    from datetime import datetime, timedelta, timezone
+    db, planner, mgr, target = planner_env
+    now = datetime.now(timezone.utc)
+    _mk_run(db, mgr.id, target, "PLANNED", now - timedelta(minutes=30), allocated=12, agents=3)
+    _mk_run(db, mgr.id, target, "FAILED", now - timedelta(minutes=5), meta={"error": "boom"})
+
+    assert planner.get_last_failure(plan_date=target) is not None
+    # The good plan is still the plan — a later failure does not erase it.
+    assert planner.get_latest_plan(plan_date=target).total_cases_allocated == 12
+
+
+def test_one_managers_failure_does_not_abort_the_others(monkeypatch):
+    """The original loop planned every manager inside one try/except, so the
+    first ValueError ended the run for everybody behind it — and
+    plan_next_day() raises ValueError by design whenever a beat is already
+    IN_PROGRESS, which is normal for one team and irrelevant to the rest."""
+    from app.workers.tasks import allocation as mod
+
+    planned, failed = [], []
+
+    class _Svc:
+        def __init__(self, db, manager_user_id):
+            self.mid = manager_user_id
+
+        def plan_next_day(self, **kw):
+            if self.mid == "m2":
+                raise ValueError("Cannot replan: 3 beat(s) are already IN_PROGRESS.")
+            planned.append(self.mid)
+            return type("R", (), {
+                "id": f"run-{self.mid}", "total_cases_allocated": 5,
+                "total_cases_deferred": 1, "total_cases_blocked": 0,
+                "total_agents_planned": 2, "expected_recovery_total": 100.0,
+            })()
+
+    monkeypatch.setattr("app.services.planner_service.PlannerService", _Svc)
+    monkeypatch.setattr(mod, "_record_failure",
+                        lambda *a, **k: failed.append(a[3].id))
+
+    class _Q:
+        def filter(self, *a, **k): return self
+        def all(self): return [type("U", (), {"id": i, "email": f"{i}@t.io"})()
+                               for i in ("m1", "m2", "m3")]
+
+    class _DB:
+        def query(self, *a, **k): return _Q()
+        def close(self): pass
+
+    monkeypatch.setattr("app.core.database.SessionLocal", lambda: _DB())
+
+    # Celery's bind=True already supplies `self` on __wrapped__, so the task
+    # body is called with keywords only.
+    out = mod.run_nightly_allocation.__wrapped__(
+        strategy="SMART", plan_date_str="2026-09-04")
+
+    # m2 failed; m1 and m3 were planned anyway.
+    assert planned == ["m1", "m3"]
+    assert failed == ["m2"]
+    assert set(out["planned"]) == {"m1@t.io", "m3@t.io"}
+    assert "m2@t.io" in out["failed"]
+    assert "IN_PROGRESS" in out["failed"]["m2@t.io"]
