@@ -339,7 +339,21 @@ function CaseDetailModal({ caseId, onClose }: { caseId: string; onClose: () => v
                 <AmountCard label="Loan balance" amount={detail.loan.total_outstanding} color="text-danger-600" />
               </div>
 
-              {detail.visit_priority && <VisitPriorityPanel vp={detail.visit_priority} />}
+              {/* Visit priority. Present on open cases; absent on resolved ones
+                  because visit_priority_service withholds a score once a case is
+                  settled — there is no next visit to rank. That was rendering as
+                  a silent gap, which reads as a missing feature rather than a
+                  finished case, so the reason is now stated. Added 2026-09-03. */}
+              {detail.visit_priority ? (
+                <VisitPriorityPanel vp={detail.visit_priority} />
+              ) : (
+                <div className="mt-3 rounded-xl p-3" style={{ background: "rgba(100,116,139,0.06)", border: "1px solid rgba(100,116,139,0.15)" }}>
+                  <p className="text-xs font-bold" style={{ color: "#475569" }}>Visit priority</p>
+                  <p className="text-xs mt-0.5" style={{ color: "#6B6D76" }}>
+                    Not ranked — this case is closed, so there is no next visit to prioritise.
+                  </p>
+                </div>
+              )}
 
               {detail.bank_agent_remarks && (
                 <div className="mt-3 rounded-xl p-3" style={{ background: "rgba(22,119,255,0.06)", border: "1px solid rgba(22,119,255,0.15)" }}>
@@ -790,7 +804,7 @@ function CaseRow({ c, onOpen }: { c: Case; onOpen: () => void }) {
             than as two measures. The band still drives the Sort and Priority
             filters above the table, and is shown with its three components in
             the case detail panel, where there is room to say what it means. */}
-        <div className="min-w-0"><VisitPriorityBadge priority={c.visit_priority} /></div>
+        <div className="min-w-0"><VisitPriorityBadge priority={c.visit_priority} showLabel={false} /></div>
         {/* Outlook only. "Due now" (arrears + penal) was removed on 2026-08-27:
             sitting one column from "Target / Collected" it was the largest
             number on the row, so it read as the amount to collect. The two

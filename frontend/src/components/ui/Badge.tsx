@@ -51,8 +51,19 @@ export function RecoveryBadge({ potential, compact = false }: {
   return <Badge variant={variant}>{compact ? short : label}</Badge>;
 }
 
-export function VisitPriorityBadge({ priority }: {
+/**
+ * showLabel=false drops the "Visit priority: " prefix, for the one place that
+ * already carries it -- the manager case table's VISIT PRIORITY column, where
+ * the header says it and the badge repeating it is noise in a narrow cell.
+ *
+ * Defaults to true because the other four call sites are badge ROWS with no
+ * headers, sitting beside DPD, Recovery and Status. RecoveryBadge renders
+ * High / Medium / Low from the same three words, so a bare "High" there would
+ * be indistinguishable from the recovery outlook next to it.
+ */
+export function VisitPriorityBadge({ priority, showLabel = true }: {
   priority: VisitPriority | null | undefined;
+  showLabel?: boolean;
 }) {
   if (!priority) return null;
   const map: Record<VisitPriority["band"], { label: string; variant: BadgeProps["variant"] }> = {
@@ -61,7 +72,7 @@ export function VisitPriorityBadge({ priority }: {
     LOW: { label: "Low", variant: "gray" },
   };
   const { label, variant } = map[priority.band];
-  return <Badge variant={variant}>{`Visit priority: ${label}`}</Badge>;
+  return <Badge variant={variant}>{showLabel ? `Visit priority: ${label}` : label}</Badge>;
 }
 
 export function TierBadge({ tier }: { tier: AgentTier }) {
