@@ -66,3 +66,17 @@ Thumbs.db
 # Postgres dumps taken before/after a destructive reseed. Binary, large,
 # and regenerable from scripts/seed_data.py — never in git.
 backups/
+
+# ── Synthetic-experiment artifacts (2026-09-03) ─────────────────────────────
+# scripts/run_synthetic_experiment.py writes a simulated collections book to a
+# SEPARATE database and drops two artifacts here. Neither belongs in git:
+#
+#   ground_truth.json  the simulator's hidden borrower/agent variables. It is
+#                      regenerable from --seed, and committing it would put a
+#                      file full of "true" repayment propensities next to the
+#                      feature code — exactly the thing that must never become
+#                      a feature.
+#   *.csv              exported training frames; regenerable, and large.
+backend/data/synthetic/
+backend/data/*.csv
+backend/app/ml/models/*.json
