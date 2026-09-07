@@ -271,7 +271,13 @@ class PlannerService:
         # all — scoring it and then discarding it would spend a slot and muddy the
         # decision audit. Both are recorded as decisions so the manager sees WHY a
         # case is absent instead of it silently disappearing.
-        month_start = datetime(plan_date.year, plan_date.month, 1, tzinfo=timezone.utc)
+        # target_date, NOT the plan_date argument. They are equal for every
+        # production caller — both pass a date — but plan_date is Optional and
+        # defaults to None, so `plan_date.year` raised AttributeError on the
+        # documented default. scripts/test_run_planner.py calls it exactly that
+        # way. Reading the resolved value makes the signature honest and changes
+        # nothing for any caller that already passed a date. Fixed 2026-09-06.
+        month_start = datetime(target_date.year, target_date.month, 1, tzinfo=timezone.utc)
         case_ids = [c.id for c in candidate_cases]
 
         visits_this_month: dict[str, int] = {}
@@ -292,7 +298,7 @@ class PlannerService:
             for cid, due in (
                 self.db.query(PTP.case_id, func.min(PTP.committed_date))
                 .filter(PTP.case_id.in_(case_ids), PTP.status == PTPStatus.ACTIVE,
-                        PTP.committed_date > plan_date)
+                        PTP.committed_date > target_date)
                 .group_by(PTP.case_id).all()
             ):
                 ptp_hold[cid] = due
@@ -699,7 +705,37 @@ class PlannerService:
         return failure
 
     def export_decisions_csv(self, run_id: str) -> str:
-        """Export allocation decisions for a run to a CSV string."""
+        """Export allocation decisions for a run to a CSV string.
+
+        Raises ValueError when the run is not this manager's, which the endpoint
+        turns into a 404.
+
+        2026-09-06 — this filtered on run_id ALONE. PlannerService is constructed
+        with a manager_user_id and every other method uses it; this one accepted
+        it and never read it, so any manager could export another agency's entire
+        decision audit — case numbers, borrower-facing reasons and agent codes —
+        by supplying a run id.
+
+        It survived the structural tenancy sweep in test_manager_endpoints.py
+        because that sweep is TEXTUAL over the endpoint body, and the endpoint
+        does mention current_user.id: it passes it to this constructor. The sweep
+        cannot follow the call, so scoping has to hold HERE. Fixing it in the
+        endpoint would have satisfied the test and left the service exportable by
+        anyone who calls it directly — including the next endpoint that does.
+
+        404, never 403: a 403 confirms the run exists, which turns this into an
+        enumeration oracle for another agency's allocation history. Same rule as
+        _require_own_agent in endpoints/manager.py.
+        """
+        owns_run = (
+            self.db.query(AllocationRun.id)
+            .filter(AllocationRun.id == run_id,
+                    AllocationRun.manager_user_id == self.manager_user_id)
+            .first()
+        )
+        if not owns_run:
+            raise ValueError(f"Allocation run {run_id} not found.")
+
         decisions = self.db.query(AllocationDecision).options(
             joinedload(AllocationDecision.case),
             joinedload(AllocationDecision.allocated_agent),

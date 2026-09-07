@@ -331,6 +331,50 @@ def test_manager_allocation_endpoints(client, db_session, test_data):
     assert resp_rb.json()["success"] is True
 
 
+def test_export_decisions_refuses_another_managers_run(client, db_session, test_data):
+    """A manager must not export another agency's allocation audit.
+
+    Behavioural, because the structural sweep in test_manager_endpoints.py
+    cannot catch this class: that sweep greps the ENDPOINT body for a scoping
+    token, and this endpoint does mention current_user.id — it passes it to
+    PlannerService. The scope was then dropped inside the service, so the sweep
+    read as a pass while any manager could export any run by id.
+
+    404 rather than 403 is asserted deliberately: a 403 would confirm the run
+    exists and turn the endpoint into an enumeration oracle.
+    """
+    owner = test_data["manager"]
+    owner_headers = {"Authorization": f"Bearer {create_access_token(
+        user_id=owner.id, role=owner.role.value, device_id='d1')}"}
+
+    run_id = client.post("/api/v1/manager/allocation/plan",
+                         json={"strategy": "SMART"},
+                         headers=owner_headers).json()["run_id"]
+
+    intruder = User(
+        id=str(uuid.uuid4()), email="manager_other@tiqcollect.in",
+        phone="9800000099", full_name="Manager Other", hashed_password="hash",
+        role=UserRole.AGENCY_MANAGER, is_active=True, is_verified=True,
+    )
+    db_session.add(intruder)
+    db_session.commit()
+    intruder_headers = {"Authorization": f"Bearer {create_access_token(
+        user_id=intruder.id, role=intruder.role.value, device_id='d2')}"}
+
+    denied = client.get(
+        f"/api/v1/manager/allocation/export-decisions?run_id={run_id}",
+        headers=intruder_headers)
+    assert denied.status_code == 404
+    assert "decision_id" not in denied.text
+
+    # The check must not have closed the endpoint to its legitimate caller.
+    allowed = client.get(
+        f"/api/v1/manager/allocation/export-decisions?run_id={run_id}",
+        headers=owner_headers)
+    assert allowed.status_code == 200
+    assert "decision_id,case_number,outcome" in allowed.text
+
+
 # ─── Failure visibility (2026-09-03) ─────────────────────────────────────────
 # The 20:00 run on 2026-09-02 died 131ms after dispatch and wrote nothing, so
 # the only evidence was a stack trace in the worker's container logs. These pin
