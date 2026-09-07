@@ -20,7 +20,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          # 3.12, matching pyproject.toml's `requires-python = ">=3.12"`. This
+          # was pinned to 3.11, so the job could only ever fail — it installed
+          # an interpreter the package declares it does not support. Corrected
+          # 2026-09-06.
+          python-version: "3.12"
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Compile check
@@ -40,7 +44,14 @@ jobs:
           node-version: "20"
       - name: Install dependencies
         run: npm ci
+      # `tsc -b`, not `tsc --noEmit`. The root tsconfig.json is a SOLUTION file:
+      # it lists project references and no files of its own, so `tsc --noEmit`
+      # resolved nothing and passed unconditionally. It reported success while
+      # `npm run build` was failing on a type error in RecordVisitPage.tsx —
+      # a step that cannot fail is worse than no step, because it is read as
+      # evidence. `-b` builds the referenced projects, which is what the build
+      # itself runs. Corrected 2026-09-06.
       - name: Typecheck
-        run: npx tsc --noEmit
+        run: npx tsc -b
       - name: Lint
         run: npm run lint
