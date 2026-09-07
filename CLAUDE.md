@@ -135,9 +135,12 @@ frontend/src/
   api · components · contexts · hooks · lib · store · types
 docs/                 PLAN.md · MERGING-INTO-PLATFORM.md · case-allocation.{html,pdf}
                       recovery-calibration.html · rollback/ · validation/
-ML-PLATFORM-PLAN.md   root, untracked, 570 lines, dated 2026-09-07. Planning only —
-                      its own header says no code changed. Not a description of
-                      what exists; read it as intent, not inventory.
+ML-PLATFORM-PLAN.md   root, 570 lines, dated 2026-09-07. Planning only — its own
+                      header says no code changed. Not a description of what
+                      exists; read it as intent, not inventory. Its §1.2 quotes
+                      `ml/models/shadow_model_metadata.json`, which is GITIGNORED
+                      and regenerated per run, so those numbers cannot be checked
+                      from a fresh clone.
 ```
 
 Domain chain: `Customer → Loan → Case → Visit → {Payment, PTP}`, plus `Beat` (one
