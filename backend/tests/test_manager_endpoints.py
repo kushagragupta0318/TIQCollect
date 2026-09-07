@@ -27,6 +27,7 @@ from app.core.database import Base, get_db
 from app.core.security import create_access_token
 from app.main import app
 from app.models.agent import Agent, AgentSpecialization, AgentStatus, AgentTier
+from app.models.audit_log import AuditAction, AuditLog
 from app.models.beat import Beat, BeatStatus
 from app.models.case import Case, CaseStatus
 from app.models.customer import Customer, RiskCategory
@@ -518,7 +519,133 @@ def test_every_manager_route_that_reads_tenant_data_is_scoped():
         if path in tenant_free:
             continue
         chunk = ' '.join(src[start:end])
+        # `_audit_visible_user_ids` / `_audit_log_query` added 2026-09-06 for the
+        # audit-log routes, which delegate their scoping to a shared helper.
+        #
+        # BE HONEST ABOUT WHAT THIS BUYS. Recognising a helper NAME is not proof
+        # that the helper scopes — that is exactly how
+        # /allocation/export-decisions passed this sweep for weeks while the
+        # service it called had dropped current_user.id entirely. The sweep is
+        # textual and cannot follow a call. It catches the route that forgot
+        # scoping altogether; it cannot catch the helper that loses it.
+        #
+        # So every route relying on a helper here MUST also carry a behavioural
+        # tenancy test. For these two that is
+        # test_audit_log_does_not_leak_another_managers_team below.
         if not ('manager_user_id' in chunk or 'current_user.id' in chunk
-                or '_require_own_agent' in chunk):
+                or '_require_own_agent' in chunk
+                or '_audit_visible_user_ids' in chunk or '_audit_log_query' in chunk):
             unscoped.append(path)
     assert unscoped == [], f'unscoped manager routes: {unscoped}'
+
+
+# ─ GET /manager/audit-log ──────────────────────────────────────────────────
+# 2026-09-06. The Compliance page rendered six HARDCODED audit rows — agent
+# names absent from the roster, a PTP dated "Jan 25, 2025", and an Export button
+# wired to nothing — under the heading "Today's Audit Log". These cover the real
+# endpoint that replaced it.
+#
+# The tenancy test here is not optional. The structural sweep above recognises
+# `_audit_visible_user_ids` by NAME, and a name is not proof: that is exactly how
+# /allocation/export-decisions passed the sweep while the service it delegated to
+# had dropped the scope entirely. Only a behavioural test can catch that.
+
+@pytest.fixture(scope="module")
+def audit_rows(seeded):
+    """One row per tenant, plus one with no actor at all."""
+    db = seeded["db"]
+    mine = seeded["agents"][0]        # belongs to seeded["manager"]
+    theirs = seeded["agents"][1]      # belongs to seeded["other"]
+    rows = [
+        AuditLog(created_at=NOW - timedelta(hours=2), user_id=mine.user_id,
+                 action=AuditAction.PAYMENT_VERIFIED, entity_type="Payment",
+                 entity_id="pay-mine", success=True),
+        AuditLog(created_at=NOW - timedelta(hours=3), user_id=seeded["manager"].id,
+                 action=AuditAction.LOGIN, entity_type="User",
+                 entity_id="mgr-login", success=True),
+        AuditLog(created_at=NOW - timedelta(hours=4), user_id=theirs.user_id,
+                 action=AuditAction.PAYMENT_VERIFIED, entity_type="Payment",
+                 entity_id="pay-theirs", success=True),
+        # Written by the system, not a person — PTP_UPDATED when a verified
+        # payment honours a promise names no user, deliberately.
+        AuditLog(created_at=NOW - timedelta(hours=5), user_id=None,
+                 action=AuditAction.PTP_UPDATED, entity_type="PTP",
+                 entity_id="ptp-system", success=True),
+        # Outside the 7-day window.
+        AuditLog(created_at=NOW - timedelta(days=30), user_id=mine.user_id,
+                 action=AuditAction.LOGIN, entity_type="User",
+                 entity_id="too-old", success=True),
+    ]
+    db.add_all(rows)
+    db.commit()
+    yield rows
+
+
+def test_audit_log_returns_this_managers_own_team(client, seeded, audit_rows):
+    r = client.get("/api/v1/manager/audit-log", headers=auth_headers(seeded["manager"]))
+    assert r.status_code == 200
+    ids = {e["entity_id"] for e in r.json()["entries"]}
+    assert "pay-mine" in ids, "the manager cannot see their own agent's action"
+    assert "mgr-login" in ids, "the manager cannot see their own action"
+
+
+def test_audit_log_does_not_leak_another_managers_team(client, seeded, audit_rows):
+    """The whole point. A row belonging to another agency must never appear."""
+    r = client.get("/api/v1/manager/audit-log", headers=auth_headers(seeded["manager"]))
+    ids = {e["entity_id"] for e in r.json()["entries"]}
+    assert "pay-theirs" not in ids
+
+    # And symmetrically, so the test cannot pass by returning nothing at all.
+    r2 = client.get("/api/v1/manager/audit-log", headers=auth_headers(seeded["other"]))
+    ids2 = {e["entity_id"] for e in r2.json()["entries"]}
+    assert "pay-theirs" in ids2
+    assert "pay-mine" not in ids2
+
+
+def test_audit_log_excludes_rows_outside_the_window(client, seeded, audit_rows):
+    r = client.get("/api/v1/manager/audit-log", headers=auth_headers(seeded["manager"]))
+    assert "too-old" not in {e["entity_id"] for e in r.json()["entries"]}
+
+
+def test_audit_log_omits_actor_less_system_rows_and_says_so(client, seeded, audit_rows):
+    """`user_id IN (...)` drops NULLs by definition, so system-written rows are
+    invisible here. That is the right default — an unattributed row cannot be
+    proven to belong to this tenant — but it is a real gap, so the response
+    must declare it rather than leave it to be discovered."""
+    r = client.get("/api/v1/manager/audit-log", headers=auth_headers(seeded["manager"]))
+    body = r.json()
+    assert "ptp-system" not in {e["entity_id"] for e in body["entries"]}
+    assert body["coverage"]["excludes_system_rows"] is True
+
+
+def test_audit_log_declares_which_actions_are_not_instrumented(client, seeded, audit_rows):
+    """A short log must be distinguishable from an uninstrumented one."""
+    body = client.get("/api/v1/manager/audit-log",
+                      headers=auth_headers(seeded["manager"])).json()
+    coverage = body["coverage"]
+    assert coverage["declared_action_types"] == len(AuditAction)
+    assert "VISIT_RECORDED" in coverage["not_instrumented"]
+    assert "PTP_SET" in coverage["not_instrumented"]
+    # Anything actually emitted must NOT be listed as missing.
+    assert "PAYMENT_VERIFIED" not in coverage["not_instrumented"]
+    assert "LOGIN" not in coverage["not_instrumented"]
+
+
+def test_audit_log_paginates(client, seeded, audit_rows):
+    r = client.get("/api/v1/manager/audit-log?limit=1&offset=0",
+                   headers=auth_headers(seeded["manager"]))
+    body = r.json()
+    assert len(body["entries"]) == 1
+    assert body["total"] >= 2 and body["limit"] == 1
+
+
+def test_audit_log_export_is_csv_and_scoped_the_same_way(client, seeded, audit_rows):
+    """The export shares `_audit_log_query` with the list, so the two cannot
+    disagree about who may see what."""
+    r = client.get("/api/v1/manager/audit-log/export",
+                   headers=auth_headers(seeded["manager"]))
+    assert r.status_code == 200
+    assert "text/csv" in r.headers["content-type"]
+    assert "timestamp,actor,action" in r.text
+    assert "pay-mine" in r.text
+    assert "pay-theirs" not in r.text, "CSV export leaked another manager's row"

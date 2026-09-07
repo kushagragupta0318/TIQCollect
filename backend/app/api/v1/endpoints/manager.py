@@ -34,6 +34,10 @@ from app.core.config import settings
 from app.core import llm as _llm
 from app.ml import eligibility as _elig
 from app.models.agent import Agent, AgentStatus, AgentPerformance
+# Module level, not a local import: the audit-log endpoints below share a
+# scoping helper, and a per-function import would make it easy for one of the
+# two callers to drift onto a different model reference.
+from app.models.audit_log import AuditAction, AuditLog
 from app.core import storage
 from app.models.beat import Beat
 from app.models.case import Case, CaseStatus
@@ -1632,6 +1636,205 @@ def review_fraud_alert(body: _ReviewBody, current_user: ManagerOnly, db: DbSessi
         "note": review.note,
         "previous_verdict": previous,
     }
+
+
+# ---------------------------------------------------------------------------
+# GET /manager/audit-log   — the real audit trail
+# ---------------------------------------------------------------------------
+# 2026-09-06. The Compliance page carried a panel headed "Today's Audit Log"
+# that rendered SIX HARDCODED ROWS — agent names absent from the roster
+# ("Amit Singh", "Neha Gupta"), a PTP committed for "Jan 25, 2025", invented
+# case numbers, and an Export button wired to nothing. On an RBI Fair Practices
+# screen. It was removed rather than reworked, because no endpoint exposed the
+# real table. This is that endpoint.
+#
+# `audit_logs` is genuinely populated — the model is well designed and
+# deliberately carries no TimestampMixin because rows must be immutable.
+
+_AUDIT_WINDOW_DAYS = 7
+_AUDIT_PAGE_SIZE = 50
+_AUDIT_MAX_PAGE_SIZE = 200
+
+# Actions DECLARED on AuditAction that NO call site writes. Maintained by hand,
+# because "never emitted" is a property of the CODE, not of the data: an action
+# missing from a given window may simply have been quiet, and the difference is
+# exactly what an auditor needs to know. A short log that does not say which of
+# these two it is, is worse than no log.
+#
+# Re-derive with:
+#   grep -rn "AuditAction\.[A-Z_]*" backend/app --include=*.py \
+#       | grep -v models/audit_log.py
+_AUDIT_ACTIONS_NOT_INSTRUMENTED = [
+    "CASE_ASSIGNED", "CASE_UPDATED", "VISIT_RECORDED", "PAYMENT_SUBMITTED",
+    "PTP_SET", "DOCUMENT_UPLOADED", "SOS_TRIGGERED", "SOS_RESOLVED",
+    "BEAT_GENERATED", "BEAT_MODIFIED", "AGENT_STATUS_CHANGED",
+    "CONTACT_HOUR_VIOLATION_ATTEMPT", "ROLE_VIOLATION_ATTEMPT", "DATA_EXPORT",
+]
+
+
+def _audit_visible_user_ids(db, current_user) -> list[str]:
+    """The user ids whose actions this manager may read: their own team's
+    agents, plus themselves.
+
+    ONE definition, shared by the list endpoint and the CSV export. Writing the
+    scope twice is precisely how GET /manager/allocation/export-decisions came
+    to be exportable across tenants — the endpoint mentioned current_user.id
+    while the service it delegated to quietly did not use it.
+    """
+    agent_user_ids = [
+        r[0] for r in
+        db.query(Agent.user_id).filter(Agent.manager_user_id == current_user.id).all()
+    ]
+    return [current_user.id, *agent_user_ids]
+
+
+def _audit_log_query(db, current_user, since: datetime):
+    """Scoped, time-bounded, newest first.
+
+    NOTE ON ACTOR-LESS ROWS: `AuditLog.user_id` is nullable, and some rows are
+    written by the system rather than a person — PTP_UPDATED when a verified
+    payment honours a promise names no user, deliberately ("nobody did this; a
+    verified payment did"). SQL `user_id IN (...)` excludes NULL by definition,
+    so those rows do not appear here. That is the correct default — an
+    unattributed row cannot be proven to belong to this tenant — but it is a
+    real gap, so the response says so rather than leaving it to be discovered.
+    """
+    return (
+        db.query(AuditLog)
+        .filter(
+            AuditLog.user_id.in_(_audit_visible_user_ids(db, current_user)),
+            AuditLog.created_at >= since,
+        )
+        .order_by(AuditLog.created_at.desc())
+    )
+
+
+def _audit_since() -> datetime:
+    return datetime.now(timezone.utc) - timedelta(days=_AUDIT_WINDOW_DAYS)
+
+
+@router.get("/audit-log")
+def audit_log(
+    current_user: ManagerOnly,
+    db: DbSession,
+    limit: int = _AUDIT_PAGE_SIZE,
+    offset: int = 0,
+):
+    """The last 7 days of recorded actions for this manager's team.
+
+    Paginated deliberately: `audit_logs` has no retention sweep anywhere in the
+    codebase, so it grows without bound and an unbounded query here would get
+    slower for the life of the deployment.
+    """
+    limit = max(1, min(limit, _AUDIT_MAX_PAGE_SIZE))
+    offset = max(0, offset)
+    since = _audit_since()
+
+    base = _audit_log_query(db, current_user, since)
+    total = base.count()
+    rows = base.offset(offset).limit(limit).all()
+
+    # Actor names in one query, not one per row.
+    actor_ids = {r.user_id for r in rows if r.user_id}
+    names: dict[str, str] = {}
+    if actor_ids:
+        names = {
+            uid: full_name for uid, full_name in
+            db.query(User.id, User.full_name).filter(User.id.in_(actor_ids)).all()
+        }
+
+    # What actually appears in the window, so the UI can distinguish "quiet"
+    # from "not instrumented" without hardcoding either list itself.
+    present = dict(
+        db.query(AuditLog.action, func.count(AuditLog.id))
+        .filter(
+            AuditLog.user_id.in_(_audit_visible_user_ids(db, current_user)),
+            AuditLog.created_at >= since,
+        )
+        .group_by(AuditLog.action)
+        .all()
+    )
+
+    return {
+        "window_days": _AUDIT_WINDOW_DAYS,
+        "since": since.isoformat(),
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "entries": [
+            {
+                "id": r.id,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "action": r.action.value if hasattr(r.action, "value") else str(r.action),
+                "actor_name": names.get(r.user_id) if r.user_id else None,
+                "entity_type": r.entity_type,
+                "entity_id": r.entity_id,
+                "success": r.success,
+                "failure_reason": r.failure_reason,
+                "ip_address": r.ip_address,
+                "details": r.details,
+            }
+            for r in rows
+        ],
+        "counts_by_action": {
+            (k.value if hasattr(k, "value") else str(k)): v for k, v in present.items()
+        },
+        # The honesty block. Without it a short log reads as a quiet week.
+        "coverage": {
+            "declared_action_types": len(AuditAction),
+            "not_instrumented": _AUDIT_ACTIONS_NOT_INSTRUMENTED,
+            "excludes_system_rows": True,
+            "note": (
+                "Actions with no recorded actor (written by the system rather "
+                "than a person) are not shown, because an unattributed row "
+                "cannot be scoped to a team. Immutability is enforced by "
+                "convention only — there is no database trigger and no revoked "
+                "UPDATE/DELETE grant."
+            ),
+        },
+    }
+
+
+@router.get("/audit-log/export")
+def export_audit_log_csv(current_user: ManagerOnly, db: DbSession):
+    """The same scoped window as GET /manager/audit-log, as CSV.
+
+    Reuses `_audit_log_query`, so the tenant scope cannot be present on one path
+    and missing on the other.
+    """
+    import csv
+    import io
+
+    from fastapi.responses import Response
+
+    rows = _audit_log_query(db, current_user, _audit_since()).all()
+
+    actor_ids = {r.user_id for r in rows if r.user_id}
+    names: dict[str, str] = {}
+    if actor_ids:
+        names = {
+            uid: full_name for uid, full_name in
+            db.query(User.id, User.full_name).filter(User.id.in_(actor_ids)).all()
+        }
+
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(["timestamp", "actor", "action", "entity_type", "entity_id",
+                     "success", "failure_reason", "ip_address"])
+    for r in rows:
+        writer.writerow([
+            r.created_at.isoformat() if r.created_at else "",
+            names.get(r.user_id, "") if r.user_id else "",
+            r.action.value if hasattr(r.action, "value") else str(r.action),
+            r.entity_type or "", r.entity_id or "",
+            "yes" if r.success else "no", r.failure_reason or "", r.ip_address or "",
+        ])
+
+    stamp = date.today().isoformat()
+    return Response(
+        content=out.getvalue(), media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=audit_log_{stamp}.csv"},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -3741,12 +3944,20 @@ def export_allocation_decisions_csv(
     current_user: ManagerOnly,
     db: DbSession,
 ):
-    """Export the explainable allocation decisions for a specific run as CSV."""
+    """Export the explainable allocation decisions for a specific run as CSV.
+
+    Ownership is enforced inside export_decisions_csv, not here — see the note
+    there on why the structural tenancy sweep could not catch this one.
+    """
     from fastapi.responses import Response
     from app.services.planner_service import PlannerService
 
     planner = PlannerService(db, manager_user_id=current_user.id)
-    csv_text = planner.export_decisions_csv(run_id=run_id)
+    try:
+        csv_text = planner.export_decisions_csv(run_id=run_id)
+    except ValueError:
+        # 404 rather than 403 — a 403 would confirm the run id exists.
+        raise HTTPException(status_code=404, detail="Allocation run not found")
 
     return Response(
         content=csv_text,

@@ -53,8 +53,24 @@ export async function getCasesDateRange() {
   return data;
 }
 
-export async function getCompliance() {
-  const { data } = await api.get("/manager/compliance");
+/** Month-to-date compliance figures for this manager's own team.
+ *
+ * Every field is measured from the 1st of the current month, NOT from today —
+ * the Compliance page labels them accordingly. `compliance_rate` and
+ * `geo_verification_rate` are fractions in [0, 1], not percentages.
+ */
+export interface ComplianceMetrics {
+  month: string;                  // "YYYY-MM"
+  total_visits: number;
+  out_of_hours_visits: number;
+  geo_violations: number;
+  sos_active_count: number;
+  compliance_rate: number;        // 0–1
+  geo_verification_rate: number;  // 0–1
+}
+
+export async function getCompliance(): Promise<ComplianceMetrics> {
+  const { data } = await api.get<ComplianceMetrics>("/manager/compliance");
   return data;
 }
 
@@ -790,6 +806,54 @@ export async function exportAllocationDecisions(runId: string): Promise<Blob> {
     params: { run_id: runId },
     responseType: "blob",
   });
+  return response.data;
+}
+
+// ── Audit trail ─────────────────────────────────────────────────────────────
+// Replaces the six hardcoded rows the Compliance page used to render under
+// "Today's Audit Log". Scoped server-side to this manager's own team.
+
+export interface AuditEntry {
+  id: string;
+  created_at: string | null;
+  action: string;
+  /** null when the row has no recorded actor. */
+  actor_name: string | null;
+  entity_type: string | null;
+  entity_id: string | null;
+  success: boolean;
+  failure_reason: string | null;
+  ip_address: string | null;
+  details: Record<string, unknown> | null;
+}
+
+export interface AuditLogPage {
+  window_days: number;
+  since: string;
+  total: number;
+  limit: number;
+  offset: number;
+  entries: AuditEntry[];
+  counts_by_action: Record<string, number>;
+  /** What the trail does NOT record. Without this a short log reads as a
+   *  quiet week rather than as missing instrumentation. */
+  coverage: {
+    declared_action_types: number;
+    not_instrumented: string[];
+    excludes_system_rows: boolean;
+    note: string;
+  };
+}
+
+export async function getAuditLog(limit = 50, offset = 0): Promise<AuditLogPage> {
+  const { data } = await api.get<AuditLogPage>("/manager/audit-log", {
+    params: { limit, offset },
+  });
+  return data;
+}
+
+export async function exportAuditLog(): Promise<Blob> {
+  const response = await api.get("/manager/audit-log/export", { responseType: "blob" });
   return response.data;
 }
 
