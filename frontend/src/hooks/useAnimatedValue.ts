@@ -1,50 +1,66 @@
-import { useState, useEffect, useRef } from "react";
+// ─── CHANGELOG (prototype → product) ────────────────────────────────────────
+// 2026-09-07 — Both hooks wrote a ref DURING RENDER (`targetRef.current =
+//   target`) and called setState synchronously inside a mount effect. Render
+//   has to be a pure function of props and state: React is allowed to call it
+//   twice, throw the result away, or run it concurrently, and a render that
+//   mutates something outside itself breaks each of those assumptions. Both
+//   carried an `eslint-disable react-hooks/exhaustive-deps` on top.
+//
+//   useAnimatedValue turned out not to need any of that machinery. Its state
+//   was only ever 0 — the "animate to target" step just handed `target` back —
+//   so the whole thing is a delay flag plus a conditional return, which reads
+//   the CURRENT target at render time and therefore cannot go stale.
+//
+//   useCountUp genuinely does need the latest target inside a
+//   requestAnimationFrame callback that outlives the render which created it.
+//   That ref is now written in an effect rather than during render, which is
+//   the standard form of the same guard and satisfies the rule for the reason
+//   the rule exists.
+// ───────────────────────────────────────────────────────────────────────────
+import { useEffect, useRef, useState } from "react";
 
 /**
- * Starts at 0 on every mount, then animates to `target` after a short delay.
- * Ensures progress bars and counters always animate on page navigation,
- * even when data is already cached in context.
+ * 0 on mount, then the real value once `delay` has passed — so a progress bar
+ * animates in from empty even when the data was already cached in context.
+ *
+ * Returns `target` directly after the delay rather than copying it into state.
+ * That is what removes the stale-closure problem the previous version needed a
+ * render-time ref to work around: there is no closure, only a render.
  */
 export function useAnimatedValue(target: number, delay = 80): number {
-  const [value, setValue] = useState(0);
-  const didMount = useRef(false);
-  // Read the target through a ref: the mount timeout below would otherwise
-  // close over the mount-time target (0, since data is still loading) and
-  // clobber a real value that arrived within `delay`.
-  const targetRef = useRef(target);
-  targetRef.current = target;
+  const [started, setStarted] = useState(false);
 
   useEffect(() => {
-    setValue(0);
-    const t = setTimeout(() => setValue(targetRef.current), delay);
+    const t = setTimeout(() => setStarted(true), delay);
     return () => clearTimeout(t);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [delay]);
 
-  // Skip the first fire (mount) so the mount-effect animation isn't overridden.
-  useEffect(() => {
-    if (!didMount.current) { didMount.current = true; return; }
-    setValue(target);
-  }, [target]);
-
-  return value;
+  return started ? target : 0;
 }
 
 /**
- * Integer count-up from 0 to `target` over `duration` ms.
- * For stat tiles that show numeric counts.
+ * Integer count-up from 0 to `target` over `duration` ms, for stat tiles.
+ *
+ * Unlike useAnimatedValue this one really does hold state: the intermediate
+ * values exist only inside the animation.
  */
 export function useCountUp(target: number, duration = 600, delay = 80): number {
   const [value, setValue] = useState(0);
   const didMount = useRef(false);
-  // Same stale-closure guard as useAnimatedValue: the mount animation must
-  // count up to whatever the target is *now*, not the 0 it saw at mount.
-  const targetRef = useRef(target);
-  targetRef.current = target;
   const animating = useRef(true);
 
+  // The latest target, for the rAF callback below — which is created once on
+  // mount and would otherwise count up to whatever the target was then (0,
+  // while the data is still loading). Written in an EFFECT, not during render.
+  const targetRef = useRef(target);
   useEffect(() => {
-    setValue(0);
+    targetRef.current = target;
+  }, [target]);
+
+  useEffect(() => {
+    // No setValue(0) here: useState already starts at 0, and a remount gets a
+    // fresh state anyway. Setting it synchronously inside the effect was a
+    // no-op that cost a render pass and tripped the rule.
     let start: number | null = null;
     let raf: number;
 
@@ -62,8 +78,7 @@ export function useCountUp(target: number, duration = 600, delay = 80): number {
 
     raf = requestAnimationFrame(tick);
     return () => { cancelAnimationFrame(raf); animating.current = false; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [duration, delay]);
 
   useEffect(() => {
     if (!didMount.current) { didMount.current = true; return; }

@@ -38,7 +38,7 @@ import { ArrowLeft, Phone, Navigation, Calendar, MapPin, CheckCircle, MessageCir
 import { toast } from "react-hot-toast";
 import { AiBadge } from "@/components/ui/AiBadge";
 import { RepaymentScore, type RepaymentScoreData } from "@/components/ui/RepaymentScore";
-import { getCaseDetail, flagCustomer, handoverCase, getVisitStrategy, logCall, notifyCase, reoptimizeBeat, sendPaymentOtp, verifyPaymentOtp, type VisitStrategyBrief, type LogCallPayload } from "@/api/agent";
+import { getCaseDetail, handoverCase, getVisitStrategy, logCall, notifyCase, reoptimizeBeat, sendPaymentOtp, verifyPaymentOtp, type VisitStrategyBrief, type LogCallPayload } from "@/api/agent";
 import { useVoiceCall } from "@/hooks/useVoiceCall";
 import CallModal from "@/components/ui/CallModal";
 import { useBeat } from "@/contexts/BeatContext";
@@ -47,13 +47,19 @@ import { DPDBadge, VisitPriorityBadge, CaseStatusBadge } from "@/components/ui/B
 import { Button } from "@/components/ui/Button";
 import OtpInput from "@/components/ui/OtpInput";
 import { haversineM } from "@/lib/geo";
-import type { VisitPriority } from "@/types";
+import { errorDetail } from "@/lib/apiError";
+import type { CaseStatus, DPDBucket, VisitPriority } from "@/types";
 
 interface CaseDetail {
   // Repayment likelihood, computed live per case by case_service.
   // Optional: the block degrades to null rather than failing the page.
   repayment?: RepaymentScoreData | null;
-  id: string; case_number: string; status: string;
+  id: string; case_number: string;
+  // The shared unions, not bare strings. They were `string`, so every
+  // badge that takes the union needed `as any` at the call site — which
+  // also meant a value outside the union would have rendered blank
+  // rather than failing the build.
+  status: CaseStatus;
   target_amount: number; collected_amount: number; visit_count: number;
   max_visits_allowed: number; is_escalated: boolean; allocation_date: string | null;
   handover_notes: string | null; collection_stage: string | null;
@@ -69,7 +75,7 @@ interface CaseDetail {
   };
   loan: {
     loan_account_number: string; loan_account_masked: string | null;
-    loan_type: string; bank_name: string; dpd: number; dpd_bucket: string; status: string; npa_flag: boolean;
+    loan_type: string; bank_name: string; dpd: number; dpd_bucket: DPDBucket; status: string; npa_flag: boolean;
     sanctioned_amount: number; outstanding_principal: number; outstanding_interest: number;
     penal_charges: number; total_outstanding: number; overdue_amount: number;
     emi_amount: number; tenure_months: number; interest_rate: number;
@@ -136,7 +142,6 @@ export default function AgentCaseDetailPage() {
   const [handoverNotes, setHandoverNotes] = useState("");
   const [handoverSubmitting, setHandoverSubmitting] = useState(false);
   const [handoverDone, setHandoverDone] = useState(false);
-  const [flagLoading, setFlagLoading] = useState(false);
   const [userLoc, setUserLoc] = useState<{ lat: number; lon: number } | null>(null);
   const [geoError, setGeoError] = useState<string | null>(null);
   const [showCallModal, setShowCallModal] = useState(false);
@@ -227,6 +232,12 @@ export default function AgentCaseDetailPage() {
     : 0;
   const animatedProgressPct = useAnimatedValue(progressPct);
 
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 60_000);
+    return () => clearInterval(id);
+  }, []);
+
   if (loading) return <div className="flex items-center justify-center h-screen"><div className="w-8 h-8 border-4 border-brand-500 border-t-transparent rounded-full animate-spin" /></div>;
   if (!caseData) return <div className="flex flex-col items-center justify-center h-screen gap-4"><p className="text-slate-500">Case not found</p><Button onClick={() => navigate("/agent/cases")}>Back</Button></div>;
 
@@ -236,28 +247,34 @@ export default function AgentCaseDetailPage() {
   const hasVerifiedContact = c.visits.some((v) => v.customer_met);
   const photos = c.photos ?? [];
 
+  // 2026-09-07 — this block called Date.now() DURING RENDER. Rendering has to be
+  // a pure function of props and state: an impure read makes two renders of the
+  // same state produce different output, which is exactly what React's
+  // memoization and concurrent rendering are allowed to assume cannot happen.
+  //
+  // The clock is now state, so render is pure, and a slow interval keeps a
+  // long-open page from showing a countdown frozen at mount. Sixty seconds is
+  // chosen against what the value is: hours remaining, displayed to the hour.
   const slaInfo = (() => {
     if (!c.allocation_date) return null;
     const deadline = new Date(c.allocation_date + "T00:00:00");
     deadline.setDate(deadline.getDate() + 3);
-    const h = Math.round((deadline.getTime() - Date.now()) / 3_600_000);
+    const h = Math.round((deadline.getTime() - nowMs) / 3_600_000);
     if (h < 0) return { label: "SLA Overdue", cls: "text-danger-700 bg-danger-50 border-danger-200", desc: `${Math.abs(h)}h past deadline` };
     if (h < 24) return { label: `${h}h remaining`, cls: "text-warning-700 bg-warning-50 border-warning-200", desc: "SLA expires today" };
     return { label: `${Math.ceil(h / 24)} days left`, cls: "text-slate-700 bg-slate-50 border-slate-200", desc: `SLA deadline: ${deadline.toLocaleDateString("en-IN")}` };
   })();
 
-  async function handleFlagCustomer(flag: { is_hostile?: boolean; do_not_contact?: boolean }) {
-    setFlagLoading(true);
-    try {
-      const res = await flagCustomer(c.customer.id, flag);
-      setCaseData((d) => d ? { ...d, customer: { ...d.customer, ...res } } : d);
-      toast.success("Customer flag updated");
-    } catch {
-      toast.error("Failed to update flag");
-    } finally {
-      setFlagLoading(false);
-    }
-  }
+  // 2026-09-07 — handleFlagCustomer was removed from here. It called
+  // api/agent.flagCustomer to mark a borrower hostile or do-not-contact, and it
+  // was wired to NOTHING: no button, no menu item, no caller anywhere in the
+  // page. It had been dead since it was written.
+  //
+  // THE CAPABILITY STILL EXISTS. `flagCustomer` is a real endpoint and the
+  // allocator reads both flags as hard gates — a hostile or DNC borrower is
+  // blocked from allocation entirely. What is missing is only the control that
+  // would let an agent set them from the field, which is a product decision
+  // about who may flag a borrower, not a lint fix.
 
   async function handleHandover(returnToPool: boolean) {
     if (!handoverNotes.trim()) { toast.error("Please write handover notes first"); return; }
@@ -364,7 +381,7 @@ export default function AgentCaseDetailPage() {
             <h1 className="font-bold text-slate-900 truncate">{c.customer.full_name}</h1>
             <p className="text-xs text-slate-400">{c.case_number} · {c.loan.bank_name}</p>
           </div>
-          <CaseStatusBadge status={c.status as any} />
+          <CaseStatusBadge status={c.status} />
         </div>
         <div className="flex px-4 gap-3 border-t border-slate-50 overflow-x-auto scrollbar-hide">
           {tabs.map((t) => (
@@ -417,7 +434,7 @@ export default function AgentCaseDetailPage() {
 
                 <div className="min-w-0 flex-1 space-y-2.5">
                   <div className="flex flex-wrap gap-2 items-center">
-                    <DPDBadge bucket={c.loan.dpd_bucket as any} />
+                    <DPDBadge bucket={c.loan.dpd_bucket} />
                     <VisitPriorityBadge priority={c.visit_priority} />
                     <span className="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded-full">{c.loan.dpd} DPD</span>
                     <span className="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded-full">{c.loan.loan_type}</span>
@@ -1260,9 +1277,8 @@ function PendingPaymentVerify({ caseId, payment, onVerified }: {
       setCode("");
       if (isResend) setResendsUsed((n) => n + 1);
       toast.success(`OTP sent to borrower (${res.masked_phone})`);
-    } catch (err: any) {
-      const detail = err?.response?.data?.detail;
-      setError(typeof detail === "string" ? detail : "Could not send OTP");
+    } catch (err) {
+      setError(errorDetail(err, "Could not send OTP"));
     } finally {
       setSending(false);
     }
@@ -1276,9 +1292,8 @@ function PendingPaymentVerify({ caseId, payment, onVerified }: {
       await verifyPaymentOtp(caseId, { otp_id: otp.id, code });
       toast.success("Payment verified ✓");
       await onVerified();
-    } catch (err: any) {
-      const detail = err?.response?.data?.detail;
-      setError(typeof detail === "string" ? detail : "Incorrect OTP");
+    } catch (err) {
+      setError(errorDetail(err, "Incorrect OTP"));
     } finally {
       setVerifying(false);
     }

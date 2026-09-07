@@ -8,19 +8,24 @@
 import { CheckCircle, Clock, X, Share2, Copy } from "lucide-react";
 import { toast } from "react-hot-toast";
 
+/** What the receipt modal renders. Exported because the page that builds one
+ *  has to hold it in state before showing it, and typing that state `any` was
+ *  the only reason a field could be dropped without anything noticing. */
+export interface PaymentReceiptData {
+  receiptNumber: string;
+  amount: number;
+  mode: string;
+  customerName: string;
+  loanAccount: string;
+  caseNumber: string;
+  agentName: string;
+  timestamp: string;
+  upiRef?: string;
+  verified?: boolean;   // borrower confirmed the amount via OTP
+}
+
 interface Props {
-  receipt: {
-    receiptNumber: string;
-    amount: number;
-    mode: string;
-    customerName: string;
-    loanAccount: string;
-    caseNumber: string;
-    agentName: string;
-    timestamp: string;
-    upiRef?: string;
-    verified?: boolean;   // borrower confirmed the amount via OTP
-  };
+  receipt: PaymentReceiptData;
   onClose: () => void;
 }
 

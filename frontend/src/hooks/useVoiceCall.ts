@@ -28,7 +28,11 @@ export function useVoiceCall() {
 
       if (!deviceRef.current) {
         const { token } = await getVoiceToken();
-        const device = new Device(token, { codecPreferences: ["opus", "pcmu"] as any });
+        // Call.Codec is the union the SDK actually accepts; the literals
+        // widen to string[] without it, which is why this was cast away.
+        const device = new Device(token, {
+          codecPreferences: [Call.Codec.Opus, Call.Codec.PCMU],
+        });
         await device.register();
         deviceRef.current = device;
       }

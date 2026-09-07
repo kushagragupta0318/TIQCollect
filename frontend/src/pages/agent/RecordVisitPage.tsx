@@ -92,8 +92,10 @@ import PaymentReceiptModal from "@/components/ui/PaymentReceiptModal";
 import VisitRecordedModal from "@/components/ui/VisitRecordedModal";
 import { SOSButton } from "@/components/ui/SOSButton";
 import { useBeat } from "@/contexts/BeatContext";
-import type { VisitOutcome, PersonMet, DefaultReason } from "@/types";
+import type { Customer, Loan, VisitOutcome, PersonMet, DefaultReason } from "@/types";
+import type { PaymentReceiptData } from "@/components/ui/PaymentReceiptModal";
 import { haversineM } from "@/lib/geo";
+import { errorDetail } from "@/lib/apiError";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -129,12 +131,24 @@ const DRAFT_FIELDS = [
   "propertyType", "occupancyStatus", "vehiclePresent", "businessRunning",
   "borrowerTone", "informantName", "informantRelation",
   "notes", "customerStatement",
-] as const;
+  // `satisfies` ties this list to FormState: renaming a form field now fails
+  // the build instead of silently dropping that field from every saved draft.
+  //
+  // 2026-09-06 — this was a bare `as const`, and saveDraft below reached into
+  // the form with `(form as Record<string, unknown>)[k]`. FormState is an
+  // interface with no index signature, so TS2352 rejected that cast and
+  // `npm run build` FAILED — the frontend could not be built for production at
+  // all. It went unnoticed because CI's typecheck step runs `npx tsc --noEmit`,
+  // which resolves the root tsconfig — a solution file listing references and
+  // no files of its own — so it checks nothing. `tsc -b`, which the build
+  // actually runs, is what catches it.
+] as const satisfies readonly (keyof FormState)[];
 
 function saveDraft(caseId: string, form: FormState) {
   try {
-    const slice: Record<string, unknown> = {};
-    for (const k of DRAFT_FIELDS) slice[k] = (form as Record<string, unknown>)[k];
+    // No cast: k is a keyof FormState, so form[k] is checked.
+    const slice: Partial<Record<(typeof DRAFT_FIELDS)[number], unknown>> = {};
+    for (const k of DRAFT_FIELDS) slice[k] = form[k];
     localStorage.setItem(DRAFT_PREFIX + caseId, JSON.stringify(slice));
   } catch {
     // Quota exceeded, private mode, or storage disabled. A draft is a
@@ -154,6 +168,27 @@ function loadDraft(caseId: string): Partial<FormState> | null {
 function clearDraft(caseId: string) {
   try { localStorage.removeItem(DRAFT_PREFIX + caseId); } catch { /* see saveDraft */ }
 }
+
+/** The stamp attached to a photo at capture time. Named because three fields
+ *  carry it and a computed key into any of them has to stay typed. */
+/** Only what this page reads from GET /agent/cases/{id}. Narrow on purpose —
+ *  claiming the whole Case type here would assert fields this screen never
+ *  touches and cannot verify. */
+interface VisitCase {
+  case_number: string;
+  target_amount: number;
+  collected_amount: number;
+  customer: Customer;
+  loan: Loan;
+}
+
+type PhotoGps = {
+  lat: number; lon: number; accuracy: number | null;
+  altitude: number | null; time: string; iso: string;
+} | null;
+
+/** The three FormState keys that hold a PhotoGps. */
+type PhotoGpsKey = "agentPhotoGps" | "borrowerPhotoGps" | "objectPhotoGps";
 
 interface FormState {
   meetingType: MeetingType;
@@ -190,13 +225,13 @@ interface FormState {
   businessRunning: boolean | null;
   // Photos & docs
   agentPhoto: string | null;
-  agentPhotoGps: { lat: number; lon: number; accuracy: number | null; altitude: number | null; time: string; iso: string } | null;
+  agentPhotoGps: PhotoGps;
   agentPhotoFromPrev: boolean;
   borrowerPhoto: string | null;
-  borrowerPhotoGps: { lat: number; lon: number; accuracy: number | null; altitude: number | null; time: string; iso: string } | null;
+  borrowerPhotoGps: PhotoGps;
   borrowerPhotoFromPrev: boolean;
   objectPhoto: string | null;
-  objectPhotoGps: { lat: number; lon: number; accuracy: number | null; altitude: number | null; time: string; iso: string } | null;
+  objectPhotoGps: PhotoGps;
   objectPhotoFromPrev: boolean;
   documents: DocUpload[];
   // Tone & DECEASED informant
@@ -303,7 +338,13 @@ const QR_DEMO_DELAY_MS = 10000;
 // (no sound asset needed). Best-effort — silently no-ops if audio is blocked.
 function playSuccessChime() {
   try {
-    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    // Safari still only exposes the prefixed constructor, and it is not in
+    // lib.dom. Declared narrowly here rather than cast away, so the fallback is
+    // visibly a vendor quirk instead of an untyped hole.
+    const AudioCtx =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext })
+        .webkitAudioContext;
     if (!AudioCtx) return;
     const ctx = new AudioCtx();
     const now = ctx.currentTime;
@@ -418,10 +459,10 @@ export default function RecordVisitPage() {
   const { user } = useAuthStore();
   const { refresh: refreshBeat } = useBeat();
 
-  const [caseData, setCaseData] = useState<any>(null);
+  const [caseData, setCaseData] = useState<VisitCase | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [receipt, setReceipt] = useState<any>(null);
+  const [receipt, setReceipt] = useState<PaymentReceiptData | null>(null);
   // Success confirmation for the no-payment path. A collection ends in
   // PaymentReceiptModal, which is confirmation enough on its own.
   const [visitDone, setVisitDone] = useState<{ outcomeLabel?: string } | null>(null);
@@ -590,7 +631,10 @@ export default function RecordVisitPage() {
 
   function confirmPhoto() {
     if (!capturedFrame || !activeCameraFor) return;
-    const gpsMap: Record<CameraTarget, keyof FormState> = {
+    // Narrowed to the three GPS keys rather than `keyof FormState`. All three
+    // hold the same shape, so `patch[key] = value` typechecks and the `as any`
+    // this line used to need is gone.
+    const gpsMap: Record<CameraTarget, PhotoGpsKey> = {
       agentPhoto: "agentPhotoGps",
       borrowerPhoto: "borrowerPhotoGps",
       objectPhoto: "objectPhotoGps",
@@ -606,7 +650,7 @@ export default function RecordVisitPage() {
       [fromPrevMap[activeCameraFor]]: false,
     };
     if (form.gpsLat && form.gpsLon) {
-      (patch as any)[gpsMap[activeCameraFor]] = {
+      patch[gpsMap[activeCameraFor]] = {
         lat: form.gpsLat, lon: form.gpsLon,
         accuracy: form.gpsAccuracy,
         altitude: form.gpsAltitude,
@@ -665,7 +709,6 @@ export default function RecordVisitPage() {
 
   const customer = caseData?.customer;
   const loan = caseData?.loan;
-  const totalOutstanding = loan?.total_outstanding ?? 0;
   const targetAmount = caseData?.target_amount ?? 0;
   const collectedAmount = caseData?.collected_amount ?? 0;
   const remainingTargetAmount = Math.max(0, targetAmount - collectedAmount);
@@ -779,17 +822,32 @@ export default function RecordVisitPage() {
     const reader = new FileReader();
     reader.onload = (ev) => {
       const patch: Partial<FormState> = { [field]: ev.target?.result as string };
-      const gpsMap: Record<string, keyof FormState> = {
+      const gpsMap: Record<string, PhotoGpsKey> = {
         agentPhoto: "agentPhotoGps",
         borrowerPhoto: "borrowerPhotoGps",
         objectPhoto: "objectPhotoGps",
       };
       const gpsKey = gpsMap[field];
       if (gpsKey && form.gpsLat && form.gpsLon) {
-        (patch as any)[gpsKey] = {
+        // 2026-09-07 — accuracy, altitude and iso were MISSING from this stamp.
+        // The gallery-upload path wrote only lat/lon/time while the camera path
+        // (above) wrote all six, and `(patch as any)[gpsKey] = ...` hid the
+        // difference from the compiler.
+        //
+        // It mattered most for `iso`. The submit payload reads
+        // `form.<x>PhotoGps?.iso ?? new Date().toISOString()`, so a gallery
+        // photo's `*_photo_captured_at` was recorded as the moment of SUBMISSION
+        // rather than of capture — on evidence attached to a compliance record.
+        // accuracy and altitude fell back to the form-level fix, so those were
+        // merely inconsistent rather than wrong.
+        const now = new Date();
+        patch[gpsKey] = {
           lat: form.gpsLat,
           lon: form.gpsLon,
-          time: new Date().toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }),
+          accuracy: form.gpsAccuracy,
+          altitude: form.gpsAltitude,
+          time: now.toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }),
+          iso: now.toISOString(),
         };
       }
       upd(patch);
@@ -888,9 +946,8 @@ export default function RecordVisitPage() {
       } else {
         toast.success(`OTP sent to borrower (${res.masked_phone})`);
       }
-    } catch (err: any) {
-      const detail = err?.response?.data?.detail;
-      setOtpError(typeof detail === "string" ? detail : "Could not send OTP. Please retry.");
+    } catch (err) {
+      setOtpError(errorDetail(err, "Could not send OTP. Please retry."));
     } finally {
       setOtpSending(false);
     }
@@ -907,9 +964,8 @@ export default function RecordVisitPage() {
         setOfflineAck(false);
         toast.success("Borrower verified the amount ✓");
       }
-    } catch (err: any) {
-      const detail = err?.response?.data?.detail;
-      setOtpError(typeof detail === "string" ? detail : "Incorrect OTP. Please retry.");
+    } catch (err) {
+      setOtpError(errorDetail(err, "Incorrect OTP. Please retry."));
     } finally {
       setOtpVerifying(false);
     }
@@ -969,9 +1025,11 @@ export default function RecordVisitPage() {
         check_in_longitude: form.gpsLon ?? 77.0266,
         customer_met: form.customerMet!,
         outcome: form.outcome!,
-        person_met: (form.personMet ?? undefined) as any,
-        default_reason: (form.defaultReason ?? undefined) as any,
-        not_met_reason: (form.notMetReason || undefined) as any,
+        // No casts: PersonMet and DefaultReason are string unions and the
+        // payload takes `string | undefined`, so these already assign.
+        person_met: form.personMet ?? undefined,
+        default_reason: form.defaultReason ?? undefined,
+        not_met_reason: form.notMetReason || undefined,
         notes: finalNotes || undefined,
         consent_given: form.consentGiven || undefined,
         property_type: form.propertyType || undefined,
@@ -1017,12 +1075,12 @@ export default function RecordVisitPage() {
         queueVisitTranscription(visitRes.id, recorder).catch(() => {});
       }
 
-      let receiptData: any = null;
+      let receiptData: PaymentReceiptData | null = null;
       if (sel?.needsPayment && form.amount) {
         const maskedAcct = loan?.loan_account_masked ?? ("XXXX" + (loan?.loan_account_number ?? "").slice(-4));
         const res = await collectPayment(caseId, {
           amount: amountNum,
-          mode: form.paymentMode as any,
+          mode: form.paymentMode,
           visit_id: visitRes.id,
           upi_reference: form.upiRef || undefined,
           cheque_number: form.chequeNumber || undefined,
@@ -1082,9 +1140,8 @@ export default function RecordVisitPage() {
         // so the agent could not tell whether the visit had saved.
         setVisitDone({ outcomeLabel: sel?.label });
       }
-    } catch (err: any) {
-      const detail = err?.response?.data?.detail;
-      toast.error(typeof detail === "string" ? detail : "Failed to submit. Please retry.");
+    } catch (err) {
+      toast.error(errorDetail(err, "Failed to submit. Please retry."));
     } finally {
       setSubmitting(false);
     }
@@ -1928,7 +1985,16 @@ export default function RecordVisitPage() {
                             </div>
                           </div>
                           <button
-                            onClick={() => upd({ [field]: existing.viewUrl, [prevField]: true } as any)}
+                            onClick={() => {
+                              // Assigned rather than built as a literal: a
+                              // computed key widens to {[x: string]: T} and
+                              // stops matching Partial<FormState>, which is
+                              // what the `as any` here used to paper over.
+                              const patch: Partial<FormState> = {};
+                              patch[field] = existing.viewUrl;
+                              patch[prevField] = true;
+                              upd(patch);
+                            }}
                             className="absolute bottom-0 left-0 right-0 bg-brand-500 text-white text-xs font-semibold py-1.5 text-center"
                           >
                             Use existing photo ✓
@@ -1948,7 +2014,13 @@ export default function RecordVisitPage() {
                         <div className="relative">
                           <img src={photo} alt={label} className="w-full h-36 object-cover rounded-xl" />
                           <button
-                            onClick={() => upd({ [field]: null, [gpsField]: null, [prevField]: false } as any)}
+                            onClick={() => {
+                              const patch: Partial<FormState> = {};
+                              patch[field] = null;
+                              patch[gpsField] = null;
+                              patch[prevField] = false;
+                              upd(patch);
+                            }}
                             className="absolute top-2 right-2 bg-danger-500 text-white rounded-full w-6 h-6 flex items-center justify-center"
                           >
                             <X className="w-3.5 h-3.5" />

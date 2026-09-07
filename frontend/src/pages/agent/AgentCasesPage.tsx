@@ -23,7 +23,7 @@ const STATUS_FILTERS: { label: string; value: CaseStatus | "ALL" | "PTP_TODAY" }
 ];
 
 export default function AgentCasesPage() {
-  const { beat, loading, refresh } = useBeat();
+  const { beat, refresh } = useBeat();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<CaseStatus | "ALL" | "PTP_TODAY">("ALL");
   const [searchParams] = useSearchParams();

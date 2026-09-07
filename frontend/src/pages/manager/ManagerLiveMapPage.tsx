@@ -12,7 +12,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { AlertTriangle, BatteryLow, Crosshair, MapPin, RefreshCw, Route } from "lucide-react";
+import { AlertTriangle, BatteryLow, Crosshair, RefreshCw, Route } from "lucide-react";
 import { getAgentsLive, getAgentTrail, type AgentTrail, type LiveAgentPosition } from "@/api/manager";
 
 const EASE = "cubic-bezier(0.2,0,0,1)";
@@ -50,7 +50,9 @@ const AGENT_COLORS = [
   "#CA8A04", // Gold
 ];
 
-export function getAgentColor(agentId: string, employeeCode?: string): string {
+// Not exported: both helpers are used only in this file, and exporting a
+// non-component from a component module disables Fast Refresh for it.
+function getAgentColor(agentId: string, employeeCode?: string): string {
   const seed = employeeCode || agentId || "";
   let hash = 0;
   for (let i = 0; i < seed.length; i++) {
@@ -61,7 +63,7 @@ export function getAgentColor(agentId: string, employeeCode?: string): string {
   return AGENT_COLORS[idx];
 }
 
-export function getAgentInitials(name: string): string {
+function getAgentInitials(name: string): string {
   if (!name) return "AG";
   const parts = name.trim().split(/\s+/);
   if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();

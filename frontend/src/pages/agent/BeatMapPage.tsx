@@ -95,6 +95,21 @@ export default function BeatMapPage() {
     }
   }
 
+  // 2026-09-07 — useAnimatedValue used to be called further down, after the `loading` and `no beat` early returns. That is a conditional
+  // hook: on a render that took either early path the hook was skipped, so
+  // React's hook order changed between renders and state could be read back
+  // against the wrong slot. It is the kind of fault that shows up as a stray
+  // animation or a stale number rather than as a crash.
+  //
+  // Hoisted above every return, with the value computed defensively from a beat
+  // that may not be loaded yet. Hooks must run in the same order on every
+  // render; the guards below only decide what is DRAWN.
+  const progressPct = Math.round(
+    ((new Set(beat?.visited_today_ids ?? []).size) /
+      Math.max((beat?.cases ?? []).length, 1)) * 100,
+  );
+  const animatedProgressPct = useAnimatedValue(progressPct);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-screen">
@@ -141,8 +156,6 @@ export default function BeatMapPage() {
   const cases = beat.cases ?? [];
   const visitedTodaySet = new Set(beat.visited_today_ids ?? []);
   const completedCount = visitedTodaySet.size;
-  const progressPct = Math.round((completedCount / Math.max(cases.length, 1)) * 100);
-  const animatedProgressPct = useAnimatedValue(progressPct);
 
   // Done = visited today only. Pending = everything else.
   const _pending = cases.filter((c) => !visitedTodaySet.has(c.id));
