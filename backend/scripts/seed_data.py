@@ -15,10 +15,13 @@ Data  architecture
     agent_performance – monthly snapshots per agent
 Generated volumes
 -----------------
-  Managers   : 2 (M1 → 25 agents, M2 → 5 agents)
-  Agents     : 30 (agent001–030)
-  Customers  : 300  (~35% SMA-1 30-60 DPD / ~35% SMA-2 60-90 DPD / ~30% NPA 90+ DPD)
-  Loans      : 350  (same DPD distribution — SMA-1, SMA-2, NPA)
+  (These follow the constants under "Config" below. Corrected 2026-09-06: this
+  block claimed 30 agents / 300 customers / 350 loans and a 25+5 manager split,
+  none of which has matched the constants for some time.)
+  Managers   : 2 (M1 → agents 001-015, M2 → agents 016-018)
+  Agents     : 18 (agent001–018)
+  Customers  : 400  (~35% SMA-1 30-60 DPD / ~35% SMA-2 60-90 DPD / ~30% NPA 90+ DPD)
+  Loans      : 500  (same DPD distribution — SMA-1, SMA-2, NPA)
   Cases      : ~420 historical  +  15 demo (fixed, deterministic for agent002)  +  10 bank-today
   Visits     : ~900 historical  +  today demo activity  +  historical visits for all 15 demo customers
   Leaves     : ~630 records (4 agents × 156 business days over 6 months)
@@ -54,7 +57,7 @@ from app.models.agent import (
     Agent, AgentTier, AgentStatus, AgentSpecialization, AgentPerformance,
 )
 from app.models.customer import Customer
-from app.models.loan import Loan, LoanType, DPDBucket, LoanStatus
+from app.models.loan import Loan, LoanType, DPDBucket, LoanStatus, dpd_bucket_for
 from app.models.case import Case, CaseStatus, CasePriority, EscalationReason
 from app.models.repayment_snapshot import TRIGGER_SEED
 from app.services.repayment_service import RepaymentService
@@ -451,13 +454,11 @@ def _jitter_coords(lat: float, lon: float, radius_km: float = 15) -> tuple[float
     dy = random.uniform(-radius_km, radius_km) / (111 * math.cos(math.radians(lat)))
     return round(lat + dx, 6), round(lon + dy, 6)
 def _dpd_to_bucket(dpd: int) -> DPDBucket:
-    if dpd <= 30:
-        return DPDBucket.BUCKET_1
-    elif dpd <= 60:
-        return DPDBucket.BUCKET_2
-    elif dpd <= 90:
-        return DPDBucket.BUCKET_3
-    return DPDBucket.NPA
+    # Delegates to models/loan.dpd_bucket_for. This copy had no CURRENT branch,
+    # so a 0-DPD loan would have been written BUCKET_1 — unreachable here
+    # (DPD_CHOICES starts at 35) but wrong, and wrong in a place that decides an
+    # EB segment key.
+    return dpd_bucket_for(dpd)
 # _risk_from_dpd was DELETED on 2026-08-21, not deprecated.
 #
 # It was one of two near-identical copies of the same formula (the other lived
@@ -2067,7 +2068,10 @@ def seed():
             last_payment_date="2025-11-10",
             next_due_date=today.strftime("%Y-%m-%d"),
             dpd=d["dpd"],
-            dpd_bucket=DPDBucket.NPA if d["dpd"] > 90 else DPDBucket.BUCKET_3 if d["dpd"] > 60 else DPDBucket.BUCKET_2,
+            # A SEVENTH copy of the bucket rule lived here, inline, with no
+            # CURRENT and no BUCKET_1 branch. Found 2026-09-07 by the
+            # delegation test in tests/test_dpd_bucket.py, not by reading.
+            dpd_bucket=dpd_bucket_for(d["dpd"]),
             status=LoanStatus.NPA if d["dpd"] > 90 else LoanStatus.ACTIVE,
             interest_rate=14.5, npa_flag=d["dpd"] > 90,
             bank_risk_score=round(d["dpd"] / 120 * 100, 1),

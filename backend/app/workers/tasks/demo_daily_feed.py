@@ -95,7 +95,7 @@ def _core():
     """Imported lazily so importing this module never triggers a DB connect."""
     from app.core.database import SessionLocal
     from app.models.customer import Customer
-    from app.models.loan import Loan, LoanType, DPDBucket, LoanStatus
+    from app.models.loan import Loan, LoanType, DPDBucket, LoanStatus, dpd_bucket_for
     from app.models.case import Case, CaseStatus, CasePriority
     return (SessionLocal, Customer, Loan, LoanType, DPDBucket,
             LoanStatus, Case, CaseStatus, CasePriority)
@@ -179,7 +179,10 @@ def _seed_day(db, day: date) -> int:
             disbursement_date="2022-01-15", maturity_date="2025-01-15",
             last_payment_date="2025-11-10", next_due_date=day.strftime("%Y-%m-%d"),
             dpd=dpd,
-            dpd_bucket=DPDBucket.NPA if dpd > 90 else DPDBucket.BUCKET_3 if dpd > 60 else DPDBucket.BUCKET_2,
+            # Was an inline chain with no CURRENT and no BUCKET_1 branch, so
+            # any DPD at or below 30 would have been written BUCKET_2.
+            # Unreachable today (the feed draws from a list starting at 32).
+            dpd_bucket=dpd_bucket_for(dpd),
             status=LoanStatus.NPA if dpd > 90 else LoanStatus.ACTIVE,
             interest_rate=14.5, npa_flag=dpd > 90,
             bank_risk_score=round(dpd / 120 * 100, 1),

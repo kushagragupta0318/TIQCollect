@@ -29,6 +29,40 @@ class DPDBucket(str, enum.Enum):
     NPA = "NPA"              # 90+ DPD (Non-Performing Asset)
 
 
+def dpd_bucket_for(dpd: int | float | None) -> DPDBucket:
+    """The bucket a DPD falls in — the thresholds commented above, as code.
+
+    2026-09-07 — added because SIX copies of this rule existed and two of them
+    disagreed with the comments above:
+
+        scripts/seed_data.py            no CURRENT branch  (0 DPD -> BUCKET_1)
+        workers/tasks/demo_daily_feed.py  no CURRENT and no BUCKET_1 branch
+                                          (5 DPD -> BUCKET_2)
+
+    NEITHER WAS LIVE. seed_data draws DPD from a list whose minimum is 35, and
+    demo_daily_feed from one whose minimum is 32, so the missing branches were
+    unreachable and every value those two actually produce was already correct.
+    Verified exhaustively over 0..400 in tests/test_dpd_bucket.py, which is why
+    this consolidation is a refactor and not a behaviour change.
+
+    It is worth doing anyway because the trap springs the moment somebody widens
+    a DPD range — and it would spring quietly.
+    EmpiricalBayesAgentAdjuster is KEYED on this bucket, so two spellings of the
+    boundary put an agent's evidence in one cell and the lookup in another, and
+    nothing would fail.
+    """
+    d = int(dpd or 0)
+    if d <= 0:
+        return DPDBucket.CURRENT
+    if d <= 30:
+        return DPDBucket.BUCKET_1
+    if d <= 60:
+        return DPDBucket.BUCKET_2
+    if d <= 90:
+        return DPDBucket.BUCKET_3
+    return DPDBucket.NPA
+
+
 class LoanStatus(str, enum.Enum):
     ACTIVE = "ACTIVE"
     CLOSED = "CLOSED"

@@ -36,7 +36,7 @@ import app.models  # noqa: register all SQLAlchemy models
 
 from app.models.base import Base
 from app.models.customer import Customer, RiskCategory
-from app.models.loan import Loan, LoanType, DPDBucket, LoanStatus
+from app.models.loan import Loan, LoanType, DPDBucket, LoanStatus, dpd_bucket_for
 from app.models.case import Case, CaseStatus, CasePriority, EscalationReason
 from app.models.repayment_snapshot import (
     OUTCOME_DECEASED, OUTCOME_RECALLED, OUTCOME_REPAID, OUTCOME_SETTLED,
@@ -88,15 +88,8 @@ def _uid() -> str:
 
 
 def _dpd_to_bucket(dpd: int) -> DPDBucket:
-    if dpd == 0:
-        return DPDBucket.CURRENT
-    elif dpd <= 30:
-        return DPDBucket.BUCKET_1
-    elif dpd <= 60:
-        return DPDBucket.BUCKET_2
-    elif dpd <= 90:
-        return DPDBucket.BUCKET_3
-    return DPDBucket.NPA
+    """Delegates to models/loan.dpd_bucket_for; was an identical copy."""
+    return dpd_bucket_for(dpd)
 
 
 # _risk_from_dpd_cibil was DELETED on 2026-08-21, not deprecated.

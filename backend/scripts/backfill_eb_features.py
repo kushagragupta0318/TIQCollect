@@ -89,23 +89,21 @@ from sqlalchemy.orm.attributes import flag_modified                  # noqa: E40
 from app.core.database import SessionLocal                           # noqa: E402
 from app.ml.empirical_bayes import EmpiricalBayesAgentAdjuster       # noqa: E402
 from app.models.case import Case                                     # noqa: E402
-from app.models.loan import DPDBucket, Loan                          # noqa: E402
+from app.models.loan import DPDBucket, Loan                          # noqa: E402, dpd_bucket_for
 from app.models.repayment_snapshot import RepaymentSnapshot          # noqa: E402
 
 LOOKBACK_DAYS = EmpiricalBayesAgentAdjuster.DEFAULT_LOOKBACK_DAYS
 
 
 def dpd_to_bucket(dpd: int) -> str:
-    """Same thresholds as scripts/ingest_daily.py and scripts/seed_data.py."""
-    if dpd == 0:
-        return DPDBucket.CURRENT.value
-    if dpd <= 30:
-        return DPDBucket.BUCKET_1.value
-    if dpd <= 60:
-        return DPDBucket.BUCKET_2.value
-    if dpd <= 90:
-        return DPDBucket.BUCKET_3.value
-    return DPDBucket.NPA.value
+    """Delegates to models/loan.dpd_bucket_for.
+
+    The docstring here used to claim "same thresholds as ingest_daily.py and
+    seed_data.py". It matched ingest_daily; seed_data had no CURRENT branch, so
+    the claim was half wrong. One rule now, and this is a thin adapter to the
+    string form the EB segment key uses.
+    """
+    return dpd_bucket_for(dpd).value
 
 
 def main() -> None:
