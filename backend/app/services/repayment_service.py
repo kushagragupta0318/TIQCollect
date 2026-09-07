@@ -402,7 +402,7 @@ class RepaymentService:
             min_visits=settings.REPAYMENT_MIN_VISITS_FOR_CONTACT,
         )
         cases = kwargs.get("cases") or ()
-        case_id = next((c.id for c in cases), None)
+        case_id = _case_as_of(cases, as_of)
 
         # Recovery potential, from the SAME feature dict. Two scorecards, one
         # point-in-time read of the loan — building the features twice is how the
@@ -1216,6 +1216,47 @@ def _distribution(before: list[float], after: list[float]) -> dict[str, Any]:
         "risk_category_changed_pct": (
             round(moved / len(before) * 100, 1) if before else 0.0),
     }
+
+
+def _case_as_of(cases: Any, as_of: date) -> str | None:
+    """Which of this loan's cases the snapshot is about, on `as_of`.
+
+    2026-09-07 — this was `next((c.id for c in cases), None)`, over the list
+    `_load` builds with NO STATUS FILTER AND NO ORDER BY. So it was whichever
+    case Postgres happened to return first: an arbitrary one, and on a loan that
+    has re-delinquented several times, usually a long-closed one.
+
+    MEASURED on a 700-borrower synthetic book: 4,984 of 6,459 snapshots (77.2%)
+    named a case whose last visit was a median of 130 DAYS before the snapshot's
+    own date, with up to 9 cases per loan. It is not a rare edge.
+
+    That was not cosmetic. scripts/backfill_eb_features.py bridges
+    snapshot -> agent through this column, so the shadow model's own
+    eb_shrunk_win feature was being looked up via the wrong case — and therefore
+    frequently the wrong agent — on the same ~77% of rows.
+
+    Now: the most recently CREATED case that existed by `as_of`. Case.created_at
+    is written once at insert and never rewritten, so this reconstructs exactly,
+    today or in a year — unlike Case.status, which is overwritten in place and
+    only ever says what is true now.
+
+    Falls back to the previous behaviour when no case carries a usable
+    created_at, so a book with missing timestamps degrades to what it did before
+    rather than losing the link entirely.
+    """
+    best_id, best_when = None, None
+    for case in cases:
+        when = getattr(case, "created_at", None)
+        if when is None:
+            continue
+        when = when.date() if hasattr(when, "date") else when
+        if when > as_of:
+            continue                    # did not exist yet; reading it looks forward
+        if best_when is None or when > best_when:
+            best_id, best_when = case.id, when
+    if best_id is not None:
+        return best_id
+    return next((c.id for c in cases), None)
 
 
 def _jsonable(features: dict[str, Any]) -> dict[str, Any]:

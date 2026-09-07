@@ -779,3 +779,53 @@ def test_a_fully_settled_loan_with_no_further_money_is_not_repaid():
     outcome, amount = SVC._infer_outcome(_snap(), [case], payments)
     assert outcome == "NO_PAYMENT"
     assert amount is None
+
+
+# ── Which case a snapshot is about (2026-09-07) ─────────────────────────────
+# score_loan used to set case_id with `next((c.id for c in cases), None)` over a
+# list built with no status filter and no ORDER BY — an arbitrary case, and on a
+# loan that has re-delinquented, usually a closed one. Measured on a synthetic
+# book: 77.2% of snapshots named a case whose last visit was a median of 130
+# days earlier.
+
+def test_case_as_of_picks_the_most_recently_created_case():
+    from datetime import date, datetime, timezone
+    from app.services.repayment_service import _case_as_of
+    from types import SimpleNamespace
+
+    def case(cid, created):
+        return SimpleNamespace(
+            id=cid, created_at=datetime(*created, tzinfo=timezone.utc))
+
+    cases = [case("old", (2026, 1, 5)), case("newest", (2026, 6, 1)),
+             case("middle", (2026, 3, 10))]
+    assert _case_as_of(cases, date(2026, 8, 1)) == "newest"
+    # Order of the input must not matter — that was the whole defect.
+    assert _case_as_of(list(reversed(cases)), date(2026, 8, 1)) == "newest"
+
+
+def test_case_as_of_never_looks_forward():
+    """A case created after the scoring date did not exist then. Picking it
+    would attach the snapshot to something the scorer could not have seen."""
+    from datetime import date, datetime, timezone
+    from app.services.repayment_service import _case_as_of
+    from types import SimpleNamespace
+
+    cases = [
+        SimpleNamespace(id="existed", created_at=datetime(2026, 3, 1, tzinfo=timezone.utc)),
+        SimpleNamespace(id="future", created_at=datetime(2026, 9, 1, tzinfo=timezone.utc)),
+    ]
+    assert _case_as_of(cases, date(2026, 5, 1)) == "existed"
+
+
+def test_case_as_of_degrades_to_the_old_behaviour_without_timestamps():
+    """A book with no usable created_at must keep working rather than lose the
+    snapshot-to-case link entirely."""
+    from datetime import date
+    from app.services.repayment_service import _case_as_of
+    from types import SimpleNamespace
+
+    cases = [SimpleNamespace(id="first", created_at=None),
+             SimpleNamespace(id="second", created_at=None)]
+    assert _case_as_of(cases, date(2026, 5, 1)) == "first"
+    assert _case_as_of([], date(2026, 5, 1)) is None
