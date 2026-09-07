@@ -1,6 +1,10 @@
-# One file for both backends in this folder:
-#   stub_main.py  (:8300, always needed) uses only the first two lines below.
-#   app/          (:8400, the full TIQCollect app) uses everything.
+# Dependencies for app/ — the real TIQCollect backend.
+#
+# 2026-09-07 — this header used to read "One file for both backends in this
+# folder: stub_main.py (:8300, always needed) uses only the first two lines
+# below." stub_main.py is not always needed; nothing imports or runs it, and its
+# own docstring points at a path in the field-ops-stub repo. Corrected rather
+# than deleted so the stale claim is visible.
 # Installing this pulls the whole set — see step 5 of the README if you only
 # ever run the stub and want to skip the ML/audio packages.
 fastapi==0.115.5
