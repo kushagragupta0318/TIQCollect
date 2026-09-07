@@ -17,6 +17,7 @@ from scipy.optimize import linear_sum_assignment
 
 from app.models.agent import Agent
 from app.models.case import Case
+from app.ml.eligibility import specialisation_fit
 from app.models.customer import Customer
 from app.models.loan import Loan
 from app.models.allocation_decision import AllocationDecision, AllocationOutcome
@@ -389,7 +390,30 @@ class GlobalAllocator:
                 tier_weight = self.TIER_WEIGHTS.get(
                     ag.tier.value if hasattr(ag.tier, "value") else str(ag.tier), 0.7
                 )
-                spec_match = 1.0 if getattr(ag, "specialization", None) and str(ag.specialization.value).upper() == loan_type_str.upper() else 0.5
+                # 2026-09-07 — THIS TERM HAD NEVER ONCE BEEN 1.0. It read:
+                #
+                #   spec_match = 1.0 if ag.specialization and
+                #       str(ag.specialization.value).upper() == loan_type_str.upper()
+                #       else 0.5
+                #
+                # comparing an AgentSpecialization (SECURED / UNSECURED / BOTH)
+                # against a LoanType (HOME / AUTO / PERSONAL / BUSINESS / GOLD /
+                # CREDIT_CARD / EDUCATION / MICROFINANCE). THE TWO ENUMS SHARE NO
+                # MEMBER, so the expression was False for every pair ever scored:
+                # the term was the constant 0.5, the specialisation half of
+                # skills_score was inert, and the audit panel's "specialises in
+                # this loan type" reason could never fire.
+                #
+                # ml/eligibility.specialisation_fit is the correct rule and both
+                # scorecards already imported it, which makes this an instance of
+                # the one-definition rule rather than a typo. Imported here now
+                # rather than restated, so a change to the SECURED/UNSECURED sets
+                # moves the allocator with them.
+                #
+                # The 0.5 floor is kept: a non-specialist is a worse fit, not an
+                # ineligible one. Measured effect on the demo book is recorded in
+                # tests/test_global_allocator_spec_match.py.
+                spec_match = 1.0 if specialisation_fit(ag, loan) else 0.5
                 skills_score = (self.SKILLS_TIER_SHARE * tier_weight
                                 + (1.0 - self.SKILLS_TIER_SHARE) * spec_match)
 
