@@ -36,6 +36,11 @@ from sqlalchemy import func
 
 from app.core.config import settings
 from app.core.errors import AppException, ErrorCode
+# Agent is read in _get_accessible_case to check whether a colleague's case
+# belongs to the same manager. It was used there and never imported, so that
+# branch raised NameError instead of authorising the visit — latent because no
+# test exercises a same-manager colleague's case. Fixed 2026-09-06.
+from app.models.agent import Agent
 from app.models.audit_log import AuditLog, AuditAction
 from app.models.case import Case, CaseStatus
 from app.models.customer import Customer
