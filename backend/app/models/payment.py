@@ -13,6 +13,12 @@ class PaymentMode(str, enum.Enum):
     CHEQUE = "CHEQUE"
     DD = "DD"
     ONLINE = "ONLINE"
+    # 2026-09-09 — the borrower paid the BANK directly; no agent collected it.
+    # Arrives through scripts/ingest_daily.py, never through the agent app.
+    # It exists because the outcome labeller derives recovery exclusively from
+    # VERIFIED Payment rows, and a direct payer had no row at all — so the
+    # clearest possible positive outcome was being labelled NOT_RECOVERED.
+    BANK_DIRECT = "BANK_DIRECT"
 
 
 class PaymentStatus(str, enum.Enum):
@@ -27,7 +33,17 @@ class Payment(Base, UUIDPrimaryKey, TimestampMixin):
 
     case_id: Mapped[str] = mapped_column(ForeignKey("cases.id"), nullable=False, index=True)
     visit_id: Mapped[str | None] = mapped_column(ForeignKey("visits.id"), nullable=True)
-    agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"), nullable=False, index=True)
+    # NULLABLE since 2026-09-09, and the NULL means something specific: nobody
+    # collected this. A direct bank payment is real money against the case, but
+    # it is not evidence about any agent, so attributing it to one would inflate
+    # that agent's collections, their leaderboard position and their
+    # `affinity_score` — which feeds `eb_multiplier` and therefore the
+    # allocator. Every agent-scoped aggregate filters `agent_id == x` or
+    # `.in_(ids)`, so a NULL drops out of all of them by construction, exactly
+    # as the absent row used to. `empirical_bayes` groups WITHOUT such a filter
+    # and had to be guarded explicitly — see the note there.
+    agent_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agents.id"), nullable=True, index=True)
 
     amount: Mapped[float] = mapped_column(Float, nullable=False)
     mode: Mapped[PaymentMode] = mapped_column(SAEnum(PaymentMode, name="payment_mode_enum"), nullable=False)

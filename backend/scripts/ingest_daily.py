@@ -165,6 +165,89 @@ def _close_case_paid(case_obj: Case, settlement_amount: float = 0.0) -> str:
     return "auto_closed_paid"
 
 
+def _record_direct_payment(db, case_obj: Case, *, amount: float,
+                           paid_on: str = "") -> str:
+    """Put a direct bank payment into the payment ledger, credited to nobody.
+
+    WHY THIS EXISTS. `ml/pipeline/outcomes.py` derives the model's label
+    exclusively from VERIFIED `Payment` rows, and `censoring_status` does not
+    censor `CaseStatus.PAID` — correctly, since PAID is the success outcome, not
+    a withdrawal from the collectable population. So a case closed here with no
+    payment row was labelled with `paid = 0`: NOT_RECOVERED, y = 1. A borrower
+    who paid read as a failure, and the model would have been monitored on "did
+    an agent collect it" rather than "did the borrower pay".
+
+    THE OUTCOME DEFINITION IS NOT CHANGED. The rule is still
+    `paid_in_window >= 0.8 * min(overdue_amount, emi_amount)` over VERIFIED
+    payments inside the window. It simply now has the payment to see.
+
+    `agent_id` is None because nobody collected this. Attributing it to the
+    assigned agent would inflate their collections, their leaderboard position
+    and their `affinity_score`, which feeds `eb_multiplier` and therefore the
+    allocator's `prob_recovery`.
+
+    THE AMOUNT IS THE ARREARS THIS ROW CLEARS, not the outstanding balance. A
+    PAID_DIRECT row means DPD went to zero, so what was paid is what was
+    overdue immediately before this file landed; the caller reads it before the
+    loan is overwritten. If the feed carries `payment_amount`, that is the
+    bank's own figure and wins. And this is what makes double counting
+    impossible when an agent had already collected part of it: the bank's
+    overdue figure is already net of that collection, so the two rows sum to
+    what was actually paid rather than to twice it.
+
+    THE DATE IS `last_payment_date` WHERE THE FEED GIVES ONE. The window is
+    half-open at the start, so a payment dated on or before the observation day
+    is correctly excluded — it says nothing about what came next. Falling back
+    to now() would drag an old payment into today's window and manufacture a
+    recovery.
+
+    Returns a short status string for the run report.
+    """
+    from app.models.payment import Payment, PaymentMode, PaymentStatus
+    from app.services.payment_service import PaymentService
+
+    amount = round(float(amount or 0.0), 2)
+    if amount <= 0:
+        # Nothing defensible to record. Inventing a figure to make a label look
+        # right is worse than leaving the row unlabelled, which is what the
+        # material-payment rule will now do with it.
+        log.warning("  DIRECT PAY  → %s  no amount (payment_amount absent and "
+                    "no prior arrears); no payment row written",
+                    case_obj.case_number)
+        return "no_amount"
+
+    when = None
+    if paid_on:
+        try:
+            when = datetime.strptime(paid_on[:10], "%Y-%m-%d").replace(
+                tzinfo=timezone.utc)
+        except ValueError:
+            when = None
+    if when is None:
+        when = datetime.now(timezone.utc)
+
+    db.add(Payment(
+        id=_uid(),
+        case_id=case_obj.id,
+        visit_id=None,
+        agent_id=None,                       # nobody collected it
+        amount=amount,
+        mode=PaymentMode.BANK_DIRECT,
+        # VERIFIED because the BANK is the verifier, and a bank statement is
+        # stronger evidence than the borrower OTP that verifies a field
+        # collection. PENDING would keep it out of the label entirely, which is
+        # the defect this function exists to fix.
+        status=PaymentStatus.VERIFIED,
+        receipt_number=PaymentService._generate_receipt(),
+        bank_reference=f"BANK-DIRECT-{case_obj.case_number}",
+        payment_date=when,
+        verified_at=when,
+    ))
+    log.info("  DIRECT PAY  → %s  Rs %s on %s", case_obj.case_number,
+             f"{amount:,.0f}", when.date())
+    return "recorded"
+
+
 def _close_case_recall(case_obj: Case, recall_reason: str, bank_remark: str) -> str:
     """Bank recalling this account — agent must stop all visits."""
     if case_obj.status in ALREADY_RESOLVED:
@@ -239,6 +322,10 @@ def process_row(row: dict, db, dry_run: bool, today: date) -> dict:
     cibil             = _parse_int(row.get("cibil_score", "650"), 650)
     total_outstanding = _parse_float(row.get("total_outstanding", "0"))
     overdue_amount    = _parse_float(row.get("overdue_amount", "0"))
+    # Optional, and symmetric with settlement_amount: what the borrower
+    # actually paid the bank. Most feeds do not carry it, in which case the
+    # arrears this row clears is the honest figure — see _record_direct_payment.
+    payment_amount    = _parse_float(row.get("payment_amount", "0"))
 
     # DPD=0 with ACTIVE is a bank payment — treat same as PAID_DIRECT
     if bank_action == "ACTIVE" and dpd == 0:
@@ -314,6 +401,10 @@ def process_row(row: dict, db, dry_run: bool, today: date) -> dict:
     # ── Loan UPSERT ───────────────────────────────────────────────────────────
     result["bank_action"] = bank_action
     loan = db.query(Loan).filter(Loan.loan_account_number == loan_account).first()
+    # What the account owed BEFORE this file overwrote it. For a PAID_DIRECT row
+    # that is the arrears the borrower cleared, and it is the only figure we have
+    # once `loan.overdue_amount` is set to 0 twenty lines below.
+    prev_overdue = float(loan.overdue_amount or 0.0) if loan else 0.0
     if loan:
         prev_bucket = loan.dpd_bucket
         loan.dpd              = dpd
@@ -403,6 +494,13 @@ def process_row(row: dict, db, dry_run: bool, today: date) -> dict:
     if bank_action == "PAID_DIRECT":
         if existing_case:
             result["action_case"] = _close_case_paid(existing_case)
+            # Only when the close ACTUALLY happened. `_close_case_paid` returns
+            # early on an already-resolved case, so re-ingesting the same file
+            # cannot write the payment twice.
+            if result["action_case"] == "auto_closed_paid":
+                result["direct_payment"] = _record_direct_payment(
+                    db, existing_case, amount=payment_amount or prev_overdue,
+                    paid_on=row.get("last_payment_date", "").strip())
         else:
             # Case never created in our system — bank paid account we didn't have yet
             result["action_case"] = "paid_before_allocation"
@@ -740,7 +838,8 @@ FIELDNAMES = [
     # Case
     "case_number", "target_amount",
     # Bank action (the key new fields)
-    "bank_action", "recall_reason", "settlement_amount", "bank_remark",
+    "bank_action", "recall_reason", "settlement_amount", "payment_amount",
+    "bank_remark",
 ]
 
 SAMPLE_ROWS = [

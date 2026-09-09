@@ -51,7 +51,17 @@ export type DefaultReason =
   | "JOB_LOSS" | "SALARY_CUT" | "BUSINESS_FAILURE" | "MEDICAL"
   | "DEATH_IN_FAMILY" | "MARITAL_DISPUTE" | "ALREADY_PAID"
   | "AMOUNT_DISPUTED" | "FRAUD_CLAIM" | "OVER_LEVERAGED" | "OTHER";
-export type PaymentMode = "CASH" | "UPI" | "NEFT" | "RTGS" | "CHEQUE" | "DD" | "ONLINE";
+/**
+ * Mirrors backend `app/models/payment.PaymentMode`.
+ *
+ * BANK_DIRECT (2026-09-09) is the borrower paying the BANK, recorded by
+ * `scripts/ingest_daily.py` with `agent_id` NULL because nobody collected it.
+ * It can reach any surface that lists a case's payments — the agent should see
+ * that the borrower paid — so leaving it out of this union would have made the
+ * type lie about what the API sends.
+ */
+export type PaymentMode =
+  | "CASH" | "UPI" | "NEFT" | "RTGS" | "CHEQUE" | "DD" | "ONLINE" | "BANK_DIRECT";
 export type RiskCategory = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
 
 export interface Agent {

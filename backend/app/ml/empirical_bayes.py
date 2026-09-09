@@ -166,6 +166,16 @@ class EmpiricalBayesAgentAdjuster:
             .join(Loan, Case.loan_id == Loan.id)
             .filter(
                 Payment.status == PaymentStatus.VERIFIED,
+                # 2026-09-09 — REQUIRED, not tidiness. `payments.agent_id`
+                # became nullable so a direct bank payment could be recorded
+                # against the case without being credited to anyone. This query
+                # groups BY agent_id with no agent filter, so a NULL would form
+                # its own group AND, worse, add to `segment_totals` — the
+                # segment prior every agent's `eb_multiplier` is divided by. A
+                # payment nobody collected is not evidence about any agent, and
+                # letting it move the prior would move the allocator's
+                # `prob_recovery` for every case in the segment.
+                Payment.agent_id.isnot(None),
                 Payment.payment_date >= start,
                 Payment.payment_date < cutoff,
             )
