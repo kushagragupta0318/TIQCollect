@@ -55,6 +55,57 @@ PSI_RETRAIN_THRESHOLD = 0.25
 GINI_RELATIVE_DROP_THRESHOLD = 0.20
 MIN_ROWS_FOR_PERFORMANCE = 500
 
+# ── the metrics that were computed and never consulted ──────────────────────
+# 2026-09-09. KS, Brier, calibration gap and SCORE PSI were all computed, all
+# reported, and none of them could trigger anything: only Gini, rank order,
+# feature PSI and a missing champion feature did. The audit called that out and
+# it is fixed here by ADDING triggers, never by moving an existing one.
+#
+# Every threshold below is RELATIVE to the model's own development figure, the
+# same discipline the Gini trigger already follows: a model that shipped at KS
+# 39.7 and now runs at 27.8 has lost 30% of its separation, and that is the
+# number that matters rather than whether 27.8 is "good".
+#
+#   metric            baseline (artifact)   threshold   direction        action
+#   ----------------  -------------------   ---------   --------------   ------
+#   KS                ks (OOT)              -30% rel.   lower = worse    RETRAIN
+#   Brier             brier (OOT)           +25% rel.   higher = worse   RETRAIN
+#   calibration gap   0 (perfect)           0.10 abs.   |gap| grows      RETRAIN
+#   score PSI         oldest third of win.  0.25 abs.   higher = drift   RETRAIN
+#   bad rate shift    bad_rate (OOT)        informational only
+#
+# WHY THESE NUMBERS.
+#   KS at -30%: KS is noisier than Gini at the same n (it reads one point of the
+#   distribution, not the whole ranking), so a tighter bound than Gini's 20%
+#   would fire on sampling variation. 30% is Gini's trigger widened by half to
+#   match that noise, and it is a COLLAPSE detector, not a fine one.
+#
+#   Brier at +25%: Brier is a cost, so the sign flips. It is bounded and small
+#   (0.170 at development), which makes relative movement the only readable
+#   scale. 25% is deliberately looser than Gini's 20% because Brier moves with
+#   the base rate as well as with skill — a book that genuinely gets worse
+#   raises Brier without the model having decayed at all.
+#
+#   Calibration gap at 0.10 absolute: this one is NOT relative, because its
+#   baseline is zero by construction — a calibrated model's mean prediction
+#   equals the observed rate. 0.10 is where the allocator starts to be misled:
+#   `expected_case_inr = collectable x probability`, so a 10-point gap misprices
+#   every case by 10 points of its balance. Development sits at -0.0097.
+#
+#   Score PSI at 0.25: the SAME constant as feature PSI, deliberately, because
+#   it is the same statistic on a different variable and two numbers for one
+#   idea is how this repo's worst bugs start. It was already computed and
+#   already reported; it simply never gated anything.
+#
+# None of these fires below MIN_ROWS_FOR_PERFORMANCE or on a one-class cohort:
+# they live inside the same branch as the Gini trigger, which those two
+# conditions already guard. That is what stops a thin or degenerate cohort from
+# manufacturing a retrain.
+KS_RELATIVE_DROP_THRESHOLD = 0.30
+BRIER_RELATIVE_RISE_THRESHOLD = 0.25
+CALIBRATION_GAP_THRESHOLD = 0.10
+SCORE_PSI_RETRAIN_THRESHOLD = PSI_RETRAIN_THRESHOLD
+
 #: The gate the nightly task consults before running anything expensive.
 #: Same number as MIN_ROWS_FOR_PERFORMANCE and deliberately a separate name:
 #: one is "how many rows before a Gini means something", the other is "how many
@@ -111,16 +162,33 @@ def readiness(db: Session, model: str, *, version: str | None = None,
     version = version or serving_version(model)
     odv = outcome_definition_version or OUTCOME_DEFINITION_VERSION
 
-    matured = db.query(ModelPrediction).filter(
-        ModelPrediction.model_name == model,
-        ModelPrediction.actual_outcome.isnot(None),
-    )
-    n_all = matured.count()
-    n_right_model = matured.filter(
-        ModelPrediction.model_version == version).count()
-    n_both = matured.filter(
-        ModelPrediction.model_version == version,
-        ModelPrediction.outcome_definition_version == odv).count()
+    # DISTINCT (entity, as_of), not a row count. A re-plan re-scores the whole
+    # pool and writes a fresh prediction per case, so the same account-day can
+    # hold seven, eight or nine near-identical rows: measured on the live book,
+    # nine runs for one plan date produced 7-9 predictions for most cases.
+    # Counting rows would let a manager clicking "Re-Plan" repeatedly walk the
+    # monitor over its own readiness threshold without a single new borrower,
+    # and would then estimate a Gini from eight copies of every error.
+    #
+    # `entity_id` rather than `case_id` because it is NOT NULL, so a loan-level
+    # prediction cannot collapse a whole cohort into one NULL group.
+    # `is_modelled` matches `_load`, and it has to. Since 2026-09-09 a
+    # below-coverage borrower is RECORDED as a declined prediction — probability
+    # NULL, is_modelled False, fallback_reason set — which is the right thing to
+    # keep, and exactly the wrong thing to count. Without this filter the gate
+    # could open at 500 rows the monitor then drops, reporting a discrimination
+    # figure computed on fewer observations than the gate promised.
+    def _distinct(*extra):
+        q = db.query(ModelPrediction.entity_id, ModelPrediction.as_of_date).filter(
+            ModelPrediction.model_name == model,
+            ModelPrediction.is_modelled.is_(True),
+            ModelPrediction.actual_outcome.isnot(None), *extra)
+        return q.distinct().count()
+
+    n_all = _distinct()
+    n_right_model = _distinct(ModelPrediction.model_version == version)
+    n_both = _distinct(ModelPrediction.model_version == version,
+                       ModelPrediction.outcome_definition_version == odv)
 
     return Readiness(
         ready=n_both >= required,
@@ -161,6 +229,12 @@ class MonitorReport:
     retrain_recommended: bool = False
     reasons: list[str] = field(default_factory=list)
     performance: dict = field(default_factory=dict)
+    #: Set ONLY when the cohort cleared the row threshold but carries one class,
+    #: so no discrimination figure exists to put in `performance`. Kept separate
+    #: precisely because `performance` being non-empty is what the final verdict
+    #: block reads as "metrics were computed" — putting counts there would have
+    #: made a single-class cohort report `healthy`.
+    outcome_variation: dict = field(default_factory=dict)
     stability: dict = field(default_factory=dict)
     #: What was left out to keep the population version-consistent, so an
     #: exclusion is visible rather than inferred from a row count that looks low.
@@ -203,9 +277,27 @@ def _load(db: Session, model: str, version: str | None,
                                          ModelPrediction.is_modelled.is_(True))
     if since:
         q = q.filter(ModelPrediction.as_of_date >= since)
-    rows = q.all()
+    rows = q.order_by(ModelPrediction.scored_at.asc()).all()
 
-    excluded = {"other_model_version": 0, "other_outcome_definition": 0}
+    # ONE ROW PER (entity, as_of). See `readiness` for why: a re-plan re-scores
+    # the whole pool, so the same account-day can carry nine copies of one
+    # observation. Pooling them does not add information — it repeats it — and
+    # every metric below assumes independent rows. The LAST scored wins, because
+    # it is the one the final plan actually used.
+    excluded = {"other_model_version": 0, "other_outcome_definition": 0,
+                "duplicate_rescores": 0}
+    seen: dict[tuple, int] = {}
+    deduped = []
+    for r in rows:
+        key = (r.entity_id, r.as_of_date)
+        if key in seen:
+            deduped[seen[key]] = r          # later scored_at replaces earlier
+            excluded["duplicate_rescores"] += 1
+        else:
+            seen[key] = len(deduped)
+            deduped.append(r)
+    rows = deduped
+
     kept = []
     for r in rows:
         if version and r.model_version != version:
@@ -275,7 +367,8 @@ def monitor_model(db: Session, model: str, *, version: str | None = None,
     dev_gini = dev.get("gini")
 
     # ── discrimination and calibration, on matured rows only ────────────────
-    if rep.n_matured >= MIN_ROWS_FOR_PERFORMANCE and matured.actual_outcome.nunique() > 1:
+    n_classes = int(matured.actual_outcome.nunique()) if rep.n_matured else 0
+    if rep.n_matured >= MIN_ROWS_FOR_PERFORMANCE and n_classes > 1:
         y = matured.actual_outcome.astype(int).to_numpy()
         s = matured.probability.astype(float).to_numpy()
         live_gini = ev.gini(y, s)
@@ -318,6 +411,65 @@ def monitor_model(db: Session, model: str, *, version: str | None = None,
             rep.reasons.append(
                 f"rank order is broken in the top five deciles at "
                 f"{ro['breaks']} — the end of the book the business acts on")
+
+        # ── KS, Brier and calibration: computed since 2026-09-08, consulted
+        # since 2026-09-09. Each is relative to the artifact's own development
+        # figure except calibration, whose baseline is zero by construction.
+        dev_ks = dev.get("ks")
+        if dev_ks:
+            ks_drop = (dev_ks - ks) / dev_ks
+            rep.performance["ks_relative_drop"] = round(ks_drop, 4)
+            if ks_drop > KS_RELATIVE_DROP_THRESHOLD:
+                rep.retrain_recommended = True
+                rep.reasons.append(
+                    f"KS has fallen {ks_drop:.0%} below its development value "
+                    f"({ks:.2f} against {dev_ks:.2f})")
+        dev_brier = dev.get("brier")
+        if dev_brier:
+            brier_rise = (brier - dev_brier) / dev_brier
+            rep.performance["brier_relative_rise"] = round(brier_rise, 4)
+            if brier_rise > BRIER_RELATIVE_RISE_THRESHOLD:
+                rep.retrain_recommended = True
+                rep.reasons.append(
+                    f"Brier score has risen {brier_rise:.0%} above its "
+                    f"development value ({brier:.5f} against {dev_brier:.5f}) "
+                    f"— the probability the allocator multiplies by is less "
+                    f"accurate, whatever the ranking says")
+        gap = rep.performance["calibration_gap"]
+        if abs(gap) > CALIBRATION_GAP_THRESHOLD:
+            rep.retrain_recommended = True
+            rep.reasons.append(
+                f"calibration is off by {gap:+.3f} — the model predicts a "
+                f"{'higher' if gap > 0 else 'lower'} bad rate than occurred, "
+                f"and expected recovery is that probability times the "
+                f"collectable balance")
+    elif rep.n_matured >= MIN_ROWS_FOR_PERFORMANCE:
+        # ENOUGH ROWS, ONE CLASS. 2026-09-09: this branch used to fall into the
+        # message below and report "only 1884 matured outcomes; performance
+        # needs 500" — self-contradictory, and the line that would actually have
+        # appeared on 2026-10-08, because the demo book holds no payments after
+        # 2026-09-08 and every matured row would have labelled NOT_RECOVERED.
+        #
+        # Discrimination is undefined without both classes: AUC asks how well
+        # the score separates two groups and there is only one group. That is a
+        # fact about the COHORT, not a shortfall in it, and the two need
+        # different names or the reader is told to wait for rows that have
+        # already arrived.
+        only = ("every outcome is 'not recovered'"
+                if float(matured.actual_outcome.mean()) >= 0.5
+                else "every outcome is 'recovered'")
+        rep.outcome_variation = {
+            "n_matured": rep.n_matured,
+            "n_classes": n_classes,
+            "bad_rate_live": round(float(matured.actual_outcome.mean()), 4),
+            "required_rows": MIN_ROWS_FOR_PERFORMANCE,
+        }
+        rep.reasons.append(
+            f"{rep.n_matured} matured outcomes, which clears the {MIN_ROWS_FOR_PERFORMANCE} "
+            f"threshold, but they contain ONE class — {only}. Gini, KS and AUC "
+            f"are undefined without both, so no discrimination figure is "
+            f"reported rather than a misleading one. This is a property of the "
+            f"cohort, not too little data")
     else:
         rep.reasons.append(
             f"only {rep.n_matured} matured outcomes; performance needs "
@@ -363,6 +515,15 @@ def monitor_model(db: Session, model: str, *, version: str | None = None,
                     f"champion features absent from the served vectors: "
                     f"{', '.join(missing)} — the model is scoring without inputs "
                     f"it was selected on, which is a serving fault, not drift")
+            score_psi = rep.stability["score_psi"]
+            if score_psi is not None and score_psi > SCORE_PSI_RETRAIN_THRESHOLD:
+                rep.retrain_recommended = True
+                rep.reasons.append(
+                    f"the SCORE distribution has shifted past PSI "
+                    f"{SCORE_PSI_RETRAIN_THRESHOLD} ({score_psi}) — the served "
+                    f"population is no longer the one the bands were fitted on, "
+                    f"which moves every band boundary even where each feature "
+                    f"individually looks stable")
             if worst > PSI_RETRAIN_THRESHOLD:
                 rep.retrain_recommended = True
                 shifted = psi_df[psi_df.psi > PSI_RETRAIN_THRESHOLD].feature.tolist()
@@ -371,9 +532,17 @@ def monitor_model(db: Session, model: str, *, version: str | None = None,
                     f"{', '.join(shifted)}")
 
     if rep.retrain_recommended:
+        # Stability runs on every row regardless of labels, so a missing
+        # champion feature or a PSI break still wins — correctly: that is a
+        # serving fault, and it does not need outcomes to be true.
         rep.verdict = "retrain_recommended"
     elif rep.performance:
         rep.verdict = "healthy"
+    elif rep.outcome_variation:
+        # Enough rows, one class. Distinct from `insufficient_data`, which means
+        # "come back when more rows mature" — these rows have already matured
+        # and more of the same will not help.
+        rep.verdict = "insufficient_outcome_variation"
     else:
         rep.verdict = "insufficient_data"
 

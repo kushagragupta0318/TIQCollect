@@ -53,7 +53,8 @@ def test_missing_numbers_become_nan_not_zero():
     """Imputing zero asserts a fact the row does not have — a borrower with an
     unknown CIBIL is not a borrower with a CIBIL of nothing. The booster
     handles NaN natively."""
-    assert tsm._num(None) != tsm._num(None) or True     # NaN != NaN
+    # `x != x` is the NaN identity, but `or True` made the line unfailable;
+    # removed 2026-09-09. pd.isna below is the check that can actually fail.
     assert pd.isna(tsm._num(None))
     assert pd.isna(tsm._num("NONE"))
     assert tsm._num(True) == 1.0
