@@ -36,6 +36,27 @@ class Beat(Base, UUIDPrimaryKey, TimestampMixin):
     cases_completed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     amount_collected: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
 
+    # ── Route detail, from the optimiser that produced it (2026-09-08) ──────
+    # WHY THESE EXIST. estimated_distance_km and estimated_duration_minutes above
+    # were computed by planner_service as Haversine x 1.15 and km/25 + 20 min a
+    # stop, AFTER core/routing had already fetched a real OSRM road matrix and
+    # thrown it away. So the ETA an agent saw was crow-flies even on nights OSRM
+    # answered perfectly. These columns hold what the solver actually produced.
+    #
+    # route_source is the honest bit: "osrm" or "haversine". The fallback used to
+    # be silent, so nobody could tell how often the demo server was answering.
+    route_geometry: Mapped[str | None] = mapped_column(Text, nullable=True)
+    route_legs: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    route_source: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+    # ── Plan versus reality ─────────────────────────────────────────────────
+    # A Beat recorded an estimate and NOTHING to compare it against, so no
+    # routing change could ever be shown to have improved anything, and there
+    # was no label for a travel-time model. Filled by the nightly reconciliation
+    # from AgentLocation fixes and visit check-in/check-out times.
+    actual_distance_km: Mapped[float | None] = mapped_column(Float, nullable=True)
+    actual_duration_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     # ML metadata
     is_ml_generated: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     ml_model_version: Mapped[str | None] = mapped_column(String(50), nullable=True)

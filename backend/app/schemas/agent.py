@@ -568,6 +568,13 @@ class BeatResponse(BaseModel):
     estimated_duration_minutes: int
     total_target_amount: float
     status: BeatStatus
+    # Road geometry for the beat map. Optional because beats planned before
+    # 2026-09-08 have none, and because a Haversine fallback produces no
+    # polyline at all — route_source tells the client which it is looking at.
+    route_geometry: Optional[str] = None
+    route_source: Optional[str] = None
+    start_latitude: Optional[float] = None
+    start_longitude: Optional[float] = None
     cases_visited_today: int
     visited_today_ids: list[str]
     amount_collected_today: float

@@ -302,6 +302,15 @@ class AgentService:
             "total_cases": len(ordered_cases),
             "estimated_distance_km": beat.estimated_distance_km,
             "estimated_duration_minutes": beat.estimated_duration_minutes,
+            # Route shape for the map (2026-09-08). `route_geometry` is an
+            # encoded polyline from OSRM /route; `route_source` says whether it
+            # is real road data or the straight-line fallback, so the UI can
+            # decline to draw a "route" that is really four straight lines.
+            # Before this, no road geometry existed anywhere in the product.
+            "route_geometry": beat.route_geometry,
+            "route_source": beat.route_source,
+            "start_latitude": agent.base_latitude,
+            "start_longitude": agent.base_longitude,
             "total_target_amount": round(float(total_target_today), 2),
             "status": beat.status,
             # Real-time today stats — single source of truth for all agent views
