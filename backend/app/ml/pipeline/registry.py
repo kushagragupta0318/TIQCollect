@@ -145,6 +145,80 @@ def save(model: str, version: str, *, pipeline: Any, metadata: dict,
     return out
 
 
+def pointer_version(model: str) -> str | None:
+    """What champion.txt says right now, or None. Never raises.
+
+    `resolve_version` raises when no champion exists, which is right for a
+    scoring path and wrong for a health check — "there is no champion" is a
+    state to report, not an error to propagate into an endpoint.
+    """
+    pointer = ARTIFACT_ROOT / model / "champion.txt"
+    if not pointer.exists():
+        return None
+    text = pointer.read_text().strip()
+    return text or None
+
+
+class PromotionRefused(RuntimeError):
+    """Promotion was asked for and declined. The champion is unchanged."""
+
+
+def promote(model: str, version: str, *, expected_incumbent: str | None,
+            approved_by: str, candidate_id: str) -> str | None:
+    """Point `champion.txt` at `version`. Returns the version it replaced.
+
+    2026-09-09 — THE ONLY WAY A MODEL BECOMES CHAMPION OUTSIDE A TRAINING RUN,
+    and it is deliberately hostile:
+
+      * the artifact must exist and carry metadata, so a pointer can never name
+        a directory that will fail to load at 20:00;
+      * the artifact's gate summary must say PASS, so a model written for
+        inspection cannot be promoted by pointing at it;
+      * `expected_incumbent` must match what the pointer says NOW. A candidate
+        was validated and compared against one specific incumbent; if that has
+        moved, the comparison it passed describes a model nobody is running and
+        the approval is stale. Refused rather than reconciled — re-validating is
+        the caller's decision, not this function's;
+      * the write is atomic (tmp + os.replace), so a crash mid-promotion leaves
+        the old pointer intact rather than a truncated file that resolves to
+        nothing.
+
+    It does NOT clear the engine cache. A process that has already loaded the
+    old artifact keeps serving it until it reloads — see
+    `DecisionEngine.serving_state`, which exists to make that visible rather
+    than to pretend it cannot happen.
+    """
+    import os
+
+    version_path = ARTIFACT_ROOT / model / version
+    if not (version_path / "metadata.json").exists():
+        raise PromotionRefused(
+            f"no artifact for {model} {version} at {version_path}")
+    meta = json.loads((version_path / "metadata.json").read_text())
+    if meta.get("gate_summary") != "PASS":
+        raise PromotionRefused(
+            f"{model} {version} did not pass its gates "
+            f"(gate_summary={meta.get('gate_summary')!r}); a model written so "
+            f"its failure can be read must not become champion")
+
+    pointer = ARTIFACT_ROOT / model / "champion.txt"
+    current = pointer.read_text().strip() if pointer.exists() else None
+    if current != expected_incumbent:
+        raise PromotionRefused(
+            f"champion moved: expected {expected_incumbent!r}, pointer now "
+            f"reads {current!r}. The candidate was compared against "
+            f"{expected_incumbent!r} and that comparison no longer describes "
+            f"production; revalidate rather than promote")
+
+    tmp = pointer.with_suffix(".txt.tmp")
+    tmp.write_text(version)
+    os.replace(tmp, pointer)
+    logger.warning(
+        "ml.registry.promoted model=%s from=%s to=%s candidate=%s approved_by=%s",
+        model, current, version, candidate_id, approved_by)
+    return current
+
+
 def resolve_version(model: str, version: str = "champion") -> str:
     if version != "champion":
         return version

@@ -23,6 +23,7 @@ celery_app = Celery(
         "app.workers.tasks.repayment_scoring",
         "app.workers.tasks.beat_reconciliation",
         "app.workers.tasks.model_outcomes",
+        "app.workers.tasks.model_retraining",
     ],
 )
 

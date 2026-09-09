@@ -29,6 +29,12 @@ class AuditAction(str, enum.Enum):
     DATA_EXPORT = "DATA_EXPORT"
     # 2026-08-19 — a manager confirming or dismissing a visit anomaly.
     ANOMALY_REVIEWED = "ANOMALY_REVIEWED"
+    # 2026-09-09 — the retraining lifecycle. A model reaching production is the
+    # highest-consequence manual action in the system, so it gets an audit row
+    # of its own rather than living only in the candidate's state history.
+    MODEL_CANDIDATE_APPROVED = "MODEL_CANDIDATE_APPROVED"
+    MODEL_CANDIDATE_REJECTED = "MODEL_CANDIDATE_REJECTED"
+    MODEL_PROMOTED = "MODEL_PROMOTED"
 
 
 class AuditLog(Base, UUIDPrimaryKey):

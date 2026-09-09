@@ -102,6 +102,48 @@ def _monitoring_digest(db, model_name: str) -> dict:
     return {"status": "ready", **digest}
 
 
+def _retrain_trigger(db, model_name: str, monitoring: dict) -> dict:
+    """Open a candidate when — and only when — monitoring genuinely asked.
+
+    FOUR REASONS NOT TO RETRAIN, and each is a different fact rather than a
+    shade of the same one:
+
+      * `not_ready`      — too few matured outcomes to judge anything;
+      * `insufficient_outcome_variation` — enough rows, one class, so
+        discrimination is undefined. Emphatically not evidence of decay;
+      * `insufficient_data` — the monitor ran and could not compute;
+      * `healthy`         — it judged, and the model is fine.
+
+    Only `retrain_recommended` proceeds. `start_retraining` then applies the
+    idempotency rules — one candidate per monitoring event, and never a second
+    while one is still active — and returns None for each, so a suppressed
+    trigger is reported rather than silently skipped.
+    """
+    from app.ml.pipeline.lifecycle import monitoring_event_id, start_retraining
+
+    verdict = monitoring.get("verdict")
+    if monitoring.get("status") != "ready":
+        return {"status": "skipped", "why": monitoring.get("status") or "unknown"}
+    if not monitoring.get("retrain_recommended"):
+        return {"status": "not_needed", "verdict": verdict}
+
+    cand = start_retraining(db, model_name, monitoring)
+    if cand is None:
+        return {"status": "suppressed", "verdict": verdict,
+                "monitoring_run_id": monitoring_event_id(monitoring),
+                "why": "duplicate monitoring event, an active candidate already "
+                       "exists, or ML_AUTO_RETRAIN_ENABLED is off"}
+
+    from app.workers.tasks.model_retraining import run_candidate_training
+    run_candidate_training.delay(cand.id)
+    logger.warning("model_outcomes.retraining_enqueued", model=model_name,
+                   candidate=cand.id, monitoring_run_id=cand.monitoring_run_id,
+                   reasons=cand.trigger_reasons)
+    return {"status": "enqueued", "candidate_id": cand.id,
+            "monitoring_run_id": cand.monitoring_run_id,
+            "reasons": cand.trigger_reasons, "verdict": verdict}
+
+
 @celery_app.task(name="app.workers.tasks.model_outcomes.attach_model_outcomes",
                  bind=True)
 def attach_model_outcomes(self, model_name: str = "recovery_risk"):
@@ -141,6 +183,25 @@ def attach_model_outcomes(self, model_name: str = "recovery_risk"):
                            error=str(exc), error_type=type(exc).__name__,
                            exc_info=True)
             summary["monitoring"] = {"status": "error",
+                                     "error": type(exc).__name__}
+
+        # ── The retrain trigger — 2026-09-09 ────────────────────────────────
+        # Until today `retrain_recommended` was a boolean in the dict above and
+        # nothing read it. This is the reader. It opens a CANDIDATE; it cannot
+        # promote one, and the candidate cannot reach production without a
+        # person (see ml/pipeline/lifecycle.py).
+        #
+        # Contained like the two diagnostics before it and for the same reason:
+        # labelling has already committed, and a retraining orchestrator that
+        # raises must not report a correct labelling run as failed.
+        try:
+            summary["retraining"] = _retrain_trigger(db, model_name,
+                                                     summary.get("monitoring") or {})
+        except Exception as exc:
+            logger.error("model_outcomes.retrain_trigger_failed", model=model_name,
+                         error=str(exc), error_type=type(exc).__name__,
+                         exc_info=True)
+            summary["retraining"] = {"status": "error",
                                      "error": type(exc).__name__}
 
         return summary

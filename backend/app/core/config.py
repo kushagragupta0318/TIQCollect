@@ -337,6 +337,11 @@ class Settings(BaseSettings):
     # app/ml/artifacts/<model>/champion.txt, which train_models.py only writes
     # when every gate passes.
     ML_MODEL_VERSION: str = "champion"
+    # 2026-09-09 — the retraining lifecycle's only switch. True lets the 19:15
+    # monitor open a CANDIDATE when it recommends a retrain; it can never
+    # promote one, so the blast radius of True is a training job and a row
+    # awaiting a person. Set False to keep monitoring and stop the automation.
+    ML_AUTO_RETRAIN_ENABLED: bool = True
     # Which value transform the allocator's expected-recovery term uses.
     # "log_current" is the pre-2026-09-08 production behaviour and is kept as the
     # baseline every before/after comparison is measured against; do not delete

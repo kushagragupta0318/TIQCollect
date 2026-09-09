@@ -16,6 +16,7 @@ from app.models.repayment_snapshot import RepaymentSnapshot
 from app.models.allocation_run import AllocationRun, AllocationStrategy, AllocationRunStatus
 from app.models.allocation_decision import AllocationDecision, AllocationOutcome
 from app.models.allocation_setting import AllocationSetting, AllocationObjective
+from app.models.model_candidate import CandidateState, ModelCandidate
 from app.models.model_prediction import ModelPrediction
 
 __all__ = [
@@ -37,5 +38,7 @@ __all__ = [
     "AllocationRun", "AllocationStrategy", "AllocationRunStatus",
     "AllocationDecision", "AllocationOutcome",
     "AllocationSetting", "AllocationObjective",
+    "ModelCandidate",
+    "CandidateState",
     "ModelPrediction",
 ]
