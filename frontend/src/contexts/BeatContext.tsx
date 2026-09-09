@@ -19,6 +19,14 @@ export interface BeatData {
   ptps_due_today: number;
   check_in_status: string;
   sos_active: boolean;
+  // Route shape for the beat map (2026-09-08). All optional: beats planned
+  // before that date carry none, and a planning run where OSRM was unreachable
+  // records route_source "haversine" with no polyline — BeatRouteMap reads the
+  // source and declines to draw straight lines as though they were roads.
+  route_geometry?: string | null;
+  route_source?: string | null;
+  start_latitude?: number | null;
+  start_longitude?: number | null;
 }
 
 export interface HomeSummaryData {

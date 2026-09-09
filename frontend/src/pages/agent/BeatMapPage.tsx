@@ -8,6 +8,8 @@ import { DPDBadge, VisitPriorityBadge, CaseStatusBadge } from "@/components/ui/B
 import { useBeat } from "@/contexts/BeatContext";
 import type { Case } from "@/types";
 import { useAnimatedValue } from "@/hooks/useAnimatedValue";
+import { BeatRouteMap, type BeatStop } from "@/components/map/BeatRouteMap";
+import "leaflet/dist/leaflet.css";
 
 // Client-side Haversine for the Google Maps URL builder only
 function distKm(lat1: number, lon1: number, lat2: number, lon2: number) {
@@ -159,6 +161,19 @@ export default function BeatMapPage() {
 
   // Done = visited today only. Pending = everything else.
   const _pending = cases.filter((c) => !visitedTodaySet.has(c.id));
+  // Stops in BEAT ORDER, not pending-first: the map shows the planned day, and
+  // renumbering it as visits complete would make the sequence disagree with the
+  // route the optimiser actually produced.
+  const mapStops: BeatStop[] = cases
+    .filter((c) => c.customer?.latitude != null && c.customer?.longitude != null)
+    .map((c) => ({
+      id: c.id,
+      lat: c.customer!.latitude as number,
+      lon: c.customer!.longitude as number,
+      label: c.customer?.full_name ?? c.case_number,
+      sublabel: c.customer?.city ?? undefined,
+      done: visitedTodaySet.has(c.id),
+    }));
 
   // All stats from real-time server values — identical source as home-summary
   const collectedAmt = beat.amount_collected_today ?? 0;
@@ -358,43 +373,39 @@ export default function BeatMapPage() {
           })}
         </div>
 
-        {/* Route visualization */}
-        {_pending.length > 0 && (
+        {/* ── The day, on a real map ────────────────────────────────────────
+            2026-09-08. This was an `<svg viewBox="0 0 300 120">` that laid the
+            next eight stops on a fixed 4x2 grid and joined them with dashed
+            lines. The positions were invented, so two stops 200 m apart and two
+            30 km apart drew identically — the one thing a route map exists to
+            show was the one thing it could not. Navigation still hands off to
+            the phone's map app (that deep-link is a free URL scheme, no key,
+            and it is the right tool for turn-by-turn); what changed is that the
+            agent can now see the shape of their day before they set off. */}
+        {cases.length > 0 && (
           <div className="card">
-            <p className="text-sm font-semibold text-slate-700 mb-3">Remaining Route</p>
-            <div className="relative overflow-hidden rounded-xl bg-slate-100 h-40 flex items-center justify-center">
-              <div className="absolute inset-0 flex items-center justify-center">
-                <svg viewBox="0 0 300 120" className="w-full h-full p-4">
-                  {_pending.slice(0, 8).map((c, i) => {
-                    const x = 20 + (i % 4) * 70;
-                    const y = i < 4 ? 25 : 85;
-                    return (
-                      <g key={c.id}>
-                        {i > 0 && (
-                          <line
-                            x1={20 + ((i - 1) % 4) * 70 + 10}
-                            y1={i - 1 < 4 ? 25 : 85}
-                            x2={x}
-                            y2={y}
-                            stroke="#3b82f6"
-                            strokeWidth="1.5"
-                            strokeDasharray="4 2"
-                            opacity={0.5}
-                          />
-                        )}
-                        <circle cx={x} cy={y} r="10" fill="#dbeafe" stroke="#3b82f6" strokeWidth="1.5" />
-                        <text x={x} y={y + 4} textAnchor="middle" fontSize="8" fill="#1d4ed8" fontWeight="bold">{i + 1}</text>
-                      </g>
-                    );
-                  })}
-                </svg>
-              </div>
-              <div className="absolute bottom-2 right-2 text-xs text-slate-400 bg-white px-2 py-1 rounded-lg">
-                {_pending.length} pending · {beat.estimated_distance_km}km
-              </div>
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-sm font-semibold text-slate-700">Route</p>
+              <p className="text-xs text-slate-400">
+                {_pending.length} pending · {beat.estimated_distance_km.toFixed(1)} km
+                {beat.estimated_duration_minutes ? ` · ~${Math.round(beat.estimated_duration_minutes / 60)}h` : ""}
+              </p>
             </div>
+            <BeatRouteMap
+              stops={mapStops}
+              start={
+                beat.start_latitude != null && beat.start_longitude != null
+                  ? { lat: beat.start_latitude, lon: beat.start_longitude }
+                  : null
+              }
+              geometry={beat.route_geometry}
+              source={beat.route_source}
+              onSelect={(id) => navigate(`/agent/cases/${id}`)}
+              className="h-56 w-full rounded-xl overflow-hidden"
+            />
           </div>
         )}
+
       </div>
     </div>
   );
