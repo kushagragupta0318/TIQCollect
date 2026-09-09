@@ -313,6 +313,63 @@ class Settings(BaseSettings):
     # decision — it must NOT become active merely because the nightly Celery
     # task got wired up. Enabling and rolling back are then the same one-line
     # act: set it, restart the worker. No migration, nothing to undo.
+    # ── Trained-model rollout gates (2026-09-08) ────────────────────────────
+    # OFF by default, for the same reason the two gates below it are: an
+    # artifact being committed is not a decision to change what the running
+    # system does. With this False the product behaves exactly as it does
+    # today — every surface keeps reading the hand-weighted scorecards — and
+    # GET /manager/ml/health still reports what is loaded, so the models can be
+    # inspected before they are trusted. Enabling and rolling back are the same
+    # one-line act.
+    # PROMOTED 2026-09-08, on a measured allocator change. Turning this on makes
+    # the nightly SMART allocation score its pool with recovery_risk and use the
+    # calibrated probability in prob_recovery, together with the rescaled value
+    # transform. Measured over 8 seeds x 1,200 cases: realised recovery +28.0%
+    # (8/8 seeds, +18.4% to +39.6%), realised recovery rate 0.2203 -> 0.2473, and
+    # the BLOCKED set identical in every run.
+    #
+    # ROLLBACK IS THIS LINE. Set it False and the allocator returns to the
+    # hand-weighted agent-side estimate and the original value transform, in the
+    # same act — see PlannerService._ml_recovery_probabilities for why the two
+    # cannot be rolled back separately.
+    ML_SCORING_ENABLED: bool = True
+    # Which artifact version the DecisionEngine loads. "champion" follows
+    # app/ml/artifacts/<model>/champion.txt, which train_models.py only writes
+    # when every gate passes.
+    ML_MODEL_VERSION: str = "champion"
+    # Which value transform the allocator's expected-recovery term uses.
+    # "log_current" is the pre-2026-09-08 production behaviour and is kept as the
+    # baseline every before/after comparison is measured against; do not delete
+    # it. See GlobalAllocator.VALUE_TRANSFORMS.
+    ALLOCATOR_VALUE_TRANSFORM: str = "log_rescaled"
+    # Epsilon-greedy exploration: the share of each night's assignments handed to
+    # a RANDOM ELIGIBLE agent instead of the best-scoring one.
+    #
+    # THIS IS THE ONE SETTING HERE THAT CHANGES WHAT AGENTS ARE ASKED TO DO, so
+    # it is worth being explicit about what it buys. Every historical
+    # (agent, case, outcome) row was produced by this allocator, so good agents
+    # got good cases and any agent-fit model fitted on that history learns the
+    # allocator rather than the agents. A randomised slice is the only way to
+    # break that confound.
+    #
+    # SIZED FOR ONE QUESTION. At ~233 allocations/day over 30 agents, 10% yields
+    # ~23 randomised visits a day and answers "does agent identity matter at
+    # all?" — a variance component — in roughly 1.3-2.1 months. It does NOT
+    # power a per-agent ranking: that needs ~820 randomised visits per agent,
+    # 24,595 total, i.e. 2.9 years at this rate. Do not read the resulting data
+    # as a leaderboard.
+    #
+    # Exploration NEVER reaches the hard gates: candidates come only from agents
+    # that already passed DNC, hostility, female-agent, territory and PTP
+    # fatigue, and capacity is preserved by swapping rather than moving.
+    # Set to 0.0 to switch it off.
+    ALLOCATOR_EXPLORATION_RATE: float = 0.10
+    # Log every served score to model_predictions for the feedback loop. Cheap,
+    # append-only, and it is the only way the monitor can compare what was
+    # predicted against what happened. Separate from ML_SCORING_ENABLED so a
+    # shadow deployment can record without acting.
+    ML_LOG_PREDICTIONS: bool = True
+
     REPAYMENT_WRITE_RISK_SCORE: bool = False
     # KILL SWITCH, and OFF by design. Case.priority is written once at case
     # creation (seed_data.py:1577, ingest_daily.py:437) and has never been

@@ -37,7 +37,25 @@ email-validator==2.2.0
 slowapi==0.1.9
 structlog==24.4.0
 orjson==3.10.12
-ortools==9.15.6755
+# 2026-09-08 — PINNED DOWN from 9.15.6755, and this is a real trade recorded
+# rather than a silent edit. optbinning 0.21.0 (the newest release) requires
+# ortools<9.12, so 9.15.6755 + optbinning is an unsatisfiable set and
+# `docker compose build api` failed outright with ResolutionImpossible.
+#
+# 9.11.4210 is chosen because it is what the routing work was ACTUALLY verified
+# against: installing optbinning on the dev machine silently downgraded ortools,
+# so core/routing.py's plan_route/plan_fleet and all 27 tests in
+# tests/test_routing.py were written and run on 9.11, never on 9.15. Pinning
+# here makes the declared dependency match the tested one instead of the other
+# way round.
+#
+# THE ALTERNATIVE, which is architecturally better and is not done yet: the
+# SERVING path should not depend on a training library at all. The model
+# artifact pickles optbinning OptimalBinning objects, so unpickling drags
+# optbinning (and therefore its ortools ceiling) into the API container. Storing
+# the binning as plain edges + WOE arrays would remove the dependency from
+# serving entirely and free ortools to move independently.
+ortools==9.11.4210
 # Self-hosted Whisper (free, TRANSCRIPTION_PROVIDER=local) — pulls in PyAV
 # for audio decoding, so no system ffmpeg binary is needed. Imported lazily
 # so the app runs fine without this installed as long as
@@ -56,3 +74,25 @@ twilio==9.4.1
 # happened to have setuptools. 2.0.1 drops that import; client.qrcode.create,
 # the only call the code makes, is unchanged.
 razorpay==2.0.1
+
+# ── Model development (2026-09-08) ──────────────────────────────────────────
+# scipy was already imported directly by services/global_allocator.py
+# (linear_sum_assignment) but was NEVER declared — it resolved only as a
+# transitive dependency of scikit-learn. Pinned now: an undeclared direct
+# import breaks the day the parent drops it.
+scipy==1.18.0
+# joblib likewise: app/ml/pipeline/registry.py serialises every model artifact
+# through it, and it arrived only via scikit-learn.
+joblib==1.5.3
+# Monotonic optimal binning, WOE and Information Value. Used rather than
+# hand-rolled because coarse classing is a constrained optimisation and a
+# hand-written version is where the subtle bugs live — an off-by-one on a bin
+# edge, a missing bin folded into the lowest bucket, a zero in an IV
+# denominator. The judgement stays in ml/pipeline/binning.py.
+optbinning==0.21.0
+# VIF and GLM inference for feature selection.
+statsmodels==0.15.0
+# EDA and evaluation plots, written into every model artifact. Agg backend only
+# — see ml/pipeline/eda.py.
+matplotlib==3.11.1
+seaborn==0.13.2

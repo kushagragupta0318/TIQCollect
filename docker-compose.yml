@@ -66,6 +66,54 @@ services:
       timeout: 3s
       retries: 12
 
+  # ─── OSRM (road routing over OpenStreetMap) ───────────────────────────────
+  # OPT-IN. Start it with:  docker compose --profile routing up -d
+  #
+  # WHY IT IS HERE. settings.OSRM_BASE_URL defaults to router.project-osrm.org,
+  # the PUBLIC DEMO SERVER: rate-limited, no SLA, and its usage policy rules out
+  # production traffic. The nightly planner fires one (stops+1)^2 table call per
+  # agent against it at 20:00, and core/routing falls back to straight-line
+  # Haversine whenever it is refused — which is how every beat ETA came to be
+  # crow-flies without anyone noticing.
+  #
+  # WHY IT IS OPT-IN RATHER THAN DEFAULT. It needs a map extract that is not in
+  # this repo and is far too large to be. One-time preparation, roughly 1.5 GB
+  # of download and 10-20 minutes of CPU for the NCR region:
+  #
+  #   mkdir -p osrm-data && cd osrm-data
+  #   curl -O https://download.geofabrik.de/asia/india/northern-zone-latest.osm.pbf
+  #   docker run --rm -v "$PWD:/data" ghcr.io/project-osrm/osrm-backend   #     osrm-extract -p /opt/car.lua /data/northern-zone-latest.osm.pbf
+  #   docker run --rm -v "$PWD:/data" ghcr.io/project-osrm/osrm-backend   #     osrm-partition /data/northern-zone-latest.osrm
+  #   docker run --rm -v "$PWD:/data" ghcr.io/project-osrm/osrm-backend   #     osrm-customize /data/northern-zone-latest.osrm
+  #
+  # Then set OSRM_BASE_URL=http://osrm:5000 in backend/.env and restart the api
+  # and celery_worker. Nothing in the code changes — that seam already exists.
+  #
+  # Until then the product runs exactly as before, and every route it produces
+  # records route_source="haversine" so the degradation is visible rather than
+  # assumed.
+  osrm:
+    image: ghcr.io/project-osrm/osrm-backend:latest
+    container_name: fieldops_dev_osrm
+    profiles: ["routing"]
+    restart: unless-stopped
+    command: >
+      osrm-routed --algorithm mld --max-table-size 8000
+      /data/${OSRM_EXTRACT:-northern-zone-latest}.osrm
+    volumes:
+      - ./osrm-data:/data:ro
+    ports:
+      - "${OSRM_HOST_PORT:-15000}:5000"
+    healthcheck:
+      # A real query rather than a port check: osrm-routed accepts connections
+      # before the graph is loaded, so a port check reports healthy while every
+      # request still fails.
+      test: ["CMD-SHELL", "wget -qO- 'http://localhost:5000/route/v1/driving/77.0266,28.4595;77.03,28.47' | grep -q '\"code\":\"Ok\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 40s
+
   # ─── MinIO (visit photos, signatures, recordings) ─────────────────────────
   minio:
     image: minio/minio:latest

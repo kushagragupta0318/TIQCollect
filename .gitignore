@@ -80,3 +80,28 @@ backups/
 backend/data/synthetic/
 backend/data/*.csv
 backend/app/ml/models/*.json
+
+# ── Modelling panel (2026-09-08) ────────────────────────────────────────────
+# scripts/build_modelling_dataset.py writes a 120k-row synthetic panel plus the
+# simulator's latent variables. Neither belongs in git: the panel is fully
+# regenerable from the seed recorded in its own dataset_metadata.json, and
+# ground_truth.json holds the true repayment propensities the model is supposed
+# to infer — a file of answers sitting next to the feature code.
+#
+# The ARTIFACTS built from it (backend/app/ml/artifacts/) are deliberately NOT
+# ignored. The model, its metrics, its EDA and its model document are the
+# deliverable, and app/ml/models/*.json above is already an object lesson in
+# what happens when a result is written somewhere git cannot see it.
+backend/data/modelling/
+
+# The EVENT LEDGER and its derived panel (2026-09-09).
+# scripts/build_ledger_dataset.py writes an append-only event ledger plus the
+# panel derived from it — ~100k account-months and ~340k events at the full
+# tier. Regenerable from the seed and intercept recorded in its own
+# dataset_metadata.json, so it is data, not a deliverable. Same reasoning as
+# the modelling panel above.
+#
+# REALISM_REPORT.txt is deliberately covered too: it is a measurement OF a
+# generated dataset, so a committed copy would drift from whatever the
+# generator currently produces — the exact trap ml/models/*.json already is.
+backend/data/ledger/
