@@ -7,6 +7,37 @@ const api = axios.create({
   headers: { "Content-Type": "application/json" },
 });
 
+/**
+ * Timeout for the handful of endpoints that do real work before answering.
+ *
+ * 2026-09-09 — the 15s default above is right for a read and badly wrong for
+ * nightly allocation. `POST /manager/allocation/plan` filters the pool, runs a
+ * Hungarian solve over a case x capacity-slot matrix, calls OSRM for a distance
+ * matrix and a route per agent, then writes fifteen beats: measured on the demo
+ * book (921 cases evaluated, 214 allocated, 15 agents) it took over 40 seconds
+ * end to end and returned 200.
+ *
+ * The browser had already given up at 15. The user saw "Failed to generate plan
+ * — please try again" WHILE THE PLAN WAS BEING WRITTEN, which is how a
+ * screenshot came to show that toast on top of a fully populated PLANNED beat
+ * plan. Worse, "please try again" is an instruction to do the one thing that
+ * makes it worse: the second click collides with the first request, which is
+ * still running, and that is the concurrent-planning collision the advisory
+ * lock in planner_service now answers with a 409. The timeout was the root
+ * cause; the collision was its symptom.
+ *
+ * Three minutes, not sixty seconds: the work scales with the size of the pool
+ * and the number of agents, and a bigger book must not reintroduce this.
+ */
+export const LONG_RUNNING_MS = 180_000;
+
+/** True when the request was aborted client-side rather than refused. */
+export function isTimeout(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  const e = err as { code?: unknown; response?: unknown };
+  return (e.code === "ECONNABORTED" || e.code === "ETIMEDOUT") && !e.response;
+}
+
 // Attach access token to every request
 api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   const token = useAuthStore.getState().accessToken;

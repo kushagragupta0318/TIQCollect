@@ -8,7 +8,7 @@
 //   ManagerCasesPage.tsx's "AI Audit Report" section could never render,
 //   silently, since visit.ai_report was always undefined).
 // ─────────────────────────────────────────────────────────────────────────
-import api from "./axios";
+import api, { LONG_RUNNING_MS } from "./axios";
 import type { DashboardSummary, Agent } from "@/types";
 
 export async function getDashboard(): Promise<DashboardSummary> {
@@ -774,7 +774,11 @@ export async function triggerAllocationPlan(opts?: {
   simulate?: boolean;
   force_replan?: boolean;
 }) {
-  const { data } = await api.post("/manager/allocation/plan", opts ?? {});
+  // LONG_RUNNING_MS, not the 15s default: this endpoint solves the assignment,
+  // calls OSRM and writes every beat before it answers. See api/axios.ts.
+  const { data } = await api.post("/manager/allocation/plan", opts ?? {}, {
+    timeout: LONG_RUNNING_MS,
+  });
   return data;
 }
 
@@ -797,7 +801,9 @@ export async function updateAllocationSettings(settings: {
 }
 
 export async function rollbackAllocationPlan(runId: string) {
-  const { data } = await api.post("/manager/allocation/rollback", { run_id: runId });
+  // Also long: it deletes and rewrites the same beats the plan wrote.
+  const { data } = await api.post("/manager/allocation/rollback", { run_id: runId },
+    { timeout: LONG_RUNNING_MS });
   return data;
 }
 

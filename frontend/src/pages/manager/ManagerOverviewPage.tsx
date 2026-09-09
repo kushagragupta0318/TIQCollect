@@ -17,6 +17,8 @@ import { useNavigate } from "react-router";
 import { Users, Briefcase, IndianRupee, MapPin, Clock, AlertTriangle, Sparkles, RefreshCw, TrendingUp, TrendingDown, ShieldAlert, Compass, Zap, RotateCcw, Download, ChevronDown, ChevronUp } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { getDashboard, getAgents, getBriefing, getUnallocatedCases, getLatestAllocation, triggerAllocationPlan, rollbackAllocationPlan, exportAllocationDecisions, getAllocationSettings, updateAllocationSettings } from "@/api/manager";
+import { isTimeout } from "@/api/axios";
+import { errorDetail, errorStatus } from "@/lib/apiError";
 import type { BriefingData, UnallocatedReport, AllocationPlanReport, AllocationDecisionItem } from "@/api/manager";
 import { StatCard } from "@/components/ui/Card";
 import { TierBadge } from "@/components/ui/Badge";
@@ -991,8 +993,23 @@ function TomorrowAllocationCard() {
       });
       toast.success("Tomorrow's beat plan generated & sequenced!");
       fetchPlan();
-    } catch {
-      toast.error("Failed to generate plan — please try again");
+    } catch (err) {
+      // A TIMEOUT IS NOT A FAILURE, and must not be reported as one. The
+      // request keeps running on the server and usually succeeds; telling the
+      // user to "try again" sends a second request into the first one, which
+      // the planner answers with a 409. Refresh instead — the plan is very
+      // likely already there.
+      if (isTimeout(err)) {
+        toast.error(
+          "Still generating — this can take a couple of minutes on a large " +
+          "book. Do not re-run; refresh in a moment to see the plan."
+        );
+        fetchPlan();
+      } else if (errorStatus(err) === 409) {
+        toast.error(errorDetail(err, "A plan is already being generated."));
+      } else {
+        toast.error(errorDetail(err, "Failed to generate plan — please try again"));
+      }
     } finally {
       setPlanning(false);
     }
