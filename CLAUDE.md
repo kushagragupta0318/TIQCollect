@@ -10,7 +10,7 @@ FastAPI + Postgres + Redis + MinIO + Celery on the backend; React 19 + Vite +
 TypeScript + Tailwind on the frontend. Python >= 3.12.
 
 **Measured 2026-09-08**, not estimated: 28,187 lines under `backend/app`,
-12,061 under `backend/scripts`, 17,863 under `frontend/src`, and **902 backend
+12,061 under `backend/scripts`, 17,863 under `frontend/src`, and **945 backend tests + 15 frontend
 tests, all passing** — up from 574 at the start of 2026-09-08, across
 Workstreams D and E, segment calibration, the allocator promotion,
 epsilon-greedy, the live-integration fixes, the model outcome labeller and the
@@ -94,7 +94,7 @@ the showcase case is provably clean.
 Verify a change with all four, because each catches what the others miss:
 
 ```bash
-cd backend  && python -m pytest          # 902 tests, ~186s, no DB or network
+cd backend  && python -m pytest          # 945 tests, ~320s, no DB or network
 cd backend  && python -m compileall app
 cd frontend && npm run build             # tsc -b + vite — the real typecheck
 cd frontend && npm run lint              # 18 errors left (was 53) — see issue 1
@@ -1118,6 +1118,246 @@ and a shorter PSI table is otherwise indistinguishable from a healthy one.
 raise in either is logged and recorded in the task's return value rather than
 failing the task. 18 executable tests in `tests/test_model_monitoring.py`.
 
+### Two defects the final wiring audit found — fixed 2026-09-09
+
+**1. A decision could not name the score that produced it.** `model_predictions`
+carried no run linkage and a re-plan re-scores the whole pool, so on the live
+book nine runs for one plan date left 7-9 prediction rows per case and **201 of
+214 allocated decisions matched MORE THAN ONE prediction** on (case_id,
+agent_id). `AllocationDecision.model_prediction_id` (migration `f7d3e91a45c2`)
+now records it.
+
+The link lives on the DECISION, not as a run id on the prediction: a prediction
+is borrower-side and agent-independent, so one score can legitimately inform
+several runs and "which run owns this row" has no single answer. A decision has
+exactly one score behind it. It is stamped for every outcome, not only
+ALLOCATED — "the model said X and we held the case anyway" is what somebody will
+want to audit. An **exploration swap does not change it**: the swap moves the
+agent and re-prices the decision, but the probability is a property of the
+borrower, so the same prediction did inform it; what follows the swap is
+`allocated_agent_id` and the prediction's own `agent_id` stamp.
+
+**Monitoring now counts account-days, not rows.** `readiness` counts DISTINCT
+(entity_id, as_of_date) and `_load` keeps the last-scored row per pair. Without
+it a manager clicking Re-Plan could walk the monitor over its 500-row readiness
+threshold without a single new borrower, and then estimate a Gini from eight
+copies of every error. Measured live: 8,133 rows collapse to 1,884 account-days,
+**4.3x inflation avoided**. 10 tests in `tests/test_prediction_lineage.py`.
+
+**2. The UI explained an ML number with a non-ML factor.** The Explainable
+Decisions panel rendered *"₹X expected recovery — recovers {affinity_score}% on
+{loan type}"* while X came from `prob_recovery_ml`. Affinity feeds only the
+shadow `prob_recovery` the allocator stopped using at the promotion. Measured
+across 214 decisions: mean affinity 0.8349 against mean `prob_recovery_ml`
+0.1662 — the panel **overstated the recovery rate behind its own figure by 5-6x**,
+to the manager deciding whether the plan was sensible.
+
+The rate now comes from whichever probability the allocator actually multiplied
+by, and says so: *"₹2,452 expected recovery — model puts recovery at 5% for this
+borrower"*. The logic moved to `pages/manager/allocationReasons.ts` so it can be
+tested without mounting a page, and **the frontend has test tooling for the first
+time** (vitest, `npm test`): 15 tests, whose binding assertion is arithmetic
+rather than wording — `expected_case_inr = collectable_balance x (the rate the
+label states)`.
+
+*(One correction to the audit that prompted this: it reported 24 of 214
+decisions matching neither probability. They were not exploration artefacts —
+the allocator divides by the COLLECTABLE BALANCE, `target − collected`, not the
+lifetime target. Re-measured with the right denominator: 20 of 20 match
+`prob_recovery_ml`, 0 match the old formula.)*
+
+### The hardening pass — 2026-09-09, and the two defects it found
+
+The wiring audit left four items marked ⚠️ INDIRECT or ❓ NOT VERIFIED. Closing
+them meant proving things at runtime rather than reading them, and doing that
+found two defects nothing had looked at before, both on `score_batch` — the only
+scoring call the production planner makes.
+
+**Neither was found by reading code. Both were found by counting columns in the
+live database**, which is the same method that found the four silent failures
+above, and the reason that method keeps being used.
+
+| | what was wrong | how it was found |
+|---|---|---|
+| 1 | **the coverage floor was not applied on the batch path.** `score()` declines below `MIN_FEATURE_COVERAGE = 0.60`; `score_batch` scored anyway and handed the allocator the number | `min(feature_coverage) = 1.000` over 11,817 rows — nothing had been mis-served, and nothing would have caught the day it stopped being 1.000 |
+| 2 | **points, band and reason codes were never computed.** `ModelPrediction` has the columns, `score_cases_and_log` assigns all three — from a result that never carried them | `count(*) filter (where points is not null) = 0` of 11,817 |
+
+`DecisionEngine.score_batch_detailed` is now the one batch path and `score_batch`
+is a wrapper over it, so there is one batch probability in the codebase rather
+than two that can drift. **The probability the allocator consumes did not move**,
+by construction — the same `predict_proba`, the same calibrator call — and
+`test_the_probability_the_allocator_gets_is_unchanged` is the test that makes the
+rest of the change safe to ship. A below-floor borrower is now recorded as a
+DECLINED prediction (probability NULL, `is_modelled` False, `fallback_reason`
+set) and is absent from the probabilities the allocator receives, rather than
+present with a confident-looking one.
+
+Re-run live after the fix: **921 of 921 served rows carry points, band and
+reason codes; 0 declined; min coverage 1.000.** Bands C/D/E at 206/579/136.
+
+**One consequence had to be chased.** A declined row is the right row to keep and
+the wrong row to count, so `readiness()` now filters `is_modelled` exactly as
+`_load` does. Without it the gate could open at 500 rows the monitor then drops,
+reporting a Gini computed on fewer observations than the gate promised — which is
+the one thing 500 was chosen to guarantee.
+
+**A finding recorded rather than fixed.** The floor cannot currently bite through
+this adapter at all: `overdue_amount` is NOT NULL in the schema, `dpd` falls back
+to 0.0, and `ptp_kept_ratio` falls back to **0.5** for a borrower with no promise
+history — so live coverage can only be 1.00 or 0.75, and 0.75 clears the 0.60
+floor. Two things follow. The floor is a guard against an ADAPTER or SCHEMA
+change, not against thin borrowers — still worth having, since fault #2 of
+2026-09-08 was an adapter change that landed on exactly 0.75. And
+`ptp_kept_ratio = 0.5` is a default wearing an observation's clothes, counted
+toward coverage, which contradicts this repo's own rule that a factor with no
+evidence abstains. Changing it moves the score of every no-history borrower, so
+it is written down here and NOT changed by a pass whose remit is integration.
+`test_the_floor_cannot_currently_BITE_through_this_adapter` fails if another
+feature ever becomes genuinely optional, so this paragraph cannot go stale
+quietly.
+
+### What the API and the page now say about the model
+
+`GET /manager/allocation/latest` carries an `ml` block on **every** decision:
+`used_for_decision`, `probability_used`, `borrower_p_recover`,
+`shadow_prob_recovery`, `value_transform`, `expected_recovery_inr`,
+`prediction_id`, `model_name`, `model_version`, `feature_coverage`. The
+predictions are preloaded in one query keyed by id — a ~900-decision landing page
+would otherwise issue 900 — and **`model_version` comes off the prediction row,
+never a constant**, because a hardcoded version keeps reporting the old model
+through a rollback, which is the one moment somebody is relying on it.
+
+The page renders a violet **ML-assisted** badge, absent when
+`used_for_decision !== true`: a badge on a scored-but-shadowed decision would
+mean "we computed a score and ignored it", which is the opposite of what it says.
+Its tooltip is plain words — chance of recovery, model version, share of inputs
+available — with a test that fails on "WOE", "logistic", "calibrated", "sha256"
+or a raw column name appearing in it.
+
+Verified in a real browser against the live plan (patchright, `manager1`):
+**214 ML-assisted badges**, tooltip *"This allocation used a recovery model.
+Estimated chance of recovery: 12%. Model 1.1.0. 100% of inputs available"*, the
+reason line reading *"₹7,038 expected recovery — model puts recovery at 12% for
+this borrower"*, zero console errors, and no `recovers NN% on ...` anywhere in
+the DOM.
+
+*One thing a reader should know and it is not a defect:* the allocator's own
+`reason` string still shows `affinity: 94%` on the same row. That is the AGENT's
+historical rate on this loan type — a different quantity from the borrower's
+modelled probability, and named as such. The defect that was fixed was the panel
+using affinity as the rate behind its own rupee figure; showing both, each
+labelled, is correct.
+
+### Proving it rather than reading it
+
+```bash
+docker compose exec api python -m scripts.ml_end_to_end_trace
+```
+
+Twelve stages against the running system — Postgres, artifact, point-in-time
+features, scoring, the planner, the allocator's arithmetic, lineage, the API over
+HTTP, the frontend contract, the labeller, the monitoring gate, rollback — each
+one a check that exits non-zero rather than a report. It never executes a
+rollback against the live plan: rollback is destructive, and proving it by
+destroying the plan a manager is looking at is the wrong trade. It is executed
+for real, against a real database session and through the authenticated
+endpoint, in `tests/test_ml_api_and_rollback.py`.
+
+Last run, all twelve green: 921 predictions logged, 214/214 decisions
+`ml_used_for_decision`, `expected_case_inr = collectable × prob_recovery_ml` on
+214 of 214 with 0 mismatched, 214/214 carrying `model_prediction_id`, 0 dangling
+lineage references across the whole table, 933/933 API decisions carrying an `ml`
+block, and the monitoring gate at **0/500 matured — not_ready by design**, first
+outcome maturing 2026-10-08.
+
+**The monitoring pipeline is verified structurally, on controlled data, and that
+distinction is the point.** `tests/test_monitoring_pipeline_wiring.py` runs
+label attachment → readiness → deduplication → metrics → retrain verdict through
+the nightly task itself, and asserts version isolation, that the serving version
+is the one monitored, that repeated planning cannot walk the gate over its
+threshold (720 rows from 80 accounts must not open it), that a broken monitor
+cannot cost a label, that the monitor writes nothing, and that a matured cohort
+enters monitoring with no manual step. Each of those was confirmed by breaking
+the property and watching exactly the intended test fail. What it does **not**
+prove is anything about real predictive performance: every outcome in it is
+written by the test. The pipeline being wired and the model being good are
+different claims, and only the first is settled.
+
+### Two defects the outcome-labelling trace found — fixed 2026-09-09
+
+Both were found by tracing what live monitoring will actually read, not by
+running anything. Neither had fired yet; both were certain to.
+
+**1. A borrower who paid the bank directly read as a failure.**
+`ingest_daily` handled `bank_action=PAID_DIRECT` by closing the case as PAID with
+a resolution note and creating no `Payment` row — verified, zero `Payment(`
+constructions in the script. But `ml/pipeline/outcomes.py` derives the label
+exclusively from VERIFIED `Payment` rows, and `censoring_status` does not censor
+`CaseStatus.PAID` (correctly: PAID is the success outcome, not a withdrawal from
+the collectable population). So the row was labelled with `paid = 0`:
+**NOT_RECOVERED, y = 1.**
+
+Not a coverage gap but a **biased target** — the model would have been monitored
+on "did an agent collect it" rather than "did the borrower pay". Latent rather
+than manifest: 0 of 323 PAID cases on the demo book lacked a verified payment,
+because no real bank feed has run against it.
+
+**`outcomes.py` is untouched.** The rule is still
+`paid_in_window >= 0.8 * min(overdue_amount, emi_amount)`; the direct payment is
+now simply *in* the ledger the labeller already reads. Migration
+`a5f8c31d7e40`: `payments.agent_id` becomes NULLABLE and `payment_mode_enum`
+gains `BANK_DIRECT`.
+
+**`agent_id` is NULL because nobody collected it.** Attributing a bank payment to
+the assigned agent would inflate their collections, their leaderboard position
+and their `affinity_score` — which feeds `eb_multiplier` and therefore the
+allocator's `prob_recovery`. Every agent-scoped aggregate in `app/` filters
+`agent_id == x` or `.in_(ids)`, so a NULL drops out exactly as the absent row
+did. **`ml/empirical_bayes` was the one exception and had to be guarded
+explicitly**: it groups by `agent_id` with no agent filter, and a NULL would have
+joined `segment_totals` — the prior every agent's multiplier is divided by.
+
+The amount is **the arrears the row clears**, read before the file zeroes
+`loan.overdue_amount`, or the feed's own `payment_amount` where it carries one.
+That is also what makes double counting impossible when an agent had already
+collected part: the bank's overdue figure is already net of that collection. The
+date is `last_payment_date`, so an old payment the bank is only now reporting
+cannot manufacture a recovery in today's window.
+
+Teaching the labeller a second kind of evidence was the other option and is
+worse: it has no amount, so the threshold would have been bypassed for exactly
+these rows — a silent change to the target. **SETTLED is deliberately untouched**:
+it is already `CENSORED_SETTLED`, and a bank-approved reduction is not the
+borrower repaying.
+
+Proven on live Postgres against a real prediction (`DAILY20260907C25`, arrears
+₹134,960, baseline overdue ₹134,960 / EMI ₹33,740), inside a rolled-back
+transaction: **`NOT_RECOVERED y=1` → `RECOVERED y=0`, paid 134,960**. And the
+allocator did not move — re-planned after the fix, **0 of 211 shared allocated
+cases changed `prob_recovery_ml` or `eb_multiplier`**. 19 tests in
+`tests/test_direct_payment_outcome.py`, executed through `process_row` rather
+than asserted from source text.
+
+**2. "Only 1,884 matured outcomes; performance needs 500."**
+With 500+ matured rows carrying ONE class, `monitor_model` fell into the
+too-few-rows branch and printed a self-contradictory message. It is the line that
+would have appeared on 2026-10-08: the demo book holds no payments after
+2026-09-08, so every matured row would have labelled NOT_RECOVERED.
+
+Discrimination is undefined without both classes — AUC asks how well a score
+separates two groups and there is one group. That is a property of the **cohort**,
+not a shortfall in it, and telling a reader to wait for rows that have already
+arrived is worse than saying nothing. The verdict is now
+`insufficient_outcome_variation`, with `outcome_variation` carrying `n_matured`,
+`n_classes` and `bad_rate_live`. **The 500 gate is unchanged.**
+
+The counts live in their own field rather than in `performance`, because
+`performance` being non-empty is what the final verdict block reads as "metrics
+were computed" — putting them there would have made a single-class cohort report
+**healthy**. A stability finding (missing champion feature, PSI break) still wins
+over both, correctly: that is a serving fault and does not need outcomes to be
+true. 5 tests added to `tests/test_monitoring_pipeline_wiring.py`.
+
 ### The feedback loop is closed
 
 The planner used `score_many()`, which returns probabilities and records
@@ -1149,6 +1389,208 @@ epsilon in plain text.
 this model comes from synthetic books. What is now demonstrated is that the
 pipeline runs end to end on live rows and records what it did — not that it
 recovers more money.
+
+## The retraining lifecycle — wired 2026-09-09, and it still cannot promote
+
+The 2026-09-09 read-only audit traced the chain and found it stopped in one
+place:
+
+```
+monitoring -> retrain_recommended -> [NOTHING]
+```
+
+`retrain_recommended` was a boolean returned into a structlog line and a Celery
+result backend with no reader — verified by grep: its only consumers were that
+log line and an offline Phase 4 script. Everything downstream of it was either
+manual (`scripts/train_models.py`) or absent (incumbent comparison, candidate
+state, approval).
+
+**What is now automatic, and what is emphatically not.**
+
+```
+predictions -> matured outcomes -> labels -> monitoring -> retrain_recommended
+    -> candidate opened -> challenger trained -> gates -> incumbent comparison
+    -> PENDING_APPROVAL ......................................... [STOPS HERE]
+    -> a person approves -> a person promotes -> pointer moves
+```
+
+Everything to the left of PENDING_APPROVAL runs without anyone. Nothing to the
+right of it can happen without a user id, and `champion.txt` is written by
+`registry.promote` alone.
+
+### The trigger
+
+`workers/tasks/model_outcomes._retrain_trigger` reads the monitoring digest at
+19:15 and is the only reader of `retrain_recommended`. Four states do NOT
+trigger, and they are four different facts rather than shades of one:
+`not_ready` (too few matured outcomes), `insufficient_outcome_variation` (enough
+rows, one class — not evidence of decay), `insufficient_data`, and `healthy`.
+
+**Idempotent twice over.** `monitoring_run_id` is a digest of the monitoring
+EVENT — model, serving version, outcome definition, matured count, verdict,
+reasons — not of the wall clock, so two nightly runs over the same cohort
+produce the same id and `uq_candidate_monitoring_event` turns the second into a
+no-op. And an active candidate blocks a new one, or a decayed model would open a
+fresh candidate every night until somebody looked.
+
+`ML_AUTO_RETRAIN_ENABLED=True` is the switch. Its blast radius is a training job
+and a row awaiting a person; it cannot promote.
+
+### The training data is production data or it is nothing
+
+`ml/pipeline/production_dataset.py` builds the frame from `model_predictions`:
+the FROZEN feature vector that was served, and the label
+`ml/pipeline/outcomes.py` attached. Point-in-time correctness is structural
+rather than disciplined — nothing is recomputed from `Loan` or `Case`, which are
+overwritten in place, so a post-prediction feature cannot enter the frame.
+Censored and unmatured rows are excluded by one clause (`actual_outcome IS NOT
+NULL`), because every non-terminal status leaves that column NULL.
+
+**There is no synthetic fallback and that is the point.** `build_training_frame`
+raises `InsufficientProductionData` rather than returning something trainable;
+the orchestrator records the detail and stops at `INSUFFICIENT_DATA`.
+`test_the_production_builder_cannot_reach_the_synthetic_panel` asserts the
+module does not so much as mention `book_simulator`.
+`scripts/build_modelling_dataset` is untouched and remains how a developer gets
+a frame in two seconds.
+
+Floors, derived rather than chosen: **2,000 rows** (a 60/15/25 split needs that
+for a 500-row out-of-time read, itself the Hanley-McNeil figure the 500-row
+monitoring gate came from), **50 minority-class rows** (below which WOE binning
+degenerates to an intercept), **8 distinct as-of dates** (below which a
+chronological split has nothing to cut).
+
+**What it costs, stated rather than hidden:** `score_cases_and_log` logs only
+the CHAMPION'S SELECTED features, so a challenger selects among the same four
+and cannot discover a new one. That is a property of the prediction log;
+widening it means logging more and waiting another horizon. Recorded on every
+cohort as `feature_source`.
+
+### Challenger versus the model that is actually deployed
+
+`ml/pipeline/comparison.py` is the gap the audit named. `train.py`'s
+`champion_kind` picks the scorecard or the GBM from inside ONE run; it never
+scored the incumbent. Absolute gates are wide — `gini_min` 0.25 against a
+champion at 0.5136 — so almost any competent refit clears them while losing.
+
+Both models are scored **through `DecisionEngine.score_batch_detailed` on the
+same out-of-time rows**, so the comparison measures what would actually be
+served, calibrator and coverage floor included.
+
+| gate | rule |
+|---|---|
+| `gini_materially_better` | uplift > 2 x SE(Gini difference), floored at 0.01 |
+| `brier_not_worse` | <= incumbent x 1.05 |
+| `ks_not_collapsed` | >= incumbent x 0.90 |
+| `calibration_not_worse` | abs gap <= incumbent + 0.10 |
+| `rank_order_top5_not_worse` | <= incumbent |
+
+The tolerance is computed per comparison from the incumbent's own AUC and the
+class balance, so it widens as the frame shrinks. **A tie keeps the incumbent**
+(`equivalent_keep_incumbent`): replacing a proven model with an
+indistinguishable one is churn with a rollback attached.
+
+*The calibration gate earned its place immediately.* The first test fixture
+returned `sigmoid(strength * y + noise)` — ranks beautifully, predicts 0.72
+where the observed rate is 0.50 — and the gate rejected it at +0.40 Gini. That
+was the gate being right and the fixture being wrong: the allocator computes
+`expected_case_inr = collectable x probability`, so a model 22 points out
+misprices every case by 22 points of its balance however well it ranks.
+
+### Metrics that were computed and never consulted
+
+KS, Brier, calibration gap and score PSI were all reported and none could
+trigger anything. Added, never by moving an existing threshold:
+
+| metric | baseline | threshold | direction | action |
+|---|---|---|---|---|
+| Gini | artifact OOT | -20% rel. | lower worse | RETRAIN *(unchanged)* |
+| KS | artifact OOT | -30% rel. | lower worse | RETRAIN *(new)* |
+| Brier | artifact OOT | +25% rel. | higher worse | RETRAIN *(new)* |
+| calibration gap | 0 by construction | 0.10 abs. | gap grows | RETRAIN *(new)* |
+| score PSI | oldest third | 0.25 abs. | higher worse | RETRAIN *(new)* |
+| feature PSI | oldest third | 0.25 abs. | higher worse | RETRAIN *(unchanged)* |
+| rank order top-5 | 0 breaks | > 0 | any break | RETRAIN *(unchanged)* |
+| missing champion feature | — | any | — | RETRAIN *(unchanged)* |
+| bad rate | artifact OOT | — | — | informational |
+
+KS is widened to 30% because it reads one point of the distribution rather than
+the whole ranking and is noisier at the same n. Brier is looser still at 25%
+because it moves with the base rate as well as with skill. Calibration is the
+one absolute threshold, because its baseline is zero by construction. Score PSI
+reuses the feature-PSI constant deliberately — one idea, one number. **None of
+them can fire below the 500-row gate or on a one-class cohort**; they sit inside
+the branch those two conditions already guard.
+
+### The candidate state machine
+
+```
+TRAINING -> VALIDATING -> COMPARING -> PENDING_APPROVAL -> APPROVED -> PROMOTED
+              |               |                |               |
+   REJECTED_VALIDATION  REJECTED_COMPARISON    |        REJECTED_BY_HUMAN
+   INSUFFICIENT_DATA / FAILED                  +-- champion unchanged throughout
+```
+
+`is_promotable` requires APPROVED **and** the recorded gate result **and** the
+recorded comparison result **and** a version — so a row hand-edited into
+APPROVED still cannot reach production. Every transition appends to
+`state_history` with a timestamp and a reason; nothing is rewritten.
+
+### Promotion, and the four ways it refuses
+
+`registry.promote` is the only writer of `champion.txt` outside a training run
+and is deliberately hostile: the artifact must exist, its `gate_summary` must
+say PASS (a model written so its failure can be read must not be promotable by
+pointing at it), the pointer must still read the incumbent the candidate was
+compared against, and the write is `tmp` + `os.replace` so a crash leaves the
+old pointer intact.
+
+**Stale approvals are refused, not reconciled.** If the champion moved between
+comparison and approval, the comparison describes a model nobody is running.
+
+### Deployment and cache
+
+Updating `champion.txt` does **not** update an already-loaded model object: the
+engine cache is keyed on the version string as ASKED FOR, so
+`("recovery_risk", "champion")` holds whatever was resolved first. That is not a
+bug to paper over — a scoring run that swapped models halfway would be worse —
+but it has to be visible, because a fleet can split across two champions with
+every instance reporting itself healthy. `DecisionEngine.serving_state(model)`
+reports loaded vs pointer vs configured per PROCESS (named by host and pid),
+`reload` clears one model, and promotion reloads the promoting process.
+`GET /manager/ml/health` exposes it under `serving`.
+
+### The surfaces
+
+`GET /manager/ml/health` now carries `monitoring` beside — never instead of —
+the artifact's development metrics. A development Gini presented as a live one
+is exactly the number somebody would act on. `not_ready` and
+`insufficient_outcome_variation` are their own states and the endpoint never
+reads `healthy` on absent evidence.
+
+`GET /manager/ml/candidates` is the durable retraining report: monitoring run,
+reasons, cohort, challenger version, gate results, incumbent comparison, state,
+approval and promotion. `/candidates/{id}` adds `current_champion` and
+`is_stale`. `POST .../approve`, `.../reject`, `.../promote` are the human gate,
+each writing an `AuditLog` row (`MODEL_CANDIDATE_APPROVED`,
+`MODEL_CANDIDATE_REJECTED`, `MODEL_PROMOTED`).
+
+**No external notification provider is configured for manager alerts, so none is
+faked.** Delivery is the API plus a structlog line at warning level on every
+trigger, rejection and promotion.
+
+### What this does NOT establish
+
+**The first genuinely matured production cohort cannot exist before
+2026-10-08.** Every lifecycle test uses a deterministic fixture cohort. They
+prove the ORCHESTRATION — that a trigger fires once, that a bad challenger is
+rejected, that a good one waits for a person, that the champion survives every
+failure — and they prove nothing whatever about how a retrained model performs
+on real borrowers. On the live book today the pipeline correctly stops at
+`INSUFFICIENT_DATA`, which is the right answer and not a defect.
+
+50 tests in `tests/test_retraining_lifecycle.py`, 16 in
+`tests/test_ml_lifecycle_api.py`.
 
 ## The nightly pipeline
 
