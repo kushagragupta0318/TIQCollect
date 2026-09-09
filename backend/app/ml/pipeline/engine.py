@@ -161,15 +161,89 @@ class DecisionEngine:
         with cls._lock:
             cls._cache.clear()
 
+    # ── what this PROCESS is actually serving ───────────────────────────────
+    # 2026-09-09. The cache is keyed on the version string as ASKED FOR, so the
+    # entry for ("recovery_risk", "champion") holds whichever artifact was
+    # resolved the first time anybody asked. Promotion rewrites champion.txt and
+    # this process keeps serving the old model until it reloads.
+    #
+    # That is not a bug to paper over — a scoring run that swapped models
+    # halfway would be worse. It IS a state that has to be visible, because with
+    # several API instances the fleet can be split across two champions and
+    # every one of them would report itself healthy.
+
+    @classmethod
+    def serving_state(cls, model: str) -> dict:
+        """Loaded version vs pointer version, for THIS process.
+
+        `instance` identifies the process, because the answer is per-process and
+        a single reply cannot speak for a fleet. A deployment running more than
+        one API container has to ask each of them.
+        """
+        import os
+        import socket
+
+        from app.ml.pipeline import registry
+
+        pointer = registry.pointer_version(model)
+        loaded = sorted({
+            eng.version for (m, _asked), eng in cls._cache.items() if m == model
+        })
+        # What a NEW request would get without touching the cache.
+        configured = None
+        try:
+            from app.core.config import settings
+            configured = settings.ML_MODEL_VERSION or "champion"
+        except Exception:                                   # pragma: no cover
+            pass
+        expected = pointer if configured in (None, "champion") else configured
+        return {
+            "model": model,
+            "instance": f"{socket.gethostname()}:{os.getpid()}",
+            "configured_version": configured,
+            "pointer_version": pointer,
+            "expected_version": expected,
+            "loaded_versions": loaded,
+            # False only when something IS loaded and it is not what the
+            # pointer/config says. Nothing loaded yet is not a mismatch.
+            "serving_matches_pointer": (
+                not loaded or (expected is not None and loaded == [expected])),
+        }
+
+    @classmethod
+    def reload(cls, model: str) -> dict:
+        """Drop this process's cached engines for one model and re-resolve.
+
+        Called immediately after a promotion so the promoting process is not the
+        one serving a stale model. Other instances pick it up when they reload
+        or restart; `serving_state` is how that is checked rather than assumed.
+        """
+        with cls._lock:
+            for key in [k for k in cls._cache if k[0] == model]:
+                cls._cache.pop(key, None)
+        cls.get(model)
+        return cls.serving_state(model)
+
     # ── scoring ─────────────────────────────────────────────────────────────
-    def _frame(self, features: dict[str, Any]) -> tuple[pd.DataFrame, float, list[str]]:
-        """One-row frame with every expected column, NaN where unsupplied."""
-        row = {f: features.get(f, np.nan) for f in self.expected_features}
+    def _coverage(self, features: dict[str, Any]) -> tuple[float, list[str]]:
+        """What share of the model's OWN inputs were supplied, and which were not.
+
+        One definition, used by both the single-row and the batch path — the
+        batch path used to have no coverage notion at all, which is how the
+        floor below came to be unenforced on the only path the product serves.
+        """
         missing = [f for f in self.selected
                    if f not in features or features.get(f) is None
                    or (isinstance(features.get(f), float) and np.isnan(features[f]))]
-        coverage = 1.0 - (len(missing) / max(len(self.selected), 1))
-        return pd.DataFrame([row]), coverage, missing
+        return 1.0 - (len(missing) / max(len(self.selected), 1)), missing
+
+    def _row(self, features: dict[str, Any]) -> dict[str, Any]:
+        return {f: features.get(f, np.nan) for f in self.expected_features}
+
+    def _frame(self, features: dict[str, Any]) -> tuple[pd.DataFrame, float, list[str]]:
+        """One-row frame with every expected column, NaN where unsupplied."""
+        coverage, missing = self._coverage(features)
+        return pd.DataFrame([self._row(features)]), coverage, missing
 
     def score(self, features: dict[str, Any]) -> ScoreResult:
         X, coverage, missing = self._frame(features)
@@ -235,21 +309,107 @@ class DecisionEngine:
         a sklearn Pipeline is dominated by call overhead, and this repo already
         learned that lesson once — RepaymentService._load bulk-loads because
         fifteen minutes is the entire margin between ingest and allocation.
+
+        Thin wrapper over `score_batch_detailed` since 2026-09-09, so there is
+        ONE batch probability in the codebase rather than two that can drift.
+        """
+        return [r.probability for r in self.score_batch_detailed(rows)]
+
+    def score_batch_detailed(self, rows: list[dict[str, Any]]) -> list[ScoreResult]:
+        """The batch path, with the same guards and the same detail as `score`.
+
+        2026-09-09 — WHY THIS EXISTS. `score_batch` returned bare probabilities,
+        and the production planner is its only caller, so two properties of the
+        single-row path were silently absent from every score the product
+        actually served:
+
+          * THE COVERAGE FLOOR WAS NOT APPLIED. `score()` declines below
+            MIN_FEATURE_COVERAGE because a scorecard with two of four inputs is
+            the intercept plus noise. `score_batch` scored it anyway and handed
+            the allocator a plausible-looking number. Measured on the live book
+            the day this was found: min coverage 1.000 across 11,817 rows, so
+            nothing had yet been mis-served — the guard was simply not there to
+            catch the day it stops being 1.000. Fault #2 of 2026-09-08 is
+            precisely that day: `ptp_kept_ratio` vanished, coverage fell to 0.75,
+            and the only thing between that and a scored-on-nothing borrower is
+            this floor.
+          * POINTS, BAND AND REASON CODES WERE NEVER COMPUTED. `ModelPrediction`
+            has columns for all three and `score_cases_and_log` assigns them —
+            from a result that never carried them. 11,817 served rows: points
+            NULL, band NULL, reason_codes []. So "why did this borrower score
+            badly" was unanswerable for exactly the scores the product served,
+            while the unused single-row path recorded it in full.
+
+        THE PROBABILITY IS UNCHANGED, by construction rather than by assertion:
+        it is the same predict_proba and the same calibrator call the previous
+        `score_batch` made, and `score_batch` now delegates here rather than
+        duplicating it. The explanation is derived from the SAME transformed
+        frame, so points and probability cannot describe different rows.
         """
         if not rows:
             return []
-        X = pd.DataFrame([{f: r.get(f, np.nan) for f in self.expected_features}
-                          for r in rows])
+
+        # ONE frame for the whole batch, not 900 concatenated one-row frames:
+        # the call overhead this method exists to avoid is not worth trading for
+        # a tidier loop.
+        cov_miss = [self._coverage(r) for r in rows]
+        X = pd.DataFrame([self._row(r) for r in rows])
+
+        def _declined(i: int, reason: str) -> ScoreResult:
+            cov, miss = cov_miss[i]
+            return ScoreResult(probability=None, points=None, band=None,
+                               model=self.model, version=self.version,
+                               is_modelled=False, feature_coverage=round(cov, 3),
+                               missing_features=miss, fallback_reason=reason)
+
         try:
             raw = self.pipeline.predict_proba(X)[:, 1]
             if self.calibrator is not None:
                 seg = pd.to_numeric(
                     X.get(self.calibrator.segment_col), errors="coerce").to_numpy()
                 raw = self.calibrator.transform(raw, seg)
-            return [round(float(p), 6) for p in raw]
         except Exception as exc:
             logger.warning("ml.engine.batch_failed model=%s error=%s", self.model, exc)
-            return [None] * len(rows)
+            return [_declined(i, f"batch scoring raised {type(exc).__name__}: {exc}")
+                    for i in range(len(rows))]
+
+        woe = None
+        if self.card is not None:
+            try:
+                woe = X
+                for _, step in self.pipeline.steps[:-1]:
+                    woe = step.transform(woe)
+            except Exception as exc:                        # pragma: no cover
+                logger.warning("ml.engine.batch_explain_failed model=%s error=%s",
+                               self.model, exc)
+                woe = None
+
+        out: list[ScoreResult] = []
+        for i, (cov, miss) in enumerate(cov_miss):
+            if cov < MIN_FEATURE_COVERAGE:
+                out.append(_declined(i, (
+                    f"only {cov:.0%} of the model's {len(self.selected)} features "
+                    f"were supplied (floor {MIN_FEATURE_COVERAGE:.0%}); "
+                    f"missing: {', '.join(miss)}")))
+                continue
+            prob = round(float(raw[i]), 6)
+            points = band = None
+            reasons: list[dict] = []
+            fpoints: dict[str, int] = {}
+            if woe is not None:
+                try:
+                    ex = self.card.explain(woe.iloc[[i]], prob)
+                    points, band = ex.points, ex.band
+                    reasons, fpoints = ex.reason_codes, ex.feature_points
+                except Exception as exc:                    # pragma: no cover
+                    logger.warning("ml.engine.explain_failed model=%s error=%s",
+                                   self.model, exc)
+            out.append(ScoreResult(
+                probability=prob, points=points, band=band, model=self.model,
+                version=self.version, is_modelled=True, reason_codes=reasons,
+                feature_points=fpoints, feature_coverage=round(cov, 3),
+                missing_features=miss))
+        return out
 
     # ── introspection ───────────────────────────────────────────────────────
     def health(self) -> dict:

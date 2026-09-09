@@ -333,7 +333,18 @@ class MLScoringService:
         function exists is that a silent gap went unnoticed for a full cycle.
         """
         engine = DecisionEngine.get(model)
-        if engine is None or not cases:
+        if engine is None:
+            # LOUD. This is the one degradation on this path that said nothing
+            # at all: no artifact meant an empty dict, the planner fell back to
+            # log_current exactly as designed, and the only trace was
+            # `scored=0` in a line that also prints on an empty pool. A
+            # swallowed failure that degrades correctly still has to be loud —
+            # the same fix `_ml_recovery_probabilities` got on 2026-09-08.
+            logger.error("ml.no_champion_artifact model=%s cases=%d — the "
+                         "allocator will run with no model at all", model,
+                         len(cases))
+            return {}, []
+        if not cases:
             return {}, []
 
         # ONE SCORE PER LOAN, APPLIED TO EVERY CASE ON IT. The first version
@@ -354,19 +365,43 @@ class MLScoringService:
             cases_by_loan[loan.id].append(case)
 
         feats = {l.id: self.build_features(l, as_of=as_of) for l in loans}
-        probs_bad = engine.score_batch([feats[l.id] for l in loans])
+        # 2026-09-09 — `score_batch_detailed`, not `score_batch`. The bare-
+        # probability call skipped the engine's coverage floor and computed no
+        # points, band or reason codes, so 11,817 served rows carried NULL in
+        # three columns this function was already assigning. See the note on
+        # DecisionEngine.score_batch_detailed; the probability is byte-for-byte
+        # the one the previous call produced.
+        results = engine.score_batch_detailed([feats[l.id] for l in loans])
 
         out: dict[str, float] = {}
         rows: list[ModelPrediction] = []
         selected = set(engine.selected)
         stamp = as_of or _utcnow().date()
 
-        for loan, p_bad in zip(loans, probs_bad):
-            if p_bad is None:
-                continue
+        for loan, res in zip(loans, results):
             f = feats[loan.id]
-            coverage = round(sum(1 for k in selected if f.get(k) is not None)
-                             / max(len(selected), 1), 3)
+            coverage = res.feature_coverage
+            if res.probability is None:
+                # DECLINED, and recorded as such. A row with is_modelled False
+                # and a fallback_reason is the evidence that the model was asked
+                # and could not answer — the state that is otherwise invisible,
+                # and the one the allocator must not be handed a number for.
+                logger.warning("ml.declined loan=%s coverage=%s reason=%s",
+                               loan.id, coverage, res.fallback_reason)
+                if settings.ML_LOG_PREDICTIONS:
+                    for case in cases_by_loan[loan.id]:
+                        rows.append(ModelPrediction(
+                            model_name=engine.model, model_version=engine.version,
+                            artifact_sha256=engine.metadata.get("artifact_sha256"),
+                            entity_type="case", entity_id=case.id, loan_id=loan.id,
+                            case_id=case.id, as_of_date=stamp,
+                            probability=None, is_modelled=False,
+                            fallback_reason=res.fallback_reason,
+                            features={k: v for k, v in f.items() if k in selected},
+                            feature_coverage=coverage,
+                        ))
+                continue
+            p_bad = res.probability
             for case in cases_by_loan[loan.id]:
                 out[case.id] = 1.0 - float(p_bad)
                 if not settings.ML_LOG_PREDICTIONS:
@@ -385,6 +420,9 @@ class MLScoringService:
                     agent_id=None,
                     as_of_date=stamp,
                     probability=round(float(p_bad), 6),
+                    points=res.points,
+                    band=res.band,
+                    reason_codes=res.reason_codes or [],
                     is_modelled=True,
                     # Only the features the model reads. Storing all 33
                     # candidates would triple the row for no monitoring value;
