@@ -1,0 +1,12 @@
+feature,vif,action
+cibil_score,1.047,kept
+months_on_book,1.591,kept
+overdue_amount,1.594,kept
+arrears_ratio,2.681,kept
+paid_ratio_3m,1.997,kept
+days_since_last_payment,1.368,kept
+visits_3m,2.008,kept
+contact_rate_6m,1.279,kept
+days_since_last_contact,1.264,kept
+ptp_kept_6m,2.397,kept
+ptp_kept_ratio,2.038,kept

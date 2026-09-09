@@ -1,0 +1,8 @@
+dropped,kept,abs_corr,iv_dropped,iv_kept
+dpd,arrears_ratio,0.8874,0.4719,0.493
+penal_charges,arrears_ratio,0.8545,0.4322,0.493
+dpd_bucket,arrears_ratio,0.8562,0.4272,0.493
+penal_ratio,arrears_ratio,0.8428,0.4234,0.493
+paid_ratio_6m,paid_ratio_3m,0.7526,0.1036,0.169
+paid_ratio_12m,paid_ratio_3m,0.7085,0.0673,0.169
+visits_6m,visits_3m,0.8807,0.1263,0.1297

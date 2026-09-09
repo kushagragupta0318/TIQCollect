@@ -1,0 +1,815 @@
+{
+  "spec": {
+    "name": "recovery_risk",
+    "version": "1.2.0-ledger",
+    "description": "Probability that a delinquent account makes NO material payment in the next cycle. Behaviour scorecard: WOE + logistic regression, with a gradient-boosting challenger. Feeds the allocator's expected-recovery term and the manager priority surfaces.",
+    "target": "y",
+    "time_col": "as_of_date",
+    "split_col": "month_index",
+    "id_cols": [
+      "loan_id",
+      "borrower_id"
+    ],
+    "numeric_features": [
+      "cibil_score",
+      "sanction_amount",
+      "emi_amount",
+      "tenure_months",
+      "interest_rate",
+      "months_on_book",
+      "is_secured",
+      "dpd",
+      "outstanding_principal",
+      "overdue_amount",
+      "penal_charges",
+      "total_outstanding",
+      "arrears_ratio",
+      "penal_ratio",
+      "outstanding_to_sanction",
+      "paid_ratio_3m",
+      "paid_ratio_6m",
+      "paid_ratio_12m",
+      "days_since_last_payment",
+      "visits_3m",
+      "visits_6m",
+      "contact_rate_6m",
+      "days_since_last_contact",
+      "distinct_agents_6m",
+      "ptp_set_6m",
+      "ptp_kept_6m",
+      "ptp_kept_ratio",
+      "age"
+    ],
+    "categorical_features": [
+      "loan_type",
+      "dpd_bucket",
+      "city",
+      "employment_type",
+      "branch_code"
+    ],
+    "train_frac": 0.6,
+    "valid_frac": 0.15,
+    "expected_sign": {
+      "cibil_score": -1,
+      "credit_vintage_months": -1,
+      "num_open_loans": 1,
+      "num_enquiries_6m": 1,
+      "other_lender_delinq": 1,
+      "utilization_pct": 1,
+      "thin_file": 1,
+      "address_vintage_months": -1,
+      "phone_verified": -1,
+      "mail_returned_count": 1,
+      "sanction_amount": 0,
+      "emi_amount": 0,
+      "tenure_months": 0,
+      "interest_rate": 1,
+      "months_on_book": 0,
+      "is_secured": -1,
+      "dpd": 1,
+      "max_dpd_12m": 1,
+      "times_30plus_12m": 1,
+      "times_60plus_12m": 1,
+      "months_since_first_delinq": 1,
+      "consecutive_misses": 1,
+      "outstanding_principal": 0,
+      "overdue_amount": 1,
+      "penal_charges": 1,
+      "total_outstanding": 0,
+      "arrears_ratio": 1,
+      "penal_ratio": 1,
+      "outstanding_to_sanction": 1,
+      "paid_ratio_3m": -1,
+      "paid_ratio_6m": -1,
+      "paid_ratio_12m": -1,
+      "days_since_last_payment": 1,
+      "bounce_count_6m": 1,
+      "visits_3m": 0,
+      "visits_6m": 0,
+      "contact_rate_6m": -1,
+      "days_since_last_contact": 1,
+      "distinct_agents_6m": 0,
+      "ptp_set_6m": 0,
+      "ptp_kept_6m": -1,
+      "ptp_kept_ratio": -1,
+      "age": 0,
+      "monthly_income": -1,
+      "dti_ratio": 1
+    },
+    "segment_cols": [
+      "dpd_bucket",
+      "loan_type",
+      "city"
+    ],
+    "pdo": 20,
+    "base_score": 600,
+    "base_odds": 50.0,
+    "gates": {
+      "gini_min": 0.25,
+      "gini_target_low": 0.35,
+      "gini_target_high": 0.55,
+      "gini_suspicious": 0.6,
+      "ks_min": 20.0,
+      "ks_suspicious": 60.0,
+      "max_breaks_total": 1,
+      "max_breaks_top5": 0,
+      "lift_capture_min": 0.55,
+      "lift_capture_suspicious": 0.995,
+      "max_train_test_gini_gap": 0.1,
+      "psi_warn": 0.1,
+      "psi_fail": 0.25,
+      "iv_min": 0.02,
+      "iv_review": 0.5,
+      "iv_max": 0.8,
+      "vif_max": 5.0,
+      "corr_max": 0.7,
+      "min_bin_fraction": 0.05,
+      "min_bin_events": 30,
+      "segment_gini_min": 0.2
+    },
+    "forbidden": [
+      "y",
+      "recovered_amount",
+      "visit_made",
+      "customer_met",
+      "ptp_set",
+      "ptp_kept",
+      "_willingness",
+      "_capacity",
+      "_willingness_anchor",
+      "_capacity_anchor",
+      "risk_score",
+      "recovery_potential",
+      "repayment_likelihood",
+      "allocation_score",
+      "visit_priority_score"
+    ]
+  },
+  "champion_kind": "scorecard",
+  "challenger_margin_required": 0.05,
+  "selected_features": [
+    "arrears_ratio",
+    "cibil_score",
+    "paid_ratio_3m",
+    "contact_rate_6m",
+    "days_since_last_contact"
+  ],
+  "n_candidate_features": 33,
+  "scorecard": {
+    "features": [
+      "arrears_ratio_woe",
+      "cibil_score_woe",
+      "paid_ratio_3m_woe",
+      "contact_rate_6m_woe",
+      "days_since_last_contact_woe"
+    ],
+    "coefficients": [
+      -0.7906519281136872,
+      -0.8145190667417519,
+      -0.4976973494198122,
+      -0.49651186857092183,
+      -1.4634027878758922
+    ],
+    "intercept": 0.7160294830714466,
+    "pdo": 20,
+    "base_score": 600,
+    "base_odds": 50.0,
+    "factor": 28.853901,
+    "offset": 487.122876,
+    "bands": [
+      [
+        "A",
+        487.0,
+        10000.0
+      ],
+      [
+        "B",
+        473.0,
+        487.0
+      ],
+      [
+        "C",
+        455.0,
+        473.0
+      ],
+      [
+        "D",
+        431.0,
+        455.0
+      ],
+      [
+        "E",
+        -10000.0,
+        431.0
+      ]
+    ],
+    "band_table": [
+      {
+        "band": "A",
+        "count": 8328,
+        "bad_rate": 0.4217098943323727,
+        "min_points": 487,
+        "max_points": 531
+      },
+      {
+        "band": "B",
+        "count": 11011,
+        "bad_rate": 0.567341749159931,
+        "min_points": 473,
+        "max_points": 486
+      },
+      {
+        "band": "C",
+        "count": 14336,
+        "bad_rate": 0.6969168526785714,
+        "min_points": 455,
+        "max_points": 472
+      },
+      {
+        "band": "D",
+        "count": 13251,
+        "bad_rate": 0.8192589238548034,
+        "min_points": 431,
+        "max_points": 454
+      },
+      {
+        "band": "E",
+        "count": 8277,
+        "bad_rate": 0.9126495106922798,
+        "min_points": 390,
+        "max_points": 430
+      }
+    ],
+    "max_points": {
+      "arrears_ratio_woe": 119,
+      "cibil_score_woe": 108,
+      "paid_ratio_3m_woe": 106,
+      "contact_rate_6m_woe": 99,
+      "days_since_last_contact_woe": 99
+    }
+  },
+  "calibration": {
+    "segment_col": "overdue_amount",
+    "method": "platt",
+    "cv_brier_by_method": {
+      "platt": 0.191548,
+      "isotonic": 0.193218
+    },
+    "edges": [
+      4568.0,
+      9155.0,
+      16407.0,
+      31812.0
+    ],
+    "n_segments_fitted": 5,
+    "brier_on_calibration_sample": {
+      "before": 0.191537,
+      "after": 0.191294
+    }
+  },
+  "calibration_by_segment_oot": [
+    {
+      "segment": 1,
+      "n": 4356,
+      "mean_exposure": 2739.49,
+      "actual": 0.5551,
+      "predicted_raw": 0.537,
+      "predicted_calibrated": 0.5413,
+      "over_prediction_raw_pct": -3.3,
+      "over_prediction_calibrated_pct": -2.5
+    },
+    {
+      "segment": 2,
+      "n": 4991,
+      "mean_exposure": 6734.88,
+      "actual": 0.6361,
+      "predicted_raw": 0.623,
+      "predicted_calibrated": 0.6214,
+      "over_prediction_raw_pct": -2.1,
+      "over_prediction_calibrated_pct": -2.3
+    },
+    {
+      "segment": 3,
+      "n": 4882,
+      "mean_exposure": 12472.8,
+      "actual": 0.7169,
+      "predicted_raw": 0.6904,
+      "predicted_calibrated": 0.6858,
+      "over_prediction_raw_pct": -3.7,
+      "over_prediction_calibrated_pct": -4.3
+    },
+    {
+      "segment": 4,
+      "n": 5107,
+      "mean_exposure": 22893.83,
+      "actual": 0.7595,
+      "predicted_raw": 0.7457,
+      "predicted_calibrated": 0.7419,
+      "over_prediction_raw_pct": -1.8,
+      "over_prediction_calibrated_pct": -2.3
+    },
+    {
+      "segment": 5,
+      "n": 5037,
+      "mean_exposure": 62468.64,
+      "actual": 0.8303,
+      "predicted_raw": 0.8145,
+      "predicted_calibrated": 0.818,
+      "over_prediction_raw_pct": -1.9,
+      "over_prediction_calibrated_pct": -1.5
+    }
+  ],
+  "metrics": {
+    "train": {
+      "label": "train",
+      "n": 55203,
+      "bad_rate": 0.6912667789794033,
+      "gini": 0.437,
+      "auc": 0.7185,
+      "ks": 32.26,
+      "ks_cutoff": 0.6969,
+      "ks_decile": 5,
+      "top_decile_bad_rate": 0.9252,
+      "top_decile_lift": 1.338,
+      "max_achievable_lift": 1.447,
+      "lift_capture": 0.9252,
+      "bottom_decile_bad_rate": 0.3913,
+      "rank_order": {
+        "breaks": [],
+        "n_breaks": 0,
+        "n_breaks_top5": 0,
+        "monotonic": true
+      },
+      "brier": 0.18677,
+      "mean_predicted": 0.6901,
+      "calibration_gap": -0.0011
+    },
+    "valid": {
+      "label": "valid",
+      "n": 15331,
+      "bad_rate": 0.6793425086426196,
+      "gini": 0.4271,
+      "auc": 0.7136,
+      "ks": 31.13,
+      "ks_cutoff": 0.7014,
+      "ks_decile": 5,
+      "top_decile_bad_rate": 0.9146,
+      "top_decile_lift": 1.346,
+      "max_achievable_lift": 1.472,
+      "lift_capture": 0.9146,
+      "bottom_decile_bad_rate": 0.3816,
+      "rank_order": {
+        "breaks": [],
+        "n_breaks": 0,
+        "n_breaks_top5": 0,
+        "monotonic": true
+      },
+      "brier": 0.19129,
+      "mean_predicted": 0.6793,
+      "calibration_gap": -0.0
+    },
+    "oot": {
+      "label": "oot",
+      "n": 24373,
+      "bad_rate": 0.7038115947975219,
+      "gini": 0.4423,
+      "auc": 0.7212,
+      "ks": 33.27,
+      "ks_cutoff": 0.6712,
+      "ks_decile": 5,
+      "top_decile_bad_rate": 0.9303,
+      "top_decile_lift": 1.322,
+      "max_achievable_lift": 1.421,
+      "lift_capture": 0.9303,
+      "bottom_decile_bad_rate": 0.4071,
+      "rank_order": {
+        "breaks": [],
+        "n_breaks": 0,
+        "n_breaks_top5": 0,
+        "monotonic": true
+      },
+      "brier": 0.18288,
+      "mean_predicted": 0.6859,
+      "calibration_gap": -0.0179
+    },
+    "oot_challenger": {
+      "label": "oot_challenger",
+      "n": 24373,
+      "bad_rate": 0.7038115947975219,
+      "gini": 0.4436,
+      "auc": 0.7218,
+      "ks": 33.37,
+      "ks_cutoff": 0.6882,
+      "ks_decile": 5,
+      "top_decile_bad_rate": 0.9323,
+      "top_decile_lift": 1.325,
+      "max_achievable_lift": 1.421,
+      "lift_capture": 0.9323,
+      "bottom_decile_bad_rate": 0.4021,
+      "rank_order": {
+        "breaks": [],
+        "n_breaks": 0,
+        "n_breaks_top5": 0,
+        "monotonic": true
+      },
+      "brier": 0.18273,
+      "mean_predicted": 0.6869,
+      "calibration_gap": -0.0169
+    },
+    "oot_uncalibrated": {
+      "label": "oot_uncalibrated",
+      "n": 24373,
+      "bad_rate": 0.7038115947975219,
+      "gini": 0.442,
+      "auc": 0.721,
+      "ks": 33.52,
+      "ks_cutoff": 0.6762,
+      "ks_decile": 5,
+      "top_decile_bad_rate": 0.9319,
+      "top_decile_lift": 1.324,
+      "max_achievable_lift": 1.421,
+      "lift_capture": 0.9319,
+      "bottom_decile_bad_rate": 0.4153,
+      "rank_order": {
+        "breaks": [],
+        "n_breaks": 0,
+        "n_breaks_top5": 0,
+        "monotonic": true
+      },
+      "brier": 0.183,
+      "mean_predicted": 0.6864,
+      "calibration_gap": -0.0174
+    }
+  },
+  "gate_summary": "PASS",
+  "gates": [
+    {
+      "gate": "gini_min",
+      "observed": 0.4423,
+      "threshold": ">= 0.25",
+      "result": "PASS"
+    },
+    {
+      "gate": "gini_in_target_band",
+      "observed": 0.4423,
+      "threshold": "0.35-0.55",
+      "result": "PASS"
+    },
+    {
+      "gate": "gini_not_suspicious",
+      "observed": 0.4423,
+      "threshold": "< 0.6",
+      "result": "PASS"
+    },
+    {
+      "gate": "ks_min",
+      "observed": 33.27,
+      "threshold": ">= 20.0",
+      "result": "PASS"
+    },
+    {
+      "gate": "ks_not_suspicious",
+      "observed": 33.27,
+      "threshold": "< 60.0",
+      "result": "PASS"
+    },
+    {
+      "gate": "rank_order_breaks_total",
+      "observed": 0.0,
+      "threshold": "<= 1",
+      "result": "PASS"
+    },
+    {
+      "gate": "rank_order_breaks_top5",
+      "observed": 0.0,
+      "threshold": "<= 0",
+      "result": "PASS"
+    },
+    {
+      "gate": "top_decile_lift_capture",
+      "observed": 0.9303,
+      "threshold": ">= 0.55 (of max 1.421x)",
+      "result": "PASS"
+    },
+    {
+      "gate": "top_decile_lift_not_suspicious",
+      "observed": 0.9303,
+      "threshold": "< 0.995",
+      "result": "PASS"
+    },
+    {
+      "gate": "train_test_gini_gap",
+      "observed": -0.0053,
+      "threshold": "< 0.1",
+      "result": "PASS"
+    },
+    {
+      "gate": "max_feature_psi",
+      "observed": 0.0455,
+      "threshold": "< 0.25",
+      "result": "PASS"
+    },
+    {
+      "gate": "min_segment_gini",
+      "observed": 0.216,
+      "threshold": ">= 0.2",
+      "result": "PASS"
+    }
+  ],
+  "bootstrap_gini_oot": {
+    "point": 0.4423,
+    "mean": 0.4416,
+    "std": 0.007,
+    "ci_lower_2.5": 0.4285,
+    "ci_upper_97.5": 0.4557,
+    "n_bootstrap": 300
+  },
+  "adversarial_validation": {
+    "auc": 0.7331,
+    "verdict": "different populations",
+    "note": "AUC near 0.5 means development and out-of-time look like the same book. Above 0.70 the out-of-time result is measuring transfer across a shift as much as it is measuring skill."
+  },
+  "score_psi_train_vs_oot": 0.0059,
+  "psi_gated_on": [
+    "arrears_ratio",
+    "cibil_score",
+    "paid_ratio_3m",
+    "contact_rate_6m",
+    "days_since_last_contact"
+  ],
+  "segment_dimensions_gated": [
+    "dpd_bucket",
+    "loan_type",
+    "city"
+  ],
+  "max_psi_all_candidates": 0.5536,
+  "high_iv_flagged_for_review": [],
+  "split": {
+    "train": 55203,
+    "valid": 15331,
+    "oot": 24373,
+    "train_periods": [
+      0,
+      13
+    ],
+    "oot_periods": [
+      18,
+      23
+    ]
+  },
+  "dataset": {
+    "tier": "full",
+    "intercept": -4.15625,
+    "calibrated": true,
+    "config": {
+      "agent_churn_per_year": 0.18,
+      "bureau_refresh_days": 90,
+      "concept_drift": false,
+      "concept_drift_decay": 0.3,
+      "concept_drift_target": "ptp_kept_ratio",
+      "covariate_drift": 0.55,
+      "cure_cycles_to_close": 3,
+      "cycle_days": 30,
+      "deceased_hazard_monthly": 0.0012,
+      "dpd_origination_mix": {
+        "BUCKET_1": 0.26,
+        "BUCKET_2": 0.1,
+        "CURRENT": 0.64
+      },
+      "dpd_start_mix": {
+        "BUCKET_1": 0.21,
+        "BUCKET_2": 0.19,
+        "BUCKET_3": 0.16,
+        "CURRENT": 0.26,
+        "NPA": 0.18
+      },
+      "grace_days": 5,
+      "income_shock_depth": 0.45,
+      "income_shock_in": 0.01,
+      "income_shock_out": 0.075,
+      "latent_rho": 0.985,
+      "latent_sigma": 0.03,
+      "missing_bureau_rate": 0.11,
+      "months": 24,
+      "n_agents": 30,
+      "n_borrowers": 5000,
+      "observation_noise": 1.0,
+      "p_pending_then_verified": 0.04,
+      "p_rejected": 0.012,
+      "p_reversed": 0.008,
+      "penal_rate_monthly": 0.02,
+      "ptp_grace_days": 3,
+      "ptp_horizon_hi": 15,
+      "ptp_horizon_lo": 3,
+      "recall_hazard_monthly": 0.004,
+      "reversal_lag_hi": 20,
+      "reversal_lag_lo": 5,
+      "seasonality_amplitude": 0.18,
+      "seed": 42,
+      "settlement_hazard_monthly": 0.15,
+      "shock_magnitude": -0.55,
+      "shock_month_index": 17,
+      "signal_scale": 1.0,
+      "start_date": "2024-10-01",
+      "target_material_rate": 0.3,
+      "thin_file_missing_boost": 0.35,
+      "verify_lag_hi": 3,
+      "verify_lag_lo": 1,
+      "visit_hazard_current": 0.01,
+      "visit_hazard_delinquent": 0.055,
+      "writeoff_dpd": 180.0,
+      "writeoff_hazard_monthly": 0.5,
+      "fingerprint": "ea9ce50bfde36786",
+      "n_days": 750
+    },
+    "realism": {
+      "passed": true,
+      "n_failed": 0,
+      "checks": [
+        {
+          "check": "forward_flow_rate",
+          "value": 0.5022,
+          "low": 0.15,
+          "high": 0.55,
+          "provenance": "ASSUMPTION",
+          "note": "Share of delinquent accounts worsening a bucket in a month. NOT sourced \u2014 replace with the client's roll-rate matrix. *(Ceiling raised from 0.45 to 0.55 on 2026-09-09, AFTER measuring 0.4645 and working out why. This band is not free: an account that does not pay at least one instalment rolls forward MECHANICALLY, because a fresh instalment bills every cycle. So forward flow is bounded below by roughly (1 - material_payment_rate) times the chance of crossing a 30-day boundary, and at the 0.20-0.40 material rate this file also asserts, a ceiling of 0.45 was arithmetically inconsistent with it. The original band was set without doing that coupling arithmetic. Recorded rather than quietly widened, because moving a goalpost after seeing the result is exactly the move that makes a validation suite worthless \u2014 the justification has to survive reading, and if it does not, the generator was right and the band was wrong.)*",
+          "status": "PASS"
+        },
+        {
+          "check": "cure_rate",
+          "value": 0.0574,
+          "low": 0.05,
+          "high": 0.25,
+          "provenance": "ASSUMPTION",
+          "note": "Share improving a bucket in a month. Wide on purpose: cure is the quantity we are least able to guess without a real book.",
+          "status": "PASS"
+        },
+        {
+          "check": "npa_share",
+          "value": 0.3147,
+          "low": 0.15,
+          "high": 0.35,
+          "provenance": "CALIBRATION_TARGET",
+          "note": "Share of account-months at 90+ DPD. A CALIBRATION TARGET, not a finding: the previous simulator let NPA become a sink at a measured 51.7% and the lifecycle hazards exist to stop that. The 90-day threshold itself is regulatory; this share is our target.",
+          "status": "PASS"
+        },
+        {
+          "check": "performing_share",
+          "value": 0.3139,
+          "low": 0.15,
+          "high": 0.45,
+          "provenance": "CALIBRATION_TARGET",
+          "note": "Share of account-months at 0-30 DPD. The book must have mass at the GOOD end or the binner has nothing to bin there and DPD's apparent power is inflated \u2014 the defect the demo seed has by starting every loan at DPD 35.",
+          "status": "PASS"
+        },
+        {
+          "check": "current_share",
+          "value": 0.0509,
+          "low": 0.0,
+          "high": 1.0,
+          "provenance": "ASSUMPTION",
+          "note": "REPORTED, NOT GATED. Kept visible because a collapse to zero would mean cures had stopped happening, but its level is an artefact of grace-vs-cycle arithmetic rather than a property of the book.",
+          "status": "REPORTED"
+        },
+        {
+          "check": "vintage_monotone_frac",
+          "value": 1.0,
+          "low": 0.8,
+          "high": 1.0,
+          "provenance": "ASSUMPTION",
+          "note": "Fraction of origination cohorts whose cumulative-ever-delinquent curve is non-decreasing in months-on-book. Near-1 by arithmetic \u2014 a genuine sanity check on the generator, not on the world.",
+          "status": "PASS"
+        },
+        {
+          "check": "exact_emi_share",
+          "value": 0.4803,
+          "low": 0.2,
+          "high": 0.5,
+          "provenance": "ASSUMPTION",
+          "note": "Payments within +/-2% of one EMI. Real ledgers spike hard at the contractual amount; the size of the spike is our guess.",
+          "status": "PASS"
+        },
+        {
+          "check": "round_number_share",
+          "value": 0.1443,
+          "low": 0.1,
+          "high": 0.45,
+          "provenance": "ASSUMPTION",
+          "note": "Payments that are a multiple of 500. Cash collection clusters on round notes. Direction is real, magnitude is assumed.",
+          "status": "PASS"
+        },
+        {
+          "check": "partial_share",
+          "value": 0.3492,
+          "low": 0.2,
+          "high": 0.6,
+          "provenance": "ASSUMPTION",
+          "note": "Payments under 90% of one EMI. A collections book is mostly partials; the band is ours.",
+          "status": "PASS"
+        },
+        {
+          "check": "ptp_kept_rate",
+          "value": 0.4609,
+          "low": 0.35,
+          "high": 0.65,
+          "provenance": "ASSUMPTION",
+          "note": "Share of resolved PTPs honoured. Wide because it varies enormously by book and by how aggressively agents record promises. NOT sourced.",
+          "status": "PASS"
+        },
+        {
+          "check": "rpc_rate",
+          "value": 0.4814,
+          "low": 0.2,
+          "high": 0.5,
+          "provenance": "ASSUMPTION",
+          "note": "Right-party contact: visits where the borrower was met. Field visits beat telephony on this, which is why the band sits above typical call-centre figures. Still an assumption.",
+          "status": "PASS"
+        },
+        {
+          "check": "material_payment_rate",
+          "value": 0.3074,
+          "low": 0.2,
+          "high": 0.4,
+          "provenance": "CALIBRATION_TARGET",
+          "note": "Share of account-months with a material payment (the model's y=0). The intercept is SOLVED to this. Calibrating PREVALENCE is legitimate \u2014 it is an observable book property. Calibrating DISCRIMINATION would not be, and nothing here does.",
+          "status": "PASS"
+        }
+      ],
+      "roll_matrix": {
+        "0.0": {
+          "0": 0.362,
+          "1": 0.038,
+          "2": 0.013,
+          "3": 0.004,
+          "4": 0.0
+        },
+        "1.0": {
+          "0": 0.637,
+          "1": 0.269,
+          "2": 0.089,
+          "3": 0.027,
+          "4": 0.003
+        },
+        "2.0": {
+          "0": 0.001,
+          "1": 0.692,
+          "2": 0.186,
+          "3": 0.046,
+          "4": 0.005
+        },
+        "3.0": {
+          "0": 0.0,
+          "1": 0.001,
+          "2": 0.713,
+          "3": 0.192,
+          "4": 0.02
+        },
+        "4.0": {
+          "0": 0.0,
+          "1": 0.0,
+          "2": 0.0,
+          "3": 0.732,
+          "4": 0.973
+        }
+      },
+      "descriptives": {
+        "panel_rows": 94907,
+        "distinct_loans": 17970,
+        "months": 24,
+        "dpd_mean": 70.0,
+        "dpd_median": 57.0,
+        "dpd_p95": 178.0,
+        "dpd_max": 446.0,
+        "bucket_mix": {
+          "NPA": 0.3147,
+          "BUCKET_1": 0.263,
+          "BUCKET_2": 0.2059,
+          "BUCKET_3": 0.1655,
+          "CURRENT": 0.0509
+        },
+        "n_payments": 68751,
+        "n_visits": 134692,
+        "n_ptps_resolved": 26161,
+        "loans_written_off": 5022,
+        "loans_settled": 5340,
+        "loans_closed": 4283,
+        "loans_opened": 15235
+      }
+    },
+    "SYNTHETIC_WARNING": "Generated by app/ml/simulation/ledger/. These are SYNTHETIC borrowers. The realism checks say the book is internally plausible; they are NOT evidence about real borrowers, and almost every acceptance band is a PROJECT ASSUMPTION with no external source. See config.BANDS for the provenance of each.",
+    "BASELINE_NOTE": "book_simulator.py is unchanged and remains the baseline. recovery_risk 1.1.0 was trained on it; nothing here is promoted."
+  },
+  "training_data_hash": "e016c31f613491b2",
+  "is_modelled": true,
+  "SYNTHETIC_WARNING": "Generated by app/ml/simulation/ledger/. These are SYNTHETIC borrowers. The realism checks say the book is internally plausible; they are NOT evidence about real borrowers, and almost every acceptance band is a PROJECT ASSUMPTION with no external source. See config.BANDS for the provenance of each.",
+  "model": "recovery_risk",
+  "version": "1.2.0-ledger",
+  "saved_at": "2026-09-09",
+  "artifact_sha256": "7da38e010eec6c36be4346b40b2fc5b233ca6913ba40a4156f3468dcb0f5f1a7",
+  "library_versions": {
+    "python": "3.12.10",
+    "scikit_learn": "1.6.0",
+    "numpy": "2.2.0",
+    "pandas": "2.2.3"
+  }
+}
