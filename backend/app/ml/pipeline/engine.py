@@ -1,0 +1,297 @@
+# ─── CHANGELOG (prototype → product) ─────────────────────────────────────────
+# 2026-09-08 — NEW. The serving seam: load a pickled model once, score a dict,
+#   return a probability, a band, reason codes and — always — whether the number
+#   came from a model at all.
+#
+#   `is_modelled` TRAVELS ON THE OBJECT. That is this repo's existing rule
+#   (ScoreOutcome, RepaymentScore, LLMResult.ai_generated) and it matters more
+#   here, not less: a DecisionEngine that cannot load its artifact still answers,
+#   and it answers with the hand-weighted fallback. A caller that forgets to
+#   check would otherwise render a scorecard behind an "AI" chip.
+#
+#   MISSING FEATURES ARE A FIRST-CLASS CASE, NOT AN ERROR. The models are fitted
+#   on a panel that carries fields the live schema does not yet have
+#   (address_vintage_months, phone_verified, mail_returned_count). Rather than
+#   refuse to score, the engine passes NaN and the WOE binner routes it to the
+#   feature's Missing bin — which is exactly what that bin was fitted for. What
+#   it will NOT do is hide it: every result carries `feature_coverage`, and
+#   below a floor the engine declines and says why.
+# ───────────────────────────────────────────────────────────────────────────
+"""
+Model serving.
+
+    from app.ml.pipeline.engine import DecisionEngine
+
+    engine = DecisionEngine.get("recovery_risk")
+    out = engine.score({"dpd": 62, "cibil_score": 611, ...})
+    out.probability      # 0.81   P(no material payment next cycle)
+    out.points           # 548    scorecard points, higher = safer
+    out.band             # "E"
+    out.reason_codes     # [{feature, points, points_lost}, ...]
+    out.is_modelled      # True
+
+Engines are cached per (model, version) — a joblib load is expensive and the
+artifact is immutable for a given version, so loading it per request would be
+pure waste.
+"""
+from __future__ import annotations
+
+import logging
+import threading
+from dataclasses import dataclass, field, asdict
+from typing import Any
+
+import numpy as np
+import pandas as pd
+
+from app.ml.pipeline import registry
+from app.ml.pipeline.scorecard import DEFAULT_BANDS, ScoreCard, band_for
+
+logger = logging.getLogger(__name__)
+
+# Below this share of the model's own features being supplied, the engine
+# declines rather than scoring. A scorecard with two of seven inputs present is
+# not a cautious estimate, it is the intercept plus noise, and returning it with
+# a plausible-looking probability is worse than returning nothing.
+MIN_FEATURE_COVERAGE = 0.60
+
+
+@dataclass
+class ScoreResult:
+    """One scored entity. Everything a caller needs to render it honestly."""
+
+    probability: float | None
+    points: int | None
+    band: str | None
+    model: str
+    version: str
+    is_modelled: bool
+    reason_codes: list[dict] = field(default_factory=list)
+    feature_points: dict[str, int] = field(default_factory=dict)
+    feature_coverage: float = 0.0
+    missing_features: list[str] = field(default_factory=list)
+    fallback_reason: str | None = None
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+class DecisionEngine:
+    """Loads one model artifact and scores against it."""
+
+    _cache: dict[tuple[str, str], "DecisionEngine"] = {}
+    _lock = threading.Lock()
+
+    def __init__(self, model: str, version: str = "champion"):
+        self.model = model
+        self.pipeline, self.metadata = registry.load(model, version)
+        self.version = self.metadata.get("version", version)
+        self.spec = self.metadata.get("spec", {})
+        self.expected_features: list[str] = (
+            list(self.spec.get("numeric_features", ()))
+            + list(self.spec.get("categorical_features", ()))
+        )
+        self.selected: list[str] = self.metadata.get("selected_features", [])
+
+        # The calibrator sits beside the pipeline, not inside it: it needs the
+        # RAW overdue_amount, which the WOE transform has already replaced by
+        # the time the estimator runs. Absent for a model trained before 1.1.0,
+        # in which case scores are returned uncalibrated and say so.
+        self.calibrator = registry.load_extra(model, version, "calibrator")
+        self.calibration_meta = self.metadata.get("calibration")
+
+        sc = self.metadata.get("scorecard") or {}
+        self.card: ScoreCard | None = None
+        if sc.get("features"):
+            self.card = ScoreCard(
+                sc["features"], np.asarray(sc["coefficients"], dtype=float),
+                float(sc["intercept"]), pdo=sc.get("pdo", 20),
+                base_score=sc.get("base_score", 600),
+                base_odds=sc.get("base_odds", 50.0),
+                bands=[tuple(b) for b in sc.get("bands", DEFAULT_BANDS)],
+            )
+            self.card.max_points_ = sc.get("max_points", {})
+
+    # ── cached construction ─────────────────────────────────────────────────
+    @classmethod
+    def get(cls, model: str, version: str | None = None) -> "DecisionEngine | None":
+        """Return a cached engine, or None if the artifact cannot be loaded.
+
+        Returning None rather than raising is deliberate: a missing or corrupt
+        artifact must degrade the product to its existing scorecard, not take
+        down the endpoint that happened to ask for a score first.
+
+        **`version=None` means `settings.ML_MODEL_VERSION`**, which is the
+        rollout gate — not the literal string "champion".
+
+        2026-09-09. This parameter defaulted to `"champion"` and **every one of
+        the six call sites in `services/ml_scoring_service.py` omitted it**, so
+        `ML_MODEL_VERSION` was read in exactly one place: the `/manager/ml/health`
+        endpoint, which reported it as `configured_version`. Pinning the setting
+        to `1.0.0` to roll back therefore changed nothing except the health
+        endpoint's claim about itself — it would have confirmed the rollback
+        while 1.1.0 went on serving every score. A gate that cannot gate is
+        worse than no gate, because it is believed.
+
+        Resolved HERE rather than at the call sites so there is one place that
+        decides, per the one-definition rule; an explicit `version=` still wins,
+        which is what the training and comparison scripts need.
+        """
+        # Imported here, not at module scope, so `ml/pipeline` stays loadable by
+        # the training scripts without pulling in the app's settings object.
+        from app.core.config import settings
+
+        version = version or settings.ML_MODEL_VERSION or "champion"
+        key = (model, version)
+        if key in cls._cache:
+            return cls._cache[key]
+        with cls._lock:
+            if key in cls._cache:
+                return cls._cache[key]
+            try:
+                cls._cache[key] = cls(model, version)
+            except Exception as exc:
+                logger.warning("ml.engine.load_failed model=%s version=%s error=%s",
+                               model, version, exc)
+                return None
+            return cls._cache[key]
+
+    @classmethod
+    def clear_cache(cls) -> None:
+        with cls._lock:
+            cls._cache.clear()
+
+    # ── scoring ─────────────────────────────────────────────────────────────
+    def _frame(self, features: dict[str, Any]) -> tuple[pd.DataFrame, float, list[str]]:
+        """One-row frame with every expected column, NaN where unsupplied."""
+        row = {f: features.get(f, np.nan) for f in self.expected_features}
+        missing = [f for f in self.selected
+                   if f not in features or features.get(f) is None
+                   or (isinstance(features.get(f), float) and np.isnan(features[f]))]
+        coverage = 1.0 - (len(missing) / max(len(self.selected), 1))
+        return pd.DataFrame([row]), coverage, missing
+
+    def score(self, features: dict[str, Any]) -> ScoreResult:
+        X, coverage, missing = self._frame(features)
+
+        if coverage < MIN_FEATURE_COVERAGE:
+            return ScoreResult(
+                probability=None, points=None, band=None,
+                model=self.model, version=self.version, is_modelled=False,
+                feature_coverage=round(coverage, 3), missing_features=missing,
+                fallback_reason=(
+                    f"only {coverage:.0%} of the model's {len(self.selected)} "
+                    f"features were supplied (floor {MIN_FEATURE_COVERAGE:.0%}); "
+                    f"missing: {', '.join(missing)}"),
+            )
+
+        try:
+            prob = float(self.pipeline.predict_proba(X)[0, 1])
+            prob = self._calibrate_one(prob, features)
+        except Exception as exc:
+            logger.warning("ml.engine.score_failed model=%s error=%s", self.model, exc)
+            return ScoreResult(
+                probability=None, points=None, band=None,
+                model=self.model, version=self.version, is_modelled=False,
+                feature_coverage=round(coverage, 3), missing_features=missing,
+                fallback_reason=f"scoring raised {type(exc).__name__}: {exc}",
+            )
+
+        points, band, reasons, fpoints = None, None, [], {}
+        if self.card is not None:
+            try:
+                # Step through the fitted transformers explicitly rather than
+                # slicing. `pipeline[:-1]` builds a NEW Pipeline that sklearn
+                # regards as unfitted — it warns today and raises from 1.8 —
+                # even though every step inside it is fitted. Walking the steps
+                # uses the same objects with no reconstruction.
+                woe = X
+                for _, step in self.pipeline.steps[:-1]:
+                    woe = step.transform(woe)
+                out = self.card.explain(woe, prob)
+                points, band = out.points, out.band
+                reasons, fpoints = out.reason_codes, out.feature_points
+            except Exception as exc:                        # pragma: no cover
+                logger.warning("ml.engine.explain_failed model=%s error=%s",
+                               self.model, exc)
+
+        return ScoreResult(
+            probability=round(prob, 6), points=points, band=band,
+            model=self.model, version=self.version, is_modelled=True,
+            reason_codes=reasons, feature_points=fpoints,
+            feature_coverage=round(coverage, 3), missing_features=missing,
+        )
+
+    def _calibrate_one(self, prob: float, features: dict[str, Any]) -> float:
+        if self.calibrator is None:
+            return prob
+        seg = features.get(self.calibrator.segment_col)
+        return self.calibrator.transform_one(prob, seg)
+
+    def score_batch(self, rows: list[dict[str, Any]]) -> list[float | None]:
+        """Probabilities for many rows in one call.
+
+        The nightly scorer runs over the whole book; a per-row predict_proba on
+        a sklearn Pipeline is dominated by call overhead, and this repo already
+        learned that lesson once — RepaymentService._load bulk-loads because
+        fifteen minutes is the entire margin between ingest and allocation.
+        """
+        if not rows:
+            return []
+        X = pd.DataFrame([{f: r.get(f, np.nan) for f in self.expected_features}
+                          for r in rows])
+        try:
+            raw = self.pipeline.predict_proba(X)[:, 1]
+            if self.calibrator is not None:
+                seg = pd.to_numeric(
+                    X.get(self.calibrator.segment_col), errors="coerce").to_numpy()
+                raw = self.calibrator.transform(raw, seg)
+            return [round(float(p), 6) for p in raw]
+        except Exception as exc:
+            logger.warning("ml.engine.batch_failed model=%s error=%s", self.model, exc)
+            return [None] * len(rows)
+
+    # ── introspection ───────────────────────────────────────────────────────
+    def health(self) -> dict:
+        m = self.metadata.get("metrics", {}).get("oot", {})
+        return {
+            "model": self.model,
+            "version": self.version,
+            "loaded": True,
+            "is_modelled": True,
+            "champion_kind": self.metadata.get("champion_kind"),
+            "trained_at": self.metadata.get("saved_at"),
+            "gate_summary": self.metadata.get("gate_summary"),
+            "features": self.selected,
+            "n_features": len(self.selected),
+            "metrics_oot": {"gini": m.get("gini"), "ks": m.get("ks"),
+                            "bad_rate": m.get("bad_rate"),
+                            "top_decile_lift": m.get("top_decile_lift")},
+            "calibrated": self.calibrator is not None,
+            "calibration": self.calibration_meta,
+            "synthetic": bool(self.metadata.get("SYNTHETIC_WARNING")),
+            "SYNTHETIC_WARNING": self.metadata.get("SYNTHETIC_WARNING"),
+            "artifact_sha256": self.metadata.get("artifact_sha256"),
+            "library_versions": self.metadata.get("library_versions"),
+        }
+
+
+def health_all() -> dict:
+    """Status of every registered model. Mirrors GET /manager/ai/health's shape.
+
+    Reports models that FAILED to load as well as those that did, because "the
+    ML health endpoint returned 200 and listed nothing" is indistinguishable
+    from "there are no models" unless it says so.
+    """
+    from app.ml.pipeline.config import REGISTRY
+
+    out, loaded = [], 0
+    for name in REGISTRY:
+        eng = DecisionEngine.get(name)
+        if eng is None:
+            out.append({"model": name, "loaded": False, "is_modelled": False,
+                        "error": "no champion artifact, or it failed to load"})
+        else:
+            out.append(eng.health())
+            loaded += 1
+    return {"models": out, "n_registered": len(REGISTRY), "n_loaded": loaded}

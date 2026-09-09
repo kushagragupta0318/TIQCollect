@@ -21,6 +21,8 @@ celery_app = Celery(
         "app.workers.tasks.demo_daily_feed",
         "app.workers.tasks.location_retention",
         "app.workers.tasks.repayment_scoring",
+        "app.workers.tasks.beat_reconciliation",
+        "app.workers.tasks.model_outcomes",
     ],
 )
 
@@ -75,6 +77,23 @@ celery_app.conf.update(
         "location-trail-retention": {
             "task": "app.workers.tasks.location_retention.prune_location_trail",
             "schedule": crontab(hour=3, minute=0),
+        },
+        # Label matured model predictions at 19:15, BEFORE the 19:30 ingest.
+        # ingest_daily applies bank actions (SETTLED / WRITTEN_OFF / RECALL /
+        # DECEASED) to cases; running after it would censor a prediction on an
+        # action that landed after its own outcome window had already closed.
+        "model-outcome-labelling": {
+            "task": "app.workers.tasks.model_outcomes.attach_model_outcomes",
+            "schedule": crontab(hour=19, minute=15),
+        },
+        # Reconcile yesterday's beats — planned route against the GPS trail and
+        # the visit timestamps that actually happened. At 2 AM, after the trail
+        # for the day has finished arriving and before the 3 AM retention sweep
+        # ages any of it out. Order matters: run it after the prune and the
+        # evidence it measures would already be gone.
+        "beat-reconciliation": {
+            "task": "app.workers.tasks.beat_reconciliation.reconcile_beats",
+            "schedule": crontab(hour=2, minute=0),
         },
         # Monthly performance snapshot at midnight on 1st of each month
         "monthly-performance-snapshot": {
