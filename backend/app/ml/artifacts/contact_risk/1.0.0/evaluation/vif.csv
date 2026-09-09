@@ -1,0 +1,7 @@
+feature,vif,action
+dpd,2.509,kept
+overdue_amount,1.513,kept
+paid_ratio_3m,2.173,kept
+days_since_last_payment,1.957,kept
+contact_rate_6m,1.603,kept
+days_since_last_contact,1.575,kept

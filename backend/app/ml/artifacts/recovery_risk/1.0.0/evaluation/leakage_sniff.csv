@@ -1,0 +1,5 @@
+feature,gini_real,gini_time_shuffled,retention,note
+dpd,0.4558,0.0023,0.005,
+overdue_amount,0.3235,0.0052,0.016,
+ptp_kept_ratio,0.2102,0.0007,0.003,
+cibil_score,0.1969,0.0003,0.002,

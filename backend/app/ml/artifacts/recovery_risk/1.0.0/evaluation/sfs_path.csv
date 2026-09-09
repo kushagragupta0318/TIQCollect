@@ -1,0 +1,6 @@
+step,candidate,gini,gain,action
+1,dpd,0.4765,0.47647,added
+2,cibil_score,0.4944,0.01793,added
+3,ptp_kept_ratio,0.5017,0.00733,added
+4,overdue_amount,0.5032,0.00146,added
+5,ptp_kept_6m,0.5034,0.00017,stopped

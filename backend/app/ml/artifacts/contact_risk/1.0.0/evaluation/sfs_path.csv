@@ -1,0 +1,4 @@
+step,candidate,gini,gain,action
+1,contact_rate_6m,0.1604,0.16037,added
+2,dpd,0.1972,0.03687,added
+3,days_since_last_contact,0.197,-0.00026,stopped

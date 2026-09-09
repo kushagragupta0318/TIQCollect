@@ -1,0 +1,12 @@
+feature,vif,action
+ptp_set_6m,9.302,dropped
+cibil_score,1.042,kept
+months_on_book,1.468,kept
+dpd,2.376,kept
+overdue_amount,2.441,kept
+total_outstanding,1.668,kept
+penal_ratio,1.767,kept
+visits_6m,2.266,kept
+contact_rate_6m,1.278,kept
+ptp_kept_6m,1.622,kept
+ptp_kept_ratio,1.754,kept

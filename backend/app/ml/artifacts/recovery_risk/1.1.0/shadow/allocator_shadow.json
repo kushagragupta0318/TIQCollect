@@ -1,0 +1,157 @@
+{
+  "plan_quality": {
+    "base": {
+      "cases": 509,
+      "realised_recovery_rate": 0.2161,
+      "realised_recovered_inr": 656537.0
+    },
+    "ml": {
+      "cases": 509,
+      "realised_recovery_rate": 0.2279,
+      "realised_recovered_inr": 575979.0
+    },
+    "swapped_in": 37,
+    "swapped_out": 37,
+    "swapped_in_realised_rate": 0.2703,
+    "swapped_out_realised_rate": 0.1081
+  },
+  "brier": {
+    "n": 509,
+    "current": 0.21611,
+    "ml": 0.13603,
+    "improvement_pct": 37.1
+  },
+  "reliability_current": [
+    {
+      "band": 1,
+      "n": 330,
+      "predicted": 0.4232,
+      "actual": 0.2,
+      "gap": 0.2232
+    },
+    {
+      "band": 2,
+      "n": 179,
+      "predicted": 0.45,
+      "actual": 0.2458,
+      "gap": 0.2042
+    }
+  ],
+  "reliability_ml": [
+    {
+      "band": 1,
+      "n": 102,
+      "predicted": 0.0461,
+      "actual": 0.0588,
+      "gap": -0.0128
+    },
+    {
+      "band": 2,
+      "n": 102,
+      "predicted": 0.0948,
+      "actual": 0.0588,
+      "gap": 0.036
+    },
+    {
+      "band": 3,
+      "n": 101,
+      "predicted": 0.1838,
+      "actual": 0.1287,
+      "gap": 0.0551
+    },
+    {
+      "band": 4,
+      "n": 102,
+      "predicted": 0.3405,
+      "actual": 0.2843,
+      "gap": 0.0562
+    },
+    {
+      "band": 5,
+      "n": 102,
+      "predicted": 0.5208,
+      "actual": 0.549,
+      "gap": -0.0282
+    }
+  ],
+  "oot": {
+    "gini": 0.5136,
+    "ks": 39.72,
+    "bad_rate": 0.7175333333333334,
+    "n": 30000,
+    "gate_summary": "PASS",
+    "bootstrap_ci": {
+      "point": 0.5136,
+      "mean": 0.5135,
+      "std": 0.0061,
+      "ci_lower_2.5": 0.502,
+      "ci_upper_97.5": 0.525,
+      "n_bootstrap": 300
+    }
+  },
+  "deferred_identical": false,
+  "deferred_base": 624,
+  "deferred_ml": 624,
+  "deferred_symmetric_difference": 74,
+  "calibration": {
+    "n_allocated_with_outcome": 509,
+    "realised_recovery_rate": 0.2161,
+    "forecast_current": 0.4326,
+    "forecast_ml": 0.2373,
+    "error_current": 0.2165,
+    "error_ml": 0.0212,
+    "relative_error_current_pct": 100.2,
+    "relative_error_ml_pct": 9.8
+  },
+  "objective": "BALANCED",
+  "model": "recovery_risk v1.1.0",
+  "cases": 1200,
+  "agents": 40,
+  "scored": 1200,
+  "base": {
+    "allocated": 509,
+    "blocked": 67,
+    "deferred": 624,
+    "expected_recovery": 2205049.86
+  },
+  "ml": {
+    "allocated": 509,
+    "blocked": 67,
+    "deferred": 624,
+    "expected_recovery": 704757.05
+  },
+  "assignments_moved": 20,
+  "assignments_compared": 472,
+  "pct_moved": 4.24,
+  "expected_recovery_delta_pct": -68.04,
+  "blocked_identical": true,
+  "blocked_base": 67,
+  "blocked_ml": 67,
+  "blocked_symmetric_difference": [],
+  "prob_recovery_current": {
+    "n": 509,
+    "mean": 0.4326,
+    "std": 0.0147,
+    "min": 0.414,
+    "max": 0.45
+  },
+  "prob_recovery_ml": {
+    "n": 509,
+    "mean": 0.2373,
+    "std": 0.1779,
+    "min": 0.0234,
+    "max": 0.6353
+  },
+  "moved_sample": [
+    "CASE00048",
+    "CASE00234",
+    "CASE00297",
+    "CASE00308",
+    "CASE00324",
+    "CASE00343",
+    "CASE00437",
+    "CASE00507",
+    "CASE00530",
+    "CASE00653"
+  ]
+}

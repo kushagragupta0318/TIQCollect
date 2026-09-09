@@ -1,0 +1,5 @@
+dropped,kept,abs_corr,iv_dropped,iv_kept
+arrears_ratio,dpd,0.9194,0.0454,0.0472
+dpd_bucket,dpd,0.8966,0.0388,0.0472
+paid_ratio_6m,paid_ratio_3m,0.9208,0.0274,0.0287
+paid_ratio_12m,paid_ratio_3m,0.9143,0.0268,0.0287

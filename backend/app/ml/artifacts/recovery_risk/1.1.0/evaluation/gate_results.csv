@@ -1,0 +1,13 @@
+gate,observed,threshold,result
+gini_min,0.5136,>= 0.25,PASS
+gini_in_target_band,0.5136,0.35-0.55,PASS
+gini_not_suspicious,0.5136,< 0.6,PASS
+ks_min,39.72,>= 20.0,PASS
+ks_not_suspicious,39.72,< 60.0,PASS
+rank_order_breaks_total,0.0,<= 1,PASS
+rank_order_breaks_top5,0.0,<= 0,PASS
+top_decile_lift_capture,0.9563,>= 0.55 (of max 1.394x),PASS
+top_decile_lift_not_suspicious,0.9563,< 0.995,PASS
+train_test_gini_gap,-0.0279,< 0.1,PASS
+max_feature_psi,0.0111,< 0.25,PASS
+min_segment_gini,0.4872,>= 0.2,PASS
