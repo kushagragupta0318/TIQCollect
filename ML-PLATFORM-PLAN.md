@@ -2,6 +2,35 @@
 
 **Status:** planning only. No code changed.
 **Date:** 2026-09-07 · **Branch:** `TIQCollect-v2-2`
+> ## Implementation status — updated 2026-09-08
+>
+> **Workstream B (the ML factory) and the data foundation of Workstream A are
+> built and committed.** `backend/app/ml/pipeline/` holds the full lifecycle,
+> `backend/app/ml/simulation/book_simulator.py` generates the panel, and
+> `backend/app/ml/artifacts/` carries two trained models with their pickles,
+> EDA, evaluation tables and model documents. 600 backend tests pass.
+>
+> What this plan predicted, and what actually happened:
+>
+> - **§1.2 was right about the Gini alarm, for the wrong reason.** The plan
+>   treated `A_scorecard roc_auc 1.0000` as possible circularity. The deeper
+>   problem was that no gate existed to catch it. There is one now, and it is a
+>   hard failure at 0.60.
+> - **§2's `IV > 0.5 = leak` rule had to be corrected.** It is an
+>   application-scorecard rule; on a behaviour model over a delinquent book,
+>   eight features legitimately clear it. Split into a review threshold (0.50)
+>   and a hard drop (0.80).
+> - **The lift gates were bad-rate-blind.** At a 70% bad rate the maximum
+>   achievable top-decile lift is 1.43x, so "suspicious above 5x" could never
+>   fire. Replaced with a bad-rate-invariant measure.
+> - **A constraint the plan missed entirely: serving availability.** The first
+>   model selected three features the live schema does not contain. Training
+>   and serving are now one contract, enforced by a test.
+> - **M3 (contactability) fails its gates**, at Gini 0.190 against a 0.25 floor,
+>   and the reason is data rather than modelling — see CLAUDE.md.
+>
+> Workstreams C (M1/M2/M4/M5), D (routing/OR) and E (maps) are **not started**.
+
 **Supersedes** plan v1 (routing/allocation/maps), which is folded in as Workstreams D and E.
 
 **What v2 adds over v1:** a realistic data foundation calibrated to a believable
