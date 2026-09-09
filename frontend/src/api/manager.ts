@@ -727,6 +727,31 @@ export interface AllocationDecisionItem {
   fit_score: number;
   reason: string;
   score_breakdown: Record<string, unknown>;
+  /**
+   * What the model contributed to THIS decision, straight off the persisted
+   * row. Added 2026-09-09: the response already carried ML-derived numbers —
+   * the assignment and the rupee figure both come from the model — while
+   * exposing nothing that said so, so a client could render a model-driven
+   * decision with no way to know it was one.
+   *
+   * `probability_used` is null when the model did not drive the decision. A
+   * client must NOT fall back to `shadow_prob_recovery` in that case: the two
+   * answer different questions and differ by roughly 6x on the live book.
+   */
+  ml?: {
+    used_for_decision: boolean;
+    probability_used: number | null;
+    borrower_p_recover: number | null;
+    shadow_prob_recovery: number | null;
+    value_transform: string | null;
+    expected_recovery_inr: number | null;
+    prediction_id: string | null;
+    model_name: string | null;
+    /** From the prediction row, never a constant — a hardcoded version would
+     *  keep reporting the old model straight through a rollback. */
+    model_version: string | null;
+    feature_coverage: number | null;
+  };
 }
 
 export interface AllocationPlanReport {

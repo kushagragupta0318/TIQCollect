@@ -18,6 +18,7 @@ import { Users, Briefcase, IndianRupee, MapPin, Clock, AlertTriangle, Sparkles, 
 import { toast } from "react-hot-toast";
 import { getDashboard, getAgents, getBriefing, getUnallocatedCases, getLatestAllocation, triggerAllocationPlan, rollbackAllocationPlan, exportAllocationDecisions, getAllocationSettings, updateAllocationSettings } from "@/api/manager";
 import { isTimeout } from "@/api/axios";
+import { mlBadge, rankedReasons } from "./allocationReasons";
 import { errorDetail, errorStatus } from "@/lib/apiError";
 import type { BriefingData, UnallocatedReport, AllocationPlanReport, AllocationDecisionItem } from "@/api/manager";
 import { StatCard } from "@/components/ui/Card";
@@ -841,95 +842,6 @@ function WithheldCases() {
  * Decisions written before 2026-09-02 carry no `contributions` key and fall back
  * to the old raw dump, so an existing plan stays readable until it is re-planned.
  */
-type Reason = { key: string; label: string; share: string };
-
-// Loan type as a manager says it, not as the enum spells it.
-const loanTypeWords = (b: Record<string, unknown>): string => {
-  const lt = typeof b.loan_type === "string" ? b.loan_type : "";
-  return lt ? `${lt.replace(/_/g, " ").toLowerCase()} loans` : "this loan type";
-};
-
-// TIER_1/2/3 map to 1.0/0.8/0.6 in global_allocator; 0.7 is the unknown-tier
-// default, which has no tier to name.
-const tierWords = (b: Record<string, unknown>): string => {
-  const w = Number(b.tier_weight ?? 0);
-  if (w >= 1.0) return "Tier 1";
-  if (w === 0.8) return "Tier 2";
-  if (w === 0.6) return "Tier 3";
-  return "";
-};
-
-const FACTOR_LABEL: Record<string, (b: Record<string, unknown>) => string> = {
-  // affinity_score is this agent's measured recovery rate on this loan type —
-  // the competency matrix that global_allocator was failing to read until
-  // 2026-09-02. It is not a weighted term of its own: it feeds prob_recovery,
-  // which produces expected_case_inr. So it is shown as the basis for the rupee
-  // figure rather than as a separate reason, which is what it actually is.
-  expected_recovery: (b) => {
-    const rupees = `₹${Math.round(Number(b.expected_case_inr ?? 0)).toLocaleString("en-IN")} expected recovery`;
-    const rate = Number(b.affinity_score ?? 0);
-    return rate > 0
-      ? `${rupees} — recovers ${Math.round(rate * 100)}% on ${loanTypeWords(b)}`
-      : rupees;
-  },
-  proximity: (b) => `${b.proximity_km ?? "?"} km from the agent's base`,
-  // 0.6 x tier + 0.4 x spec_match. Seniority and a DECLARED specialisation —
-  // not experience. Whether they have actually worked this loan type is the
-  // recovery rate above.
-  skills: (b) => {
-    const tier = tierWords(b);
-    return Number(b.spec_match ?? 0) >= 1
-      ? [tier, `specialises in ${loanTypeWords(b)}`].filter(Boolean).join(" · ")
-      : tier ? `${tier} agent` : "Agent tier";
-  },
-  workload: () => "Had capacity free",
-  continuity: () => "Already their case",
-  language: () => "Speaks the borrower's language",
-};
-
-function rankedReasons(breakdown: Record<string, unknown>): Reason[] {
-  const contributions = breakdown.contributions as Record<string, number> | undefined;
-
-  if (!contributions) {
-    return Object.entries(breakdown)
-      .filter(([k]) => k !== "contributions")
-      .map(([k, v]) => ({ key: k, label: k.replace(/_/g, " "), share: String(v) }));
-  }
-
-  const total = Object.values(contributions).reduce((a, b) => a + b, 0);
-
-  // A term can be present and still not be a reason. continuity_bonus is 0.10
-  // weighted at 0.05, so it contributes exactly 0.005 to every row it fires on —
-  // and it fires on nearly all of them, because the nightly plan re-plans cases
-  // that are already assigned (planner_service.py:193 pools assigned AND
-  // unassigned), so most cases are evaluated against their incumbent agent.
-  //
-  // A RELATIVE threshold cannot exclude it. Its share is 0.005 / fit, which
-  // crosses 1% as soon as the fit score falls to 1.0 — so it stayed visible on
-  // exactly the low-value, far-away cases, which is the worst place for noise.
-  //
-  // The durable property is absolute: continuity can never exceed 0.005, while
-  // every other factor here maxes out at 0.05 or more — a tenfold gap. So the
-  // floor is on the contribution itself, and it names no factor: anything that
-  // cannot move a decision by 0.01 is not an explanation for one. The relative
-  // test stays as a second filter, to drop terms that are real but drowned out.
-  //
-  // Nothing is hidden from the record — score_breakdown keeps every term. This
-  // governs only what is offered to a manager as a reason.
-  const MIN_ABSOLUTE_CONTRIBUTION = 0.01;
-
-  return Object.entries(contributions)
-    .filter(([, v]) => v >= MIN_ABSOLUTE_CONTRIBUTION)
-    .map(([k, v]) => ({ k, v, pct: total > 0 ? Math.round((v / total) * 100) : 0 }))
-    .filter((r) => r.pct >= 1)
-    .sort((a, b) => b.v - a.v)
-    .map((r) => ({
-      key: r.k,
-      label: FACTOR_LABEL[r.k]?.(breakdown) ?? r.k.replace(/_/g, " "),
-      share: `${r.pct}%`,
-    }));
-}
-
 function TomorrowAllocationCard() {
   const [plan, setPlan] = useState<AllocationPlanReport | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1410,6 +1322,23 @@ function TomorrowAllocationCard() {
                     <div className="flex items-center justify-between">
                       <span className="font-bold text-slate-800">{d.case_number}</span>
                       <div className="flex items-center gap-1.5">
+                        {/* Says the model was involved, without saying how. A
+                            manager needs to know the recovery estimate came
+                            from a model — the version and input coverage sit in
+                            the tooltip for anyone who asks. Absent entirely
+                            when the model did NOT drive the decision, so the
+                            badge never quietly means "scored and ignored". */}
+                        {(() => {
+                          const badge = mlBadge(d.ml);
+                          return badge ? (
+                            <span
+                              title={badge.title}
+                              className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-violet-100 text-violet-800"
+                            >
+                              {badge.label}
+                            </span>
+                          ) : null;
+                        })()}
                         {d.outcome === "ALLOCATED" && (
                           <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800">
                             → {d.allocated_agent_name}

@@ -1528,14 +1528,250 @@ def ai_health(current_user: ManagerOnly):
 # healthy and deliberately not in use, and those are different states.
 
 @router.get("/ml/health")
-def ml_health(current_user: ManagerOnly):
-    from app.ml.pipeline.engine import health_all
+def ml_health(current_user: ManagerOnly, db: DbSession):
+    from app.ml.pipeline.engine import DecisionEngine, health_all
 
     out = health_all()
     out["scoring_enabled"] = settings.ML_SCORING_ENABLED
     out["prediction_logging_enabled"] = settings.ML_LOG_PREDICTIONS
     out["configured_version"] = settings.ML_MODEL_VERSION
+    out["auto_retrain_enabled"] = settings.ML_AUTO_RETRAIN_ENABLED
+
+    # 2026-09-09 — LIVE MONITORING, alongside the artifact's development
+    # metrics and never instead of them. `health_all()` reports what the model
+    # scored WHEN IT WAS BUILT; `monitoring` below reports what it is scoring
+    # NOW, on matured production outcomes. Merging them would be the worst
+    # possible answer: a development Gini presented as a live one is exactly
+    # the number somebody would act on.
+    #
+    # `status` is never "healthy" on absent evidence. `not_ready` and
+    # `insufficient_outcome_variation` are their own states precisely so that a
+    # model nobody can judge yet cannot read as a model that has been judged.
+    out["monitoring"] = _ml_monitoring_block(db)
+
+    # Which artifact THIS PROCESS has in memory against what the pointer says.
+    # A promotion rewrites champion.txt and does not reach into a running
+    # process's cache; with several API containers the fleet can be split
+    # across two champions and every one of them would otherwise report itself
+    # healthy. The answer is per-instance and says so.
+    # `health_all()["models"]` is a LIST of per-model dicts, each with a
+    # "model" key — not a mapping. Iterating it as a mapping handed a dict
+    # where a model name belonged.
+    out["serving"] = {
+        m["model"]: DecisionEngine.serving_state(m["model"])
+        for m in (out.get("models") or []) if m.get("model")
+    }
     return out
+
+
+def _ml_monitoring_block(db, model_name: str = "recovery_risk") -> dict:
+    """The production monitoring state, in the shape a reader can act on.
+
+    Read-only and defensive: a health endpoint that 500s because a diagnostic
+    raised is worse than one that reports the diagnostic failed.
+    """
+    from app.ml.pipeline.monitor import (
+        CALIBRATION_GAP_THRESHOLD, GINI_RELATIVE_DROP_THRESHOLD,
+        KS_RELATIVE_DROP_THRESHOLD, BRIER_RELATIVE_RISE_THRESHOLD,
+        MIN_MATURED_FOR_MONITORING, PSI_RETRAIN_THRESHOLD, monitor_model,
+        readiness,
+    )
+    from app.models.model_candidate import ModelCandidate
+
+    thresholds = {
+        "gini_relative_drop": GINI_RELATIVE_DROP_THRESHOLD,
+        "ks_relative_drop": KS_RELATIVE_DROP_THRESHOLD,
+        "brier_relative_rise": BRIER_RELATIVE_RISE_THRESHOLD,
+        "calibration_gap_abs": CALIBRATION_GAP_THRESHOLD,
+        "psi": PSI_RETRAIN_THRESHOLD,
+        "min_matured": MIN_MATURED_FOR_MONITORING,
+    }
+    try:
+        gate = readiness(db, model_name)
+    except Exception as exc:                                # pragma: no cover
+        return {"status": "error", "error": type(exc).__name__, "detail": str(exc)}
+
+    base = {
+        "model": model_name,
+        "model_version": gate.model_version,
+        "outcome_definition_version": gate.outcome_definition_version,
+        "n_matured": gate.n_matured,
+        "required_matured": gate.required,
+        "excluded_other_model_version": gate.n_excluded_other_model_version,
+        "excluded_other_outcome_version": gate.n_excluded_other_outcome_version,
+        "thresholds": thresholds,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if not gate.ready:
+        # NOT a verdict about the model. Said in as many words, because
+        # "not_ready" rendered beside a green tick is how a reader concludes
+        # the opposite of what it means.
+        return {**base, "status": "not_ready", "verdict": None,
+                "retrain_recommended": False, "retrain_reasons": [],
+                "n_classes": None, "bad_rate_live": None,
+                "performance": {}, "stability": {},
+                "note": ("fewer than the required matured outcomes on the "
+                         "serving version and current outcome definition; no "
+                         "conclusion about model health is available yet")}
+    try:
+        rep = monitor_model(db, model_name, version=gate.model_version,
+                            outcome_definition_version=gate.outcome_definition_version)
+    except Exception as exc:                                # pragma: no cover
+        return {**base, "status": "error", "error": type(exc).__name__,
+                "detail": str(exc)}
+
+    variation = rep.outcome_variation or {}
+    latest = (db.query(ModelCandidate)
+              .filter(ModelCandidate.model_name == model_name)
+              .order_by(ModelCandidate.created_at.desc()).first())
+    return {
+        **base,
+        # `status` and `verdict` are the same word here on purpose: the monitor
+        # already distinguishes healthy / retrain_recommended /
+        # insufficient_outcome_variation / insufficient_data, and inventing a
+        # second vocabulary for the endpoint would be two names for one thing.
+        "status": rep.verdict,
+        "verdict": rep.verdict,
+        "retrain_recommended": rep.retrain_recommended,
+        "retrain_reasons": rep.reasons,
+        "n_predictions": rep.n_predictions,
+        "n_matured_scored": rep.n_matured,
+        "n_classes": variation.get("n_classes"),
+        "bad_rate_live": variation.get("bad_rate_live")
+                         or (rep.performance or {}).get("bad_rate_live"),
+        "performance": rep.performance,
+        "stability": rep.stability,
+        "excluded": rep.excluded,
+        "latest_candidate": latest.to_dict() if latest else None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# The retraining lifecycle — 2026-09-09
+# ---------------------------------------------------------------------------
+# The 2026-09-09 audit found that a retrain recommendation had no consumer and
+# a candidate had no surface: the whole lifecycle lived in worker logs. These
+# five routes are the durable report AND the approval gate.
+#
+# NOTHING HERE CAN PROMOTE WITHOUT A PERSON. `/approve` records a judgement,
+# `/promote` acts on it, and both are authenticated manager routes that refuse
+# a candidate which did not pass validation and beat the incumbent. There is no
+# code path from the nightly job to `champion.txt`.
+
+@router.get("/ml/candidates")
+def ml_candidates(current_user: ManagerOnly, db: DbSession,
+                  model: str = "recovery_risk", limit: int = 25,
+                  state: Optional[str] = None):
+    """Every retraining attempt, newest first — the durable retraining report.
+
+    Deliberately NOT tenant-scoped: a model is one global object, not a
+    manager's own data, and hiding another manager's view of the champion would
+    make two people disagree about which model is live. It is manager-only.
+    """
+    from app.models.model_candidate import ModelCandidate
+
+    q = db.query(ModelCandidate).filter(ModelCandidate.model_name == model)
+    if state:
+        q = q.filter(ModelCandidate.state == state.upper())
+    rows = q.order_by(ModelCandidate.created_at.desc()).limit(min(limit, 100)).all()
+    return {"model": model, "count": len(rows),
+            "candidates": [c.to_dict() for c in rows]}
+
+
+@router.get("/ml/candidates/{candidate_id}")
+def ml_candidate_detail(candidate_id: str, current_user: ManagerOnly, db: DbSession):
+    from app.ml.pipeline import registry
+    from app.models.model_candidate import ModelCandidate
+
+    cand = (db.query(ModelCandidate)
+            .filter(ModelCandidate.id == candidate_id).first())
+    if cand is None:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+    out = cand.to_dict()
+    # The incumbent AS OF NOW, beside the one the candidate was compared
+    # against. A reader approving a candidate needs to see when those differ,
+    # because that is exactly the case `approve` will refuse.
+    out["current_champion"] = registry.pointer_version(cand.model_name)
+    out["is_stale"] = out["current_champion"] != cand.incumbent_version
+    return out
+
+
+@router.post("/ml/candidates/{candidate_id}/approve")
+def ml_approve_candidate(candidate_id: str, current_user: ManagerOnly,
+                         db: DbSession, note: Optional[str] = None):
+    """Record a person's decision to accept the challenger. Does NOT promote."""
+    from app.ml.pipeline.lifecycle import ApprovalRefused, approve
+
+    try:
+        cand = approve(db, candidate_id, user_id=current_user.id, note=note)
+    except ApprovalRefused as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except Exception:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+
+    db.add(AuditLog(
+        created_at=datetime.now(timezone.utc), user_id=current_user.id,
+        action=AuditAction.MODEL_CANDIDATE_APPROVED,
+        entity_type="ModelCandidate", entity_id=cand.id,
+        details={"model": cand.model_name, "version": cand.candidate_version,
+                 "incumbent": cand.incumbent_version,
+                 "gini_uplift": cand.gini_uplift, "note": note},
+        success=True))
+    db.commit()
+    return cand.to_dict()
+
+
+@router.post("/ml/candidates/{candidate_id}/reject")
+def ml_reject_candidate(candidate_id: str, current_user: ManagerOnly,
+                        db: DbSession, note: Optional[str] = None):
+    from app.ml.pipeline.lifecycle import ApprovalRefused, reject
+
+    try:
+        cand = reject(db, candidate_id, user_id=current_user.id, note=note)
+    except ApprovalRefused as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except Exception:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+
+    db.add(AuditLog(
+        created_at=datetime.now(timezone.utc), user_id=current_user.id,
+        action=AuditAction.MODEL_CANDIDATE_REJECTED,
+        entity_type="ModelCandidate", entity_id=cand.id,
+        details={"model": cand.model_name, "version": cand.candidate_version,
+                 "note": note},
+        success=True))
+    db.commit()
+    return cand.to_dict()
+
+
+@router.post("/ml/candidates/{candidate_id}/promote")
+def ml_promote_candidate(candidate_id: str, current_user: ManagerOnly,
+                         db: DbSession):
+    """The one write in this codebase that changes what borrowers are scored by.
+
+    Separate from `/approve` on purpose: approval records a judgement, promotion
+    acts on it, and time passes in between. Promotion re-checks that the
+    champion has not moved since the candidate was compared against it.
+    """
+    from app.ml.pipeline.lifecycle import ApprovalRefused, promote
+
+    try:
+        cand = promote(db, candidate_id, user_id=current_user.id)
+    except ApprovalRefused as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except Exception:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+
+    db.add(AuditLog(
+        created_at=datetime.now(timezone.utc), user_id=current_user.id,
+        action=AuditAction.MODEL_PROMOTED,
+        entity_type="ModelCandidate", entity_id=cand.id,
+        details={"model": cand.model_name, "to": cand.candidate_version,
+                 "from": cand.promoted_from_version,
+                 "gini_uplift": cand.gini_uplift},
+        success=True))
+    db.commit()
+    return cand.to_dict()
 
 
 # ---------------------------------------------------------------------------
@@ -3791,6 +4027,19 @@ def get_latest_allocation_plan(
     }
     decisions.sort(key=lambda d: (outcome_order.get(str(d.outcome), 2), -(float(d.visit_priority_score or 0))))
 
+    # One query for every prediction these decisions point at, rather than one
+    # per decision inside the loop below. The run holds ~900 decisions and this
+    # endpoint is on the manager's landing page.
+    from app.models.model_prediction import ModelPrediction
+
+    _pred_ids = [d.model_prediction_id for d in decisions if d.model_prediction_id]
+    predictions_by_id = {}
+    if _pred_ids:
+        predictions_by_id = {
+            p.id: p for p in db.query(ModelPrediction)
+            .filter(ModelPrediction.id.in_(_pred_ids)).all()
+        }
+
     decision_list = []
     for d in decisions:
         case_num = d.case.case_number if d.case else ""
@@ -3800,6 +4049,22 @@ def get_latest_allocation_plan(
             if d.allocated_agent and d.allocated_agent.user
             else (d.allocated_agent.employee_code if d.allocated_agent else "")
         )
+        # ── the ML block ────────────────────────────────────────────────────
+        # 2026-09-09. The response carried ML-DERIVED numbers — the assignment
+        # and the rupee figure both come from the model — while exposing nothing
+        # that said so. A client could render a model-driven decision with no
+        # way to know it was one, and no way to trace it back to the score.
+        #
+        # Read from `score_breakdown`, which the allocator already writes, plus
+        # the lineage column. Nothing is recomputed and nothing is duplicated
+        # that the caller could derive: `expected_recovery_inr` is the
+        # allocator's own `expected_case_inr`, surfaced under a name a client
+        # can read without knowing the allocator's internals.
+        #
+        # `model_version` comes off the PREDICTION ROW, never a constant: a
+        # hardcoded version would keep reporting 1.1.0 through a rollback.
+        _bd = d.score_breakdown or {}
+        _pred = predictions_by_id.get(d.model_prediction_id)
         decision_list.append({
             "decision_id": d.id,
             "case_id": d.case_id,
@@ -3812,6 +4077,26 @@ def get_latest_allocation_plan(
             "fit_score": d.fit_score,
             "reason": d.reason,
             "score_breakdown": d.score_breakdown,
+            "ml": {
+                # Did the model actually drive this decision, or was it computed
+                # and shadowed? The allocator records exactly this.
+                "used_for_decision": bool(_bd.get("ml_used_for_decision")),
+                # The probability the objective multiplied by. `None` when the
+                # model did not drive it — the caller must not silently fall
+                # back to the shadow value.
+                "probability_used": _bd.get("prob_recovery_ml"),
+                # Borrower-side P(recover) before the agent adjustment.
+                "borrower_p_recover": _bd.get("ml_borrower_p_recover"),
+                # The shadow figure, named so nobody mistakes it for the live
+                # one. Kept because the promotion is only readable beside it.
+                "shadow_prob_recovery": _bd.get("prob_recovery"),
+                "value_transform": _bd.get("value_transform"),
+                "expected_recovery_inr": _bd.get("expected_case_inr"),
+                "prediction_id": d.model_prediction_id,
+                "model_name": _pred.model_name if _pred else None,
+                "model_version": _pred.model_version if _pred else None,
+                "feature_coverage": _pred.feature_coverage if _pred else None,
+            },
         })
 
     return {

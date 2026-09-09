@@ -506,14 +506,35 @@ def test_every_manager_route_that_reads_tenant_data_is_scoped():
     # /ai/health reports LLM reachability only: it takes no db session and
     # reads no row belonging to anyone.
     #
-    # /ml/health (2026-09-08) is the same shape for the trained models: it reads
-    # app/ml/artifacts/ off disk and the settings flags, takes no db session,
-    # and every field it returns describes a model file rather than a borrower,
-    # an agent or a case. Added to the allowlist rather than given a token
-    # scope, because a fake `current_user.id` reference purely to satisfy a
-    # textual sweep is worse than an explicit exemption — it would make the
-    # sweep report a scope that does not exist.
-    tenant_free = {'/ai/health', '/ml/health'}
+    # /ml/health (2026-09-08) is the same shape for the trained models: every
+    # field it returns describes a model rather than a borrower, an agent or a
+    # case. Added to the allowlist rather than given a token scope, because a
+    # fake `current_user.id` reference purely to satisfy a textual sweep is
+    # worse than an explicit exemption — it would make the sweep report a scope
+    # that does not exist.
+    #
+    # *(This entry used to say /ml/health "takes no db session". That stopped
+    # being true on 2026-09-09, when the live monitoring block was added and the
+    # route began reading `model_predictions` and `model_candidates`. Corrected
+    # rather than deleted, because the OLD reason would have quietly stopped
+    # applying while the exemption stayed — which is the exact failure mode this
+    # sweep exists to catch.)*
+    #
+    # THE EXEMPTION STILL HOLDS, for a different and narrower reason: those two
+    # tables are global ML state. `model_candidates` has no tenant column at all
+    # — there is ONE champion for the whole deployment — and the monitoring
+    # block returns aggregate model metrics (n, Gini, KS, PSI, a verdict), never
+    # a borrower, agent or case identifier. Scoping a model's health to one
+    # manager would make two managers disagree about which model is live.
+    #
+    # Pinned behaviourally by test_the_ml_routes_return_no_tenant_identifiers,
+    # because "it returns aggregates" is a claim about content and this sweep
+    # can only read text.
+    tenant_free = {'/ai/health', '/ml/health',
+                   '/ml/candidates', '/ml/candidates/{candidate_id}',
+                   '/ml/candidates/{candidate_id}/approve',
+                   '/ml/candidates/{candidate_id}/reject',
+                   '/ml/candidates/{candidate_id}/promote'}
     pattern = re.compile(r'@router\.(get|post|put|patch|delete)\("([^"]+)"')
     marks = []
     for i, ln in enumerate(src):
