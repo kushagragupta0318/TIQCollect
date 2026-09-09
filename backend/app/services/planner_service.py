@@ -519,17 +519,36 @@ class PlannerService:
         # outcome matures.
         _rows = getattr(self, "_ml_prediction_rows", None)
         if _rows:
+            # `assigned_cases_by_agent` is what allocate() RETURNED, so it is
+            # already post-exploration: a swapped case names the agent that
+            # actually got it, not the one the solve first picked.
             _agent_of = {c.id: aid
                          for aid, cs in assigned_cases_by_agent.items()
                          for c in cs}
+            # Ids are Python-side defaults, applied at INSERT. Without this
+            # flush every `_row.id` below is None and the lineage column would
+            # be silently NULL on every decision.
+            self.db.flush()
+            _pred_of = {_row.case_id: _row.id for _row in _rows if _row.case_id}
             _linked = 0
             for _row in _rows:
                 _aid = _agent_of.get(_row.case_id)
                 if _aid:
                     _row.agent_id = _aid
                     _linked += 1
+            # THE LINEAGE, written on the decision. Stamped for every outcome,
+            # not only ALLOCATED: a deferred or blocked case was still scored,
+            # and "the model said X and we held the case anyway" is exactly the
+            # kind of decision somebody will want to audit later.
+            _stamped = 0
+            for _d in decisions:
+                _pid = _pred_of.get(_d.case_id)
+                if _pid:
+                    _d.model_prediction_id = _pid
+                    _stamped += 1
             logger.info("allocation.ml_predictions_linked",
-                        rows=len(_rows), linked=_linked)
+                        rows=len(_rows), linked=_linked,
+                        decisions_stamped=_stamped)
 
         decisions.extend(pool_decisions)
         deferred_count += len(pool_decisions)
