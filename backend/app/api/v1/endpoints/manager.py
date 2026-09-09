@@ -23,6 +23,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import and_, func
+from sqlalchemy.exc import IntegrityError
 # Aliased: `Case` in this module is the SQLAlchemy model for a collections
 # case, so importing the SQL CASE construct under its own name would read as
 # the model with a typo.
@@ -1511,6 +1512,30 @@ def agents_performance(
 @router.get("/ai/health")
 def ai_health(current_user: ManagerOnly):
     return _llm.health()
+
+
+# ---------------------------------------------------------------------------
+# GET /manager/ml/health
+# ---------------------------------------------------------------------------
+# The same idea as /ai/health, for the trained models: which artifacts are
+# loaded, what version, whether they passed their gates, and what they scored
+# out-of-time. Added 2026-09-08 because a pickled model can fail in ways that
+# are invisible from the outside — absent artifact, checksum mismatch, a
+# scikit-learn version it was not fitted under — and every one of them would
+# otherwise look identical to "the fallback scorecard is fine".
+#
+# Reports `scoring_enabled` separately from `n_loaded`: a model can be present,
+# healthy and deliberately not in use, and those are different states.
+
+@router.get("/ml/health")
+def ml_health(current_user: ManagerOnly):
+    from app.ml.pipeline.engine import health_all
+
+    out = health_all()
+    out["scoring_enabled"] = settings.ML_SCORING_ENABLED
+    out["prediction_logging_enabled"] = settings.ML_LOG_PREDICTIONS
+    out["configured_version"] = settings.ML_MODEL_VERSION
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -3820,7 +3845,11 @@ def create_or_simulate_allocation_plan(
     req: Optional[dict] = None,
 ):
     """Trigger on-demand next-day planning, simulation, or replan."""
-    from app.services.planner_service import PlannerService, get_target_plan_date
+    from app.services.planner_service import (
+        PlanInProgressError,
+        PlannerService,
+        get_target_plan_date,
+    )
 
     req = req or {}
     strategy = req.get("strategy", "SMART")
@@ -3839,6 +3868,22 @@ def create_or_simulate_allocation_plan(
             objective=objective,
             simulate=simulate,
             force_replan=force_replan,
+        )
+    except PlanInProgressError as e:
+        # 409, not 500. Two planning runs for the same manager and date used to
+        # collide on the UNIQUE (agent_id, beat_date) index and surface as an
+        # opaque "Failed to generate plan" with the run rolled back. The request
+        # was valid; the timing was not, and the caller can simply retry.
+        raise HTTPException(status_code=409, detail=str(e))
+    except IntegrityError:
+        # The advisory lock covers Postgres. This is the belt to its braces: if
+        # a collision still lands, say so in a way a person can act on rather
+        # than returning a database error.
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="A conflicting plan was written while this one was being "
+                   "generated. Nothing was changed — please try again.",
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

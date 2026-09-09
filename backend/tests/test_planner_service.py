@@ -514,3 +514,126 @@ def test_one_managers_failure_does_not_abort_the_others(monkeypatch):
     assert set(out["planned"]) == {"m1@t.io", "m3@t.io"}
     assert "m2@t.io" in out["failed"]
     assert "IN_PROGRESS" in out["failed"]["m2@t.io"]
+
+
+# ─── Concurrent planning ────────────────────────────────────────────────────
+# Two planning runs for the same manager and date both delete the PLANNED beats
+# and then both insert, colliding on the UNIQUE (agent_id, beat_date) index.
+# Observed live as an opaque 500 and a "Failed to generate plan" toast, with the
+# run rolled back and nothing to show for it. A double-click on
+# "Re-Plan & Sequence" is enough; so is the 20:00 task overlapping a manual
+# re-plan.
+
+def test_plan_in_progress_returns_409_not_500(client, db_session, test_data, monkeypatch):
+    """The request was valid; the timing was not. That is 409, not 500 — and a
+    500 here previously told the user nothing they could act on."""
+    from app.services.planner_service import PlannerService
+
+    mgr = test_data["manager"]
+    token = create_access_token(user_id=mgr.id, role=mgr.role.value,
+                                device_id="test_device_lock")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Simulate losing the race: the lock is already held by someone else.
+    monkeypatch.setattr(PlannerService, "_acquire_plan_lock",
+                        lambda self, target_date: False)
+    resp = client.post("/api/v1/manager/allocation/plan",
+                       json={"strategy": "SMART"}, headers=headers)
+    assert resp.status_code == 409, f"expected 409, got {resp.status_code}"
+    assert "already being generated" in resp.json()["detail"]
+
+
+def test_the_exception_is_importable_where_it_is_caught():
+    """THE BUG THIS TEST EXISTS FOR was not the lock — it was the import.
+
+    `PlanInProgressError` was added to the imports of `get_latest_allocation_plan`
+    while the `except` clause sat in `create_or_simulate_allocation_plan`, so the
+    handler raised `NameError: name 'PlanInProgressError' is not defined` and the
+    500 came back unchanged. The patch's own `assert "..." in source` passed
+    because the string existed — in the wrong function. A name check on the
+    module cannot catch that; only executing the handler can, which is what the
+    test above does. This one guards the cheaper half: the symbol must exist.
+    """
+    from app.services.planner_service import PlanInProgressError
+
+    assert issubclass(PlanInProgressError, Exception)
+    # And it must NOT be a ValueError, or the endpoint's `except ValueError`
+    # would swallow it first and answer 400 instead of 409.
+    assert not issubclass(PlanInProgressError, ValueError)
+
+
+def test_simulate_does_not_take_the_lock(db_session, test_data, monkeypatch):
+    """A simulation writes no beats, so it must never block a real plan."""
+    from app.services.planner_service import PlannerService
+
+    calls = []
+    monkeypatch.setattr(PlannerService, "_acquire_plan_lock",
+                        lambda self, d: calls.append(d) or True)
+    svc = PlannerService(db_session, test_data["manager"].id)
+    svc.plan_next_day(simulate=True)
+    assert calls == [], "a simulated plan should not acquire the write lock"
+
+
+def test_lock_is_a_noop_on_non_postgres(db_session, test_data):
+    """SQLite has no advisory locks and no concurrent writers; the guard must
+    degrade to True rather than raising or blocking the test suite."""
+    from datetime import date as _date
+
+    from app.services.planner_service import PlannerService
+
+    svc = PlannerService(db_session, test_data["manager"].id)
+    assert svc._acquire_plan_lock(_date(2026, 9, 9)) is True
+
+
+def test_transform_is_paired_to_the_model_probabilities(db_session, test_data, monkeypatch):
+    """EXECUTABLE proof of the pairing, replacing a source grep.
+
+    The measured allocator change is `calibrated probability + log_rescaled`.
+    The other two corners were never evaluated and one is actively bad:
+    `calibrated probability + log_current` measured -10.1% realised recovery
+    across 8 seeds. So when scoring yields nothing, the transform MUST fall back
+    with it. This asserts what the allocator is actually constructed with, by
+    capturing the kwargs, rather than asserting a string appears in a file.
+    """
+    from app.core.config import settings
+    from app.services import global_allocator as ga
+    from app.services.planner_service import PlannerService
+
+    captured = {}
+    real_init = ga.GlobalAllocator.__init__
+
+    def spy(self, *a, **kw):
+        captured.update(kw)
+        return real_init(self, *a, **kw)
+
+    monkeypatch.setattr(ga.GlobalAllocator, "__init__", spy)
+
+    # (a) scoring OFF -> no probabilities -> the ORIGINAL transform
+    monkeypatch.setattr(settings, "ML_SCORING_ENABLED", False)
+    PlannerService(db_session, test_data["manager"].id).plan_next_day(
+        simulate=True, force_replan=True)
+    assert captured.get("value_transform") == "log_current"
+    assert captured.get("ml_recovery_probability") in (None, {})
+    assert captured.get("use_ml_affinity") is False
+
+    # (b) scoring ON but the model returns nothing -> STILL the original
+    captured.clear()
+    monkeypatch.setattr(settings, "ML_SCORING_ENABLED", True)
+    monkeypatch.setattr(PlannerService, "_ml_recovery_probabilities",
+                        lambda self, cases: {})
+    PlannerService(db_session, test_data["manager"].id).plan_next_day(
+        simulate=True, force_replan=True)
+    assert captured.get("value_transform") == "log_current", (
+        "an empty model result must not leave the allocator on log_rescaled — "
+        "that combination was never measured")
+
+    # (c) probabilities present -> the configured (promoted) transform
+    captured.clear()
+    cases = test_data.get("cases") or []
+    fake = {c.id: 0.3 for c in cases} or {"any-case": 0.3}
+    monkeypatch.setattr(PlannerService, "_ml_recovery_probabilities",
+                        lambda self, c: fake)
+    PlannerService(db_session, test_data["manager"].id).plan_next_day(
+        simulate=True, force_replan=True)
+    assert captured.get("value_transform") == settings.ALLOCATOR_VALUE_TRANSFORM
+    assert captured.get("use_ml_affinity") is True

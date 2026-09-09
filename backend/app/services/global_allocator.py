@@ -9,6 +9,7 @@ Stage 2: Route Feasibility Validation (OR-Tools / TSP) with Iterative Rebalancin
 from __future__ import annotations
 
 import math
+import random
 import uuid
 from typing import Sequence
 import structlog
@@ -57,6 +58,30 @@ class GlobalAllocator:
     PRIORITY_UPLIFT = 0.25        # a top-priority case gets up to +25% utility
     PROB_RECOVERY_FLOOR = 0.20
     PROB_RECOVERY_CEIL = 0.85
+
+    # 2026-09-08 — A SECOND FLOOR, FOR THE CALIBRATED PATH ONLY. The 0.20 above
+    # is deliberately NOT changed: it guards `_prob_recovery`, whose input is an
+    # Empirical Bayes agent estimate that is uninformative for most pairs (297
+    # of 315 cells sit below the five-observation threshold), and a floor is the
+    # right response to an estimate that cannot be taken literally. Changing it
+    # would also move production, which no measurement here justifies.
+    #
+    # `_prob_recovery_ml` has the opposite problem: its input IS meant to be
+    # taken literally, and the 0.20 floor was destroying that. Measured on the
+    # 350-case shadow pool, the floor lifted 153 of 350 cases (43.7%) whose mean
+    # predicted P(pay) was 0.0923 and whose ACTUAL recovery rate was 0.0588 —
+    # it overstated that group by 240%, and accounted for roughly half of the
+    # ML path's total +42% forecast bias.
+    #
+    # WHY 0.02 AND NOT ZERO. It is set below anything the model actually
+    # produces on this book (its minimum prediction is 0.0287), so it lifts
+    # nothing and is inert as a calibration matter — it exists purely so a
+    # pathological input cannot make a case's expected value exactly zero and
+    # lose all ordering among hopeless accounts. The reliability curve justifies
+    # trusting the low end: over ten bands the model's bottom decile predicts
+    # 0.0399 against a realised 0.0000, and no band shows the systematic
+    # collapse that would argue for a protective floor.
+    PROB_RECOVERY_FLOOR_ML = 0.02
     TIER_UPLIFT = 0.20            # prob = affinity x ((1-this) + this x tier)
 
     # Where a borrower or an agent base sits when the record has no coordinates.
@@ -83,9 +108,327 @@ class GlobalAllocator:
         return min(cls.PROB_RECOVERY_CEIL,
                    max(cls.PROB_RECOVERY_FLOOR, affinity * uplift))
 
+
+    # -----------------------------------------------------------------
+    # Epsilon-greedy exploration
+    # -----------------------------------------------------------------
+    def _explore(self, assigned_by_agent, decisions, agents,
+                 eligible_agents) -> tuple[list[dict], float]:
+        """Reassign a random epsilon-fraction of cases to a random ELIGIBLE agent.
+
+        WHY THIS EXISTS. Every historical (agent, case, outcome) row in this
+        system was produced by this allocator, so good agents systematically
+        received good cases. A model fitted on that data learns the allocator,
+        not the agents — and no amount of propensity weighting fully removes a
+        confound you never broke. A small randomised slice is the only source of
+        unconfounded evidence about whether WHICH agent is sent matters at all.
+
+        WHAT IT IS SIZED FOR, and what it is not. At the measured book volume —
+        233 allocations a day across 30 agents — epsilon = 10% yields ~23
+        randomised visits a day, about one per agent every 1.3 days. That powers
+        a VARIANCE COMPONENT ("does agent identity matter?") in roughly 1.3-2.1
+        months. It does NOT power per-agent point estimates: detecting a 25%
+        relative effect for a named agent needs ~820 randomised visits each,
+        24,595 in total, which is 2.9 years at this rate. Anyone reading the
+        resulting data as an agent ranking will be reading noise.
+
+        IT CANNOT REACH THE HARD GATES. Candidates come only from
+        `eligible_agents`, built as the cost matrix was constructed, which is the
+        single place DNC, hostility, the female-agent requirement, the territory
+        radius and PTP fatigue are evaluated. A case is never offered to an agent
+        the gates excluded, and BLOCKED cases are never touched because they were
+        never assigned.
+
+        CAPACITY IS PRESERVED BY SWAPPING, not by moving. Moving a case to an
+        agent already at `max_cases_per_day` would silently overfill a day; a
+        pairwise swap between two agents keeps every count exactly as the solver
+        left it, and is always feasible when a mutually-eligible partner exists.
+
+        DETERMINISTIC GIVEN ITS SEED. A plan that cannot be reproduced cannot be
+        audited, which is the same reason the route solver refuses a wall-clock
+        limit. The seed is recorded on every explored decision.
+
+        RETURNS the exploration log AND the change it makes to the expected
+        recovery total. The total is accumulated in Stage 2, before this runs, so
+        without the adjustment the plan would report a forecast for a pairing it
+        no longer uses — measured as an identical figure at every epsilon, which
+        is exactly the defect _prob_recovery was merged to prevent on
+        2026-09-03. Exploration is deliberately sub-optimal; the forecast has to
+        say so.
+        """
+        if self.exploration_rate <= 0.0:
+            return [], 0.0
+
+        seed = self.exploration_seed
+        if seed is None:
+            seed = 0
+        rng = random.Random(seed)
+
+        agent_by_id = {a.id: a for a in agents}
+        holder = {c.id: aid for aid, cs in assigned_by_agent.items() for c in cs}
+        case_by_id = {c.id: c for cs in assigned_by_agent.values() for c in cs}
+
+        candidates = sorted(holder)                 # sorted -> seed reproducible
+        # HALVED ON PURPOSE. Exploration proceeds by SWAPS, and a swap randomises
+        # BOTH of its cases — so selecting `N * epsilon` initiators randomised
+        # 2 * epsilon of the book. Measured before this correction: a configured
+        # 10% produced a realised 19.1%, and 20% produced 35.4%. `epsilon` is the
+        # share of assignments that end up randomised, which is the quantity the
+        # power calculation and the operational conversation are both about.
+        n_explore = int(round(len(candidates) * self.exploration_rate / 2.0))
+        if n_explore <= 0:
+            return [], 0.0
+        chosen = rng.sample(candidates, min(n_explore, len(candidates)))
+
+        log: list[dict] = []
+        swapped: set[str] = set()
+        for case_id in chosen:
+            if case_id in swapped:
+                continue
+            current = holder[case_id]
+            # sorted() so the draw is reproducible from the seed — a set's
+            # iteration order is not stable across processes.
+            allowed = sorted(a for a in eligible_agents.get(case_id, ()) if a != current)
+            if not allowed:
+                continue
+            target = rng.choice(allowed)
+
+            # Find a case held by `target` that could legally sit with `current`.
+            partners = [cid for cid, aid in sorted(holder.items())
+                        if aid == target and cid not in swapped
+                        and current in eligible_agents.get(cid, ())]
+            if not partners:
+                continue
+            partner = rng.choice(partners)
+
+            a_case, b_case = case_by_id[case_id], case_by_id[partner]
+            assigned_by_agent[current].remove(a_case)
+            assigned_by_agent[target].remove(b_case)
+            assigned_by_agent[target].append(a_case)
+            assigned_by_agent[current].append(b_case)
+            holder[case_id], holder[partner] = target, current
+            swapped.update({case_id, partner})
+
+            # The propensity of the observed assignment, for IPW later. Uniform
+            # over the eligible alternatives, so 1/len(allowed) for the explored
+            # case. Recorded rather than reconstructed: the eligible set depends
+            # on gate state at plan time and cannot be rebuilt afterwards.
+            for cid, moved_to, moved_from, k in (
+                    (case_id, target, current, len(allowed)),
+                    (partner, current, target,
+                     len(eligible_agents.get(partner, ())))):
+                log.append({"case_id": cid, "from_agent": moved_from,
+                            "to_agent": moved_to, "propensity": 1.0 / max(k, 1),
+                            "n_eligible": k, "seed": seed})
+
+        # Stamp the decisions so the slice is self-identifying in the audit
+        # trail, and re-price each swapped case against the agent it actually
+        # went to. Only the tier uplift can move — the borrower's probability is
+        # a property of the borrower, and eb_multiplier is looked up per pair but
+        # is 1.0 wherever an agent has too little evidence, which is most of the
+        # book (297 of 315 cells).
+        recovery_delta = 0.0
+        by_case = {e["case_id"]: e for e in log}
+        for d in decisions:
+            if d.outcome != AllocationOutcome.ALLOCATED.value:
+                continue
+            entry = by_case.get(d.case_id)
+            if entry is None:
+                d.score_breakdown["exploration"] = False
+                continue
+            bd = d.score_breakdown
+            old_agent = agent_by_id.get(entry["from_agent"])
+            new_agent = agent_by_id.get(entry["to_agent"])
+            case = case_by_id.get(d.case_id)
+            if case is not None and old_agent is not None and new_agent is not None:
+                remaining = max(0.0, float(case.target_amount or 0.0)
+                                - float(case.collected_amount or 0.0))
+
+                def _tw(ag):
+                    return self.TIER_WEIGHTS.get(
+                        ag.tier.value if hasattr(ag.tier, "value") else str(ag.tier),
+                        self.TIER_WEIGHT_DEFAULT)
+
+                ml_p = bd.get("ml_borrower_p_recover")
+                eb = bd.get("eb_multiplier", 1.0)
+                aff = bd.get("affinity_score", 0.5)
+                if bd.get("ml_used_for_decision") and ml_p is not None:
+                    old_p = self._prob_recovery_ml(ml_p, eb, _tw(old_agent))
+                    new_p = self._prob_recovery_ml(ml_p, eb, _tw(new_agent))
+                else:
+                    old_p = self._prob_recovery(aff, _tw(old_agent))
+                    new_p = self._prob_recovery(aff, _tw(new_agent))
+                recovery_delta += remaining * (new_p - old_p)
+                bd["prob_recovery_after_exploration"] = round(new_p, 4)
+
+            d.allocated_agent_id = entry["to_agent"]
+            d.reason = (f"EXPLORATION: randomly reassigned from "
+                        f"{entry['from_agent']} among {entry['n_eligible']} "
+                        f"eligible agents (epsilon={self.exploration_rate:.0%})")
+            d.score_breakdown.update({
+                "exploration": True,
+                "exploration_propensity": round(entry["propensity"], 6),
+                "exploration_from_agent": entry["from_agent"],
+                "exploration_n_eligible": entry["n_eligible"],
+                "exploration_seed": entry["seed"],
+                "exploration_rate": self.exploration_rate,
+            })
+
+        logger.info("allocator.exploration", rate=self.exploration_rate,
+                    selected=len(chosen), swapped=len(swapped), seed=seed,
+                    expected_recovery_delta=round(recovery_delta, 2))
+        return log, recovery_delta
+
+    @classmethod
+    def _prob_recovery_ml(cls, borrower_p_recover: float, eb_multiplier: float,
+                          tier_weight: float) -> float:
+        """Chance this agent recovers on this case, using the TRAINED model.
+
+        WHY THIS IS NOT A SUBSTITUTION FOR affinity_score, and why that matters.
+        The obvious wiring — feed the model's output in where `shrunk_win` goes —
+        is a category error. `shrunk_win` is an AGENT-side estimate: what share of
+        target THIS AGENT recovers on work of this kind. `recovery_risk` is a
+        BORROWER-side estimate: will THIS BORROWER make a material payment. It
+        cannot see the agent at all, so substituting it would make every agent
+        score identically on a given case and destroy the per-agent
+        differentiation the allocator exists to provide.
+
+        The model's actual place is here, in prob_recovery, which today has NO
+        borrower-side input whatsoever: it is clamp(agent_skill x tier, .., ..),
+        so the probability that a case is recovered currently takes no account
+        of the borrower. That is the gap.
+
+        AND THIS IS NOT THE 2026-09-03 MISTAKE, though it looks like it. That
+        fix removed `base_affinity * eb_multiplier` because both factors
+        estimated THE SAME QUANTITY — agent skill — from two different windows
+        and groupings, so their product counted skill twice. Here the two
+        factors are different quantities:
+
+            borrower_p_recover   P(material payment), calibrated, borrower-side,
+                                 knows nothing about any agent
+            eb_multiplier        the agent's RELATIVE effect, defined in
+                                 empirical_bayes.get_segment_multiplier as
+                                 shrunk_win / segment_prior and bounded to
+                                 [0.75, 1.25] — a ratio centred on 1.0, not a
+                                 second probability
+
+        A base rate modulated by a bounded relative effect is the standard way
+        to combine them, and it degrades correctly: where an agent has too few
+        observations the multiplier is exactly 1.0 and the estimate falls back
+        to the borrower's own probability. On this book that is the common path,
+        not the edge case — 297 of 315 (agent, segment) cells are below the
+        five-observation threshold.
+
+        The CEILING is shared with _prob_recovery; the FLOOR is not. See
+        PROB_RECOVERY_FLOOR_ML for why a floor that is correct for an
+        uninformative agent estimate is actively wrong for a calibrated
+        borrower probability.
+        """
+        base = min(1.0, max(0.0, float(borrower_p_recover)))
+        uplift = (1.0 - cls.TIER_UPLIFT) + cls.TIER_UPLIFT * tier_weight
+        # PROB_RECOVERY_FLOOR_ML, not PROB_RECOVERY_FLOOR — see the constant for
+        # the measurement. Applying the agent-side floor to a calibrated
+        # borrower probability was the single largest source of bias in the
+        # first shadow run.
+        return min(cls.PROB_RECOVERY_CEIL,
+                   max(cls.PROB_RECOVERY_FLOOR_ML,
+                       base * float(eb_multiplier) * uplift))
+
     # Indicator value for "this agent already holds this case". 0/1 like
     # lang_match; the objective table supplies the weight. See where it is used.
     CONTINUITY_BONUS = 1.0
+
+    # ── Candidate value transforms (2026-09-08, evaluation only) ────────────
+    #
+    # WHY THERE ARE ALTERNATIVES AT ALL. _value_score below is unchanged and is
+    # still what production runs. It was calibrated against TARGET AMOUNTS —
+    # the 2026-09-02 note quotes Rs 7,031 / 25,901 / 211,701 / 500,000 — but it
+    # is fed EXPECTED values, i.e. a target multiplied by a probability below 1.
+    # While that probability was effectively a constant 0.43 the mismatch was a
+    # scale factor and nothing more. With a calibrated probability (mean 0.27,
+    # anti-correlated with balance at -0.41) it becomes structural:
+    #
+    #   100% of expected values now fall BELOW the knee of 25,000
+    #   -> log1p(x/25000) runs entirely in its near-linear region
+    #   -> then divides by log1p(12) = 2.565
+    #   -> the term uses 3.9% of its available 0-1 range at p90
+    #
+    # So the log is not taming a heavy tail; there is no tail above the knee.
+    # It is shrinking a nearly-linear signal until proximity (range 0.40)
+    # outvotes it about 26 to 1, whatever the nominal 0.45 weight says.
+    #
+    # THE CONSTANTS BELOW ARE FIXED RUPEE FIGURES, NOT POOL-DERIVED. That is the
+    # same deliberate choice _value_score documents: a pool-relative scale would
+    # make an identical case score differently depending on what else happened
+    # to be planned that night, which is not a property anything called an audit
+    # trail can have. They were set once, from the measured expected-value
+    # distribution on a 1,200-case book:
+    #
+    #   EV under the current formula   p10   476   p50  2,051   p90  7,458   p99 21,538
+    #   EV under the calibrated model  p10   294   p50    835   p90  2,602   p99  6,296
+    #
+    # so a knee near 1,000 sits between the two medians and a reference of
+    # 20,000 sits just under the wider distribution's p99.
+    # LOCKED 2026-09-08 after a sensitivity sweep, not chosen by eye. Every
+    # combination on an 8x span of knee (500-4,000) and a 4x span of reference
+    # (10,000-40,000) beat the production baseline on realised recovery in 3 of
+    # 3 seeds, from +21.2% to +38.3%, with the BLOCKED set identical throughout
+    # and the largest-balance quintile's share of the plan ranging 0.248-0.294
+    # against a baseline of 0.261. The result is therefore a property of the
+    # RESCALING, not of these two numbers.
+    #
+    # 1,000 / 20,000 is deliberately the MIDDLE of that grid rather than its
+    # best-scoring corner (500 / 10,000, +38.3%): picking the maximum would be
+    # fitting the constants to the measurement, and the mid-grid choice leaves
+    # the value term's influence just BELOW proximity's (ratio 0.910) rather
+    # than just above it.
+    VALUE_EV_KNEE_INR = 1_000.0
+    VALUE_EV_REFERENCE_INR = 20_000.0
+
+    @classmethod
+    def _value_log_rescaled(cls, expected_inr: float) -> float:
+        """The CURRENT SHAPE, rescaled to the quantity actually being fed to it."""
+        if expected_inr <= 0:
+            return 0.0
+        ceiling = math.log1p(cls.VALUE_EV_REFERENCE_INR / cls.VALUE_EV_KNEE_INR)
+        return min(1.0, math.log1p(expected_inr / cls.VALUE_EV_KNEE_INR) / ceiling)
+
+    @classmethod
+    def _value_sqrt(cls, expected_inr: float) -> float:
+        """Square root of the normalised expected value.
+
+        Spreads the low end harder than a log without being linear. Bounded, so
+        it cannot reproduce the 2026-09-02 failure where an unbounded linear
+        term let a Rs 500,000 case score 12.0 against a proximity maximum of 1.0.
+        """
+        if expected_inr <= 0:
+            return 0.0
+        return min(1.0, math.sqrt(expected_inr / cls.VALUE_EV_REFERENCE_INR))
+
+    @classmethod
+    def _value_power(cls, expected_inr: float, alpha: float = 0.35) -> float:
+        """A tunable power curve; alpha < 0.5 spreads the low end more than sqrt."""
+        if expected_inr <= 0:
+            return 0.0
+        return min(1.0, (expected_inr / cls.VALUE_EV_REFERENCE_INR) ** alpha)
+
+    @classmethod
+    def _value_linear_capped(cls, expected_inr: float) -> float:
+        """Bounded linear. The honest control: if this wins, the log was the
+        whole problem rather than its scale."""
+        if expected_inr <= 0:
+            return 0.0
+        return min(1.0, expected_inr / cls.VALUE_EV_REFERENCE_INR)
+
+    #: Selectable by GlobalAllocator(value_transform=...). "log_current" is the
+    #: default and is production; nothing in the product selects another.
+    VALUE_TRANSFORMS = {
+        "log_current": lambda cls, v: cls._value_score(v),
+        "log_rescaled": lambda cls, v: cls._value_log_rescaled(v),
+        "sqrt": lambda cls, v: cls._value_sqrt(v),
+        "power_035": lambda cls, v: cls._value_power(v, 0.35),
+        "linear_capped": lambda cls, v: cls._value_linear_capped(v),
+    }
 
     @classmethod
     def _value_score(cls, expected_inr: float) -> float:
@@ -127,10 +470,41 @@ class GlobalAllocator:
         objective: str = AllocationObjective.BALANCED.value,
         territory_radius_km: float = 16.0,
         eb_adjuster: EmpiricalBayesAgentAdjuster | None = None,
+        ml_recovery_probability: dict[str, float] | None = None,
+        use_ml_affinity: bool = False,
+        value_transform: str = "log_current",
+        exploration_rate: float = 0.0,
+        exploration_seed: int | None = None,
     ):
+        """
+        ml_recovery_probability
+            case_id -> P(the borrower makes a material payment next cycle), from
+            the trained recovery_risk model. Optional. When supplied it is always
+            RECORDED in every decision's score_breakdown, whether or not it is
+            used, so a shadow run leaves a full audit of what the model would
+            have said.
+        use_ml_affinity
+            False (the default, and what production runs) means the utility is
+            computed exactly as before and the model's number is carried along
+            for comparison only. True means the model drives prob_recovery.
+            Nothing in the product sets this to True — only
+            scripts/shadow_allocation_ml.py does, to build the counterfactual.
+        """
         self.objective = objective
         self.territory_radius_km = territory_radius_km
         self.eb_adjuster = eb_adjuster or EmpiricalBayesAgentAdjuster()
+        self.ml_recovery_probability = ml_recovery_probability or {}
+        self.use_ml_affinity = use_ml_affinity
+        if value_transform not in self.VALUE_TRANSFORMS:
+            raise ValueError(f"unknown value_transform {value_transform!r}; "
+                             f"expected one of {sorted(self.VALUE_TRANSFORMS)}")
+        self.value_transform = value_transform
+        # EPSILON-GREEDY EXPLORATION. Off by default; PlannerService supplies the
+        # configured rate. See _explore for what it does and why it is safe.
+        if not 0.0 <= exploration_rate <= 1.0:
+            raise ValueError(f"exploration_rate must be in [0,1], got {exploration_rate}")
+        self.exploration_rate = exploration_rate
+        self.exploration_seed = exploration_seed
 
     @classmethod
     def _work_anchor(cls, base_km: float, centroid: tuple[float, float] | None,
@@ -241,6 +615,13 @@ class GlobalAllocator:
         cost_matrix = np.full((num_cases, num_slots), PENALTY_INELIGIBLE, dtype=np.float64)
         decision_cache: dict[tuple[int, int], tuple[float, str, dict]] = {}
 
+        # Agents that survived EVERY hard gate for each case. Captured here, as
+        # the matrix is built, because this is the only place the gates are
+        # evaluated — reconstructing it later would mean a second copy of the
+        # rules, which is how this repo's worst bugs have started. Exploration
+        # draws exclusively from these sets.
+        eligible_agents: dict[str, set[str]] = {}
+
         # Where each agent is ALREADY working — the centroid of the open cases
         # they currently hold. See _work_anchor for why this exists.
         work_centroids: dict[str, tuple[float, float]] = {}
@@ -339,6 +720,15 @@ class GlobalAllocator:
                 dist_km = self.haversine_km(base_lat, base_lon, cust_lat, cust_lon)
                 if dist_km > self.territory_radius_km:
                     continue
+
+                # A SET, NOT A LIST. The loop below iterates over capacity
+                # SLOTS, so an agent with 15 slots was appended 15 times. Two
+                # consequences, both wrong: rng.choice became weighted by
+                # capacity rather than uniform over agents, and the recorded
+                # propensity (1/k) described a uniform draw that never happened.
+                # Observed on a live run: "among 93 eligible agents" for a
+                # manager who has 15.
+                eligible_agents.setdefault(case.id, set()).add(ag.id)
 
                 # Empirical Bayes Segment Performance Multiplier
                 shrunk_win, prior_win, eb_multiplier = self.eb_adjuster.get_segment_multiplier(
@@ -442,9 +832,22 @@ class GlobalAllocator:
                 # collections left 202 partially paid cases in it.
                 target_inr = max(0.0, float(case.target_amount or 0.0)
                                  - float(case.collected_amount or 0.0))
+                # Both probabilities are computed on every pair. The decision
+                # uses the current one unless use_ml_affinity is set, which only
+                # the shadow comparator does — production behaviour is unchanged
+                # by construction rather than by a flag being read correctly.
                 prob_recovery = self._prob_recovery(affinity_score, tier_weight)
-                expected_case_inr = target_inr * prob_recovery
-                inr_score = self._value_score(expected_case_inr)
+                ml_p = self.ml_recovery_probability.get(case.id)
+                prob_recovery_ml = (
+                    self._prob_recovery_ml(ml_p, eb_multiplier, tier_weight)
+                    if ml_p is not None else None)
+
+                effective_prob = (prob_recovery_ml
+                                  if (self.use_ml_affinity and prob_recovery_ml is not None)
+                                  else prob_recovery)
+                expected_case_inr = target_inr * effective_prob
+                inr_score = self.VALUE_TRANSFORMS[self.value_transform](
+                    type(self), expected_case_inr)
 
                 # The utility is a weighted sum, so each term's weight x score IS
                 # its share of the decision. Recording those shares is what lets
@@ -477,6 +880,17 @@ class GlobalAllocator:
                         "proximity_score": round(proximity_score, 3),
                         "skills_score": round(skills_score, 3),
                         "expected_case_inr": round(expected_case_inr, 2),
+                        # Shadow columns. Present on every decision whenever the
+                        # model supplied a probability for the case, so the
+                        # comparison can be rebuilt from persisted rows later
+                        # rather than only from a script's stdout.
+                        "prob_recovery": round(prob_recovery, 4),
+                        "prob_recovery_ml": (round(prob_recovery_ml, 4)
+                                             if prob_recovery_ml is not None else None),
+                        "ml_borrower_p_recover": (round(ml_p, 4)
+                                                  if ml_p is not None else None),
+                        "ml_used_for_decision": bool(
+                            self.use_ml_affinity and prob_recovery_ml is not None),
                         # Three factors that were computed and discarded. They are
                         # the most legible reasons on the list — "speaks the
                         # borrower's language", "was already his case" — and the
@@ -490,6 +904,8 @@ class GlobalAllocator:
                         "loan_type": loan_type_str,
                         "contributions": contributions,
                         "objective": self.objective,
+                        "value_transform": self.value_transform,
+                        "inr_score": round(inr_score, 4),
                     }
                 )
 
@@ -558,7 +974,15 @@ class GlobalAllocator:
                 _, util, reason, bdown = assigned_case_to_decision[c.id]
                 aff_score = bdown.get("affinity_score", 0.5)
                 t_weight = bdown.get("tier_weight", 0.8)
-                prob_rec = self._prob_recovery(aff_score, t_weight)
+                # Read back the probability the utility was actually built from,
+                # rather than recomputing one. Recomputing is how the plan and
+                # its own forecast came to disagree once before (see
+                # _prob_recovery, merged 2026-09-03) — and under a shadow run
+                # the two branches would silently diverge here.
+                prob_rec = bdown.get("prob_recovery_ml") if bdown.get("ml_used_for_decision") \
+                    else bdown.get("prob_recovery")
+                if prob_rec is None:
+                    prob_rec = self._prob_recovery(aff_score, t_weight)
                 # Same correction as target_inr above: forecast what can still be
                 # collected. Summing full targets had the plan predicting Rs 48.5L
                 # against Rs 16.4L of collectable balance — 296% of the possible.
@@ -578,6 +1002,13 @@ class GlobalAllocator:
                     fit_score=round(util, 3),
                     score_breakdown=bdown,
                 ))
+
+        # -------------------------------------------------------------
+        # EPSILON-GREEDY EXPLORATION
+        # -------------------------------------------------------------
+        exploration_log, exploration_delta = self._explore(
+            assigned_by_agent, decisions, agents, eligible_agents)
+        expected_recovery_sum += exploration_delta
 
         # Handle Unallocated Cases
         allocated_case_ids = {c.id for c_list in assigned_by_agent.values() for c in c_list}

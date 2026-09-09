@@ -15,10 +15,13 @@ from datetime import date, datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Sequence
 
 import structlog
-from sqlalchemy import and_, func, or_
+import zlib
+
+from sqlalchemy import and_, func, or_, text
 from sqlalchemy.orm import Session, joinedload
 
-from app.core.routing import optimize_route
+from app.core.config import settings as _settings
+from app.core.routing import avg_visit_seconds, plan_route
 from app.ml.eligibility import agent_block_reason, is_eligible, is_female
 from app.ml.visit_priority import score as score_visit_priority
 from app.models.agent import Agent, AgentSpecialization, AgentStatus, AgentTier
@@ -34,6 +37,14 @@ from app.models.visit import Visit, VisitOutcome
 from app.services.visit_priority_service import score_cases as score_cases_priority
 
 logger = structlog.get_logger("planner_service")
+
+
+class PlanInProgressError(RuntimeError):
+    """Another planning run holds this (manager, date). Retryable, not a bug.
+
+    Distinct from ValueError so the API can answer 409 Conflict rather than 400
+    Bad Request: the caller's request was fine, the timing was not.
+    """
 
 # Strategy weights for Smart Allocation (heavier weight on proximity to ensure 60-140 km daily routes)
 W_AFFINITY = 0.30
@@ -228,6 +239,13 @@ class PlannerService:
         agent_ids = [a.id for a in agents]
         agent_by_id = {a.id: a for a in agents}
 
+        # Serialise before touching any beat — see _acquire_plan_lock.
+        if not simulate and not self._acquire_plan_lock(target_date):
+            raise PlanInProgressError(
+                f"A plan for {target_date} is already being generated for this "
+                f"team. Wait for it to finish, then try again."
+            )
+
         # 2. Check for existing PLANNED beats on target_date
         existing_beats = self.db.query(Beat).filter(
             Beat.agent_id.in_(agent_ids),
@@ -376,7 +394,24 @@ class PlannerService:
 
         if strategy == AllocationStrategy.SMART.value:
             from app.services.global_allocator import GlobalAllocator
-            global_allocator = GlobalAllocator(objective=objective, eb_adjuster=eb_adjuster)
+            ml_probs = self._ml_recovery_probabilities(sorted_cases)
+            # Paired by construction: no probabilities means the original
+            # transform, so a model outage cannot leave the allocator running a
+            # configuration nobody measured.
+            transform = (_settings.ALLOCATOR_VALUE_TRANSFORM if ml_probs
+                         else "log_current")
+            global_allocator = GlobalAllocator(
+                objective=objective, eb_adjuster=eb_adjuster,
+                ml_recovery_probability=ml_probs,
+                use_ml_affinity=bool(ml_probs),
+                value_transform=transform,
+                exploration_rate=_settings.ALLOCATOR_EXPLORATION_RATE,
+                # Seeded from the plan DATE, not from the clock: two runs for the
+                # same target date explore identically, so a re-plan is
+                # reproducible and the audit trail holds. A different date gets a
+                # different draw, which is what makes the slice random over time.
+                exploration_seed=int(target_date.strftime("%Y%m%d")),
+            )
             assigned_cases_by_agent, decisions, expected_recovery_sum = global_allocator.allocate(
                 cases=sorted_cases,
                 agents=agents,
@@ -477,6 +512,25 @@ class PlannerService:
         # cannot double-count or silently drop them — an earlier attempt inferred
         # "already added?" from the outcomes present, which happened to work but
         # would have quietly broken the day a pool hold arrived from somewhere else.
+        # Decision linkage: stamp each prediction with the agent the case was
+        # actually given. Written here rather than at scoring time because the
+        # assignment does not exist until the solve returns, and a prediction
+        # with no decision attached cannot be evaluated per agent once the
+        # outcome matures.
+        _rows = getattr(self, "_ml_prediction_rows", None)
+        if _rows:
+            _agent_of = {c.id: aid
+                         for aid, cs in assigned_cases_by_agent.items()
+                         for c in cs}
+            _linked = 0
+            for _row in _rows:
+                _aid = _agent_of.get(_row.case_id)
+                if _aid:
+                    _row.agent_id = _aid
+                    _linked += 1
+            logger.info("allocation.ml_predictions_linked",
+                        rows=len(_rows), linked=_linked)
+
         decisions.extend(pool_decisions)
         deferred_count += len(pool_decisions)
 
@@ -496,39 +550,58 @@ class PlannerService:
             if not cases_for_agent:
                 continue
 
-            # Build route using OSRM + OR-Tools
+            # ── Route the day, and KEEP WHAT THE OPTIMISER RETURNED ─────
+            #
+            # 2026-09-08. This block used to call optimize_route(), which had
+            # just paid for an N x N OSRM road matrix, take only the ordering
+            # out of it, and then recompute the distance itself as
+            # Haversine x 1.15 and the duration as km/25 + 20 minutes a stop.
+            # The road matrix was discarded every single night, so THE ETA
+            # SHOWN TO EVERY AGENT AND MANAGER WAS CROW-FLIES even when OSRM
+            # answered perfectly. There were four different per-visit constants
+            # involved — 15 in settings (which is what the route was actually
+            # made feasible against), and 30, 20 and 25 hardcoded here.
+            #
+            # plan_route() returns the legs it used. Nothing is recomputed.
             stops = [
                 (float(c.customer.latitude), float(c.customer.longitude))
-                for c in cases_for_agent if c.customer and c.customer.latitude and c.customer.longitude
+                for c in cases_for_agent
+                if c.customer and c.customer.latitude and c.customer.longitude
             ]
 
             ordered_case_ids = [c.id for c in cases_for_agent]
             est_distance_km = 0.0
-            est_duration_min = len(cases_for_agent) * 30  # fallback duration
+            # Fallback duration is service time alone — honest for a day whose
+            # travel could not be computed, rather than a third invented number.
+            est_duration_min = int(len(cases_for_agent) * avg_visit_seconds() / 60)
+            route_geometry = None
+            route_legs = None
+            route_source = None
 
             if stops and len(stops) == len(cases_for_agent):
                 try:
-                    ordered_indices = optimize_route(
+                    windows = self._contact_windows(cases_for_agent)
+                    route = plan_route(
                         case_coords=stops,
                         start_lat=ag.base_latitude,
                         start_lon=ag.base_longitude,
+                        time_windows=windows,
+                        with_geometry=True,
                     )
-                    # Reorder case IDs based on optimal sequence
-                    ordered_case_ids = [cases_for_agent[idx].id for idx in ordered_indices]
-                    
-                    # Compute realistic driving distance with road network factor
-                    tot_dist = 0.0
-                    curr_pos = (ag.base_latitude, ag.base_longitude)
-                    for idx in ordered_indices:
-                        nxt_pos = stops[idx]
-                        tot_dist += self._calc_distance_km(curr_pos[0], curr_pos[1], nxt_pos[0], nxt_pos[1])
-                        curr_pos = nxt_pos
-                    est_distance_km = tot_dist * 1.15  # urban road network factor
-                    est_duration_min = int(est_distance_km / 25 * 60) + len(stops) * 20
+                    ordered_case_ids = [cases_for_agent[i].id for i in route.order]
+                    est_distance_km = route.km
+                    est_duration_min = route.minutes
+                    route_geometry = route.geometry
+                    route_source = route.source
+                    route_legs = [
+                        {"from": leg.from_stop, "to": leg.to_stop,
+                         "seconds": leg.seconds, "metres": leg.metres,
+                         "case_id": cases_for_agent[leg.to_stop].id}
+                        for leg in route.legs
+                    ]
                 except Exception as e:
-                    logger.warning("Routing optimization fallback used", agent_id=ag.id, error=str(e))
-                    est_distance_km = len(stops) * 3.5
-                    est_duration_min = len(stops) * 25
+                    logger.warning("Routing optimization fallback used",
+                                   agent_id=ag.id, error=str(e))
 
             total_target = sum(float(c.target_amount or 0.0) for c in cases_for_agent)
 
@@ -541,6 +614,9 @@ class PlannerService:
                 total_cases=len(ordered_case_ids),
                 estimated_distance_km=round(est_distance_km, 2),
                 estimated_duration_minutes=int(est_duration_min),
+                route_geometry=route_geometry,
+                route_legs=route_legs,
+                route_source=route_source,
                 total_target_amount=round(total_target, 2),
                 status=BeatStatus.PLANNED,
                 cases_completed=0,
@@ -758,6 +834,134 @@ class PlannerService:
             ])
 
         return output.getvalue()
+
+
+
+
+    # ── Concurrency guard ───────────────────────────────────────────────────
+    def _acquire_plan_lock(self, target_date) -> bool:
+        """Serialise planning per (manager, date). True if we hold the lock.
+
+        WHY. Two planning runs for the same manager and date both delete the
+        PLANNED beats and then both insert, and the second one violates the
+        UNIQUE index on (agent_id, beat_date) — surfacing as a 500 and a
+        "Failed to generate plan" toast, with the run rolled back and nothing to
+        show for it. Observed live: a run at 11:25:15 succeeded and a second at
+        11:27:32 died on `duplicate key value violates unique constraint
+        "ix_beat_agent_date"`.
+
+        It is not a rare race. A double-click on "Re-Plan & Sequence" fires two
+        POSTs, and the 20:00 nightly task can overlap a manual re-plan on the
+        same date.
+
+        A TRANSACTION-LEVEL advisory lock, so it is released automatically on
+        commit or rollback — a session-level lock leaks on a crashed worker and
+        would block every subsequent plan until the connection is reaped.
+        Postgres only; other dialects (SQLite, in the tests) return True and
+        rely on the IntegrityError path below, which is correct because they do
+        not have concurrent writers.
+        """
+        bind = self.db.get_bind()
+        if bind is None or bind.dialect.name != "postgresql":
+            return True
+        # Two 32-bit keys rather than one 64-bit hash: the pair is readable in
+        # pg_locks, which matters when someone is trying to work out why a plan
+        # is blocked.
+        key1 = zlib.crc32((self.manager_user_id or "global").encode()) % (2 ** 31)
+        key2 = int(target_date.strftime("%Y%m%d"))
+        got = self.db.execute(
+            text("SELECT pg_try_advisory_xact_lock(:k1, :k2)"),
+            {"k1": key1, "k2": key2},
+        ).scalar()
+        return bool(got)
+
+    # ── Trained-model inputs for the allocator ──────────────────────────────
+    def _ml_recovery_probabilities(self, cases) -> dict[str, float]:
+        """P(material payment) per case, from recovery_risk. Empty when off.
+
+        THE PROBABILITY AND THE VALUE TRANSFORM MOVE TOGETHER, and that pairing
+        is enforced here rather than left to two settings agreeing. The measured
+        change is `calibrated probability + log_rescaled`. The other two corners
+        of that square were never measured, and one of them is actively bad:
+
+          * calibrated probability + log_current  -> -10.1% realised recovery
+            (8 of 8 seeds), because a correct probability is anti-correlated
+            with balance and the old scale compresses the result until proximity
+            outvotes it 8:1;
+          * flat 0.43 probability + log_rescaled  -> never evaluated at all.
+
+        So when this returns nothing, plan_next_day also keeps the original
+        transform. One switch, one measured configuration.
+        """
+        self._ml_prediction_rows = []
+        if not _settings.ML_SCORING_ENABLED:
+            return {}
+        try:
+            from app.services.ml_scoring_service import MLScoringService
+
+            svc = MLScoringService(self.db)
+            # score_cases_and_log, NOT score_many: the latter returns numbers and
+            # records nothing, which left model_predictions at 0 rows while the
+            # model was driving allocation. The rows are stashed so the allocated
+            # agent can be attached once the solve is done.
+            out, rows = svc.score_cases_and_log(cases, model="recovery_risk")
+            self._ml_prediction_rows = rows
+            logger.info("allocation.ml_scored", cases=len(cases),
+                        scored=len(out), logged=len(rows))
+            return out
+        except Exception as exc:
+            # A model failure must not take the nightly allocation down with it.
+            # Returning nothing degrades to the pre-2026-09-08 behaviour exactly,
+            # because the transform is paired to this result.
+            # LOGGED AT ERROR, NOT WARNING, and with the type and traceback.
+            # This exact path swallowed a TypeError for a full cycle —
+            # `disbursement_date` is String(10) and the adapter treated it as a
+            # date — while the allocator quietly ran with no model at all and
+            # every health surface reported fine.
+            logger.error("allocation.ml_scoring_failed", error=str(exc),
+                         error_type=type(exc).__name__, exc_info=True)
+            self._ml_prediction_rows = []
+            return {}
+
+    # ── Legal and preferred contact windows ─────────────────────────────────
+    def _contact_windows(self, cases) -> list[tuple[int, int] | None]:
+        """Per-stop time windows, in seconds from the start of the working day.
+
+        WHY THE NIGHTLY PLAN NEVER HAD THESE. core/routing has supported VRPTW
+        since 2026-07-13, but only the agent's on-demand re-optimise ever passed
+        windows; the nightly build passed None. So the plan could hand an agent
+        a day whose later stops fall outside RBI contact hours — a route that is
+        not merely inefficient but illegal to execute, and the compliance rules
+        would then block the visit the planner had just scheduled.
+
+        Two sources, narrowest wins:
+          * RBI contact hours (settings.CONTACT_HOUR_START/END), which bound
+            every stop;
+          * the borrower's own preferred_contact_start/end where recorded.
+
+        Windows are SOFT: solve_tsp retries without them if the set is
+        infeasible, because an agent with no beat is worse than an agent with an
+        imperfect one.
+        """
+        day_start_h = _settings.CONTACT_HOUR_START
+        day_end_h = _settings.CONTACT_HOUR_END
+        span_end = (day_end_h - day_start_h) * 3600
+
+        windows: list[tuple[int, int] | None] = []
+        for c in cases:
+            lo, hi = 0, span_end
+            cust = getattr(c, "customer", None)
+            start = getattr(cust, "preferred_contact_start", None) if cust else None
+            end = getattr(cust, "preferred_contact_end", None) if cust else None
+            if start is not None:
+                lo = max(lo, (getattr(start, "hour", day_start_h) - day_start_h) * 3600)
+            if end is not None:
+                hi = min(hi, (getattr(end, "hour", day_end_h) - day_start_h) * 3600)
+            # A preference that inverts the window is data, not a constraint —
+            # fall back to the legal bounds rather than making the solve
+            # infeasible for the whole beat.
+            windows.append((lo, hi) if lo < hi else (0, span_end))
+        return windows
 
     @staticmethod
     def _calc_distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
