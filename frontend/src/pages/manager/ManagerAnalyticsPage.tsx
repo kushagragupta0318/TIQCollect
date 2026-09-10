@@ -6,6 +6,7 @@
 //   calendar cells scale down on touch. See docs/frontend-guide.md.
 // ─────────────────────────────────────────────────────────────────────────
 import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useIsBelowLg, useMediaQuery } from "@/hooks/useMediaQuery";
 import { TrendingUp, BarChart2, IndianRupee, Users, Calendar, X, Brain, Loader2 } from "lucide-react";
 import { toast } from "react-hot-toast";
@@ -21,7 +22,7 @@ import {
 import { AiBadge } from "@/components/ui/AiBadge";
 import type {
   AnalyticsData, AgentsPerformanceData, AgentPerfEntry, AgentMonthlyPerf,
-  AgentAvailabilityCalendar, AgentCalendarDay, AgentDPDRow, TeamAttendance,
+  AgentAvailabilityCalendar, AgentCalendarDay, TeamAttendance,
   RecoveryBreakdown,
 } from "@/api/manager";
 import { TierBadge } from "@/components/ui/Badge";
@@ -353,6 +354,19 @@ function AgentSpotlight({ entry, months, color, animate, onClose, selMonth, onMo
   );
 }
 
+// ─── React Query migration, 2026-09-10 ──────────────────────────────────────
+// The QueryClient in App.tsx sets `staleTime: 30_000, retry: 1` globally. Both
+// would change what this page puts on the wire, so both are overridden: the
+// hand-rolled effects retried nothing and refetched on every dependency change.
+// `refetchOnWindowFocus` / `refetchOnReconnect` are off because this page had no
+// focus listener — React Query's defaults would ADD requests that never existed.
+const AS_BEFORE = {
+  retry: false,
+  staleTime: 0,
+  refetchOnWindowFocus: false,
+  refetchOnReconnect: false,
+} as const;
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function ManagerAnalyticsPage() {
@@ -360,17 +374,27 @@ export default function ManagerAnalyticsPage() {
   const [agentPerf, setAgentPerf]   = useState<AgentsPerformanceData | null>(null);
   const [loading, setLoading]       = useState(true);
   const [chartMode, setChartMode]   = useState<"team" | "individual">("team");
-  const [barReady, setBarReady]     = useState(false);
+  // `barReady` is DERIVED, not stored. 2026-09-10.
+  //
+  // It used to be a boolean that an effect reset to false and then set true on a
+  // 160ms timer, so the effect wrote state synchronously on every render where
+  // `loading` or `analytics` changed — `react-hooks/set-state-in-effect`, one of
+  // the 18 errors keeping CI red, and a genuine cascading-render risk on a page
+  // this size.
+  //
+  // Storing WHICH analytics payload the bars have finished staggering for makes
+  // the reset unnecessary: when `analytics` is replaced the identity comparison
+  // is false again by itself, which is exactly what the removed line did by
+  // hand. Behaviour is unchanged, including the re-animation on reload — the
+  // thing a plain `setBarReady(false)` deletion would have quietly broken.
+  const [readyFor, setReadyFor] = useState<unknown>(null);
+  const barReady = !loading && !!analytics && readyFor === analytics;
   const [selectedAgent, setSelectedAgent] = useState<AgentPerfEntry | null>(null);
   // Behavioural switches only — pill row becomes a select, copy changes from
   // "Click"/"Hover" to "Tap"/"Pick". Layout itself is done with Tailwind.
   const isBelowLg = useIsBelowLg();
   const [selTeamMonth, setSelTeamMonth]   = useState<string | null>(null);
   const [selAgentMonth, setSelAgentMonth] = useState<string | null>(null);  // month label e.g. "Apr"
-  const [agentCalendar, setAgentCalendar]   = useState<AgentAvailabilityCalendar | null>(null);
-  const [agentDpdRows, setAgentDpdRows]     = useState<AgentDPDRow[] | null>(null);
-  const [teamDpdRows, setTeamDpdRows]       = useState<AgentDPDRow[] | null>(null);
-  const [agentDataLoading, setAgentDataLoading] = useState(false);
 
   useEffect(() => {
     Promise.all([getAnalytics(), getAgentsPerformance(6)])
@@ -380,38 +404,82 @@ export default function ManagerAnalyticsPage() {
   }, []);
 
   useEffect(() => {
-    setBarReady(false);
     if (!loading && analytics) {
-      const t = setTimeout(() => setBarReady(true), 160);
+      const t = setTimeout(() => setReadyFor(analytics), 160);
       return () => clearTimeout(t);
     }
   }, [loading, analytics]);
 
-  useEffect(() => {
-    if (!selectedAgent) { setAgentCalendar(null); setAgentDpdRows(null); return; }
-    setAgentDataLoading(true);
-    // Resolve selAgentMonth label (e.g. "Apr") back to YYYY-MM for API call
-    const agentMonths = agentPerf?.months ?? [];
-    const apiMonth = selAgentMonth
-      ? agentMonths.find((m) => monthLabel(m) === selAgentMonth)
-      : undefined;
-    Promise.all([
-      getManagerAgentCalendar(selectedAgent.agent_id),
-      getAgentDPDBreakdown(selectedAgent.agent_id, apiMonth),
-    ])
-      .then(([cal, dpd]) => { setAgentCalendar(cal); setAgentDpdRows(dpd); })
-      .catch(() => toast.error("Could not load agent details"))
-      .finally(() => setAgentDataLoading(false));
-  }, [selectedAgent?.agent_id, selAgentMonth]);
+  // ─── React Query, 2026-09-10 ────────────────────────────────────────────
+  //
+  // The two effects these replace each began by writing state synchronously —
+  // `setAgentDataLoading(true)`, `setAgentCalendar(null)`, `setTeamDpdRows(null)`
+  // — which is what `react-hooks/set-state-in-effect` was flagging. The resets
+  // are now derivations: when no agent is selected there is nothing to null out,
+  // because the value is simply not read.
+  //
+  // Query keys carry only primitives (agent id, "YYYY-MM" or null), so they are
+  // structurally stable and two renders with the same selection hash the same.
+  //
+  // Resolve the month LABEL the pills show ("Apr") back to the "YYYY-MM" the API
+  // takes — the same reverse lookup the effects did, hoisted so it can key the
+  // queries.
+  const apiAgentMonth = selAgentMonth
+    ? (agentPerf?.months ?? []).find((m) => monthLabel(m) === selAgentMonth) ?? null
+    : null;
+  const apiTeamMonth = selTeamMonth && analytics
+    ? analytics.monthly_trend.find((m) => monthLabel(m.month) === selTeamMonth)?.month ?? null
+    : null;
 
+  // Keyed on the AGENT alone, because `getManagerAgentCalendar` takes no month.
+  //
+  // I expected that to remove a redundant request — the old effect depended on
+  // `selAgentMonth`, so changing the month refetched the calendar too. IT DOES
+  // NOT, and the comment that claimed it did was wrong. Measured in a browser on
+  // 2026-09-10: selecting an agent fires one `availability-calendar` and one
+  // `dpd-breakdown`, and changing the month fires BOTH again. `staleTime: 0`
+  // marks the query stale the moment it settles, so the agent-detail subtree
+  // re-mounting on a month change refetches it through `refetchOnMount` — the
+  // key never has to change.
+  //
+  // That is the RIGHT outcome for this migration, which is meant to preserve the
+  // request profile exactly, and the caching win is available later by raising
+  // `staleTime` on this one query. Recorded rather than quietly deleted, because
+  // an optimisation that a measurement says did not happen is worth knowing
+  // about the next time somebody reaches for it.
+  const agentCalendarQ = useQuery({
+    queryKey: ["manager", "agent", selectedAgent?.agent_id ?? null, "calendar"],
+    queryFn: () => getManagerAgentCalendar(selectedAgent!.agent_id),
+    enabled: !!selectedAgent,
+    ...AS_BEFORE,
+  });
+  const agentDpdQ = useQuery({
+    queryKey: ["manager", "agent", selectedAgent?.agent_id ?? null, "dpd", apiAgentMonth],
+    queryFn: () => getAgentDPDBreakdown(selectedAgent!.agent_id, apiAgentMonth ?? undefined),
+    enabled: !!selectedAgent,
+    ...AS_BEFORE,
+  });
+  const agentCalendar = selectedAgent ? agentCalendarQ.data ?? null : null;
+  const agentDpdRows  = selectedAgent ? agentDpdQ.data ?? null : null;
+  const agentDataLoading = agentCalendarQ.isFetching || agentDpdQ.isFetching;
+
+  const teamDpdQ = useQuery({
+    queryKey: ["manager", "team", "dpd", apiTeamMonth],
+    queryFn: () => getTeamDPDBreakdown(apiTeamMonth ?? undefined),
+    enabled: !selectedAgent && !!apiTeamMonth,
+    ...AS_BEFORE,
+  });
+  const teamDpdRows = selectedAgent ? null : teamDpdQ.data ?? null;
+
+  // The toasts the old `.catch` arms fired. Watching `isError` rather than
+  // wrapping each queryFn keeps the two request paths untouched; these set no
+  // React state, so they are not what the lint rule is about.
   useEffect(() => {
-    if (selectedAgent || !selTeamMonth || !analytics) { setTeamDpdRows(null); return; }
-    // reverse-lookup YYYY-MM from the same monthly_trend used to set selTeamMonth
-    const apiMonth = analytics.monthly_trend.find((m) => monthLabel(m.month) === selTeamMonth)?.month;
-    getTeamDPDBreakdown(apiMonth)
-      .then(setTeamDpdRows)
-      .catch(() => toast.error("Could not load team DPD breakdown"));
-  }, [selTeamMonth, selectedAgent, analytics]);
+    if (agentCalendarQ.isError || agentDpdQ.isError) toast.error("Could not load agent details");
+  }, [agentCalendarQ.isError, agentDpdQ.isError]);
+  useEffect(() => {
+    if (teamDpdQ.isError) toast.error("Could not load team DPD breakdown");
+  }, [teamDpdQ.isError]);
 
   if (loading) return <LoadingSkeleton />;
   if (!analytics || !agentPerf) return <p className="text-sm p-6" style={{ color: "#6B6D76" }}>No data.</p>;
@@ -1302,19 +1370,27 @@ const LEAVE_LABELS: Record<string, { label: string; color: string }> = {
 function TeamLeaveSummaryCard({ months, selTeamMonth, todayOnDuty, totalAgents }: {
   months: string[]; selTeamMonth: string | null; todayOnDuty: number; totalAgents: number;
 }) {
-  const [attendance, setAttendance] = useState<TeamAttendance | null>(null);
-  const [loadingLeave, setLoadingLeave] = useState(false);
-
-  useEffect(() => {
-    if (!selTeamMonth) { setAttendance(null); return; }
-    const apiMonth = months.find((m) => monthLabel(m) === selTeamMonth);
-    if (!apiMonth) return;
-    setLoadingLeave(true);
-    getTeamAttendance(apiMonth)
-      .then(setAttendance)
-      .catch(() => {})
-      .finally(() => setLoadingLeave(false));
-  }, [selTeamMonth]);
+  // ─── React Query, 2026-09-10 ────────────────────────────────────────────
+  // The effect began with `setAttendance(null)` / `setLoadingLeave(true)`, both
+  // synchronous writes inside an effect. The null-out is now a derivation: with
+  // no month selected the query is disabled and reads as null on its own.
+  //
+  // One faithful detail worth keeping: the old code returned WITHOUT clearing
+  // when the label could not be resolved to a "YYYY-MM" (`if (!apiMonth) return`
+  // came after the null-out), so the previous month's figures stayed on screen.
+  // `enabled: !!apiMonth` reproduces that — the query simply does not run, and
+  // React Query holds the last data for the last key that did.
+  const apiLeaveMonth = selTeamMonth
+    ? months.find((m) => monthLabel(m) === selTeamMonth) ?? null
+    : null;
+  const attendanceQ = useQuery({
+    queryKey: ["manager", "team", "attendance", apiLeaveMonth],
+    queryFn: () => getTeamAttendance(apiLeaveMonth!),
+    enabled: !!apiLeaveMonth,
+    ...AS_BEFORE,
+  });
+  const attendance = selTeamMonth ? attendanceQ.data ?? null : null;
+  const loadingLeave = attendanceQ.isFetching;
 
   const [y] = (selTeamMonth && months.find((m) => monthLabel(m) === selTeamMonth) || "").split("-");
   const monthLabel_ = selTeamMonth ? `${selTeamMonth} '${(y ?? "").slice(2)}` : "";

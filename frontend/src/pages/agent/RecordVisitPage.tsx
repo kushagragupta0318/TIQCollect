@@ -91,7 +91,7 @@ import OtpInput from "@/components/ui/OtpInput";
 import PaymentReceiptModal from "@/components/ui/PaymentReceiptModal";
 import VisitRecordedModal from "@/components/ui/VisitRecordedModal";
 import { SOSButton } from "@/components/ui/SOSButton";
-import { useBeat } from "@/contexts/BeatContext";
+import { useBeat } from "@/contexts/useBeat";
 import type { Customer, Loan, VisitOutcome, PersonMet, DefaultReason } from "@/types";
 import type { PaymentReceiptData } from "@/components/ui/PaymentReceiptModal";
 import { haversineM } from "@/lib/geo";

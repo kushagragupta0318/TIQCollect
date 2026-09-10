@@ -32,16 +32,17 @@
 //   page so both agent-side rings match.
 // ──────────────────────────────────────────────────────────────────────────
 import { useEffect, useState, useCallback, useRef } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useAnimatedValue } from "@/hooks/useAnimatedValue";
 import { useParams, useNavigate } from "react-router";
 import { ArrowLeft, Phone, Navigation, Calendar, MapPin, CheckCircle, MessageCircle, Lock, Unlock, Sparkles, RefreshCw, Clock, AlertTriangle, TrendingUp, Zap, PhoneCall, X, ShieldCheck, Send } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { AiBadge } from "@/components/ui/AiBadge";
 import { RepaymentScore, type RepaymentScoreData } from "@/components/ui/RepaymentScore";
-import { getCaseDetail, handoverCase, getVisitStrategy, logCall, notifyCase, reoptimizeBeat, sendPaymentOtp, verifyPaymentOtp, type VisitStrategyBrief, type LogCallPayload } from "@/api/agent";
+import { getCaseDetail, handoverCase, getVisitStrategy, logCall, notifyCase, reoptimizeBeat, sendPaymentOtp, verifyPaymentOtp, type LogCallPayload } from "@/api/agent";
 import { useVoiceCall } from "@/hooks/useVoiceCall";
 import CallModal from "@/components/ui/CallModal";
-import { useBeat } from "@/contexts/BeatContext";
+import { useBeat } from "@/contexts/useBeat";
 import { useModalA11y } from "@/hooks/useModalA11y";
 import { DPDBadge, VisitPriorityBadge, CaseStatusBadge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -137,8 +138,6 @@ export default function AgentCaseDetailPage() {
   const [caseData, setCaseData] = useState<CaseDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<"overview" | "visits" | "payments" | "ptps" | "strategy" | "photos">("overview");
-  const [strategy, setStrategy] = useState<VisitStrategyBrief | null>(null);
-  const [strategyLoading, setStrategyLoading] = useState(false);
   const [handoverNotes, setHandoverNotes] = useState("");
   const [handoverSubmitting, setHandoverSubmitting] = useState(false);
   const [handoverDone, setHandoverDone] = useState(false);
@@ -207,25 +206,49 @@ export default function AgentCaseDetailPage() {
       .finally(() => setLoading(false));
   }, [id]);
 
-  const fetchStrategy = useCallback(async (force = false) => {
-    if (!id) return;
-    if (strategy && !force) return;
-    setStrategyLoading(true);
-    try {
-      const brief = await getVisitStrategy(id);
-      setStrategy(brief);
-    } catch {
-      toast.error("Could not generate strategy — please try again");
-    } finally {
-      setStrategyLoading(false);
-    }
-  }, [id, strategy]);
-
-  useEffect(() => {
-    if (tab === "strategy" && !strategy && !strategyLoading) {
-      fetchStrategy();
-    }
-  }, [tab, strategy, strategyLoading, fetchStrategy]);
+  // ─── React Query, 2026-09-10 ────────────────────────────────────────────
+  //
+  // WAS: an effect that fired `fetchStrategy()` whenever `tab` became
+  // "strategy" and no brief was loaded, guarding itself with `!strategyLoading`
+  // against re-entering while a request was in flight. That guard is exactly
+  // what `enabled` plus React Query's in-flight deduplication give for free,
+  // and the `setStrategyLoading(true)` inside it was one of this page's two
+  // `react-hooks/set-state-in-effect` errors.
+  //
+  // Each option reproduces a specific line of the old behaviour:
+  //
+  //   enabled              fetch only once the Strategy tab is open — the brief
+  //                        is an LLM call and has to stay lazy.
+  //   staleTime: Infinity  the old code returned early when `strategy` was
+  //                        already set, so tabbing away and back never
+  //                        re-fetched. An ERRORED query is stale regardless, so
+  //                        returning after a failure does retry — which is what
+  //                        the old `!strategy` check did too.
+  //   retry: false         the old catch fired one toast per attempt. The
+  //                        client's global `retry: 1` would have made two
+  //                        requests and two toasts for one failure.
+  //
+  // The toast lives in the queryFn rather than in an `isError` effect because
+  // useQuery has no `onError` in v5, and an effect watching `isError` fires
+  // twice under StrictMode — a duplicate toast for a single failure.
+  const strategyQ = useQuery({
+    queryKey: ["agent", "case", id, "visit-strategy"],
+    queryFn: async () => {
+      try {
+        return await getVisitStrategy(id!);
+      } catch (e) {
+        toast.error("Could not generate strategy — please try again");
+        throw e;
+      }
+    },
+    enabled: tab === "strategy" && !!id,
+    staleTime: Infinity,
+    retry: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+  const strategy = strategyQ.data ?? null;
+  const strategyLoading = strategyQ.isFetching;
 
   const progressPct = caseData
     ? Math.min(Math.round((caseData.collected_amount / Math.max(caseData.target_amount, 1)) * 100), 100)
@@ -601,7 +624,7 @@ export default function AgentCaseDetailPage() {
               </div>
               {strategy && !strategyLoading && (
                 <button
-                  onClick={() => fetchStrategy(true)}
+                  onClick={() => void strategyQ.refetch()}
                   className="flex items-center gap-1.5 text-xs text-brand-600 font-medium hover:text-brand-800 active:scale-95 transition-all"
                 >
                   <RefreshCw className="w-3.5 h-3.5" /> Regenerate
@@ -715,7 +738,7 @@ export default function AgentCaseDetailPage() {
               <div className="card flex flex-col items-center gap-3 py-8">
                 <Sparkles className="w-8 h-8 text-brand-300" />
                 <p className="text-sm text-slate-500 text-center">Tap to generate your AI visit strategy</p>
-                <Button onClick={() => fetchStrategy()}>Generate Strategy</Button>
+                <Button onClick={() => void strategyQ.refetch()}>Generate Strategy</Button>
               </div>
             )}
           </div>

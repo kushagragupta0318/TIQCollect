@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from "react-router";
 import { MapPin, Navigation, Phone, MessageCircle, ChevronRight, Search, Briefcase, Sparkles, RefreshCw, Loader2 } from "lucide-react";
 import { DPDBadge, VisitPriorityBadge, CaseStatusBadge } from "@/components/ui/Badge";
 import { Input } from "@/components/ui/Input";
-import { useBeat } from "@/contexts/BeatContext";
+import { useBeat } from "@/contexts/useBeat";
 import { getRankedCases, notifyVisit, type RankedCase } from "@/api/agent";
 import { toast } from "react-hot-toast";
 import { useVoiceCall } from "@/hooks/useVoiceCall";

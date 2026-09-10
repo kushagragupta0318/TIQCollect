@@ -14,6 +14,8 @@
 //   six-month window, so the applied-filter chip compares against that span.
 // ─────────────────────────────────────────────────────────────────────────
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { casesView } from "./casesViewState";
 import { useSearchParams } from "react-router";
 import { createPortal } from "react-dom";
 import {
@@ -874,9 +876,6 @@ function CaseRow({ c, onOpen }: { c: Case; onOpen: () => void }) {
 
 export default function ManagerCasesPage() {
   const [searchParams] = useSearchParams();
-  const [cases, setCases] = useState<Case[]>([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [bucketFilter, setBucketFilter] = useState("ALL");
@@ -910,33 +909,79 @@ export default function ManagerCasesPage() {
   const [defaultRange, setDefaultRange] = useState<{ min: string; max: string } | null>(null);
   const [agentId, setAgentId] = useState<string | null>(() => searchParams.get("agent_id"));
   const [agentName] = useState<string | null>(() => searchParams.get("agent_name"));
-  const [page, setPage] = useState(0);
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
 
-  const fetchCases = useCallback(
-    (pg: number) => {
-      setLoading(true);
-      getCases({
-        status: statusFilter !== "ALL" ? statusFilter : undefined,
-        recovery: recoveryFilter !== "ALL" ? recoveryFilter : undefined,
-        sort: prioritySort !== "OFF" ? prioritySort : undefined,
-        priority_band: priorityBand !== "ALL" ? priorityBand : undefined,
-        date_from: dateFrom || undefined,
-        date_to: dateTo || undefined,
-        agent_id: agentId || undefined,
-        offset: pg * PAGE_SIZE,
-        limit: PAGE_SIZE,
-      })
-        .then((r) => {
-          setCases((r.cases as Case[]) ?? []);
-          setTotal(r.total);
-        })
-        .catch(() => toast.error("Failed to load cases"))
-        .finally(() => setLoading(false));
+  // ─── React Query, 2026-09-10 ────────────────────────────────────────────
+  //
+  // The effect this replaces did two things in one breath: `setPage(0)` and
+  // `fetchCases(0)`, on every change to any filter. The `setPage(0)` was the
+  // synchronous write `react-hooks/set-state-in-effect` flagged.
+  //
+  // PAGE IS NOW DERIVED AGAINST THE FILTER SIGNATURE. Storing which filters a
+  // page number belongs to makes the reset fall out of a comparison instead of
+  // an effect: change any filter and `pageState.sig` no longer matches, so
+  // `page` reads 0 without anything being written. Same behaviour, no cascade.
+  // JSON.stringify, not join(): the separator has to be a character no filter
+  // value can contain, and reaching for one is how a literal NUL ended up in
+  // this file on the first attempt — valid TypeScript, but it made the source
+  // read as binary to grep and diff.
+  const filterSig = JSON.stringify([statusFilter, recoveryFilter, prioritySort,
+                                    priorityBand, dateFrom, dateTo, agentId ?? ""]);
+  const [pageState, setPageState] = useState({ sig: filterSig, page: 0 });
+  const page = pageState.sig === filterSig ? pageState.page : 0;
+  const setPage = useCallback(
+    (p: number) => setPageState({ sig: filterSig, page: p }), [filterSig]);
+
+  // Only primitives in the key, so two renders with the same selection hash to
+  // the same string and React Query does not treat them as different queries.
+  const casesQ = useQuery({
+    queryKey: ["manager", "cases", {
+      status: statusFilter, recovery: recoveryFilter, sort: prioritySort,
+      band: priorityBand, from: dateFrom, to: dateTo,
+      agent: agentId ?? null, page,
+    }],
+    queryFn: async () => {
+      try {
+        return await getCases({
+          status: statusFilter !== "ALL" ? statusFilter : undefined,
+          recovery: recoveryFilter !== "ALL" ? recoveryFilter : undefined,
+          sort: prioritySort !== "OFF" ? prioritySort : undefined,
+          priority_band: priorityBand !== "ALL" ? priorityBand : undefined,
+          date_from: dateFrom || undefined,
+          date_to: dateTo || undefined,
+          agent_id: agentId || undefined,
+          offset: page * PAGE_SIZE,
+          limit: PAGE_SIZE,
+        });
+      } catch (e) {
+        toast.error("Failed to load cases");
+        throw e;
+      }
     },
-    [statusFilter, recoveryFilter, prioritySort, priorityBand, dateFrom, dateTo, agentId]
-  );
+    // The old code gated the first fetch on the seeded date range so the page
+    // did not load every case and then immediately reload a filtered set.
+    enabled: datesReady,
+    // WITHOUT THIS, `total` FLASHES TO ZERO ON EVERY PAGE CHANGE. The rows are
+    // hidden behind the `loading` skeleton either way, but `total` is printed in
+    // the header and drives `totalPages > 1` — so the pagination row would
+    // disappear and reappear on each click. The old code kept the previous
+    // `total` in state until the new response landed; this is that.
+    placeholderData: keepPreviousData,
+    retry: false,
+    staleTime: 0,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+  const cases = (casesQ.data?.cases as Case[] | undefined) ?? [];
+  const total = casesQ.data?.total ?? 0;
+  // `isFetching`, not `isPending`: the old `fetchCases` set `loading` true on
+  // every call, so the skeleton showed on page changes too, not just first load.
+  //
+  // NOT SUFFICIENT ON ITS OWN — see casesViewState.ts. While `datesReady` is
+  // false the query is disabled, so `isFetching` is false too, and the table
+  // used to claim "No cases match the current filters" before it had asked.
+  const loading = casesQ.isFetching;
 
   // Seed the filter from the data's own span. Runs once; failure just leaves the
   // inputs empty, which means "no date filter" — every case, not zero cases.
@@ -955,12 +1000,6 @@ export default function ManagerCasesPage() {
     return () => { cancelled = true; };
   }, [datesReady]);
 
-  useEffect(() => {
-    if (!datesReady) return;
-    setPage(0);
-    fetchCases(0);
-  }, [fetchCases, datesReady]);
-
   const displayed = cases.filter((c) => {
     if (bucketFilter !== "ALL" && c.loan.dpd_bucket !== bucketFilter) return false;
     if (search) {
@@ -972,6 +1011,16 @@ export default function ManagerCasesPage() {
       );
     }
     return true;
+  });
+
+  // The three-way choice the table body makes, in one place so it can be tested
+  // without mounting this page. `!datesReady` is the term whose absence let the
+  // empty-state message render before anything had been asked — see
+  // casesViewState.ts for the measurement and the rule.
+  const view = casesView({
+    datesReady,
+    isFetching: loading,
+    rowCount: displayed.length,
   });
 
   const totalPages = Math.ceil(total / PAGE_SIZE);
@@ -1199,11 +1248,11 @@ export default function ManagerCasesPage() {
             <span>Date</span>
           </div>
 
-          {loading ? (
+          {view === "loading" ? (
             Array.from({ length: 10 }).map((_, i) => (
               <div key={i} className="h-20 lg:h-12 border-b animate-pulse" style={{ borderColor: "#EAEBEF", background: "#F5F6F9" }} />
             ))
-          ) : displayed.length === 0 ? (
+          ) : view === "empty" ? (
             <div className="py-16 px-4 text-center" style={{ color: "#6B6D76" }}>
               <FileText className="w-8 h-8 mx-auto mb-2 opacity-30" />
               <p className="text-sm">No cases match the current filters</p>
@@ -1224,7 +1273,7 @@ export default function ManagerCasesPage() {
             <div className="flex items-center gap-2 justify-between sm:justify-end">
               <button
                 disabled={page === 0}
-                onClick={() => { const np = page - 1; setPage(np); fetchCases(np); window.scrollTo({ top: 0 }); }}
+                onClick={() => { setPage(page - 1); window.scrollTo({ top: 0 }); }}
                 className="tap-target flex-1 sm:flex-none px-4 rounded-xl border text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                 style={{ borderColor: "#EAEBEF", color: "#6B6D76" }}
               >
@@ -1233,7 +1282,7 @@ export default function ManagerCasesPage() {
               <span className="px-2 text-xs whitespace-nowrap flex-shrink-0" style={{ color: "#6B6D76" }}>{page + 1} / {totalPages}</span>
               <button
                 disabled={page >= totalPages - 1}
-                onClick={() => { const np = page + 1; setPage(np); fetchCases(np); window.scrollTo({ top: 0 }); }}
+                onClick={() => { setPage(page + 1); window.scrollTo({ top: 0 }); }}
                 className="tap-target flex-1 sm:flex-none px-4 rounded-xl border text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                 style={{ borderColor: "#EAEBEF", color: "#6B6D76" }}
               >

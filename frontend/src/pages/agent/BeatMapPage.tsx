@@ -5,7 +5,7 @@ import { ArrowLeft, Navigation, CheckCircle, MapPin, ChevronRight, Zap, Route, R
 import { toast } from "react-hot-toast";
 import { reoptimizeBeat } from "@/api/agent";
 import { DPDBadge, VisitPriorityBadge, CaseStatusBadge } from "@/components/ui/Badge";
-import { useBeat } from "@/contexts/BeatContext";
+import { useBeat } from "@/contexts/useBeat";
 import type { Case } from "@/types";
 import { useAnimatedValue } from "@/hooks/useAnimatedValue";
 import { BeatRouteMap, type BeatStop } from "@/components/map/BeatRouteMap";

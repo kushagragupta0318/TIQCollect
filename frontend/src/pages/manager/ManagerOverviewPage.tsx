@@ -11,7 +11,8 @@
 //   leaderboard row keeps that design but wraps below sm — rank plus three
 //   fixed-width figure blocks overflow a 320px row — and its hover moved
 //   from mouseenter/mouseleave handlers to .row-lift.
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { CSSProperties, ReactNode } from "react";
 import { useNavigate } from "react-router";
 import { Users, Briefcase, IndianRupee, MapPin, Clock, AlertTriangle, Sparkles, RefreshCw, TrendingUp, TrendingDown, ShieldAlert, Compass, Zap, RotateCcw, Download, ChevronDown, ChevronUp } from "lucide-react";
@@ -20,13 +21,57 @@ import { getDashboard, getAgents, getBriefing, getUnallocatedCases, getLatestAll
 import { isTimeout } from "@/api/axios";
 import { mlBadge, rankedReasons } from "./allocationReasons";
 import { errorDetail, errorStatus } from "@/lib/apiError";
-import type { BriefingData, UnallocatedReport, AllocationPlanReport, AllocationDecisionItem } from "@/api/manager";
+import type { BriefingData, UnallocatedReport, AllocationDecisionItem } from "@/api/manager";
 import { StatCard } from "@/components/ui/Card";
 import { TierBadge } from "@/components/ui/Badge";
 import { exactRupees, shortMoney } from "@/lib/money";
-import type { DashboardSummary, Agent } from "@/types";
+import type { Agent } from "@/types";
 
 const EASE = "cubic-bezier(0.16,1,0.3,1)";
+
+// ─── React Query migration, 2026-09-10 ──────────────────────────────────────
+//
+// These four options exist to make React Query behave EXACTLY as the
+// hand-rolled `useState` + `useEffect` fetches did, not to configure it well.
+// The QueryClient in App.tsx sets `staleTime: 30_000, retry: 1` globally, and
+// both would have changed what this page puts on the wire:
+//
+//   retry: false              the old code retried nothing. A global retry of 1
+//                             would silently double every failed request.
+//   staleTime: 0              the old code fetched on every mount. A 30s stale
+//                             window would serve a cached dashboard instead.
+//   refetchOnWindowFocus:false the old code had no focus listener on this page.
+//                             React Query's default would ADD requests.
+//   refetchOnReconnect: false  likewise.
+//
+// The migration is worth doing anyway because the effects it replaces were the
+// `react-hooks/set-state-in-effect` errors keeping CI red, and because React
+// Query cancels superseded requests — see the note on the allocation query.
+const AS_BEFORE = {
+  retry: false,
+  staleTime: 0,
+  refetchOnWindowFocus: false,
+  refetchOnReconnect: false,
+} as const;
+
+// Hoisted so the `select` below is referentially stable; an inline arrow would
+// re-run the sort on every render.
+//
+// Ranked by collection rate — the percentage each row shows — with the rupee
+// amount as tie-break, since capping at 100% makes ties common.
+// Stable identity for the empty case. `?? []` allocates a fresh array on every
+// render, and the stagger effect below depends on `agents` — so an inline
+// fallback re-arms its timer on each render while the query is still pending.
+const NO_AGENTS: readonly Agent[] = Object.freeze([]);
+
+function topOnDutyAgents(a: Agent[]): Agent[] {
+  return a
+    .filter(ag => ag.status === "ON_DUTY")
+    .sort((x, y) =>
+      collectionPctOf(y) - collectionPctOf(x) ||
+      (y.today_collected ?? 0) - (x.today_collected ?? 0))
+    .slice(0, 10);
+}
 
 /**
  * The percentage a leaderboard row shows in its donut — today's collected
@@ -53,47 +98,54 @@ const DPD_BUCKET_CONFIG: Record<string, { bar: string; shadow: string; label: st
 
 export default function ManagerOverviewPage() {
   const navigate = useNavigate();
-  const [summary, setSummary] = useState<DashboardSummary | null>(null);
-  const [agents, setAgents] = useState<Agent[]>([]);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
+
+  // Two queries where there was one Promise.all: the request count is identical
+  // (both were always issued in parallel), and each 30s poll replaces the single
+  // `setInterval(load, 30_000)` the effect used to own.
+  const dashboardQ = useQuery({
+    queryKey: ["manager", "dashboard"],
+    queryFn: getDashboard,
+    refetchInterval: 30_000,
+    ...AS_BEFORE,
+  });
+  const agentsQ = useQuery({
+    queryKey: ["manager", "agents"],
+    queryFn: getAgents,
+    select: topOnDutyAgents,
+    refetchInterval: 30_000,
+    ...AS_BEFORE,
+  });
+
+  const summary = dashboardQ.data ?? null;
+  const agents = agentsQ.data ?? NO_AGENTS;
+  // `isPending` is "no data yet", which is what the old `loading` meant: it was
+  // set false in a `.finally()` after the FIRST load and never set true again,
+  // so a background poll never re-showed the skeleton. `isFetching` would have.
+  const loading = dashboardQ.isPending || agentsQ.isPending;
   const [animated, setAnimated]     = useState(false);
   const [barReady, setBarReady]     = useState(false);
-  const [briefing, setBriefing]     = useState<BriefingData | null>(null);
-  const [briefingLoading, setBriefingLoading] = useState(true);
+  const briefingQ = useQuery({
+    queryKey: ["manager", "briefing"],
+    queryFn: () => getBriefing(),
+    ...AS_BEFORE,
+  });
+  // The refresh button hits the SAME endpoint with `?refresh=true`, so it is not
+  // a second query key — it is an action whose result replaces this one's data.
+  // A mutation keeps that honest: the key stays "the current briefing", and the
+  // forced regeneration cannot be served from cache or fired by a poll.
+  const briefingRefresh = useMutation({
+    mutationFn: () => getBriefing(true),
+    onSuccess: (b) => queryClient.setQueryData(["manager", "briefing"], b),
+    onError: () => {},   // as before: a failed refresh leaves the old briefing
+  });
+  const briefing = briefingQ.data ?? null;
+  // True on first load AND during a manual refresh — the old `loadBriefing` set
+  // its flag on both paths, so the card is replaced by the skeleton either way.
+  const briefingLoading = briefingQ.isPending || briefingRefresh.isPending;
   // Lakh shorthand rounds to one decimal, which hides up to ~₹5,000 — so the
   // exact figure is a click away on any amount in the Collections card.
   const [exactRupees, setExactRupees] = useState(false);
-
-  const load = useCallback(() => {
-    return Promise.all([getDashboard(), getAgents()])
-      .then(([s, a]) => {
-        setSummary(s);
-        // Ranked by collection rate — the percentage each row shows — with the
-        // rupee amount as tie-break, since capping at 100% makes ties common.
-        const onDuty = a
-          .filter(ag => ag.status === "ON_DUTY")
-          .sort((x, y) =>
-            collectionPctOf(y) - collectionPctOf(x) ||
-            (y.today_collected ?? 0) - (x.today_collected ?? 0));
-        setAgents(onDuty.slice(0, 10));
-      })
-      .catch(() => {});
-  }, []);
-
-  const loadBriefing = useCallback((refresh = false) => {
-    setBriefingLoading(true);
-    return getBriefing(refresh)
-      .then(b => setBriefing(b))
-      .catch(() => {})
-      .finally(() => setBriefingLoading(false));
-  }, []);
-
-  useEffect(() => {
-    load().finally(() => setLoading(false));
-    loadBriefing();
-    const t = setInterval(load, 30_000);
-    return () => clearInterval(t);
-  }, [load, loadBriefing]);
 
   // Stagger: trigger bar animations after data loads
   useEffect(() => {
@@ -354,7 +406,7 @@ export default function ManagerOverviewPage() {
         {briefingLoading ? (
           <div className="card animate-pulse" style={{ height: 220, background: "#EFF0F4", border: "none", boxShadow: "none" }} />
         ) : briefing ? (
-          <AiBriefingCard briefing={briefing} onRefresh={() => loadBriefing(true)} />
+          <AiBriefingCard briefing={briefing} onRefresh={() => briefingRefresh.mutate()} />
         ) : (
           <div className="card p-5">
             <h3 className="text-sm font-bold mb-3 flex items-center gap-2" style={{ color: "#1C1C1F" }}>
@@ -842,25 +894,65 @@ function WithheldCases() {
  * Decisions written before 2026-09-02 carry no `contributions` key and fall back
  * to the old raw dump, so an existing plan stays readable until it is re-planned.
  */
+type Objective = "BALANCED" | "MAX_RECOVERY" | "MIN_DISTANCE";
+
 function TomorrowAllocationCard() {
-  const [plan, setPlan] = useState<AllocationPlanReport | null>(null);
-  const [loading, setLoading] = useState(true);
+  const planQ = useQuery({
+    queryKey: ["manager", "allocation", "latest"],
+    queryFn: () => getLatestAllocation(),
+    ...AS_BEFORE,
+  });
+  const plan = planQ.data ?? null;
+  // `isFetching`, not `isPending`: the old `fetchPlan` set `loading` true on
+  // EVERY call, including the refetches after a re-plan and a rollback, so the
+  // card showed its skeleton again each time. `isPending` would only cover the
+  // first load and would silently drop that.
+  const loading = planQ.isFetching;
+  const refetchPlan = planQ.refetch;
+
+  const settingsQ = useQuery({
+    queryKey: ["manager", "allocation", "settings"],
+    queryFn: getAllocationSettings,
+    ...AS_BEFORE,
+  });
+
   const [planning, setPlanning] = useState(false);
   const [rollingBack, setRollingBack] = useState(false);
-  const [objective, setObjective] = useState<"BALANCED" | "MAX_RECOVERY" | "MIN_DISTANCE">("BALANCED");
+  // The saved objective SEEDS the switcher; the manager can then change it.
+  // Derived rather than copied into state by an effect, so there is no
+  // synchronous setState to schedule and no window in which the two disagree.
+  //
+  // ONE BEHAVIOUR DIFFERENCE, AND IT IS A FIX. The old effect called
+  // `setObjective(settings.objective)` whenever the GET resolved. If the manager
+  // clicked a different objective while that request was still in flight, the
+  // late response overwrote their choice. Here their choice wins, because it is
+  // checked first. The window was small and nobody is likely to have hit it, but
+  // it is a real difference and not an accident of the rewrite.
+  const [objectiveChoice, setObjectiveChoice] = useState<Objective | null>(null);
+  const objective: Objective =
+    objectiveChoice ?? (settingsQ.data?.objective as Objective | undefined) ?? "BALANCED";
+  const setObjective = setObjectiveChoice;
   const [showDecisions, setShowDecisions] = useState(false);
   const [selectedDecision, setSelectedDecision] = useState<AllocationDecisionItem | null>(null);
   const [decisionFilter, setDecisionFilter] = useState<"ALL" | "ALLOCATED" | "DEFERRED" | "BLOCKED">("ALL");
 
+  // Hoisted out of the memo, 2026-09-10. Reading `plan?.decisions` INSIDE it
+  // made the React Compiler infer `plan` as the dependency while the array said
+  // `plan?.decisions` — "inferred less specific property than source" — and
+  // rather than pick a side it skipped optimizing this component entirely.
+  // Binding the narrow value here keeps the dependency exactly as narrow as it
+  // was and lets the two agree, so nothing recomputes more often than before.
+  const decisions = plan?.decisions;
+
   const sortedDecisions = useMemo(() => {
-    if (!plan?.decisions) return [];
+    if (!decisions) return [];
     const outcomeOrder: Record<string, number> = {
       ALLOCATED: 1,
       DEFERRED: 2,
       DEFERRED_ROUTE_INFEASIBLE: 2,
       BLOCKED: 3,
     };
-    const list = [...plan.decisions].sort((a, b) => {
+    const list = [...decisions].sort((a, b) => {
       const rankA = outcomeOrder[a.outcome] ?? 2;
       const rankB = outcomeOrder[b.outcome] ?? 2;
       if (rankA !== rankB) return rankA - rankB;
@@ -871,26 +963,7 @@ function TomorrowAllocationCard() {
       return list.filter((d) => d.outcome === "DEFERRED" || d.outcome === "DEFERRED_ROUTE_INFEASIBLE");
     }
     return list.filter((d) => d.outcome === decisionFilter);
-  }, [plan?.decisions, decisionFilter]);
-
-  const fetchPlan = useCallback(() => {
-    setLoading(true);
-    getLatestAllocation()
-      .then((data) => {
-        setPlan(data);
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => {
-    fetchPlan();
-    getAllocationSettings()
-      .then((settings) => {
-        if (settings?.objective) setObjective(settings.objective);
-      })
-      .catch(() => {});
-  }, [fetchPlan]);
+  }, [decisions, decisionFilter]);
 
   const handleRunPlan = async (
     obj?: "BALANCED" | "MAX_RECOVERY" | "MIN_DISTANCE"
@@ -904,7 +977,7 @@ function TomorrowAllocationCard() {
         force_replan: true,
       });
       toast.success("Tomorrow's beat plan generated & sequenced!");
-      fetchPlan();
+      void refetchPlan();
     } catch (err) {
       // A TIMEOUT IS NOT A FAILURE, and must not be reported as one. The
       // request keeps running on the server and usually succeeds; telling the
@@ -916,7 +989,7 @@ function TomorrowAllocationCard() {
           "Still generating — this can take a couple of minutes on a large " +
           "book. Do not re-run; refresh in a moment to see the plan."
         );
-        fetchPlan();
+        void refetchPlan();
       } else if (errorStatus(err) === 409) {
         toast.error(errorDetail(err, "A plan is already being generated."));
       } else {
@@ -939,7 +1012,7 @@ function TomorrowAllocationCard() {
     try {
       await rollbackAllocationPlan(plan.run_id);
       toast.success("Allocation plan rolled back successfully");
-      fetchPlan();
+      void refetchPlan();
     } catch {
       toast.error("Failed to roll back plan");
     } finally {

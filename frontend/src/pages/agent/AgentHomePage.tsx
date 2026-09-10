@@ -8,7 +8,7 @@ import { checkIn as apiCheckIn } from "@/api/agent";
 import { StatCard } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { useAuthStore } from "@/store/authStore";
-import { useBeat } from "@/contexts/BeatContext";
+import { useBeat } from "@/contexts/useBeat";
 import { useAnimatedValue, useCountUp } from "@/hooks/useAnimatedValue";
 
 export default function AgentHomePage() {
