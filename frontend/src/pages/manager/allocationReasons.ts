@@ -49,6 +49,62 @@ export function effectiveRecoveryRate(
   return { rate, fromModel: usedModel };
 }
 
+/**
+ * Whether the rate the allocator used is a property of the BORROWER ALONE.
+ *
+ * 2026-09-10 — THE LABEL CLAIMED IT ALWAYS WAS, AND IT IS NOT.
+ * `prob_recovery_ml` is not the model's output. `global_allocator._prob_recovery_ml`
+ * computes clamp(borrower_p_recover x eb_multiplier x (0.8 + 0.2 x tier_weight),
+ * 0.02, 0.85), so the number on screen carries the agent's empirical-Bayes
+ * multiplier and their tier while the sentence said "for this borrower".
+ *
+ * Measured on the run of 2026-09-10, 214 allocated decisions:
+ *   prob_recovery_ml != ml_borrower_p_recover     155 of 214
+ *   the DISPLAYED whole percent differs           104 of 214
+ *   max gap 2.05pp, mean 0.55pp
+ * The worst row is a Tier 3 agent: borrower 0.2556 x 1.00 x 0.92 = 0.2351, shown
+ * as 24% where the borrower's own figure is 26%. Small today only because
+ * eb_multiplier sits at 0.98-1.06 while 297 of 315 (agent, segment) cells are
+ * below the five-observation threshold. It is bounded [0.75, 1.25], and the
+ * epsilon-greedy slice exists to push those cells over that threshold — so the
+ * gap widens by design rather than by accident.
+ *
+ * THE CONDITION IS DERIVED, NEVER ASSERTED, and that is the entire point. A
+ * hardcoded qualifier describing today's formula is exactly what went stale last
+ * time — see the note on `expected_recovery` below. Comparing the two numbers
+ * asks the question the sentence actually makes ("is this rate borrower-only?")
+ * instead of restating the arithmetic that answers it, so it stays correct if
+ * the adjustment changes shape, is removed, or starts biting harder. It also
+ * needs no knowledge of WHICH factor moved it: EB, tier or the clamp all falsify
+ * the same claim.
+ *
+ * "unknown" is its own answer and is not folded into either. A decision recorded
+ * before `ml_borrower_p_recover` existed cannot establish agent-independence,
+ * and guessing either way would be inventing evidence — so the caller states
+ * neither, the same way it shows rupees alone rather than inventing a rate.
+ */
+export type AgentAdjustment = "adjusted" | "none" | "unknown";
+
+// Both values are rounded to 4dp by the allocator before they are persisted, so
+// exact equality would serve. This guards float representation only, and sits far
+// below the smallest adjustment the formula can produce — eb_multiplier 0.98 on a
+// rate of 0.15 moves it by 0.003.
+export const RATE_EPSILON = 1e-9;
+
+export function agentAdjustment(b: Record<string, unknown>): AgentAdjustment {
+  // typeof, NOT Number(). The API sends JSON, so an absent probability arrives
+  // as null — and `Number(null)` is 0, which is finite. The first draft of this
+  // function used Number() and classified a MISSING borrower probability as
+  // "adjusted", asserting an agent effect from a value nobody recorded. Caught
+  // by test_states_neither_when_agent_independence_cannot_be_established, which
+  // is the reason that case is tested rather than assumed benign.
+  const used = b.prob_recovery_ml;
+  const borrower = b.ml_borrower_p_recover;
+  if (typeof used !== "number" || typeof borrower !== "number") return "unknown";
+  if (!Number.isFinite(used) || !Number.isFinite(borrower)) return "unknown";
+  return Math.abs(used - borrower) > RATE_EPSILON ? "adjusted" : "none";
+}
+
 export const FACTOR_LABEL: Record<string, (b: Record<string, unknown>) => string> = {
   /**
    * 2026-09-09 — THIS LABEL USED THE WRONG NUMBER.
@@ -74,9 +130,14 @@ export const FACTOR_LABEL: Record<string, (b: Record<string, unknown>) => string
     const eff = effectiveRecoveryRate(b);
     if (!eff) return rupees;
     const pct = Math.round(eff.rate * 100);
-    return eff.fromModel
-      ? `${rupees} — model puts recovery at ${pct}% for this borrower`
-      : `${rupees} — recovers ${pct}% on ${loanTypeWords(b)}`;
+    if (!eff.fromModel) return `${rupees} — recovers ${pct}% on ${loanTypeWords(b)}`;
+    // Derived from the two numbers themselves — see agentAdjustment above.
+    const whose: Record<AgentAdjustment, string> = {
+      adjusted: " for this borrower with this agent",
+      none: " for this borrower",
+      unknown: "",
+    };
+    return `${rupees} — model puts recovery at ${pct}%${whose[agentAdjustment(b)]}`;
   },
   proximity: (b) => `${b.proximity_km ?? "?"} km from the agent's base`,
   // 0.6 x tier + 0.4 x spec_match. Seniority and a DECLARED specialisation —
