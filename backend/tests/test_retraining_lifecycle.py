@@ -68,6 +68,23 @@ def user(db):
 
 
 @pytest.fixture
+def second_reviewer(db):
+    """The other pair of eyes.
+
+    Added 2026-09-10 with the four-eyes rule in lifecycle.promote. Before it,
+    every promotion test approved and promoted as `user`, which is precisely the
+    path the rule now refuses — so the tests were demonstrating a flow the
+    product should never have allowed, and six of them failed the moment the
+    rule landed. That is the rule working, not the tests being wrong.
+    """
+    u = User(id=str(uuid.uuid4()), email="mgr_ml2@t.in", phone="9800000098",
+             full_name="M2", hashed_password="h", role=UserRole.AGENCY_MANAGER,
+             is_active=True, is_verified=True)
+    db.add(u); db.commit()
+    return u
+
+
+@pytest.fixture
 def champion_guard():
     """Fail loudly if a test moves the real champion pointer.
 
@@ -680,13 +697,13 @@ def _approved(db, user, *, version="2.0.0", incumbent="1.0.0"):
 
 
 def test_scenario_g_approved_candidate_promotes_and_leaves_an_audit_trail(
-        db, user, isolated_model, monkeypatch):
+        db, user, second_reviewer, isolated_model, monkeypatch):
     """SCENARIO G. Approved -> promoted -> the pointer moves -> rollback target
     recorded."""
     monkeypatch.setattr("app.ml.pipeline.engine.DecisionEngine.reload",
                         classmethod(lambda cls, m: {"model": m}))
     cand = _approved(db, user)
-    out = lifecycle.promote(db, cand.id, user_id=user.id)
+    out = lifecycle.promote(db, cand.id, user_id=second_reviewer.id)
 
     assert out.state == CandidateState.PROMOTED
     assert (isolated_model / "champion.txt").read_text() == "2.0.0"
@@ -695,18 +712,79 @@ def test_scenario_g_approved_candidate_promotes_and_leaves_an_audit_trail(
     assert [h["to"] for h in out.state_history][-1] == "PROMOTED"
 
 
-def test_promotion_is_idempotent(db, user, isolated_model, monkeypatch):
+# ── four eyes ───────────────────────────────────────────────────────────────
+# Every other gate on this path asks whether the MODEL is good enough. None
+# asked how many PEOPLE agreed, so one person could approve and then promote in
+# two clicks — and the role gate does not help, because `ManagerOnly` resolves to
+# AGENCY_MANAGER + AGENCY_ADMIN and AGENCY_ADMIN distinguishes nothing anywhere
+# in the codebase. Found by the repo-wide audit of 2026-09-10.
+
+def test_the_approver_cannot_also_promote(db, user, isolated_model, monkeypatch):
+    """The rule. Same person, both steps -> refused, and the pointer never moves."""
+    monkeypatch.setattr(registry, "ARTIFACT_ROOT", isolated_model.parent)
+    cand = _approved(db, user)
+    before = (isolated_model / "champion.txt").read_text()
+
+    with pytest.raises(lifecycle.ApprovalRefused, match="four-eyes"):
+        lifecycle.promote(db, cand.id, user_id=user.id)
+
+    db.refresh(cand)
+    assert cand.state == CandidateState.APPROVED, "state must not advance"
+    assert cand.promoted_at is None
+    assert (isolated_model / "champion.txt").read_text() == before, (
+        "the pointer moved on a refused promotion")
+
+
+def test_a_second_reviewer_can_promote_the_same_candidate(
+        db, user, second_reviewer, isolated_model, monkeypatch):
+    """The rule must not have closed the door on its legitimate path — otherwise
+    the safe outcome is indistinguishable from a broken one."""
+    monkeypatch.setattr(registry, "ARTIFACT_ROOT", isolated_model.parent)
+    cand = _approved(db, user)
+    out = lifecycle.promote(db, cand.id, user_id=second_reviewer.id)
+    assert out.state == CandidateState.PROMOTED
+    assert (isolated_model / "champion.txt").read_text().strip() == "2.0.0"
+
+
+def test_four_eyes_is_not_defeated_by_rejecting_and_re_approving(
+        db, user, isolated_model, monkeypatch):
+    """`decided_by_id` is overwritten by whoever decided LAST, so the obvious way
+    round the rule is to have a second person approve and the first promote. That
+    is fine — it is still two people. What must NOT work is one person laundering
+    their own approval through a state change."""
+    monkeypatch.setattr(registry, "ARTIFACT_ROOT", isolated_model.parent)
+    cand = _approved(db, user)
+    cand.state = CandidateState.PENDING_APPROVAL
+    db.commit()
+    lifecycle.approve(db, cand.id, user_id=user.id)      # same person again
+    with pytest.raises(lifecycle.ApprovalRefused, match="four-eyes"):
+        lifecycle.promote(db, cand.id, user_id=user.id)
+
+
+def test_four_eyes_does_not_fire_when_no_approver_was_recorded(
+        db, user, isolated_model, monkeypatch):
+    """A NULL decided_by_id is absent evidence, not evidence of self-approval.
+    Refusing on it would block a candidate nobody can ever promote."""
+    monkeypatch.setattr(registry, "ARTIFACT_ROOT", isolated_model.parent)
+    cand = _approved(db, user)
+    cand.decided_by_id = None
+    db.commit()
+    out = lifecycle.promote(db, cand.id, user_id=user.id)
+    assert out.state == CandidateState.PROMOTED
+
+
+def test_promotion_is_idempotent(db, user, second_reviewer, isolated_model, monkeypatch):
     monkeypatch.setattr("app.ml.pipeline.engine.DecisionEngine.reload",
                         classmethod(lambda cls, m: {}))
     cand = _approved(db, user)
-    lifecycle.promote(db, cand.id, user_id=user.id)
-    again = lifecycle.promote(db, cand.id, user_id=user.id)
+    lifecycle.promote(db, cand.id, user_id=second_reviewer.id)
+    again = lifecycle.promote(db, cand.id, user_id=second_reviewer.id)
     assert again.state == CandidateState.PROMOTED
     assert (isolated_model / "champion.txt").read_text() == "2.0.0"
 
 
 def test_scenario_i_rollback_after_promotion_restores_the_previous_champion(
-        db, user, isolated_model, monkeypatch):
+        db, user, second_reviewer, isolated_model, monkeypatch):
     """SCENARIO I. The recorded `promoted_from_version` is the rollback target,
     and `ML_MODEL_VERSION` pins what is served without touching the pointer."""
     from app.core.config import settings
@@ -714,7 +792,7 @@ def test_scenario_i_rollback_after_promotion_restores_the_previous_champion(
 
     monkeypatch.setattr(DecisionEngine, "reload", classmethod(lambda cls, m: {}))
     cand = _approved(db, user)
-    lifecycle.promote(db, cand.id, user_id=user.id)
+    lifecycle.promote(db, cand.id, user_id=second_reviewer.id)
     assert (isolated_model / "champion.txt").read_text() == "2.0.0"
 
     # Route 1: pin the version. The pointer is untouched and the previous model
@@ -731,7 +809,7 @@ def test_scenario_i_rollback_after_promotion_restores_the_previous_champion(
 
 
 def test_promotion_refuses_when_the_champion_moved_underneath_it(
-        db, user, isolated_model, monkeypatch):
+        db, user, second_reviewer, isolated_model, monkeypatch):
     """The race the audit worried about: approval happened, then somebody else
     promoted something. Refused, not reconciled."""
     monkeypatch.setattr("app.ml.pipeline.engine.DecisionEngine.reload",
@@ -740,13 +818,13 @@ def test_promotion_refuses_when_the_champion_moved_underneath_it(
     (isolated_model / "champion.txt").write_text("2.0.0")     # moved by someone
 
     with pytest.raises(lifecycle.ApprovalRefused, match="champion moved"):
-        lifecycle.promote(db, cand.id, user_id=user.id)
+        lifecycle.promote(db, cand.id, user_id=second_reviewer.id)
     assert (isolated_model / "champion.txt").read_text() == "2.0.0"
     assert cand.state == CandidateState.APPROVED
 
 
 def test_promotion_refuses_a_candidate_whose_artifact_failed_its_gates(
-        db, user, isolated_model):
+        db, user, second_reviewer, isolated_model):
     """A model is written even when it fails so the failure can be read.
     Pointing at that directory must not make it champion."""
     (isolated_model / "3.0.0").mkdir()
@@ -755,14 +833,14 @@ def test_promotion_refuses_a_candidate_whose_artifact_failed_its_gates(
     cand = _approved(db, user, version="3.0.0")
 
     with pytest.raises(lifecycle.ApprovalRefused, match="did not pass its gates"):
-        lifecycle.promote(db, cand.id, user_id=user.id)
+        lifecycle.promote(db, cand.id, user_id=second_reviewer.id)
     assert (isolated_model / "champion.txt").read_text() == "1.0.0"
 
 
-def test_promotion_refuses_a_version_with_no_artifact(db, user, isolated_model):
+def test_promotion_refuses_a_version_with_no_artifact(db, user, second_reviewer, isolated_model):
     cand = _approved(db, user, version="9.9.9-never-trained")
     with pytest.raises(lifecycle.ApprovalRefused, match="no artifact"):
-        lifecycle.promote(db, cand.id, user_id=user.id)
+        lifecycle.promote(db, cand.id, user_id=second_reviewer.id)
     assert (isolated_model / "champion.txt").read_text() == "1.0.0"
 
 

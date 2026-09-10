@@ -263,6 +263,36 @@ def test_a_rejected_candidate_cannot_be_promoted_over_http(
     assert registry.pointer_version("recovery_risk") == champion_guard.strip()
 
 
+def test_the_same_manager_cannot_approve_and_then_promote_over_http(
+        client, auth, db_session, champion_guard, test_data):
+    """Four eyes, at the surface a person actually uses.
+
+    Approve and promote are separate endpoints, so before 2026-09-10 one manager
+    could hit both in sequence and the "second checkpoint" was the same judgement
+    twice. The rule lives in lifecycle.promote; this asserts the HTTP contract it
+    produces — 409, not 500, because the request was valid and the AUTHORITY was
+    not.
+    """
+    cand = _candidate(db_session, state=CandidateState.PENDING_APPROVAL)
+    ok = client.post(f"/api/v1/manager/ml/candidates/{cand.id}/approve",
+                     headers=auth, json={"note": "looks good"})
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["decided_by_id"] == test_data["manager"].id
+
+    r = client.post(f"/api/v1/manager/ml/candidates/{cand.id}/promote",
+                    headers=auth)
+    assert r.status_code == 409, r.text
+    assert "four-eyes" in r.json()["detail"]
+    # The pointer is the thing that matters — a refused promotion that still
+    # moved the champion would be the worst possible outcome.
+    assert registry.pointer_version("recovery_risk") == champion_guard.strip()
+
+    from app.models.model_candidate import CandidateState as _CS
+    db_session.refresh(cand)
+    assert cand.state == _CS.APPROVED, "state advanced on a refused promotion"
+    assert cand.promoted_at is None
+
+
 def test_a_pending_candidate_cannot_be_promoted_without_approval(
         client, auth, db_session, champion_guard):
     """The gate the whole design exists for: no path from trained to live that

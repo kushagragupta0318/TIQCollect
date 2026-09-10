@@ -450,9 +450,12 @@ def reject(db: Session, candidate_id: str, *, user_id: str,
 def promote(db: Session, candidate_id: str, *, user_id: str) -> ModelCandidate:
     """APPROVED -> PROMOTED, and the pointer moves. The last gate in the system.
 
-    Five checks before the pointer is touched, and `registry.promote` repeats
+    Six checks before the pointer is touched, and `registry.promote` repeats
     the incumbent one against the file itself — belt and brace, because this is
     the single write in the codebase that changes what borrowers are scored by.
+
+    *(This said "Five checks" until 2026-09-10, when the four-eyes rule was
+    added. Corrected rather than left to drift.)*
     """
     from app.ml.pipeline import registry
     from app.ml.pipeline.engine import DecisionEngine
@@ -468,6 +471,28 @@ def promote(db: Session, candidate_id: str, *, user_id: str) -> ModelCandidate:
         raise ApprovalRefused(
             "candidate is APPROVED but its recorded validation or comparison "
             "result is not a pass; refusing to promote")
+    # FOUR EYES, added 2026-09-10 by the repo-wide audit.
+    #
+    # Every other gate on this path asks whether the MODEL is good enough. None
+    # asked how many PEOPLE agreed, and one person could approve and then
+    # promote in two clicks — so "approval and promotion are separate on
+    # purpose" (see approve() above) bought a second checkpoint that the same
+    # judgement passed twice.
+    #
+    # The audit also found the role gate does not help here: `ManagerOnly`
+    # resolves to AGENCY_MANAGER + AGENCY_ADMIN, and AGENCY_ADMIN is never used
+    # to distinguish anything anywhere in the codebase, so every manager can
+    # already reach this function. Separation of DUTY is available where
+    # separation of PRIVILEGE is not.
+    #
+    # Enforced here rather than in the endpoint because the endpoint is not the
+    # only caller a future script could have, and this is the function that
+    # moves the pointer.
+    if cand.decided_by_id and cand.decided_by_id == user_id:
+        raise ApprovalRefused(
+            f"four-eyes: this candidate was approved by {user_id} and cannot be "
+            f"promoted by the same person. Promotion changes what every "
+            f"borrower is scored by; it needs a second reviewer")
 
     try:
         previous = registry.promote(
