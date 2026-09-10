@@ -678,3 +678,65 @@ def test_audit_log_export_is_csv_and_scoped_the_same_way(client, seeded, audit_r
     assert "timestamp,actor,action" in r.text
     assert "pay-mine" in r.text
     assert "pay-theirs" not in r.text, "CSV export leaked another manager's row"
+
+
+# ── exporting borrower data is itself an auditable act ──────────────────────
+# `DATA_EXPORT` was declared in AuditAction from the beginning and written
+# nowhere — one of 14 such actions the 2026-09-10 repo audit counted. These two
+# endpoints are the ones that ship data off the platform, so they are the ones
+# that got it. The other 12 are still unwritten and are still a known issue.
+
+def test_exporting_the_audit_log_writes_a_data_export_row(client, seeded, audit_rows):
+    from app.models.audit_log import AuditLog, AuditAction
+
+    # Counted as a DELTA, not an absolute. `seeded` is module-scoped, so these
+    # rows outlive the test and an absolute count makes the assertion depend on
+    # what ran before it.
+    db = TestingSession()
+    try:
+        before = db.query(AuditLog).filter(
+            AuditLog.action == AuditAction.DATA_EXPORT).count()
+    finally:
+        db.close()
+
+    r = client.get("/api/v1/manager/audit-log/export",
+                   headers=auth_headers(seeded["manager"]))
+    assert r.status_code == 200
+
+    db = TestingSession()
+    try:
+        rows = (db.query(AuditLog)
+                  .filter(AuditLog.action == AuditAction.DATA_EXPORT)
+                  .order_by(AuditLog.created_at.desc()).all())
+        assert len(rows) == before + 1, (
+            "the export of an audit trail was itself unaudited")
+        row = rows[0]
+        assert row.user_id == seeded["manager"].id
+        assert row.success is True
+        assert row.details["endpoint"] == "/manager/audit-log/export"
+        assert row.details["rows"] >= 1
+        # The row records the SHAPE of the export, never its content — copying
+        # the payload here would duplicate the data being logged.
+        assert "pay-mine" not in str(row.details)
+    finally:
+        db.close()
+
+
+def test_a_refused_export_writes_no_data_export_row(client, seeded):
+    """404 means nothing left the platform. A DATA_EXPORT row here would make the
+    trail read as though another agency's run had been handed over."""
+    from app.models.audit_log import AuditLog, AuditAction
+
+    r = client.get("/api/v1/manager/allocation/export-decisions?run_id=does-not-exist",
+                   headers=auth_headers(seeded["manager"]))
+    assert r.status_code == 404
+
+    db = TestingSession()
+    try:
+        # Scoped to THIS run id, so the assertion says what it means regardless
+        # of which other tests exported something first.
+        assert db.query(AuditLog).filter(
+            AuditLog.action == AuditAction.DATA_EXPORT,
+            AuditLog.entity_id == "does-not-exist").count() == 0
+    finally:
+        db.close()

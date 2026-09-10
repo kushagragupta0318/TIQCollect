@@ -2092,6 +2092,24 @@ def export_audit_log_csv(current_user: ManagerOnly, db: DbSession):
         ])
 
     stamp = date.today().isoformat()
+
+    # 2026-09-10 — AN EXPORT OF THE AUDIT TRAIL WAS ITSELF UNAUDITED.
+    # `DATA_EXPORT` has been declared in AuditAction since the table was written
+    # and was emitted nowhere; the repo-wide audit found 14 of 25 actions in that
+    # state, and this is the one that ships borrower-adjacent history off the
+    # platform. Row count and window are recorded rather than the content: the
+    # export is reproducible from them, and copying the payload into the audit
+    # table would duplicate the very data the export is being logged for.
+    db.add(AuditLog(
+        created_at=datetime.now(timezone.utc), user_id=current_user.id,
+        action=AuditAction.DATA_EXPORT,
+        entity_type="AuditLog", entity_id=None,
+        details={"format": "csv", "rows": len(rows),
+                 "since": _audit_since().isoformat(),
+                 "endpoint": "/manager/audit-log/export"},
+        success=True))
+    db.commit()
+
     return Response(
         content=out.getvalue(), media_type="text/csv",
         headers={"Content-Disposition": f"attachment; filename=audit_log_{stamp}.csv"},
@@ -4287,7 +4305,21 @@ def export_allocation_decisions_csv(
         csv_text = planner.export_decisions_csv(run_id=run_id)
     except ValueError:
         # 404 rather than 403 — a 403 would confirm the run id exists.
+        # No audit row on this path: nothing was exported, and logging a
+        # DATA_EXPORT for a refused request would make the trail read as though
+        # another agency's run had been handed over.
         raise HTTPException(status_code=404, detail="Allocation run not found")
+
+    # Written only after the ownership check inside export_decisions_csv has
+    # passed — see the 2026-09-10 note on the audit-log export above.
+    db.add(AuditLog(
+        created_at=datetime.now(timezone.utc), user_id=current_user.id,
+        action=AuditAction.DATA_EXPORT,
+        entity_type="AllocationRun", entity_id=run_id,
+        details={"format": "csv", "rows": max(0, len(csv_text.splitlines()) - 1),
+                 "endpoint": "/manager/allocation/export-decisions"},
+        success=True))
+    db.commit()
 
     return Response(
         content=csv_text,
