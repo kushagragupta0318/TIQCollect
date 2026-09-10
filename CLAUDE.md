@@ -9,16 +9,25 @@ detection and an LLM performance narrative over their own team.
 FastAPI + Postgres + Redis + MinIO + Celery on the backend; React 19 + Vite +
 TypeScript + Tailwind on the frontend. Python >= 3.12.
 
-**Measured 2026-09-08**, not estimated: 28,187 lines under `backend/app`,
-12,061 under `backend/scripts`, 17,863 under `frontend/src`, and **945 backend tests + 15 frontend
-tests, all passing** — up from 574 at the start of 2026-09-08, across
-Workstreams D and E, segment calibration, the allocator promotion,
-epsilon-greedy, the live-integration fixes, the model outcome labeller and the
-dual-label comparison.
+**Measured 2026-09-10**, not estimated: 32,833 lines under `backend/app`,
+13,179 under `backend/scripts`, 18,805 under `frontend/src`, and **1,044 backend
+tests + 23 frontend tests, all passing** (full suite: 1038 passed in 493s on
+2026-09-10; the collected count is higher because it includes the four-eyes
+tests added after that run).
 
-> **The working tree is dirty and nothing is committed.** 34 entries are modified,
-> new or deleted against `86eb6d0`. If you are reading this in a fresh session, run
-> `git status` before assuming the tree matches the last commit.
+*(These read 28,187 / 12,061 / 17,863 and "945 backend + 15 frontend", dated
+2026-09-08. Every one had drifted by the 2026-09-10 audit — `backend/app` grew
+16% while the file went on quoting a two-day-old figure. Corrected rather than
+deleted, because a number presented as "measured, not estimated" is exactly the
+kind a reader quotes without re-running it.)*
+
+> **Run `git status` before assuming the tree matches the last commit.**
+>
+> *(This used to say "The working tree is dirty and nothing is committed — 34
+> entries against `86eb6d0`". That stopped being true when the ML lifecycle work
+> was committed and pushed as `401be94..8d4595e`; leaving it would have told a
+> fresh session to distrust a clean tree. The advice is kept, the stale count is
+> gone.)*
 
 ## Provenance — read this first
 
@@ -97,7 +106,7 @@ Verify a change with all four, because each catches what the others miss:
 cd backend  && python -m pytest          # 945 tests, ~320s, no DB or network
 cd backend  && python -m compileall app
 cd frontend && npm run build             # tsc -b + vite — the real typecheck
-cd frontend && npm run lint              # 18 errors left (was 53) — see issue 1
+cd frontend && npm run lint              # 16 errors left (was 53) — see issue 1
 ```
 
 **Use `npm run build`, never `npx tsc --noEmit`.** The root `tsconfig.json` is a
@@ -123,7 +132,7 @@ backend/app/
   core/               config · security · database · dependencies · errors · geo
                       routing (OSRM + OR-Tools VRPTW) · llm (provider seam)
                       transcription (Whisper seam) · storage (MinIO)
-  models/             21 files → 19 mapped tables (two are dead — see below)
+  models/             22 files → 21 mapped tables (base.py is the only non-table)
   ml/                 repayment_scorecard · recovery_scorecard · visit_priority
                       empirical_bayes · eligibility · allocator · repayment (tier seam)
                       recovery_validation · shadow_evaluator · train_shadow_model
@@ -170,13 +179,17 @@ where it did), `RepaymentSnapshot` (the ML spine), `AgentLocation`, `FraudReview
 `CallLog`, `AuditLog`, `AllocationSetting`, `AgentPerformance`,
 `QuickLoginToken`.
 
-`models/document.py` and `models/case_photo.py` are **dead** — absent from
-`models/__init__.py` and imported nowhere, so their tables are never created.
-`Document` declares `back_populates="documents"` against `Visit`, which has **no
-such relationship** (verified: zero occurrences of "documents" in `visit.py`), so
-importing it would break the SQLAlchemy mapper for the whole app. Delete them or
-wire them up; do not import them casually. (`base.py` is the declarative base, not
-a table — that is why 21 files give 19 tables.)
+*(This paragraph warned that `models/document.py` and `models/case_photo.py`
+were **dead** — absent from `models/__init__.py`, imported nowhere — and that
+`Document`'s `back_populates="documents"` against a `Visit` with no such
+relationship would break the SQLAlchemy mapper for the whole app if anyone
+imported it. It offered two options, "delete them or wire them up". **Deleted
+2026-09-10**, after the repo-wide audit re-confirmed zero importers: a documented
+footgun is still a footgun, and the warning only ever protected someone who read
+the warning first.)*
+
+`base.py` is the declarative base, not a table — that is why 22 files give 21
+mapped tables.
 
 ## The scoring layers
 
@@ -1548,6 +1561,24 @@ old pointer intact.
 **Stale approvals are refused, not reconciled.** If the champion moved between
 comparison and approval, the comparison describes a model nobody is running.
 
+**Four eyes, added 2026-09-10.** Every gate above asks whether the MODEL is good
+enough; none asked how many PEOPLE agreed, so one person could approve and then
+promote in two clicks and the second checkpoint was the same judgement twice.
+`lifecycle.promote` now refuses when `decided_by_id == user_id`, and the API
+returns 409. A NULL approver does **not** trip it — absent evidence is not
+evidence of self-approval, and refusing on it would strand a candidate nobody
+could ever promote.
+
+Separation of DUTY is enforced because separation of PRIVILEGE is not available:
+the repo-wide audit found that **`ManagerOnly` resolves to `AGENCY_MANAGER +
+AGENCY_ADMIN` and `AGENCY_ADMIN` is never used to distinguish anything anywhere
+in the codebase**, so every manager can already reach every one of these routes.
+That role is decorative, and it remains an open issue — four eyes narrows the
+blast radius, it does not close it. The rule is in `lifecycle.promote` rather
+than the endpoint because the endpoint is not the only possible caller and that
+function is what moves the pointer. Six tests, mutation-checked by removing the
+condition and confirming exactly the two refusal tests fail.
+
 ### Deployment and cache
 
 Updating `champion.txt` does **not** update an already-loaded model object: the
@@ -1663,16 +1694,15 @@ Full specification: [docs/PLAN.md](docs/PLAN.md).
   `ai_generated` and label the fallback rather than passing it off as AI. It
   **does** support `response_format: json_object`, which matters for feature #2
   below. Same shape as `core/transcription.py` for Whisper.
-- Root `main.py` is the old `:8300` Command Center dev stub. **Nothing consumes
-  it.** Safe to delete. **So is `backend/stub_main.py`** (163 lines, tracked):
-  its own docstring says it serves `:8300` from `field-ops-stub/backend`, a path
-  in the *other* repo, and nothing here imports or runs it. *(This line used to
-  claim stub_main.py was "already gone". It is not — verified 2026-09-07 by an
-  AST pass over every import, celery `include=[]` string and router
-  registration. Corrected rather than deleted so the wrong claim is visible.)*
-  Root `requirements.txt` (two lines) fed only those two stubs; CI and both
-  Dockerfiles use `backend/requirements.txt`. `app/schemas/manager.py` is dead
-  too — all three of its models are referenced nowhere.
+- **The four dead stubs are gone, deleted 2026-09-10.** Root `main.py` (the old
+  `:8300` Command Center dev stub), `backend/stub_main.py` (163 lines, whose own
+  docstring said it served `:8300` from `field-ops-stub/backend` — a path in the
+  *other* repo), root `requirements.txt` (two lines, which fed only those two;
+  CI and both Dockerfiles use `backend/requirements.txt`, and CI's backend job
+  runs with `working-directory: backend`, so that line always resolved there)
+  and `app/schemas/manager.py`. *(This bullet recorded them as safe to delete
+  across three sessions and once wrongly claimed stub_main.py was "already gone".
+  The audit re-verified zero importers before removing them.)*
 - **Do not regress these**, they are load-bearing and were each fixed once: JWT
   with `jti` + `device_id` binding; bcrypt; single-use quick-login tokens (the
   90-day-reusable-token incident is documented in `core/security.py:1`); slowapi
@@ -1715,7 +1745,15 @@ depend on judgement layers that do not exist yet.
 
 ## Known issues — open
 
-1. **The frontend lint job fails — 18 errors, all `react-hooks/set-state-in-effect`.**
+1. **The frontend lint job fails — 16 errors, all `react-hooks/set-state-in-effect`.**
+   *(This said 18, and its "all" was wrong: two were different rules. Both were
+   fixed on 2026-09-10 — `react-refresh/only-export-components` by splitting
+   `useBeat` out of `BeatContext.tsx` into `contexts/useBeat.ts`, named for the
+   hook because `beatContext.ts` beside `BeatContext.tsx` differs only by case
+   and resolves ambiguously on a case-insensitive filesystem; and
+   `react-hooks/preserve-manual-memoization` in `ManagerOverviewPage` by hoisting
+   `plan?.decisions` into a local so the compiler's inferred dependency and the
+   declared one agree. The count is now right and the "all" is now true.)*
    Down from 53 on 2026-09-06; the other 35 were fixed on 2026-09-07 (20
    `no-explicit-any`, 7 unused vars, 2 needless exports, and four that were real
    bugs — see the fixed list below). What remains is concentrated in the six
@@ -1730,12 +1768,26 @@ depend on judgement layers that do not exist yet.
    scanning the card has nothing to check it against, so the anti-impersonation
    control is inert. The Compliance page states this rather than claiming ID
    verification.
-3. **The audit trail is mostly declared and unwritten.** `AuditLog` defines 22
-   action types; **8 are emitted** — `LOGIN`, `LOGIN_FAILED`, `LOGOUT`,
+3. **The audit trail is mostly declared and unwritten.** `AuditLog` defines **25**
+   action types and **12 are emitted** — `LOGIN`, `LOGIN_FAILED`, `LOGOUT`,
    `TOKEN_REFRESH`, `DEVICE_MISMATCH`, `PAYMENT_VERIFIED`, `PTP_UPDATED`,
-   `ANOMALY_REVIEWED`. `VISIT_RECORDED`, `PTP_SET`, `CASE_ASSIGNED`,
-   `BEAT_GENERATED`, `DATA_EXPORT` and nine others are defined and never written.
-   Immutability is convention only — no trigger, no revoked grant.
+   `ANOMALY_REVIEWED`, the three `MODEL_*` actions, and `DATA_EXPORT`.
+   `VISIT_RECORDED`, `PTP_SET`, `CASE_ASSIGNED`, `BEAT_GENERATED`,
+   `CONTACT_HOUR_VIOLATION_ATTEMPT`, `ROLE_VIOLATION_ATTEMPT` and seven others
+   are defined and never written. Immutability is convention only — no trigger,
+   no revoked grant.
+
+   *(This read "22 action types; 8 are emitted" and listed `DATA_EXPORT` among
+   the unwritten. **`DATA_EXPORT` was wired on 2026-09-10** — both
+   `/manager/audit-log/export` and `/manager/allocation/export-decisions` now
+   write one, after the ownership check and never on a 404, because a row on a
+   refused request would make the trail read as though another agency's run had
+   been handed over. The row records the shape of the export — row count,
+   window, endpoint — never its content, since copying the payload into the
+   audit table would duplicate the very data being logged. An export of the
+   audit trail that was itself unaudited is the one worth fixing first; the
+   other 13 are still open, and the two `*_VIOLATION_ATTEMPT` actions are the
+   next most valuable, being security events declared and not recorded.)*
 4. **The audit-log read path has one deliberate blind spot.** `GET
    /manager/audit-log` and `/audit-log/export` share `_audit_log_query`, so the
    tenant scope cannot be dropped on one path and not the other. But the scope is
@@ -1744,7 +1796,10 @@ depend on judgement layers that do not exist yet.
    appear. Correct as a default; a real gap nonetheless. The API declares it
    (`excludes_system_rows: true`) and the page says so. Scoping them through
    `PTP → agent → manager` is the obvious extension and is not done.
-5. **Two competing schema authorities.** Eight Alembic migrations exist, but
+5. **Two competing schema authorities.** Fifteen Alembic migrations exist —
+   that read "Eight" until 2026-09-10, when the chain was re-verified with
+   `alembic history`: single head `b6c14e83af27`, base `d7a84c5a710f`, no forks
+   and no dangling revisions — but
    `seed_data.py` does `drop_all` + `create_all` and — verified — **never touches
    `alembic_version` at all**. `docker-entrypoint.sh` arbitrates by checking for
    `public.agents`. Fine for a demo box; for production `alembic upgrade head` has
@@ -1780,6 +1835,41 @@ depend on judgement layers that do not exist yet.
     happens to put it. Nothing reads it that way today — recorded because the next
     thing that wants "how much did this agent recover" will reach for this
     function first, and it will look right.
+
+11. **`AGENCY_ADMIN` is a decorative role.** `UserRole` declares three roles, but
+    `ManagerOnly` resolves to `AGENCY_MANAGER + AGENCY_ADMIN` and — verified by
+    the 2026-09-10 audit — **`AGENCY_ADMIN` is never used to distinguish anything
+    anywhere in `app/`**. Its only two other appearances are `AnyRole` and an
+    `in_([...])` in `workers/tasks/allocation.py`, both of which also include
+    `AGENCY_MANAGER`. So there is exactly one privilege level above field agent,
+    and every manager holds it.
+
+    The sharpest consequence is `POST /manager/ml/candidates/{id}/promote`, which
+    rewrites `champion.txt` for the **entire deployment** — the highest-consequence
+    manual action in the system, by the migration's own description — and is open
+    to every manager. The tenant-scoping sweep cannot see this: it asks whether a
+    route is scoped to its tenant, and these routes are correctly tenant-free
+    because there is one champion for everybody. Tenancy and authority are
+    different questions and only the first is tested.
+
+    Four eyes on promotion (2026-09-10) narrows this but does not close it: two
+    managers are still two managers. Closing it properly means an `AdminOnly`
+    dependency, which is a deliberate behaviour change — the live database holds
+    2 `AGENCY_MANAGER`s and 1 `AGENCY_ADMIN`, so gating promote would 403 the two
+    people who can do it today.
+
+12. **Notification delivery is best-effort and now says so out loud.**
+    `NotificationService.send_twilio` / `send_sms` still swallow every exception
+    — deliberately, because a failed receipt must not roll back a verified
+    payment — but until 2026-09-10 they did it with a bare `pass`, so an outage,
+    a bad credential and a successful send were indistinguishable afterwards.
+    They now log at ERROR with the exception type and traceback. **It is still a
+    swallow**: no caller learns that delivery failed, and the borrower-facing
+    consequence is real — `send_sms`'s only caller is `OtpService`, so an agent
+    sees "OTP sent" while the borrower who must approve the payment gets nothing.
+    A delivery-status column or a retry queue is the actual fix and is not built.
+    Verified NOT to be the `ptp_reminders` defect: no caller of either function
+    writes a delivery flag.
 
 ## Fixed on 2026-09-08 — routing (Workstream D)
 
