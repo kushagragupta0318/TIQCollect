@@ -5,6 +5,25 @@
 #   VisitService plus 3 endpoints that stay in agent.py for now
 #   (collect_payment, notify_visit, notify_case) — those callers only changed
 #   their import source, not their behavior. Full detail + why: /changelog.md
+# 2026-09-10 — Delivery failures are still swallowed, but they are no longer
+#   SILENT. Both senders caught `Exception` and did `pass`, so a Twilio outage,
+#   a bad credential or a rejected number produced exactly the same trace as a
+#   successful send: none. That matters most for send_sms, whose one caller is
+#   OtpService — the borrower's payment-verification code. The agent sees "OTP
+#   sent", the borrower gets nothing, and no operator can tell the difference
+#   after the fact.
+#
+#   THE SWALLOW IS DELIBERATE AND IS KEPT. A failed receipt must not roll back a
+#   verified payment, and the docstrings have promised best-effort since
+#   2026-07-14. What changes is that it logs at ERROR with the exception type,
+#   exactly as planner_service._ml_recovery_probabilities was corrected on
+#   2026-09-08 for the same reason: "a swallowed exception that degrades
+#   correctly still has to be loud."
+#
+#   NOT the ptp_reminders defect. Nothing here marks a row as sent — verified:
+#   no caller of send_twilio/send_sms writes a delivery flag. See
+#   workers/tasks/ptp_reminders.py, which deliberately sends nothing AND marks
+#   nothing.
 # 2026-07-30 — Added send_sms() (SMS-only, no WhatsApp) for borrower payment
 #   OTP delivery — OtpService uses it. send_twilio() (SMS + WhatsApp) is
 #   unchanged and still used by every existing caller; send_sms() is additive
@@ -22,7 +41,11 @@ from __future__ import annotations
 
 import re
 
+import structlog
+
 from app.core.config import settings
+
+logger = structlog.get_logger()
 
 
 class NotificationService:
@@ -67,8 +90,10 @@ class NotificationService:
                 client.messages.create(body=sms_body, from_=settings.TWILIO_PHONE_NUMBER, to=phone_e164)
             if settings.TWILIO_WHATSAPP_FROM:
                 client.messages.create(body=wa_body, from_=settings.TWILIO_WHATSAPP_FROM, to=f"whatsapp:{phone_e164}")
-        except Exception:
-            pass
+        except Exception as exc:
+            # Swallowed on purpose (see the header), but never silently.
+            logger.error("notification.twilio_send_failed", channel="sms+whatsapp",
+                         error=str(exc), error_type=type(exc).__name__, exc_info=True)
 
     @staticmethod
     def send_sms(phone_e164: str, sms_body: str) -> None:
@@ -83,5 +108,8 @@ class NotificationService:
             client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
             if settings.TWILIO_PHONE_NUMBER:
                 client.messages.create(body=sms_body, from_=settings.TWILIO_PHONE_NUMBER, to=phone_e164)
-        except Exception:
-            pass
+        except Exception as exc:
+            # The OTP path. A borrower who never receives this cannot verify a
+            # payment, and before this line nothing anywhere recorded that.
+            logger.error("notification.twilio_send_failed", channel="sms",
+                         error=str(exc), error_type=type(exc).__name__, exc_info=True)
