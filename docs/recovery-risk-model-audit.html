@@ -1,0 +1,868 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  Recovery Risk Model Audit — plain-English audit of the recovery_risk champion.
+
+  WHY THIS FILE EXISTS. MODEL_DEVELOPMENT.html (generated from the artifact at
+  ml/artifacts/recovery_risk/1.1.0/) is the technical record and stays the source
+  of truth. It is written for someone who already knows what an IV table is. This
+  page answers the same questions for someone who does not, and is the one to hand
+  to a manager, a client or an auditor.
+
+  EVERY FIGURE WAS MEASURED ON 2026-09-11, not estimated and not copied from
+  CLAUDE.md, which has drifted before:
+
+    * model metrics, gates, the selection funnel, scorecard points and the band
+      table   ->  app/ml/artifacts/recovery_risk/1.1.0/metadata.json
+                  and evaluation/{selection_log,sfs_path,vif,gate_results}.csv
+    * live counts (19,935 scores / 973 loans / 214 ML-used decisions / mean
+      prob_recovery_ml 0.1489)  ->  the model_predictions and
+      allocation_decisions tables on the running database
+
+  The "scores we tested and turned down" section records a read-only investigation
+  run on 2026-09-11 (six ablation arms through the production pipeline, plus a
+  data-lineage trace of the two hand-weighted scorecards). It changed no model,
+  no policy and no production behaviour; it corrected the WRITTEN REASONING for
+  the forbidden-output rule, which had been stated as leakage and is not.
+
+  IT GOES STALE THE MOMENT THE CHAMPION MOVES. champion.txt read 1.1.0 when this
+  was written; if it reads anything else, every number below describes a model
+  nobody is running. Re-measure rather than patch.
+-->
+<title>Recovery Risk Model Audit</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --ground:#EDF0F2;
+    --surface:#FFFFFF;
+    --surface-2:#F6F8F9;
+    --ink:#141C26;
+    --ink-2:#3D4956;
+    --muted:#6B7686;
+    --line:#D9DFE4;
+    --line-soft:#E7ECEF;
+    --accent:#0F5C5A;
+    --accent-soft:#E2EFEE;
+    --pass:#1C7A4D;
+    --pass-soft:#E3F2E9;
+    --watch:#96650A;
+    --watch-soft:#FBF0DA;
+    --fail:#A93B2C;
+    --fail-soft:#F8E5E1;
+    --shadow:0 1px 2px rgba(20,28,38,.06), 0 8px 24px -16px rgba(20,28,38,.22);
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --ground:#0E1418;
+      --surface:#161E24;
+      --surface-2:#1B242B;
+      --ink:#E7EDF0;
+      --ink-2:#BAC5CD;
+      --muted:#8D9AA5;
+      --line:#2A353E;
+      --line-soft:#232D35;
+      --accent:#4FBFB1;
+      --accent-soft:#13322F;
+      --pass:#5FC78D;
+      --pass-soft:#132A1F;
+      --watch:#D9A93F;
+      --watch-soft:#2C2312;
+      --fail:#E08272;
+      --fail-soft:#2E1916;
+      --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.8);
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#0E1418;
+    --surface:#161E24;
+    --surface-2:#1B242B;
+    --ink:#E7EDF0;
+    --ink-2:#BAC5CD;
+    --muted:#8D9AA5;
+    --line:#2A353E;
+    --line-soft:#232D35;
+    --accent:#4FBFB1;
+    --accent-soft:#13322F;
+    --pass:#5FC78D;
+    --pass-soft:#132A1F;
+    --watch:#D9A93F;
+    --watch-soft:#2C2312;
+    --fail:#E08272;
+    --fail-soft:#2E1916;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.8);
+  }
+
+  *{box-sizing:border-box}
+  body{
+    background:var(--ground);
+    color:var(--ink);
+    font-family:"Source Serif 4",Georgia,"Times New Roman",serif;
+    font-size:17px;
+    line-height:1.62;
+    -webkit-font-smoothing:antialiased;
+  }
+  .page{max-width:1060px;margin:0 auto;padding-inline:20px;padding-block:0 72px}
+
+  h1,h2,h3,.label,.chip,table,.bar-cap{font-family:Archivo,"Helvetica Neue",Arial,sans-serif}
+  .mono,code{font-family:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;font-variant-numeric:tabular-nums}
+  .num{font-family:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;font-variant-numeric:tabular-nums}
+
+  .label{
+    font-size:11px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--muted);
+  }
+
+  /* masthead */
+  header.mast{
+    border-bottom:2px solid var(--ink);
+    padding-block:40px 20px;
+    display:flex;flex-wrap:wrap;gap:24px;align-items:flex-end;justify-content:space-between;
+  }
+  .mast h1{
+    font-size:clamp(30px,5vw,46px);line-height:1.04;margin:10px 0 0;
+    letter-spacing:-.022em;font-weight:700;text-wrap:balance;
+  }
+  .mast .sub{margin:12px 0 0;color:var(--ink-2);max-width:58ch;font-size:18px}
+  .stamp{
+    border:1px solid var(--line);background:var(--surface);border-radius:2px;
+    padding:14px 18px;min-width:210px;box-shadow:var(--shadow);
+  }
+  .stamp dl{margin:0;display:grid;grid-template-columns:auto auto;gap:6px 16px;align-items:baseline}
+  .stamp dt{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-family:Archivo,sans-serif;font-weight:600}
+  .stamp dd{margin:0;font-family:"IBM Plex Mono",monospace;font-size:13px;text-align:right}
+
+  /* sections */
+  section{padding-block:38px;border-bottom:1px solid var(--line-soft)}
+  section:last-of-type{border-bottom:0}
+  h2{
+    font-size:13px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;
+    margin:0 0 6px;color:var(--accent);
+  }
+  .deck{
+    font-size:clamp(21px,3vw,27px);line-height:1.28;margin:0 0 22px;
+    font-family:Archivo,sans-serif;font-weight:600;letter-spacing:-.015em;
+    max-width:32ch;text-wrap:balance;color:var(--ink);
+  }
+  p{margin:0 0 16px;max-width:68ch}
+  p.wide{max-width:none}
+  .lede{font-size:19px}
+  strong{font-weight:600}
+  .term{
+    font-family:"IBM Plex Mono",monospace;font-size:.82em;
+    background:var(--accent-soft);color:var(--accent);
+    padding:1px 6px;border-radius:2px;white-space:nowrap;font-weight:500;
+  }
+
+  /* nightly rail */
+  .rail{display:grid;gap:0;margin:8px 0 4px}
+  .stop{
+    display:grid;grid-template-columns:78px 1fr;gap:20px;align-items:start;
+    padding-block:14px;border-top:1px solid var(--line-soft);
+  }
+  .stop:first-child{border-top:0}
+  .stop .clock{
+    font-family:"IBM Plex Mono",monospace;font-size:15px;font-weight:600;
+    color:var(--muted);padding-top:2px;
+  }
+  .stop.here .clock{color:var(--accent)}
+  .stop .what{border-left:3px solid var(--line);padding-left:18px}
+  .stop.here .what{border-left-color:var(--accent)}
+  .stop h3{margin:0 0 4px;font-size:16px;font-weight:600;letter-spacing:-.01em}
+  .stop.here h3{color:var(--accent)}
+  .stop p{margin:0;font-size:15.5px;color:var(--ink-2);max-width:62ch}
+
+  .formula{
+    background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--accent);
+    padding:16px 20px;margin:24px 0 0;border-radius:2px;box-shadow:var(--shadow);
+  }
+  .formula .eq{font-family:"IBM Plex Mono",monospace;font-size:15px;line-height:1.8;color:var(--ink)}
+  .formula .eq b{color:var(--accent);font-weight:600}
+  .formula .note{font-size:15px;color:var(--ink-2);margin:10px 0 0;max-width:64ch}
+
+  /* funnel */
+  .funnel{display:grid;gap:2px;margin:10px 0 22px}
+  .fstep{
+    display:grid;grid-template-columns:26px 200px minmax(110px,1fr) auto;
+    gap:16px;align-items:center;padding:11px 0;border-top:1px solid var(--line-soft);
+  }
+  .fstep:first-child{border-top:0}
+  .fstep .idx{font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--muted);font-weight:600}
+  .fstep .test{font-family:Archivo,sans-serif;font-weight:600;font-size:14.5px;line-height:1.3}
+  .fstep .test small{display:block;font-weight:500;color:var(--muted);font-size:12px;font-family:"IBM Plex Mono",monospace}
+  .track{background:var(--line-soft);height:26px;border-radius:2px;overflow:hidden}
+  .track span{display:block;height:100%;background:var(--accent);opacity:.86}
+  .fstep .count{font-family:"IBM Plex Mono",monospace;font-size:14px;white-space:nowrap;min-width:96px;text-align:right}
+  .fstep .count b{font-weight:600;font-size:16px}
+  .fstep .count i{font-style:normal;color:var(--muted)}
+  .funnel-note{font-size:15px;color:var(--ink-2);max-width:66ch}
+
+  h3.sub-h{font-family:Archivo,sans-serif;font-size:15px;font-weight:600;margin:26px 0 4px;letter-spacing:-.01em}
+  p.sub-p{font-size:15px;color:var(--ink-2)}
+
+  /* weights */
+  .weights{display:grid;gap:14px;margin:6px 0 20px}
+  .wrow{display:grid;grid-template-columns:minmax(150px,230px) minmax(90px,1fr) 52px;gap:16px;align-items:center}
+  .wrow .nm{font-size:16px;line-height:1.3}
+  .wrow .nm small{display:block;font-family:"IBM Plex Mono",monospace;font-size:11.5px;color:var(--muted)}
+  .wrow .tr{background:var(--line-soft);height:14px;border-radius:2px;overflow:hidden}
+  .wrow .tr span{display:block;height:100%;background:var(--ink);opacity:.78}
+  .wrow .pt{font-family:"IBM Plex Mono",monospace;font-size:14px;text-align:right;color:var(--ink-2)}
+
+  /* ladder */
+  .ladder{display:grid;gap:6px;margin:6px 0 18px}
+  .lrow{display:grid;grid-template-columns:30px 1fr 96px;gap:14px;align-items:center}
+  .lrow .g{
+    font-family:Archivo,sans-serif;font-weight:700;font-size:15px;text-align:center;
+    border:1px solid var(--line);border-radius:2px;padding:2px 0;background:var(--surface);
+  }
+  .lrow .tr{background:var(--line-soft);height:22px;border-radius:2px;overflow:hidden}
+  .lrow .tr span{display:block;height:100%}
+  .lrow .v{font-family:"IBM Plex Mono",monospace;font-size:13.5px;color:var(--ink-2);text-align:right}
+
+  /* tables */
+  .scroll{overflow-x:auto;margin:4px 0 18px;border:1px solid var(--line);border-radius:2px;background:var(--surface);box-shadow:var(--shadow)}
+  table{border-collapse:collapse;width:100%;font-size:14.5px;min-width:680px}
+  thead th{
+    text-align:left;font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;
+    color:var(--muted);font-weight:600;padding:12px 16px;border-bottom:1px solid var(--line);
+    background:var(--surface-2);white-space:nowrap;
+  }
+  td{padding:13px 16px;border-bottom:1px solid var(--line-soft);vertical-align:top;color:var(--ink-2)}
+  tbody tr:last-child td{border-bottom:0}
+  td.k{color:var(--ink);font-family:Archivo,sans-serif;font-weight:600;font-size:14px;white-space:nowrap}
+  td.k small{display:block;font-weight:500;color:var(--muted);font-size:11.5px;font-family:"IBM Plex Mono",monospace;letter-spacing:0}
+  td.n{font-family:"IBM Plex Mono",monospace;font-variant-numeric:tabular-nums;color:var(--ink);white-space:nowrap}
+  td.n em{font-style:normal;font-size:11.5px;color:var(--muted)}
+  td.plain{font-family:"Source Serif 4",Georgia,serif;font-size:15px;min-width:270px}
+  td.range{font-family:"IBM Plex Mono",monospace;font-size:12.5px;color:var(--muted);white-space:nowrap;line-height:1.55}
+
+  .chip{
+    display:inline-block;font-size:10.5px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;
+    padding:3px 8px;border-radius:2px;white-space:nowrap;
+  }
+  .chip.pass{background:var(--pass-soft);color:var(--pass)}
+  .chip.watch{background:var(--watch-soft);color:var(--watch)}
+  .chip.fail{background:var(--fail-soft);color:var(--fail)}
+
+  /* live tiles */
+  .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:2px;overflow:hidden;margin:6px 0 20px}
+  .tile{background:var(--surface);padding:16px 18px}
+  .tile .v{font-family:"IBM Plex Mono",monospace;font-size:25px;font-weight:600;letter-spacing:-.02em;line-height:1.1}
+  .tile .l{font-size:12px;color:var(--muted);margin-top:6px;font-family:Archivo,sans-serif;line-height:1.35}
+
+  /* caveats */
+  .caveat{
+    background:var(--surface);border:1px solid var(--line);border-top:3px solid var(--watch);
+    padding:20px 22px;border-radius:2px;box-shadow:var(--shadow);
+  }
+  .caveat h3{margin:0 0 10px;font-size:16px;font-weight:600}
+  .caveat ul{margin:0;padding-left:18px}
+  .caveat li{margin-bottom:10px;color:var(--ink-2);font-size:15.5px}
+  .caveat li:last-child{margin-bottom:0}
+  .caveat li b{color:var(--ink);font-weight:600}
+
+  footer{padding-block:28px 0;border-top:2px solid var(--ink);margin-top:36px;color:var(--muted);font-size:13.5px;font-family:Archivo,sans-serif}
+  footer p{max-width:none;margin:0}
+
+  @media (max-width:640px){
+    body{font-size:16px}
+    .fstep{grid-template-columns:22px 1fr;grid-template-areas:"idx test" ". bar" ". cnt";gap:8px 12px}
+    .fstep .idx{grid-area:idx}
+    .fstep .test{grid-area:test}
+    .fstep .track{grid-area:bar}
+    .fstep .count{grid-area:cnt;text-align:left;min-width:0}
+    .wrow{grid-template-columns:1fr 48px;grid-template-areas:"nm pt" "tr tr";gap:6px 12px}
+    .wrow .nm{grid-area:nm}
+    .wrow .pt{grid-area:pt}
+    .wrow .tr{grid-area:tr}
+    .stop{grid-template-columns:60px 1fr;gap:12px}
+  }
+  @media (prefers-reduced-motion:reduce){*{animation:none !important;transition:none !important}}
+</style>
+<style>
+  /* Published as an artifact, this skeleton is supplied by the platform. Kept
+     here so the file also opens correctly straight off disk. */
+  :root{color-scheme:light dark}
+  body{margin:0}
+  img{max-width:100%}
+  [hidden]{display:none!important}
+</style>
+<style>
+  /* ── print / PDF ──────────────────────────────────────────────────────────
+     docs/recovery-risk-model-audit.pdf is generated from this file, so these
+     rules are what the PDF looks like. Three things they have to fix:
+
+       1. A4 is ~698 CSS px of usable width. The metric table carries
+          min-width:680px so it can scroll on a phone, and overflow-x does not
+          scroll on paper — it CLIPS. The verdict column would have been cut off
+          the right edge of every copy. min-width goes to 0 here and the cells
+          wrap instead.
+       2. prefers-color-scheme is honoured by the printer too, so a reader in
+          dark mode would print white text on paper. The palette is pinned light.
+       3. Rows, steps and bars are single objects; a page break through the
+          middle of one turns a chart into two half-charts. Every repeated unit
+          is marked unbreakable.
+  */
+  @media print{
+    :root,
+    :root[data-theme="dark"],
+    :root:not([data-theme="light"]){
+      --ground:#FFFFFF; --surface:#FFFFFF; --surface-2:#F6F8F9;
+      --ink:#141C26; --ink-2:#3D4956; --muted:#6B7686;
+      --line:#C8D0D6; --line-soft:#E2E8EC;
+      --accent:#0F5C5A; --accent-soft:#E2EFEE;
+      --pass:#1C7A4D; --pass-soft:#E3F2E9;
+      --watch:#96650A; --watch-soft:#FBF0DA;
+      --fail:#A93B2C; --fail-soft:#F8E5E1;
+      --shadow:none;
+    }
+    @page{size:A4;margin:14mm 12mm}
+    body{background:#fff;font-size:10.5pt;line-height:1.5}
+    .page{max-width:none;padding-inline:0;padding-block:0}
+    header.mast{padding-block:0 14px;break-after:avoid}
+    .mast h1{font-size:30px}
+    .mast .sub{font-size:12.5pt}
+    section{padding-block:20px}
+    .deck{font-size:16pt;margin-bottom:14px;break-after:avoid}
+    h2{break-after:avoid}
+    .lede{font-size:11.5pt}
+    p{max-width:none;orphans:3;widows:3}
+
+    /* nothing that reads as one object may be split across a page */
+    .stop,.fstep,.wrow,.lrow,.tile,.tiles,.caveat,.caveat li,
+    .formula,.stamp,tr,thead{break-inside:avoid}
+
+    /* the table would otherwise be clipped at the right margin */
+    .scroll{overflow:visible;border-radius:0}
+    table{min-width:0;font-size:8.5pt;table-layout:auto}
+    thead{display:table-header-group}
+    thead th,td{padding:7px 8px}
+    /* nowrap is what keeps a figure and its unit together on screen; on paper it
+       is also what pushed the table 24px past the right margin, which clips the
+       verdict column rather than scrolling it. The cells already carry their own
+       <br> breaks, so releasing nowrap changes nothing except that the table
+       now fits. Measured: 725px -> inside the 701px box. */
+    thead th,td.k,td.n,td.range{white-space:normal}
+    td.plain{min-width:0;font-size:9pt}
+    td.range{font-size:7.5pt}
+    td.k small{font-size:7.5pt}
+
+    .tiles{grid-template-columns:repeat(3,1fr)}
+    .tile .v{font-size:20px}
+    a{text-decoration:none;color:inherit}
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="mast">
+    <div>
+      <div class="label">Model audit &middot; TIQCollect field collections</div>
+      <h1>Recovery Risk Model Audit</h1>
+      <p class="sub">One model helps decide which borrower an agent visits tomorrow. This is what it is,
+        where it sits, what it looks at, and how well it has actually been shown to work.</p>
+    </div>
+    <div class="stamp">
+      <dl>
+        <dt>Model</dt><dd>recovery_risk</dd>
+        <dt>Version</dt><dd>1.1.0</dd>
+        <dt>Live since</dt><dd>2026-09-08</dd>
+        <dt>Gates</dt><dd><span class="chip pass">12 / 12 pass</span></dd>
+        <dt>Audited</dt><dd>2026-09-11</dd>
+      </dl>
+    </div>
+  </header>
+
+  <section>
+    <h2>What it does</h2>
+    <p class="deck">It answers one question about one borrower: are they about to pay something, or not?</p>
+
+    <p class="lede">Every night the system looks at each overdue account and asks the model:
+      <strong>over the next 30 days, will this borrower make a payment big enough to matter?</strong>
+      "Big enough" has a fixed definition &mdash; at least 80% of whichever is smaller, the arrears or
+      one instalment. The model answers with a percentage.</p>
+
+    <p>That percentage is not a verdict on the person. It is a ranking tool. With 931 overdue cases and
+      roughly 214 visits available in a day, somebody has to choose which ones get visited. The model's
+      job is to make that choice better than a list sorted by amount owed.</p>
+
+    <p>One point of confusion worth clearing up. Internally the model predicts the <em>bad</em> outcome
+      &mdash; the chance of <em>no</em> payment &mdash; so a higher raw number is worse. Everything shown
+      to a manager is flipped into the friendly direction: chance of recovery. On last night's run that
+      averaged <strong class="num">14.9%</strong> across allocated cases. A 14% figure on screen is the
+      model saying "roughly one borrower like this in seven pays next month", which on a book this far
+      overdue is the honest answer rather than a pessimistic one.</p>
+
+    <div class="formula">
+      <div class="eq">expected recovery &nbsp;=&nbsp; (target &minus; already collected) &nbsp;&times;&nbsp; <b>chance of recovery</b></div>
+      <p class="note">This is the only place the model's number becomes money. The rupee figure on the
+        allocation screen is that multiplication and nothing else &mdash; which is why an over-confident
+        model would misprice every single case by however much it is wrong by.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Where it sits</h2>
+    <p class="deck">Inside the nightly run, between the bank file arriving and tomorrow's routes being drawn.</p>
+
+    <p>Nothing about the model is interactive. It runs once a night, unattended, in a fixed order. The
+      step marked in teal is the only one where the model makes a prediction; the 19:15 step is where
+      last month's predictions get marked right or wrong.</p>
+
+    <div class="rail">
+      <div class="stop">
+        <div class="clock">19:15</div>
+        <div class="what">
+          <h3>Yesterday's homework gets marked</h3>
+          <p>Predictions that have now had their full 30 days are compared against what the borrower
+             actually did, and a drift monitor checks whether the model is still behaving. It can
+             recommend a retrain. It cannot promote one &mdash; a person has to approve that, and a
+             second person has to release it.</p>
+        </div>
+      </div>
+      <div class="stop">
+        <div class="clock">19:30</div>
+        <div class="what">
+          <h3>The bank file lands</h3>
+          <p>Fresh balances, days overdue, and bank actions such as write-off or settlement. This is
+             the day's new information.</p>
+        </div>
+      </div>
+      <div class="stop">
+        <div class="clock">19:45</div>
+        <div class="what">
+          <h3>The older scorecards refresh</h3>
+          <p>Four hand-built scorecards update &mdash; repayment likelihood, recovery potential, visit
+             priority, agent competency. None of them is this model, and none of them is trained from
+             data. They are expert rules with weights.</p>
+        </div>
+      </div>
+      <div class="stop here">
+        <div class="clock">20:00</div>
+        <div class="what">
+          <h3>The model runs, and the day is allocated</h3>
+          <p>Each case's history is rebuilt exactly as it stood tonight, the model scores it, and the
+             chance of recovery becomes the expected-rupees term in the engine that pairs cases to
+             agents. Every score is written to a log table alongside the exact inputs that produced it.</p>
+        </div>
+      </div>
+      <div class="stop">
+        <div class="clock">06:00</div>
+        <div class="what">
+          <h3>Agents get their day</h3>
+          <p>Routed beats reach the phones. The manager screen shows the same figures with an
+             ML-assisted badge and a plain-words tooltip on every case the model touched.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Features &mdash; from 33 down to 4</h2>
+    <p class="deck">Thirty-three things were offered to the model. Four survived, and every elimination round had to justify itself.</p>
+
+    <p>The starting pool was <strong>33 candidate features</strong> &mdash; 28 numeric (days overdue,
+      bureau score, arrears, payment ratios, visit and contact counts, promise history, income) and 5
+      categorical (loan type, overdue bucket, city, employment type, branch). Each round below removes
+      features for one specific, stated reason. It is a funnel, so the order matters.</p>
+
+    <div class="funnel">
+      <div class="fstep">
+        <div class="idx">00</div>
+        <div class="test">Everything offered<small>28 numeric + 5 categorical</small></div>
+        <div class="track"><span style="width:100%"></span></div>
+        <div class="count"><b>33</b> <i>in</i></div>
+      </div>
+      <div class="fstep">
+        <div class="idx">01</div>
+        <div class="test">Does it tell us anything?<small>information value &middot; IV</small></div>
+        <div class="track"><span style="width:57.6%"></span></div>
+        <div class="count"><b>19</b> <i>&minus;14</i></div>
+      </div>
+      <div class="fstep">
+        <div class="idx">02</div>
+        <div class="test">Is it a duplicate?<small>correlation &middot; |r| &gt; 0.7</small></div>
+        <div class="track"><span style="width:33.3%"></span></div>
+        <div class="count"><b>11</b> <i>&minus;8</i></div>
+      </div>
+      <div class="fstep">
+        <div class="idx">03</div>
+        <div class="test">A duplicate of several others?<small>variance inflation &middot; VIF &gt; 5</small></div>
+        <div class="track"><span style="width:30.3%"></span></div>
+        <div class="count"><b>10</b> <i>&minus;1</i></div>
+      </div>
+      <div class="fstep">
+        <div class="idx">04</div>
+        <div class="test">Does it still add anything?<small>forward stepwise &middot; SFS</small></div>
+        <div class="track"><span style="width:12.1%"></span></div>
+        <div class="count"><b>4</b> <i>&minus;6</i></div>
+      </div>
+      <div class="fstep">
+        <div class="idx">05</div>
+        <div class="test">Does it point the right way?<small>sign check vs expectation</small></div>
+        <div class="track"><span style="width:12.1%"></span></div>
+        <div class="count"><b>4</b> <i>&minus;0</i></div>
+      </div>
+    </div>
+
+    <p class="funnel-note">Round 2 is the one worth understanding. Days overdue and arrears ratio agree
+      with each other <span class="num">93%</span> of the time, because they are two readings of the
+      same fact. Keeping both would let one idea vote twice. Round 4 stopped adding features when the
+      fifth candidate improved accuracy by <span class="num">0.0002</span> &mdash; real, and far too
+      small to be worth another thing that can break.</p>
+
+    <h3 class="sub-h">The four that made it, and how much each one counts</h3>
+    <p class="sub-p">Bar length is that feature's maximum possible influence on the score. No single
+      input can decide a case on its own.</p>
+
+    <div class="weights">
+      <div class="wrow">
+        <div class="nm">How far behind they are<small>dpd &middot; days past due</small></div>
+        <div class="tr"><span style="width:100%"></span></div>
+        <div class="pt">139</div>
+      </div>
+      <div class="wrow">
+        <div class="nm">Credit bureau score<small>cibil_score</small></div>
+        <div class="tr"><span style="width:92%"></span></div>
+        <div class="pt">128</div>
+      </div>
+      <div class="wrow">
+        <div class="nm">Promises kept before<small>ptp_kept_ratio</small></div>
+        <div class="tr"><span style="width:90%"></span></div>
+        <div class="pt">125</div>
+      </div>
+      <div class="wrow">
+        <div class="nm">Rupees currently overdue<small>overdue_amount</small></div>
+        <div class="tr"><span style="width:86%"></span></div>
+        <div class="pt">119</div>
+      </div>
+    </div>
+
+    <p>All four are things a collections manager would have named unprompted, which is the point: a
+      model that cannot be explained to the person acting on it will not be trusted by them. This one is
+      a <strong>points system</strong>, not a black box &mdash; each feature earns points, the points add
+      up, and the total converts to a percentage. It fits on one page and can be argued with.</p>
+  </section>
+
+  <section>
+    <h2>Does the ranking actually separate people?</h2>
+    <p class="deck">Sorted into five grades, the failure rate climbs from 44% to 94% without one step backwards.</p>
+
+    <p>This is the plainest evidence in the whole audit and it needs no statistics to read. Take 70,000
+      accounts, sort them by score, cut them into five grades. If the model works, each grade should be
+      worse than the one above it.</p>
+
+    <div class="ladder">
+      <div class="lrow"><div class="g">A</div><div class="tr"><span style="width:43.7%;background:var(--pass)"></span></div><div class="v">43.7% fail</div></div>
+      <div class="lrow"><div class="g">B</div><div class="tr"><span style="width:53.4%;background:var(--pass);opacity:.72"></span></div><div class="v">53.4% fail</div></div>
+      <div class="lrow"><div class="g">C</div><div class="tr"><span style="width:68.5%;background:var(--watch)"></span></div><div class="v">68.5% fail</div></div>
+      <div class="lrow"><div class="g">D</div><div class="tr"><span style="width:84.0%;background:var(--fail);opacity:.75"></span></div><div class="v">84.0% fail</div></div>
+      <div class="lrow"><div class="g">E</div><div class="tr"><span style="width:94.3%;background:var(--fail)"></span></div><div class="v">94.3% fail</div></div>
+    </div>
+
+    <p>Every step goes the right way &mdash; <strong>zero rank-order breaks</strong>. An A-grade borrower
+      is more than twice as likely to pay as an E-grade one. That gap is what an agent's day is being
+      spent on, and every metric in the next section measures it from a different angle.</p>
+  </section>
+
+  <section>
+    <h2>Every metric, in plain words</h2>
+    <p class="deck">What each test asks, what counts as a good answer, and what this model scored.</p>
+
+    <p>Two rules apply throughout. Every number below is measured on <strong>30,000 accounts from months
+      the model never saw while training</strong> &mdash; the equivalent of marking an exam with questions
+      the student was not shown. And several tests are <em>two-sided</em>: a score that is too good fails
+      as hard as one that is too weak, because on a book like this, near-perfect accuracy almost always
+      means the answer leaked into the question.</p>
+
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Metric</th><th>What it asks, in plain words</th><th>Good range</th><th>Ours</th><th>Verdict</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="k">Accuracy of ranking<small>ROC-AUC</small></td>
+            <td class="plain">Pick one borrower who paid and one who did not. How often does the model score those two in the right order?</td>
+            <td class="range">0.50 coin toss<br>0.70&ndash;0.80 useful<br>&gt;0.90 suspect</td>
+            <td class="n">0.7568</td>
+            <td><span class="chip pass">Pass</span></td>
+          </tr>
+          <tr>
+            <td class="k">Gini<small>2 &times; AUC &minus; 1</small></td>
+            <td class="plain">The same thing rescaled, which is what the credit industry quotes. Zero is random guessing, one is perfect.</td>
+            <td class="range">&ge;0.25 floor<br>0.35&ndash;0.55 target<br>&ge;0.60 suspect</td>
+            <td class="n">0.5136<br><em>&plusmn;0.011</em></td>
+            <td><span class="chip pass">Pass</span></td>
+          </tr>
+          <tr>
+            <td class="k">Separation<small>KS statistic</small></td>
+            <td class="plain">At the single best cut-off, how wide is the gap between the payers and the non-payers?</td>
+            <td class="range">&ge;20 required<br>30&ndash;45 strong<br>&ge;60 suspect</td>
+            <td class="n">39.72</td>
+            <td><span class="chip pass">Pass</span></td>
+          </tr>
+          <tr>
+            <td class="k">Predictive strength<small>information value &middot; IV</small></td>
+            <td class="plain">Per feature, before any modelling: how much does knowing this one thing change the odds? Used to throw out the useless and to flag the suspiciously good.</td>
+            <td class="range">&lt;0.02 useless<br>0.1&ndash;0.3 medium<br>0.3&ndash;0.5 strong<br>&gt;0.5 investigate</td>
+            <td class="n">0.75 overdue days<br>0.34 overdue amt<br>0.28 promises<br>0.13 bureau</td>
+            <td><span class="chip pass">Pass</span></td>
+          </tr>
+          <tr>
+            <td class="k">Re-expression<small>WOE</small></td>
+            <td class="plain">Not a score &mdash; a translation. Each feature is cut into bands, and each band is replaced by "how much riskier than average is this band". It is what makes the model readable and stops one freak value dominating.</td>
+            <td class="range">no range;<br>bands must move<br>in one direction</td>
+            <td class="n">monotonic<br><em>on all four</em></td>
+            <td><span class="chip pass">Pass</span></td>
+          </tr>
+          <tr>
+            <td class="k">Redundancy<small>VIF</small></td>
+            <td class="plain">Is this feature just a mix of the others wearing a different name? If so it adds noise and scrambles the weights.</td>
+            <td class="range">&lt;5 fine<br>5&ndash;10 drop it<br>&gt;10 severe</td>
+            <td class="n">max 2.44<br><em>one dropped at 9.30</em></td>
+            <td><span class="chip pass">Pass</span></td>
+          </tr>
+          <tr>
+            <td class="k">Selection<small>SFS</small></td>
+            <td class="plain">Add features one at a time, best first, and stop when the next one stops earning its place. Prevents a bloated model that memorises instead of generalising.</td>
+            <td class="range">stop when the<br>gain &lt; 0.0008</td>
+            <td class="n">stopped at 4<br><em>5th gained 0.0002</em></td>
+            <td><span class="chip pass">Pass</span></td>
+          </tr>
+          <tr>
+            <td class="k">Population drift<small>PSI</small></td>
+            <td class="plain">Have the borrowers themselves changed since training? A model built on one kind of book quietly stops applying to a different one.</td>
+            <td class="range">&lt;0.10 stable<br>0.10&ndash;0.25 watch<br>&gt;0.25 retrain</td>
+            <td class="n">0.0075</td>
+            <td><span class="chip pass">Pass</span></td>
+          </tr>
+          <tr>
+            <td class="k">Input drift<small>CSI</small></td>
+            <td class="plain">The same test applied to each input rather than to the final score &mdash; so you can see <em>which</em> input moved, not merely that something did. Same arithmetic, same thresholds.</td>
+            <td class="range">&lt;0.10 stable<br>&gt;0.25 retrain</td>
+            <td class="n">max 0.0111<br><em>across the four used</em></td>
+            <td><span class="chip pass">Pass</span></td>
+          </tr>
+          <tr>
+            <td class="k">Honesty of the %<small>calibration gap</small></td>
+            <td class="plain">When it says 30%, do about 30 in 100 actually pay? Ranking correctly is not enough here, because this percentage gets multiplied by rupees.</td>
+            <td class="range">within &plusmn;0.05<br>of observed</td>
+            <td class="n">&minus;0.0097</td>
+            <td><span class="chip pass">Pass</span></td>
+          </tr>
+          <tr>
+            <td class="k">Overall error<small>Brier score</small></td>
+            <td class="plain">Average squared miss across every prediction. Rewards being right <em>and</em> being appropriately unsure.</td>
+            <td class="range">0 perfect<br>0.25 no skill<br>lower is better</td>
+            <td class="n">0.1699</td>
+            <td><span class="chip pass">Pass</span></td>
+          </tr>
+          <tr>
+            <td class="k">Order holds<small>rank-order breaks</small></td>
+            <td class="plain">Going down the grades, does any grade have a <em>lower</em> failure rate than the one above it? Even one break means the ranking cannot be relied on.</td>
+            <td class="range">0 breaks<br>in the top 5</td>
+            <td class="n">0</td>
+            <td><span class="chip pass">Pass</span></td>
+          </tr>
+          <tr>
+            <td class="k">Memorising check<small>train vs out-of-time</small></td>
+            <td class="plain">Is it much better on data it has seen than on data it has not? A big drop means it memorised rather than learned.</td>
+            <td class="range">gap &lt; 0.10</td>
+            <td class="n">&minus;0.0279<br><em>unseen scored higher</em></td>
+            <td><span class="chip pass">Pass</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>That last row is the most reassuring line in the table. The model performs <em>better</em> on the
+      months it was never shown than on the months it trained on. A model that has memorised its
+      training data cannot do that.</p>
+  </section>
+
+  <section>
+    <h2>Running in production</h2>
+    <p class="deck">Live counts, read from the database this morning.</p>
+
+    <div class="tiles">
+      <div class="tile"><div class="v">19,935</div><div class="l">scores recorded, each with the exact inputs behind it</div></div>
+      <div class="tile"><div class="v">973</div><div class="l">distinct loans scored</div></div>
+      <div class="tile"><div class="v">100%</div><div class="l">of scores had every input available &mdash; none was guessed</div></div>
+      <div class="tile"><div class="v">214</div><div class="l">of last night's allocations used the model</div></div>
+      <div class="tile"><div class="v">911</div><div class="l">decisions traceable to the exact score behind them</div></div>
+      <div class="tile"><div class="v">0</div><div class="l">predictions old enough to be marked yet</div></div>
+    </div>
+
+    <p>Every score carries an audit trail: model name, version, a fingerprint of the model file, the
+      feature values used, the date they were read as of, and the decision they fed. When a manager asks
+      "why was this case chosen", the answer is looked up rather than reconstructed.</p>
+
+    <p>If the model fails for any reason, the allocator falls back to its previous behaviour and the
+      night's plan still gets made. That was learned the hard way: a date stored as text once broke the
+      feature builder, and the system ran without the model for a full cycle while every health screen
+      reported fine. It now logs that failure loudly. Failing safely and failing silently are not the
+      same thing.</p>
+  </section>
+
+  <section>
+    <h2>The scores we tested and turned down</h2>
+    <p class="deck">The business already has two hand-built scores. We measured whether the model should read them, and the answer changed our reasoning as well as our answer.</p>
+
+    <p>The platform computes a <strong>repayment score</strong> (will this borrower pay?) and a
+      <strong>recovery score</strong> (what share comes back, and how fast?). Both are older than the
+      model and both are barred from being fed into it. In September 2026 we checked whether that bar
+      was actually earned, or merely inherited.</p>
+
+    <h3 class="sub-h">First finding: the reason written in the code was wrong</h3>
+    <p>The rule was justified on the grounds that these scores are "downstream outputs" and would
+      therefore <em>leak</em> — leak meaning a model accidentally shown the answer, which then looks
+      brilliant in testing and fails in the field. We traced the dates. The two windows never touch:</p>
+
+    <div class="formula">
+      <div class="eq">the scores look &nbsp;<b>BACKWARD</b>&nbsp; &mdash; from 180 days before the scoring day, up to that day</div>
+      <div class="eq">the model's target looks &nbsp;<b>FORWARD</b>&nbsp; &mdash; from that day until 30 days later</div>
+      <p class="note">They are back to back and never overlap, and the code goes further: a promise
+        whose status changed after the scoring day is deliberately thrown away, so yesterday's score
+        cannot be quietly rewritten by today's news. <strong>There is no leakage here.</strong> The
+        rule is sound; its stated reason was not, and that has been corrected wherever it was written
+        down.</p>
+    </div>
+
+    <h3 class="sub-h">Second finding: the scores add nothing measurable</h3>
+    <p>We rebuilt the champion from scratch and then rebuilt it five more times, each with a score
+      forced in alongside the four features. Same data, same split, same maths, same tests. The
+      rebuild reproduced the live model exactly, which is what makes the five comparisons worth
+      reading.</p>
+
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr><th>What the model was given</th><th>Out-of-time Gini</th><th>Change</th><th>Outcome</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="k">The four features<small>the live champion</small></td>
+            <td class="n">0.5136</td><td class="range">&mdash;</td>
+            <td><span class="chip pass">Champion</span></td>
+          </tr>
+          <tr>
+            <td class="k">+ repayment score<small>repayment_likelihood</small></td>
+            <td class="n">0.5131</td><td class="n">&minus;0.0005</td>
+            <td><span class="chip fail">Rejected</span></td>
+          </tr>
+          <tr>
+            <td class="k">+ risk score<small>risk_score</small></td>
+            <td class="n">0.5131</td><td class="n">&minus;0.0005</td>
+            <td><span class="chip fail">Rejected</span></td>
+          </tr>
+          <tr>
+            <td class="k">+ recovery rate<small>recovery_rate_90</small></td>
+            <td class="n">0.5135</td><td class="n">&minus;0.0001</td>
+            <td><span class="chip fail">Rejected</span></td>
+          </tr>
+          <tr>
+            <td class="k">+ expected recoverable<small>expected_recoverable_amount</small></td>
+            <td class="n">0.5134</td><td class="n">&minus;0.0002</td>
+            <td><span class="chip fail">Rejected</span></td>
+          </tr>
+          <tr>
+            <td class="k">+ all three at once<small></small></td>
+            <td class="n">0.5130</td><td class="n">&minus;0.0006</td>
+            <td><span class="chip fail">Rejected</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>Not one arm improved on the champion, and every one was turned down by the same gate the system
+      uses to decide whether a retrained model may replace the live one. The rows are not rounding
+      noise in the model's favour &mdash; they are all on the losing side of zero.</p>
+
+    <p><strong>The risk score and the repayment score are the same number.</strong> One is literally
+      <span class="term">100 &minus; the other</span>, and the two arms above produced bit-for-bit
+      identical predictions. They are one input wearing two names, which is exactly why both stay on
+      the barred list: so nobody adds "the other one" believing it is fresh evidence.</p>
+
+    <h3 class="sub-h">Third finding: the real reasons, which are better than the old one</h3>
+    <ul style="max-width:68ch;padding-left:20px">
+      <li style="margin-bottom:10px"><strong>Redundancy.</strong> The four features already reconstruct
+        the repayment score with 84% accuracy, and the score on its own separates payers from
+        non-payers <em>less</em> well than days-overdue alone (0.432 against 0.468).</li>
+      <li style="margin-bottom:10px"><strong>Double counting.</strong> Adding the score drags the
+        weight on days-overdue down from 0.797 to 0.664. It is not contributing new information; it is
+        splitting the credit for information the model already had.</li>
+      <li><strong>Version dependency.</strong> These scores are hand-weighted and get re-tuned from
+        time to time. Wire one in and a tuning session would shift the model's inputs without a single
+        borrower having changed &mdash; setting off drift alarms that mean nothing.</li>
+    </ul>
+
+    <h3 class="sub-h">What is still genuinely open</h3>
+    <p>The bar applies to the two <em>scores</em>, never to the facts underneath them. Eight of those
+      facts are things the model has never been offered: whether the borrower is <strong>hostile</strong>,
+      a <strong>fraud flag</strong>, <strong>legal action</strong> under way, a <strong>settlement</strong>
+      agreed, <strong>difficult visit outcomes</strong>, the <strong>size of the last payment</strong>,
+      the <strong>case target</strong>, and <strong>money paid in the recent window</strong>.</p>
+    <p>Whether any of them would help is <strong>unknown, and was not settled by this work</strong>.
+      They could not be tested: the simulated book the model trains on does not generate them. A
+      possible future experiment &mdash; <em>recorded here as an idea, not scheduled and not built</em>
+      &mdash; would be to start writing those raw facts into the prediction log alongside the four the
+      model uses. That changes no score and no decision; it would simply mean that in thirty days'
+      time the question could be answered with evidence instead of argument.</p>
+
+    <p><strong>Nothing was changed by this investigation.</strong> The model, its four features, the
+      barred list, the two scorecards and every production behaviour are exactly as they were. The
+      only thing that moved is the written reasoning, which now matches what the data says.</p>
+  </section>
+
+  <section>
+    <h2>What this audit does not prove</h2>
+    <p class="deck">Four limits, stated plainly, because each is the sort of thing that gets quoted out of context later.</p>
+
+    <div class="caveat">
+      <h3>Read these alongside every number above</h3>
+      <ul>
+        <li><b>It was trained on simulated borrowers, not real ones.</b> The 120,000 training rows come
+          from a synthetic book. Everything here proves the process works end to end and reports
+          believable results. None of it is evidence about how much money this recovers from real people.</li>
+        <li><b>No prediction has been marked right or wrong yet.</b> The first ones reach their 30-day
+          maturity on <strong>2026-10-08</strong>, and the monitor needs 500 matured accounts before it
+          will report live performance at all &mdash; below that the verdict would be noise wearing a
+          number. Today it correctly says "not ready".</li>
+        <li><b>The training months and the test months are visibly different books.</b> A check designed
+          to detect exactly that scored 0.75, where 0.50 would mean identical. So part of the
+          out-of-time result measures how well the model survives a changing book rather than pure
+          skill. Worth stating, and it cuts both ways: it held up across that change.</li>
+        <li><b>A second model was built and rejected.</b> <span class="term">contact_risk</span>, which
+          tried to predict whether a visit would find the borrower at home, reached a Gini of 0.19
+          against a 0.25 floor. It failed its gates, was never promoted, and is used nowhere. It is kept
+          so the failure can be read. The honest diagnosis is that the data it needs &mdash; time of day,
+          phone and address quality &mdash; is not captured by the product yet, which makes it a data
+          problem rather than a modelling one.</li>
+      </ul>
+    </div>
+  </section>
+
+  <footer>
+    <p>Figures read directly from the model artifact at
+      <span class="mono">ml/artifacts/recovery_risk/1.1.0</span> and from the live
+      <span class="mono">model_predictions</span> and <span class="mono">allocation_decisions</span>
+      tables on 2026-09-11. Nothing on this page is estimated or recalled from documentation.
+      The six ablation arms were rebuilt on the 120,000-row modelling panel through the production
+      pipeline modules &mdash; same split, binning, calibration and evaluation &mdash; and judged by
+      <span class="mono">comparison.compare_to_incumbent</span>, the same gate that decides whether a
+      retrained model may go live. The rebuilt champion reproduced the committed artifact exactly,
+      which is what makes the five comparisons against it meaningful.</p>
+  </footer>
+
+</div>
+</body>
+</html>

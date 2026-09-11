@@ -94,6 +94,15 @@ class ModelTrainer:
         raising. Checked here rather than trusted because the spec's feature
         tuples are edited by hand and a leak added this way costs nothing to
         make and everything to find.
+
+        The error message says "outcomes or system outputs" because those are
+        two different faults sharing one guard, and only the first is leakage.
+        An outcome-window column is the answer to the question. A system output
+        — risk_score, recovery_potential, repayment_likelihood — is honest about
+        time and merely redundant: measured 2026-09-11, forcing each one in
+        beside the champion's four features changed out-of-time Gini by between
+        -0.0001 and -0.0006 and every arm was rejected by the production
+        comparison gate. ModelSpec.forbidden carries the full reasoning.
         """
         bad = [f for f in self.spec.all_features if f in self.spec.forbidden]
         if bad:

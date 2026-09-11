@@ -51,7 +51,18 @@
 #   legal posture" is explainable to a manager in one sentence where "the
 #   repayment score times a haircut" invites "then why two numbers?".
 #   Shared INPUTS across two scorecards are normal. Shared OUTPUTS fed back in
-#   are the leak.
+#   are banned.
+#
+#   That last line used to read "Shared OUTPUTS fed back in are the LEAK", and
+#   leak is the wrong word — corrected 2026-09-11 rather than deleted, because
+#   the wrong word was doing real work: it implied a timing violation and so
+#   made the rule look self-evident, which stopped anyone measuring it. Measured
+#   now: these scores read a strictly backward window and the model's target
+#   window is strictly forward, so there is no look-ahead of any kind. The rule
+#   survives on redundancy, double counting and version dependency instead —
+#   forcing recovery_rate_90 in beside the champion's four features moved
+#   out-of-time Gini by -0.0001. See repayment_service._FORBIDDEN_FEATURE_KEYS
+#   for the full arm-by-arm figures.
 #
 #   MONOTONICITY IS STRUCTURAL, not tested-for-and-hoped. The 30/60/90 estimates
 #   are not three independent scores — that formulation lets a fast-maturing

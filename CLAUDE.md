@@ -235,6 +235,33 @@ by convention:
   either. Recovery is deliberately *not* `P(pay) × haircut` — kept independent so
   it can say "unlikely to pay, HIGH to recover" about a hostile borrower on a
   secured loan. That disagreement is the most useful thing the pair produces.
+
+  *(**The rule holds; "because they leak" was the wrong reason, and it was never
+  measured until 2026-09-11.** The scores are built from a strictly BACKWARD
+  window — `as_of - 180d` to `as_of`, with a PTP whose status moved after `as_of`
+  explicitly discarded — while the model's target window is `(end of as_of,
+  as_of + 30d]`. The two are disjoint, so there is no look-ahead and no target
+  leakage anywhere in this ban. What an ablation did find, forcing each score in
+  beside the champion's four features under the same split, binning, calibration
+  and evaluation: `repayment_likelihood` **−0.0005** OOT Gini, `risk_score`
+  **−0.0005** and bit-identical to it (`risk_score = 100 − likelihood`, a
+  monotone transform), `recovery_rate_90` **−0.0001**,
+  `expected_recoverable_amount` **−0.0002**, all three together **−0.0006**.
+  Every arm was rejected by the production comparison gate as
+  `equivalent_keep_incumbent`. So the ban stands on **redundancy** (a non-linear
+  fit rebuilds `likelihood` from those four features at R² 0.845, and its own
+  univariate |Gini| 0.432 is lower than `dpd` alone at 0.468), **double
+  counting** (adding it pulls `dpd`'s coefficient from −0.797 to −0.664), and
+  **version dependency** (a hand-weighted scorecard reweighting would move the
+  model's inputs with no borrower changing) — not on leakage. Two things follow.
+  Anyone defending this rule should cite those, because the leakage claim does
+  not survive the lineage. And the ban covers **outputs, never inputs**: the
+  eight raw facts these scorecards read and the ML candidate set lacks —
+  `is_hostile`, `fraud_flag`, `legal_status`, `settlement_status`,
+  `adverse_visit_outcomes`, `last_payment_amount`, `case_target_amount`,
+  `amount_paid_in_window` — remain an **open question**, untestable today only
+  because the synthetic panel does not generate them. Full write-up:
+  [docs/recovery-risk-model-audit.html](docs/recovery-risk-model-audit.html).)*
 - **A factor with no evidence abstains; it never scores zero silently.** Its weight
   is withheld from the coverage denominator, and coverage is *not* renormalised —
   a thin borrower must read as thin, not as confidently average.

@@ -159,10 +159,33 @@ class ModelSpec:
 
     gates: Gates = field(default_factory=Gates)
 
-    # Never features, whatever a frame happens to contain. The point-in-time
-    # ban this repo already enforces in repayment_service._FORBIDDEN_FEATURE_KEYS
-    # is the same idea: an output of the system may not become an input, and
-    # anything drawn from the outcome window is the answer, not a feature.
+    # Never features, whatever a frame happens to contain. TWO DIFFERENT RULES
+    # share this one tuple, and conflating them cost an investigation on
+    # 2026-09-11 — the comment here used to call both "the point-in-time ban",
+    # which is true of only the first:
+    #
+    #   LEAKAGE, a timing violation. `y`, `recovered_amount`, `visit_made`,
+    #   `customer_met`, `ptp_set`, `ptp_kept` and the `_willingness`/`_capacity`
+    #   latents are drawn from the outcome window or from the generator's hidden
+    #   state. They are the answer. A model reading them scores near-perfectly
+    #   and is worth nothing.
+    #
+    #   SYSTEM OUTPUTS, an architectural rule. `risk_score`,
+    #   `recovery_potential`, `repayment_likelihood`, `allocation_score` and
+    #   `visit_priority_score` are this repo's own hand-weighted scores. These
+    #   do NOT leak: they are computed from a backward-looking window that is
+    #   disjoint from the target window. They are banned because they are
+    #   redundant (a non-linear fit rebuilds `likelihood` from the champion's
+    #   four features at R^2 0.845), because they double-count (adding one pulls
+    #   dpd's coefficient from -0.797 to -0.664), and because a scorecard
+    #   reweighting would move the model's inputs without a single borrower
+    #   changing. Measured: every arm that forced one in lost ground, the best
+    #   of them by -0.0001 OOT Gini.
+    #
+    # Both rules are kept, and the tuple stays exactly as it is. The distinction
+    # matters when somebody asks "is this really necessary" — for the first
+    # group the answer is arithmetic, for the second it is evidence, and only
+    # the second can ever be revisited by measurement.
     forbidden: tuple[str, ...] = (
         "y", "recovered_amount", "visit_made", "customer_met",
         "ptp_set", "ptp_kept", "_willingness", "_capacity",

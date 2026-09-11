@@ -99,6 +99,58 @@ _CENSORING_STATUSES = frozenset({
 # — but neither may eat the other's OUTPUT, or the pair collapses into one
 # number wearing two labels, and the disagreement between them (unlikely to pay,
 # high to recover) is the most useful thing either of them says.
+#
+# 2026-09-11 — THE BAN STANDS, AND THE FIRST SENTENCE ABOVE IS WRONG ABOUT WHY.
+# "Feeding any of them back in trains a model to predict itself, which reads as
+# near-perfect accuracy" describes DATA LEAKAGE, and an investigation measured
+# that leakage is not what is happening here. These scores are built from a
+# strictly BACKWARD window — build_features filters on
+# `>= as_of - REPAYMENT_BEHAVIOUR_WINDOW_DAYS and <= as_of`, and discards a PTP
+# whose status moved after as_of — while the model's target window is
+# (end of as_of, as_of + 30d]. The two are disjoint at as_of. Nothing here can
+# see the future, and no arm of the experiment produced inflated accuracy.
+#
+# What the measurement DID find, on the 120k-row modelling panel, forcing each
+# score in beside the champion's four features under the same split, binning,
+# calibration and evaluation:
+#
+#   arm                          OOT Gini      vs champion 0.5136
+#   + repayment_likelihood         0.5131         -0.0005
+#   + risk_score                   0.5131         -0.0005   (bit-identical to
+#                                                            the line above)
+#   + recovery_rate_90             0.5135         -0.0001
+#   + expected_recoverable_amount  0.5134         -0.0002
+#   + all three                    0.5130         -0.0006
+#
+# Every arm returned `equivalent_keep_incumbent` from the production
+# comparison gate. So the reasons the ban survives are REDUNDANCY, CIRCULARITY
+# and VERSION-DEPENDENCY, not leakage:
+#
+#   * redundancy — a non-linear fit reconstructs `likelihood` from those four
+#     features at R^2 0.845, and the score's own univariate |Gini| (0.432) is
+#     LOWER than dpd's alone (0.468). Its IV is 0.666, above this repo's own
+#     0.50 review line, with no lift behind it: high IV and zero incremental
+#     value is exactly what a redundant feature looks like.
+#   * double counting — adding it pulls dpd's fitted coefficient from -0.797 to
+#     -0.664. The score does not add signal, it splits dpd's weight with a
+#     noisier copy of itself. At |r| 0.853 against dpd the selection funnel's
+#     own correlation gate (0.70) would drop it before it reached a model.
+#   * version dependency — these scorecards are hand-weighted and versioned.
+#     A weight change would move the model's input distribution, firing a PSI
+#     drift alarm caused by an internal edit rather than by borrowers. This is
+#     the strongest reason of the three and it was previously written nowhere.
+#
+# `risk_score` and `risk_category` are kept in the list for a reason worth
+# stating: risk_score is `100 - likelihood`, a strictly monotone transform, and
+# the experiment confirmed the two produce bit-identical predictions. They are
+# one feature under two names, and listing both is what stops somebody adding
+# "the other one" believing it is independent evidence.
+#
+# The ban covers OUTPUTS, never inputs. Nothing here stops a future model
+# reading the raw facts these scorecards read — is_hostile, fraud_flag,
+# legal_status, settlement_status, adverse_visit_outcomes and the rest. Whether
+# those help is genuinely unknown and stays open; the synthetic panel does not
+# generate them, so no ablation run so far could test them.
 _FORBIDDEN_FEATURE_KEYS = frozenset({
     "risk_score", "risk_category", "collection_priority_score",
     "bank_risk_score", "recovery_potential", "priority", "allocation_score",
