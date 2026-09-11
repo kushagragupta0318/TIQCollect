@@ -101,7 +101,21 @@ class AgentService:
             self.db.query(func.count(PTP.id))
             .join(Case, Case.id == PTP.case_id)
             .filter(
-                PTP.agent_id == agent.id,
+                # SCOPED TO THE BEAT, like every other figure in this method —
+                # see `cases_today` above, which already calls the beat "the
+                # single source of truth for cases/target, same as beat map and
+                # my-cases".
+                #
+                # It used to read `PTP.agent_id == agent.id`, the agent who TOOK
+                # the promise. A PTP keeps its taker while the nightly allocator
+                # reassigns cases freely, so a promise made by this agent on a
+                # case that has since moved counted here and could never be
+                # opened. And `ranked_cases`, which builds the list behind the
+                # card, is beat-scoped — so case ownership is not the right
+                # scope either: a case the agent holds but that is NOT on today's
+                # beat does not appear in that list, and counting it would
+                # reproduce the same mismatch one step removed.
+                PTP.case_id.in_(beat_case_ids),
                 PTP.committed_date == eff_day,
                 PTP.status == PTPStatus.ACTIVE,
                 Case.status.notin_(list(RESOLVED_STATUSES)),
@@ -255,13 +269,33 @@ class AgentService:
             )
             cases_by_id = {c.id: c for c in cases}
 
-        # Case IDs that have an active PTP committed for today specifically
+        # Case IDs on THIS BEAT that have an active PTP committed for today.
+        #
+        # 2026-09-10 — this read `or_(PTP.agent_id == agent.id, PTP.case_id IN
+        # beat)`, and the count it produced was used for the home card while the
+        # flag it sets is only ever attached to cases IN THE BEAT (see the loop
+        # below). The two halves of that `or_` are not the same set: a PTP keeps
+        # the agent who TOOK it, and the nightly allocator reassigns cases freely,
+        # so a promise taken by this agent on a case that now belongs to somebody
+        # else counted toward "1 PTP due today" and could never appear in the list
+        # behind it. Measured that day: Piyush Sharma's home screen said 1 PTP due
+        # and tapping it showed nothing — PTP 71820ca4 on CASE0000567, his
+        # promise, another agent's case.
+        #
+        # THE COUNT MUST NOT EXCEED WHAT THE LIST CAN SHOW. Restricted to the
+        # beat, which is the set the flag is applied to and the only work this
+        # agent can actually open today. A promise on a case that has moved on is
+        # now the new holder's to chase, which is also who can.
+        #
+        # The taker is not forgotten — `PTP.agent_id` still records who made the
+        # promise, and that is what agent accountability reads. It is simply not
+        # a to-do item for somebody who cannot open the case.
         ptp_due_today_ids: set[str] = set(
             row[0] for row in
             self.db.query(PTP.case_id)
             .join(Case, Case.id == PTP.case_id)
             .filter(
-                or_(PTP.agent_id == agent.id, PTP.case_id.in_(beat.ordered_case_ids or [])),
+                PTP.case_id.in_(beat.ordered_case_ids or []),
                 PTP.committed_date == eff_day,
                 PTP.status == PTPStatus.ACTIVE,
                 Case.status.notin_(list(RESOLVED_STATUSES)),
