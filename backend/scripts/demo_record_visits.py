@@ -13,7 +13,8 @@ WHAT IT WRITES
 For each agent holding cases in today's beats, N cases (default 3), each with
 
   * a Visit, GPS jittered a few metres around the customer's own coordinates,
-    `geo_verified=True`, `within_contact_hours=True`, a plausible check-out;
+    `geo_verified=True`, `within_contact_hours` derived from the IST check-in
+    time by the same rule the API enforces, a plausible check-out;
   * for the paying outcomes only, a VERIFIED Payment with a unique receipt;
   * for the promising outcomes, an ACTIVE PTP with a committed date.
 
@@ -71,6 +72,7 @@ from datetime import date, datetime, time, timedelta, timezone
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
+from app.core.geo import IST, is_within_contact_hours
 from app.core.database import SessionLocal                           # noqa: E402
 from app.models.agent import Agent                                   # noqa: E402
 from app.models.beat import Beat                                     # noqa: E402
@@ -168,7 +170,10 @@ def main() -> None:
     db = SessionLocal()
     try:
         today = date.today()
-        day_start = datetime.combine(today, time(0, 0), tzinfo=timezone.utc)
+        # IST, explicitly: the 9:00-17:00 window below is meant in Indian time.
+        # Built in UTC it was 14:30-22:30 IST, and 24 rows recorded on
+        # 2026-09-10 sat outside contact hours while flagged inside them.
+        day_start = datetime.combine(today, time(0, 0), tzinfo=IST)
 
         beats = db.query(Beat).filter(Beat.beat_date == today).all()
         if not beats:
@@ -260,7 +265,7 @@ def main() -> None:
                     check_in_time=when,
                     check_out_time=when + timedelta(minutes=rng.randint(8, 27)),
                     distance_from_customer_metres=rng.uniform(4.0, 38.0),
-                    geo_verified=True, within_contact_hours=True,
+                    geo_verified=True, within_contact_hours=is_within_contact_hours(when),
                     customer_met=outcome != VisitOutcome.NOT_AVAILABLE,
                     person_met=(PersonMet.BORROWER
                                 if outcome != VisitOutcome.NOT_AVAILABLE else None),

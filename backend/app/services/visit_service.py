@@ -34,18 +34,24 @@ prototype_to_product/final_changes.md §7.1 for the full extraction plan.
 """
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timedelta, timezone
+
+import structlog
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session, joinedload
 
-from app.core.geo import GEO_FENCE_METRES, RBI_CONTACT_END, RBI_CONTACT_START, is_within_contact_hours, within_geo_fence
+from app.core.geo import GEO_FENCE_METRES, IST, RBI_CONTACT_END, RBI_CONTACT_START, is_within_contact_hours, within_geo_fence
+from app.models.audit_log import AuditAction, AuditLog
 from app.models.agent import Agent
 from app.models.case import Case, CaseStatus, EscalationReason
 from app.models.visit import Visit, VisitOutcome
 from app.schemas.agent import RecordVisitRequest
 from app.services.ai_report_service import AIReportService
 from app.services.notification_service import NotificationService
+
+logger = structlog.get_logger()
 
 _PAYMENT_OUTCOMES = {VisitOutcome.PAID_FULL, VisitOutcome.PART_PAID, VisitOutcome.PART_PAID_PTP}
 # A flaky connection can make an agent's app retry the same submit. Anything
@@ -138,6 +144,23 @@ class VisitService:
         )
 
         if not within_hours:
+            # Written BEFORE the refusal, and committed on its own, because
+            # get_db never commits and a row left pending here would be
+            # discarded with the session when the 403 propagates.
+            #
+            # 2026-09-11 — CONTACT_HOUR_VIOLATION_ATTEMPT had been declared
+            # since the first schema and written by nothing, which made the
+            # compliance tile a tautology: it counted stored visits with
+            # within_contact_hours = False, and this refusal is the only place
+            # the flag could ever be False on the real path — a refused visit is
+            # never stored. So "0 of N outside hours" was true of every book
+            # forever and measured nothing. The number a manager actually
+            # wants is how many attempts this rule stopped. This row is that.
+            #
+            # user_id is the AGENT'S user, which is what tenant-scopes it: the
+            # manager's audit query reads user_id IN (their agents' users).
+            # success=False, because the attempted action did not happen.
+            self._audit_contact_hour_violation(agent, case, now_utc, req)
             raise HTTPException(
                 status_code=403,
                 detail=(
@@ -234,6 +257,45 @@ class VisitService:
             self._notify_visit_completed(agent, case, now_utc)
 
         return self._to_response(visit)
+
+    def _audit_contact_hour_violation(self, agent: Agent, case: Case,
+                                      attempted_at: datetime, req: RecordVisitRequest) -> None:
+        """One CONTACT_HOUR_VIOLATION_ATTEMPT row per refused visit.
+
+        The refusal is the point; this row is the evidence of it. It must
+        never weaken the refusal, so a failure to write it is logged at
+        ERROR — the same treatment notification_service gives a swallowed
+        delivery failure — and the 403 still follows. No IP or user-agent:
+        the service has no Request object, and inventing one to carry them is
+        not worth a second code path for the sake of two nullable columns.
+        """
+        ist = attempted_at.astimezone(IST)
+        try:
+            self.db.add(AuditLog(
+                id=str(uuid.uuid4()),
+                created_at=attempted_at,
+                user_id=agent.user_id,
+                action=AuditAction.CONTACT_HOUR_VIOLATION_ATTEMPT,
+                entity_type="Case",
+                entity_id=case.id,
+                details={
+                    "agent_id": agent.id,
+                    "case_number": case.case_number,
+                    "attempted_at_ist": ist.isoformat(),
+                    "ist_hour": ist.hour,
+                    "window": f"{RBI_CONTACT_START:02d}:00-{RBI_CONTACT_END:02d}:00 IST",
+                    "outcome_attempted": str(getattr(req.outcome, "value", req.outcome)),
+                    "channel": "visit",
+                },
+                success=False,
+                failure_reason="outside contact hours",
+            ))
+            self.db.commit()
+        except Exception as exc:  # noqa: BLE001 — the refusal must still happen
+            self.db.rollback()
+            logger.error("visit.contact_hour_audit_failed", case_id=case.id,
+                         agent_id=agent.id, error=str(exc),
+                         error_type=type(exc).__name__, exc_info=True)
 
     def _to_response(self, visit: Visit) -> dict:
         return {

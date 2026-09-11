@@ -82,6 +82,7 @@ os.environ.setdefault("SECRET_KEY", "demo-script")
 os.environ.setdefault("COMMAND_CENTRE_API_KEY", "demo-script")
 
 from sqlalchemy import func                                             # noqa: E402
+from app.core.geo import IST, is_within_contact_hours
 from app.core.database import SessionLocal                              # noqa: E402
 from app.models.agent import Agent                                      # noqa: E402
 from app.models.beat import Beat                                        # noqa: E402
@@ -171,7 +172,8 @@ def main() -> None:
 
     db = SessionLocal()
     today = date.today()
-    day_start = datetime.combine(today, datetime.min.time()).replace(tzinfo=timezone.utc)
+    # IST, explicitly — the 9:00-17:00 window below is meant in Indian time.
+    day_start = datetime.combine(today, datetime.min.time()).replace(tzinfo=IST)
     rng = random.Random(SEED)
 
     mgr = db.query(User).filter(
@@ -296,7 +298,7 @@ def main() -> None:
                 check_in_time=when,
                 check_out_time=when + timedelta(minutes=rng.randint(9, 26)),
                 distance_from_customer_metres=rng.uniform(4.0, 38.0),
-                geo_verified=True, within_contact_hours=True,
+                geo_verified=True, within_contact_hours=is_within_contact_hours(when),
                 customer_met=True, person_met=PersonMet.BORROWER,
                 outcome=VisitOutcome.PAID_FULL if full else VisitOutcome.PART_PAID,
                 visit_number=(case.visit_count or 0) + 1,

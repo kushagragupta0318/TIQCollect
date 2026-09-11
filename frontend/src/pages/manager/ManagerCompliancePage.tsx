@@ -51,7 +51,13 @@ const EASE = "cubic-bezier(0.16,1,0.3,1)";
 //              screen that silently omits a gap is how the gap survives.
 type RuleState = "enforced" | "partial" | "absent";
 
-const RBI_RULES: { rule: string; state: RuleState; detail: string }[] = [
+// A detail may be a function of the live metrics. Added 2026-09-11 for the
+// audit-trail row, whose "8 of 22 declared action types are written" had been a
+// literal since 2026-09-06 and was 13 of 25 by the time anyone re-counted. A
+// number a reader is meant to trust cannot live in a string constant.
+type RuleDetail = string | ((m: ComplianceMetrics | null) => string);
+
+const RBI_RULES: { rule: string; state: RuleState; detail: RuleDetail }[] = [
   { rule: "Contact hours 8 AM – 7 PM IST", state: "enforced",
     detail: "Recording a visit or sending a borrower OTP outside the window is refused (403)." },
   { rule: "Visit GPS geo-fence, 100 m", state: "enforced",
@@ -65,11 +71,15 @@ const RBI_RULES: { rule: string; state: RuleState; detail: string }[] = [
   { rule: "Collections confirmed by borrower OTP", state: "partial",
     detail: "A code to the borrower's registered phone promotes a payment to VERIFIED. Optional: with no signal the payment is recorded PENDING_VERIFICATION and confirmed later." },
   { rule: "Payment receipt to the borrower", state: "partial",
-    detail: "SMS and WhatsApp on every collection — best-effort, and silently skipped when Twilio is not configured." },
+    detail: "SMS and WhatsApp on every collection — best-effort. A delivery failure is logged at ERROR and never blocks the payment; nothing tells the agent or the borrower it failed." },
   { rule: "Agent ID card carries a signed token", state: "partial",
     detail: "The QR is signed and cannot be forged without the server secret, but no public endpoint validates it yet, so a borrower cannot check it." },
   { rule: "Immutable audit trail", state: "partial",
-    detail: "8 of 22 declared action types are written. Immutability is convention — no database trigger and no revoked UPDATE/DELETE grant." },
+    // Observed data, named as such. "Implemented" cannot be derived at runtime
+    // (a source reference is not a write), so the page never claims it.
+    detail: (m) => (m
+      ? `${m.audit_actions.ever_recorded} of ${m.audit_actions.declared} declared audit action types have ever been recorded in this database — an observed-data figure, not implementation coverage. Immutability is convention — no database trigger and no revoked UPDATE/DELETE grant.`
+      : "Counted from this database's audit table when it loads. Immutability is convention — no database trigger and no revoked UPDATE/DELETE grant.") },
   { rule: "No contact on Sundays", state: "absent",
     detail: "Not implemented. The nightly planner skips Sunday when scheduling, but nothing prevents a visit being recorded on one." },
   { rule: "Automated PTP follow-up reminders", state: "absent",
@@ -89,18 +99,7 @@ const RULE_STATE_META: Record<RuleState, { label: string; icon: typeof CheckCirc
 /** The tiles. Every figure comes from GET /manager/compliance and is
  *  MONTH-TO-DATE, which the labels say — the previous version said "Today" over
  *  numbers that were month-shaped even in fiction. */
-function ComplianceScorecard() {
-  const [data, setData] = useState<ComplianceMetrics | null>(null);
-  const [error, setError] = useState(false);
-
-  useEffect(() => {
-    let alive = true;
-    getCompliance()
-      .then((d) => { if (alive) setData(d); })
-      .catch(() => { if (alive) setError(true); });
-    return () => { alive = false; };
-  }, []);
-
+function ComplianceScorecard({ data, error }: { data: ComplianceMetrics | null; error: boolean }) {
   if (error) {
     return (
       <div className="card p-4" style={{ border: "1px solid rgba(220,38,38,0.20)", background: "rgba(220,38,38,0.05)" }}>
@@ -116,15 +115,23 @@ function ComplianceScorecard() {
 
   const tiles = [
     {
-      value: pct(data?.compliance_rate),
-      label: "Contact Hour Compliance",
+      // 2026-09-11 — this was `compliance_rate` with "N of M visits outside
+      // 8 AM – 7 PM" beneath it, and it was a tautology: the API refuses an
+      // out-of-hours visit with 403 and stores nothing, so through the real
+      // path N could only ever be 0 and the tile read 100% on every book
+      // forever. The number that means something is how many attempts the
+      // rule stopped — one CONTACT_HOUR_VIOLATION_ATTEMPT audit row each,
+      // written at the refusal. No percentage: there is no honest denominator
+      // for "attempts that were not made".
+      value: num(data?.blocked_contact_attempts),
+      label: "Blocked Out-of-hours Attempts",
       foot: data
-        ? `${num(data.out_of_hours_visits)} of ${num(data.total_visits)} visits outside 8 AM – 7 PM`
+        ? "Visits refused this month under the 8 AM – 7 PM IST rule. A recorded visit cannot be outside hours."
         : "Loading…",
       icon: CheckCircle,
       // Colour follows the number rather than being fixed green: the old tile
       // was green whatever it said, so a bad figure would still have looked fine.
-      tone: (data?.out_of_hours_visits ?? 0) > 0 ? "warn" : "good",
+      tone: (data?.blocked_contact_attempts ?? 0) > 0 ? "warn" : "good",
     },
     {
       value: pct(data?.geo_verification_rate),
@@ -180,6 +187,19 @@ function ComplianceScorecard() {
 }
 
 export default function ManagerCompliancePage() {
+  // One fetch for the page: the scorecard tiles and the audit-trail rule line
+  // both read it, and fetching twice for two consumers is how figures on one
+  // screen come to disagree with each other.
+  const [metrics, setMetrics] = useState<ComplianceMetrics | null>(null);
+  const [metricsError, setMetricsError] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    getCompliance()
+      .then((d) => { if (alive) setMetrics(d); })
+      .catch(() => { if (alive) setMetricsError(true); });
+    return () => { alive = false; };
+  }, []);
+
   return (
     <div className="space-y-5">
       <div style={{ animation: `enter 420ms ${EASE} 0ms both` }}>
@@ -187,7 +207,7 @@ export default function ManagerCompliancePage() {
         <p className="text-[13px] sm:text-sm mt-0.5" style={{ color: "#6B6D76" }}>RBI Fair Practices Code adherence · Contact hours · Visit evidence</p>
       </div>
 
-      <ComplianceScorecard />
+      <ComplianceScorecard data={metrics} error={metricsError} />
 
       {/* RBI rules status — three states, each with the detail behind it. */}
       <div className="card p-4 sm:p-6" style={{ animation: `enter 420ms ${EASE} 120ms both` }}>
@@ -225,7 +245,9 @@ export default function ManagerCompliancePage() {
                 </div>
                 {/* The detail is the point. "Partial" with no explanation is the
                     same unfalsifiable claim the old uniform "Active" made. */}
-                <p className="text-xs mt-1 break-words" style={{ color: "#6B6D76" }}>{detail}</p>
+                <p className="text-xs mt-1 break-words" style={{ color: "#6B6D76" }}>
+                  {typeof detail === "function" ? detail(metrics) : detail}
+                </p>
               </div>
             );
           })}

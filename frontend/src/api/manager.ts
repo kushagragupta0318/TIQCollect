@@ -58,15 +58,29 @@ export async function getCasesDateRange() {
  * Every field is measured from the 1st of the current month, NOT from today —
  * the Compliance page labels them accordingly. `compliance_rate` and
  * `geo_verification_rate` are fractions in [0, 1], not percentages.
+ *
+ * `out_of_hours_visits` and `compliance_rate` count STORED visits flagged
+ * outside hours. Through the real API that is always zero — an out-of-hours
+ * visit is refused with 403 and never stored — so they describe seeded data,
+ * not compliance. The page does not render them. `blocked_contact_attempts`
+ * is the measurement: one CONTACT_HOUR_VIOLATION_ATTEMPT audit row per
+ * refused visit, same month, same team.
  */
 export interface ComplianceMetrics {
   month: string;                  // "YYYY-MM"
   total_visits: number;
   out_of_hours_visits: number;
+  /** Visits refused under the 8 AM – 7 PM IST rule this month. */
+  blocked_contact_attempts: number;
   geo_violations: number;
   sos_active_count: number;
   compliance_rate: number;        // 0–1
   geo_verification_rate: number;  // 0–1
+  /** Declared audit action types vs. those EVER RECORDED IN THIS DATABASE.
+   *  Observed data, system-wide — NOT implementation coverage. A wired action
+   *  that has never fired reads as never recorded. `semantics` says so on the
+   *  wire so no consumer can misread it. */
+  audit_actions: { declared: number; ever_recorded: number; never_recorded: string[]; semantics: string };
 }
 
 export async function getCompliance(): Promise<ComplianceMetrics> {

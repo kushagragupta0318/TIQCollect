@@ -46,6 +46,7 @@ from datetime import datetime, date, timedelta, timezone
 # Silence all SQLAlchemy logs regardless of engine.echo setting
 logging.getLogger("sqlalchemy").setLevel(logging.CRITICAL)
 from sqlalchemy import text, func
+from app.core.geo import IST, is_within_contact_hours
 from app.core.database import SessionLocal, engine
 engine.echo = False  # force off regardless of settings.DEBUG
 from app.core.database import Base
@@ -447,6 +448,26 @@ BANK_REMARKS = [
     "Account flagged for special mention — court case pending. Handle with care.",
 ]
 # ─── Helpers ──────────────────────────────────────────────────────────────────
+
+def _visit(**kw) -> Visit:
+    """Every seeded Visit is built here so within_contact_hours is DERIVED.
+
+    2026-09-11 — thirty-nine Visit(...) constructors in this file each wrote
+    the flag as a literal True, beside check-in times that were built as
+    IST-looking hours stamped tzinfo=timezone.utc. Read back in IST a "17:30"
+    visit was 23:00, and 82 rows on the live demo book were outside the
+    8 AM - 7 PM window while flagged inside it. The compliance page then
+    reported 100% on data that was 30% non-compliant by its own timestamps.
+
+    The rule is not restated here: is_within_contact_hours in app/core/geo.py
+    is the single definition the API enforces with, and this calls it. The
+    times themselves are now built with tzinfo=IST (see today_at, _past and
+    the inline constructions), so an hour written as 9 means 9 in the morning
+    in India — which is what every author of these lines meant.
+    """
+    kw["within_contact_hours"] = is_within_contact_hours(kw["check_in_time"])
+    return Visit(**kw)
+
 def _uid() -> str:
     return str(uuid.uuid4())
 def _jitter_coords(lat: float, lon: float, radius_km: float = 15) -> tuple[float, float]:
@@ -981,14 +1002,14 @@ def seed_recent_daily_activity(db, agents, today: date, days_back: int = 30) -> 
                     outcome = VisitOutcome.PTP      # nothing left to collect
                 met = outcome != VisitOutcome.NOT_AVAILABLE
                 cin = datetime.combine(day, datetime.min.time()).replace(
-                    hour=min(8 + i, 17), minute=r.randint(5, 55), tzinfo=timezone.utc)
-                v = Visit(
+                    hour=min(8 + i, 17), minute=r.randint(5, 55), tzinfo=IST)
+                v = _visit(
                     id=_uid(), case_id=c.id, agent_id=ag.id,
                     check_in_latitude=cu.latitude, check_in_longitude=cu.longitude,
                     check_in_time=cin,
                     check_out_time=cin + timedelta(minutes=r.randint(18, 45)),
                     distance_from_customer_metres=round(r.uniform(15, 90), 1),
-                    geo_verified=True, within_contact_hours=True,
+                    geo_verified=True,
                     customer_met=met, outcome=outcome,
                     person_met=PersonMet.BORROWER if met else None,
                     agent_recording_transcript=r.choice(
@@ -1720,7 +1741,7 @@ def seed():
                 ).replace(
                     hour=random.randint(8, 18),
                     minute=random.randint(0, 59),
-                    tzinfo=timezone.utc,
+                    tzinfo=IST,
                 )
                 if visit_date.date() > today:
                     break
@@ -1766,7 +1787,7 @@ def seed():
                     visit_agent_id = random.choice([a.id for a in agents if a.id != c.agent_id])
                 else:
                     visit_agent_id = c.agent_id
-                v = Visit(
+                v = _visit(
                     id=_uid(),
                     case_id=c.id,
                     agent_id=visit_agent_id,
@@ -1775,7 +1796,6 @@ def seed():
                     check_out_time=visit_date + timedelta(minutes=random.randint(10, 45)),
                     distance_from_customer_metres=round(dist, 1),
                     geo_verified=dist < 200,
-                    within_contact_hours=True,
                     customer_met=met,
                     outcome=outcome,
                     person_met=person,
@@ -2113,24 +2133,24 @@ def seed():
     _pa9 = agents[8]   # EMP0009 Deepak Joshi (male)
     def _past(days_ago: int, hour: int = 10, minute: int = 30) -> datetime:
         return datetime.combine(today - timedelta(days=days_ago), datetime.min.time()).replace(
-            hour=hour, minute=minute, second=0, tzinfo=timezone.utc)
+            hour=hour, minute=minute, second=0, tzinfo=IST)
     # ── demo_cases[0]: Rajesh Kumar Sharma (Sector 44) ─ 3 prior visits → today is #4 ─
     rc = demo_cases[0]
     # Visit 1 — 42 days ago, EMP0001: door locked
-    _v = Visit(id=_uid(), case_id=rc.id, agent_id=_pa1.id,
+    _v = _visit(id=_uid(), case_id=rc.id, agent_id=_pa1.id,
                check_in_latitude=28.4615, check_in_longitude=77.0683,
                check_in_time=_past(42, 10, 15), check_out_time=_past(42, 10, 28),
-               distance_from_customer_metres=42.0, geo_verified=True, within_contact_hours=True,
+               distance_from_customer_metres=42.0, geo_verified=True,
                customer_met=False, outcome=VisitOutcome.NOT_AVAILABLE,
                not_met_reason=NotMetReason.PREMISES_LOCKED,
                agent_recording_transcript="Door locked. Neighbour says borrower leaves for factory shift by 7 AM. Best time: after 6 PM.",
                visit_number=1, property_type="RENTED", occupancy_status="LOCKED")
     db.add(_v); db.flush()
     # Visit 2 — 28 days ago, EMP0003: PTP taken ₹55,500 — now broken
-    _v2 = Visit(id=_uid(), case_id=rc.id, agent_id=_pa3.id,
+    _v2 = _visit(id=_uid(), case_id=rc.id, agent_id=_pa3.id,
                 check_in_latitude=28.4614, check_in_longitude=77.0682,
                 check_in_time=_past(28, 18, 10), check_out_time=_past(28, 18, 40),
-                distance_from_customer_metres=50.0, geo_verified=True, within_contact_hours=True,
+                distance_from_customer_metres=50.0, geo_verified=True,
                 customer_met=True, outcome=VisitOutcome.PTP,
                 person_met=PersonMet.BORROWER, default_reason=DefaultReason.JOB_LOSS,
                 agent_recording_transcript="Met borrower evening. Laid off 3 months ago. Showed termination letter. PTP full ₹55,500 by month-end.",
@@ -2141,10 +2161,10 @@ def seed():
                committed_amount=55500.0, committed_date=today - timedelta(days=14),
                status=PTPStatus.BROKEN, customer_reason="Awaiting new job offer — cash flow dry."))
     # Visit 3 — 14 days ago, agent002: broken PTP + goodwill talk
-    _v3 = Visit(id=_uid(), case_id=rc.id, agent_id=agent002.id,
+    _v3 = _visit(id=_uid(), case_id=rc.id, agent_id=agent002.id,
                 check_in_latitude=28.4614, check_in_longitude=77.0682,
                 check_in_time=_past(14, 18, 30), check_out_time=_past(14, 19, 10),
-                distance_from_customer_metres=40.0, geo_verified=True, within_contact_hours=True,
+                distance_from_customer_metres=40.0, geo_verified=True,
                 customer_met=True, outcome=VisitOutcome.BROKEN_PTP,
                 person_met=PersonMet.BORROWER, default_reason=DefaultReason.JOB_LOSS,
                 agent_recording_transcript="PTP not honoured. Customer apologetic. Got part-time work. Offered ₹50K now, requested 2 more weeks for balance.",
@@ -2155,20 +2175,20 @@ def seed():
     # ── demo_cases[1]: Sunita Devi Agarwal (DLF Phase 4, ~4.6 km NE) ─ 3 visits ─
     sc = demo_cases[1]
     # Visit 1 — 35 days ago, EMP0005: not home
-    _vs1 = Visit(id=_uid(), case_id=sc.id, agent_id=_pa5.id,
+    _vs1 = _visit(id=_uid(), case_id=sc.id, agent_id=_pa5.id,
                  check_in_latitude=28.4913, check_in_longitude=77.0874,
                  check_in_time=_past(35, 11, 0), check_out_time=_past(35, 11, 14),
-                 distance_from_customer_metres=65.0, geo_verified=True, within_contact_hours=True,
+                 distance_from_customer_metres=65.0, geo_verified=True,
                  customer_met=False, outcome=VisitOutcome.NOT_AVAILABLE,
                  not_met_reason=NotMetReason.CUSTOMER_AWAY,
                  agent_recording_transcript="Nobody home. Building watchman says family went to native — will return in a week.",
                  visit_number=1, property_type="OWNED", occupancy_status="LOCKED")
     db.add(_vs1); db.flush()
     # Visit 2 — 20 days ago, EMP0005: partial payment ₹8,000 received
-    _vs2 = Visit(id=_uid(), case_id=sc.id, agent_id=_pa5.id,
+    _vs2 = _visit(id=_uid(), case_id=sc.id, agent_id=_pa5.id,
                  check_in_latitude=28.4912, check_in_longitude=77.0873,
                  check_in_time=_past(20, 10, 30), check_out_time=_past(20, 11, 5),
-                 distance_from_customer_metres=55.0, geo_verified=True, within_contact_hours=True,
+                 distance_from_customer_metres=55.0, geo_verified=True,
                  customer_met=True, outcome=VisitOutcome.PART_PAID,
                  person_met=PersonMet.BORROWER, default_reason=DefaultReason.MEDICAL,
                  agent_recording_transcript="Husband hospitalised last month. Partial ₹8,000 accepted in goodwill. Says full amount after discharge.",
@@ -2185,20 +2205,20 @@ def seed():
     # ── demo_cases[2]: Mohammed Irfan Khan (Sector 44, ~38 m from agent home) ─ 2 visits ──
     mc = demo_cases[2]
     # Visit 1 — 21 days ago, EMP0007: premises locked
-    _vm1 = Visit(id=_uid(), case_id=mc.id, agent_id=_pa7.id,
+    _vm1 = _visit(id=_uid(), case_id=mc.id, agent_id=_pa7.id,
                  check_in_latitude=28.455410, check_in_longitude=77.071910,
                  check_in_time=_past(21, 9, 45), check_out_time=_past(21, 10, 0),
-                 distance_from_customer_metres=80.0, geo_verified=True, within_contact_hours=True,
+                 distance_from_customer_metres=80.0, geo_verified=True,
                  customer_met=False, outcome=VisitOutcome.NOT_AVAILABLE,
                  not_met_reason=NotMetReason.PREMISES_LOCKED,
                  agent_recording_transcript="Plot locked. Neighbour says owner goes out early.",
                  visit_number=1, property_type="OWNED", occupancy_status="LOCKED")
     db.add(_vm1); db.flush()
     # Visit 2 — 10 days ago, agent002: customer claims already paid directly to bank
-    _vm2 = Visit(id=_uid(), case_id=mc.id, agent_id=agent002.id,
+    _vm2 = _visit(id=_uid(), case_id=mc.id, agent_id=agent002.id,
                  check_in_latitude=28.455400, check_in_longitude=77.071900,
                  check_in_time=_past(10, 11, 0), check_out_time=_past(10, 11, 28),
-                 distance_from_customer_metres=18.0, geo_verified=True, within_contact_hours=True,
+                 distance_from_customer_metres=18.0, geo_verified=True,
                  customer_met=True, outcome=VisitOutcome.DISPUTE,
                  person_met=PersonMet.BORROWER, default_reason=DefaultReason.ALREADY_PAID,
                  agent_recording_transcript="Customer agitated — claims he paid ₹30K directly to bank in Feb. Demanding settlement letter. Raised ticket with bank.",
@@ -2209,10 +2229,10 @@ def seed():
     mc.visit_count = 2
     # ── demo_cases[3]: Priya Singh Rawat (Sector 44, ~50 m from agent home) ─ 1 prior visit ─
     pc = demo_cases[3]
-    _vp1 = Visit(id=_uid(), case_id=pc.id, agent_id=_pa1.id,
+    _vp1 = _visit(id=_uid(), case_id=pc.id, agent_id=_pa1.id,
                  check_in_latitude=28.454810, check_in_longitude=77.071310,
                  check_in_time=_past(15, 12, 30), check_out_time=_past(15, 13, 5),
-                 distance_from_customer_metres=42.0, geo_verified=True, within_contact_hours=True,
+                 distance_from_customer_metres=42.0, geo_verified=True,
                  customer_met=True, outcome=VisitOutcome.PART_PAID,
                  person_met=PersonMet.BORROWER, default_reason=DefaultReason.SALARY_CUT,
                  agent_recording_transcript="Salary cut 30% post restructuring. Paid ₹5,000 as goodwill. Requesting 3-month EMI waiver.",
@@ -2229,10 +2249,10 @@ def seed():
     pc.visit_count = 1                     # will be updated to 2 below
     # ── demo_cases[4]: Deepak Verma Gupta (MG Road, ~4.9 km NE) ─ 1 prior dispute ─
     dc = demo_cases[4]
-    _vd1 = Visit(id=_uid(), case_id=dc.id, agent_id=_pa3.id,
+    _vd1 = _visit(id=_uid(), case_id=dc.id, agent_id=_pa3.id,
                  check_in_latitude=28.4794, check_in_longitude=77.0999,
                  check_in_time=_past(30, 10, 0), check_out_time=_past(30, 10, 35),
-                 distance_from_customer_metres=50.0, geo_verified=True, within_contact_hours=True,
+                 distance_from_customer_metres=50.0, geo_verified=True,
                  customer_met=True, outcome=VisitOutcome.DISPUTE,
                  person_met=PersonMet.BORROWER, default_reason=DefaultReason.AMOUNT_DISPUTED,
                  agent_recording_transcript="Customer insists bank overcharged ₹12,000 in penal interest. Showed own statement. Calculation mismatch — escalating.",
@@ -2243,10 +2263,10 @@ def seed():
     dc.visit_count = 1  # today's visit adds to 2
     # ── demo_cases[5]: Anita Kapoor Malhotra (Palam Vihar, ~7.9 km N) ─ 1 revisit ─
     ac = demo_cases[5]
-    _va1 = Visit(id=_uid(), case_id=ac.id, agent_id=_pa9.id,
+    _va1 = _visit(id=_uid(), case_id=ac.id, agent_id=_pa9.id,
                  check_in_latitude=28.5227, check_in_longitude=77.0515,
                  check_in_time=_past(12, 14, 0), check_out_time=_past(12, 14, 22),
-                 distance_from_customer_metres=90.0, geo_verified=True, within_contact_hours=True,
+                 distance_from_customer_metres=90.0, geo_verified=True,
                  customer_met=True, outcome=VisitOutcome.REVISIT,
                  person_met=PersonMet.RELATIVE,
                  agent_recording_transcript="Relative home. Says Anita is out of station for a wedding. Back in 10-12 days. Requested revisit.",
@@ -2257,10 +2277,10 @@ def seed():
     # ── demo_cases[6]: Suresh Chand Bansal (Civil Lines, ~2.5 km NW) ─ 2 visits ──
     suc = demo_cases[6]
     # Visit 1 — 25 days ago, EMP0004: PTP ₹5,850
-    _vsu1 = Visit(id=_uid(), case_id=suc.id, agent_id=agents[3].id,
+    _vsu1 = _visit(id=_uid(), case_id=suc.id, agent_id=agents[3].id,
                   check_in_latitude=28.4689, check_in_longitude=77.0549,
                   check_in_time=_past(25, 11, 30), check_out_time=_past(25, 12, 5),
-                  distance_from_customer_metres=72.0, geo_verified=True, within_contact_hours=True,
+                  distance_from_customer_metres=72.0, geo_verified=True,
                   customer_met=True, outcome=VisitOutcome.PTP,
                   person_met=PersonMet.BORROWER, default_reason=DefaultReason.OVER_LEVERAGED,
                   agent_recording_transcript="3 active loans. Cash flow very tight. PTP full ₹5,850 on 5th of month.",
@@ -2272,10 +2292,10 @@ def seed():
                committed_amount=5850.0, committed_date=today - timedelta(days=10),
                status=PTPStatus.BROKEN, customer_reason="Gold loan EMI came due same date — funds exhausted."))
     # Visit 2 — 10 days ago, agent002: broken PTP + partial + new PTP
-    _vsu2 = Visit(id=_uid(), case_id=suc.id, agent_id=agent002.id,
+    _vsu2 = _visit(id=_uid(), case_id=suc.id, agent_id=agent002.id,
                   check_in_latitude=28.4688, check_in_longitude=77.0548,
                   check_in_time=_past(10, 16, 30), check_out_time=_past(10, 17, 5),
-                  distance_from_customer_metres=74.0, geo_verified=True, within_contact_hours=True,
+                  distance_from_customer_metres=74.0, geo_verified=True,
                   customer_met=True, outcome=VisitOutcome.PART_PAID_PTP,
                   person_met=PersonMet.BORROWER, default_reason=DefaultReason.OVER_LEVERAGED,
                   agent_recording_transcript="PTP broken. Customer apologetic. Paid ₹2,000 cash on the spot. New PTP ₹3,850 for end of month.",
@@ -2296,19 +2316,19 @@ def seed():
     # ── demo_cases[7]: Ramesh Lal Gupta (DLF Phase 1, ~3.0km NE) — HOSTILE, NPA ──
     rc7 = demo_cases[7]
     # Visit 1 — 28 days ago, EMP0005: premises locked
-    db.add(Visit(id=_uid(), case_id=rc7.id, agent_id=_pa5.id,
+    db.add(_visit(id=_uid(), case_id=rc7.id, agent_id=_pa5.id,
                  check_in_latitude=28.4725, check_in_longitude=77.0986,
                  check_in_time=_past(28, 10, 0), check_out_time=_past(28, 10, 15),
-                 distance_from_customer_metres=70.0, geo_verified=True, within_contact_hours=True,
+                 distance_from_customer_metres=70.0, geo_verified=True,
                  customer_met=False, outcome=VisitOutcome.NOT_AVAILABLE,
                  not_met_reason=NotMetReason.PREMISES_LOCKED,
                  agent_recording_transcript="House locked. Neighbour says owner travels often for business.",
                  visit_number=1, property_type="OWNED", occupancy_status="LOCKED"))
     # Visit 2 — 14 days ago, EMP0003: hostile confrontation, legal warning issued
-    _vr7 = Visit(id=_uid(), case_id=rc7.id, agent_id=_pa3.id,
+    _vr7 = _visit(id=_uid(), case_id=rc7.id, agent_id=_pa3.id,
                  check_in_latitude=28.4724, check_in_longitude=77.0985,
                  check_in_time=_past(14, 11, 30), check_out_time=_past(14, 12, 5),
-                 distance_from_customer_metres=45.0, geo_verified=True, within_contact_hours=True,
+                 distance_from_customer_metres=45.0, geo_verified=True,
                  customer_met=True, outcome=VisitOutcome.RTP,
                  person_met=PersonMet.BORROWER, default_reason=DefaultReason.AMOUNT_DISPUTED,
                  agent_recording_transcript="Customer became aggressive — threatened to file harassment complaint. Left legal demand notice at door. Escalation recommended.",
@@ -2324,10 +2344,10 @@ def seed():
     # ── demo_cases[8]: Kavitha Rao Pillai (Sector 49, ~4.2km S) — DO NOT CONTACT ──
     kc = demo_cases[8]
     # Visit 1 — 22 days ago, EMP0001: dispute — customer filed complaint with bank
-    _vk1 = Visit(id=_uid(), case_id=kc.id, agent_id=_pa1.id,
+    _vk1 = _visit(id=_uid(), case_id=kc.id, agent_id=_pa1.id,
                  check_in_latitude=28.4193, check_in_longitude=77.0821,
                  check_in_time=_past(22, 14, 0), check_out_time=_past(22, 14, 28),
-                 distance_from_customer_metres=55.0, geo_verified=True, within_contact_hours=True,
+                 distance_from_customer_metres=55.0, geo_verified=True,
                  customer_met=True, outcome=VisitOutcome.DISPUTE,
                  person_met=PersonMet.BORROWER, default_reason=DefaultReason.ALREADY_PAID,
                  agent_recording_transcript="Customer insists loan was settled in Dec. Has bank receipt screenshot — amount mismatch. Filed grievance with ombudsman.",
@@ -2340,19 +2360,19 @@ def seed():
     # ── demo_cases[9]: Vikas Kumar Pandey (DLF Phase 2, ~3.3km NE) — PTP due today ──
     vc = demo_cases[9]
     # Visit 1 — 32 days ago, EMP0007: not home
-    db.add(Visit(id=_uid(), case_id=vc.id, agent_id=_pa7.id,
+    db.add(_visit(id=_uid(), case_id=vc.id, agent_id=_pa7.id,
                  check_in_latitude=28.4811, check_in_longitude=77.0861,
                  check_in_time=_past(32, 9, 30), check_out_time=_past(32, 9, 45),
-                 distance_from_customer_metres=82.0, geo_verified=True, within_contact_hours=True,
+                 distance_from_customer_metres=82.0, geo_verified=True,
                  customer_met=False, outcome=VisitOutcome.NOT_AVAILABLE,
                  not_met_reason=NotMetReason.CUSTOMER_AWAY,
                  agent_recording_transcript="Office closed — told he's in client meeting. Will return by 6 PM.",
                  visit_number=1, property_type="OWNED", occupancy_status="LOCKED"))
     # Visit 2 — 20 days ago, EMP0009: partial ₹20K + broken PTP
-    _vv2 = Visit(id=_uid(), case_id=vc.id, agent_id=_pa9.id,
+    _vv2 = _visit(id=_uid(), case_id=vc.id, agent_id=_pa9.id,
                  check_in_latitude=28.4810, check_in_longitude=77.0860,
                  check_in_time=_past(20, 17, 0), check_out_time=_past(20, 17, 45),
-                 distance_from_customer_metres=28.0, geo_verified=True, within_contact_hours=True,
+                 distance_from_customer_metres=28.0, geo_verified=True,
                  customer_met=True, outcome=VisitOutcome.PART_PAID_PTP,
                  person_met=PersonMet.BORROWER, default_reason=DefaultReason.BUSINESS_FAILURE,
                  agent_recording_transcript="Business down 40%. Paid ₹20,000. PTP for remaining ₹1,25,000 in 10 days.",
@@ -2368,10 +2388,10 @@ def seed():
                committed_amount=125000.0, committed_date=today - timedelta(days=10),
                status=PTPStatus.BROKEN, customer_reason="Client delayed payment, funds locked."))
     # Visit 3 — 8 days ago, agent002: broken PTP, new PTP set (due today+2)
-    _vv3 = Visit(id=_uid(), case_id=vc.id, agent_id=agent002.id,
+    _vv3 = _visit(id=_uid(), case_id=vc.id, agent_id=agent002.id,
                  check_in_latitude=28.4809, check_in_longitude=77.0859,
                  check_in_time=_past(8, 11, 15), check_out_time=_past(8, 11, 55),
-                 distance_from_customer_metres=33.0, geo_verified=True, within_contact_hours=True,
+                 distance_from_customer_metres=33.0, geo_verified=True,
                  customer_met=True, outcome=VisitOutcome.PTP,
                  person_met=PersonMet.BORROWER, default_reason=DefaultReason.BUSINESS_FAILURE,
                  agent_recording_transcript="PTP broken. Client payment finally cleared. New PTP ₹1,25,000 due today — business account funded.",
@@ -2388,10 +2408,10 @@ def seed():
     # ── demo_cases[10]: Meena Devi Tiwari (Sector 23, ~2.8km W) — GOLD LOAN, partial ──
     mc10 = demo_cases[10]
     # Visit 1 — 30 days ago, EMP0003: paid ₹15K towards gold loan
-    _vm10a = Visit(id=_uid(), case_id=mc10.id, agent_id=_pa3.id,
+    _vm10a = _visit(id=_uid(), case_id=mc10.id, agent_id=_pa3.id,
                    check_in_latitude=28.4657, check_in_longitude=77.0498,
                    check_in_time=_past(30, 10, 0), check_out_time=_past(30, 10, 35),
-                   distance_from_customer_metres=60.0, geo_verified=True, within_contact_hours=True,
+                   distance_from_customer_metres=60.0, geo_verified=True,
                    customer_met=True, outcome=VisitOutcome.PART_PAID,
                    person_met=PersonMet.BORROWER, default_reason=DefaultReason.SALARY_CUT,
                    agent_recording_transcript="Salary delayed. Paid ₹15,000 in cash. Requesting 2 more months.",
@@ -2403,10 +2423,10 @@ def seed():
                    amount=15000.0, mode=PaymentMode.CASH, status=PaymentStatus.VERIFIED,
                    receipt_number="RCPT-HIST-M10A", payment_date=_past(30, 10, 15)))
     # Visit 2 — 12 days ago, EMP0007: another ₹10K payment
-    _vm10b = Visit(id=_uid(), case_id=mc10.id, agent_id=_pa7.id,
+    _vm10b = _visit(id=_uid(), case_id=mc10.id, agent_id=_pa7.id,
                    check_in_latitude=28.4656, check_in_longitude=77.0497,
                    check_in_time=_past(12, 15, 30), check_out_time=_past(12, 16, 10),
-                   distance_from_customer_metres=40.0, geo_verified=True, within_contact_hours=True,
+                   distance_from_customer_metres=40.0, geo_verified=True,
                    customer_met=True, outcome=VisitOutcome.PART_PAID,
                    person_met=PersonMet.BORROWER, default_reason=DefaultReason.SALARY_CUT,
                    agent_recording_transcript="Paid another ₹10,000 cash. Struggling with multiple EMIs. Requesting settlement letter.",
@@ -2423,10 +2443,10 @@ def seed():
     # ── demo_cases[11]: Arun Prasad Singh (Sector 48, ~4.1km S) — NEW CASE ──
     ac11 = demo_cases[11]
     # Visit 1 — 7 days ago, EMP0001: initial contact, not available
-    db.add(Visit(id=_uid(), case_id=ac11.id, agent_id=_pa1.id,
+    db.add(_visit(id=_uid(), case_id=ac11.id, agent_id=_pa1.id,
                  check_in_latitude=28.4211, check_in_longitude=77.0741,
                  check_in_time=_past(7, 9, 15), check_out_time=_past(7, 9, 28),
-                 distance_from_customer_metres=88.0, geo_verified=True, within_contact_hours=True,
+                 distance_from_customer_metres=88.0, geo_verified=True,
                  customer_met=False, outcome=VisitOutcome.NOT_AVAILABLE,
                  not_met_reason=NotMetReason.CUSTOMER_AWAY,
                  agent_recording_transcript="Flat locked, security says tenant leaves early for work. Left notice. Case handed to EMP0002.",
@@ -2436,19 +2456,19 @@ def seed():
     # ── demo_cases[12]: Fatima Begum Ansari (Sector 47, ~2.0km SW) — REQUIRES FEMALE AGENT ──
     fc = demo_cases[12]
     # Visit 1 — 25 days ago, EMP0004 (female): husband refused entry
-    db.add(Visit(id=_uid(), case_id=fc.id, agent_id=_pa4.id,
+    db.add(_visit(id=_uid(), case_id=fc.id, agent_id=_pa4.id,
                  check_in_latitude=28.4496, check_in_longitude=77.0581,
                  check_in_time=_past(25, 11, 0), check_out_time=_past(25, 11, 18),
-                 distance_from_customer_metres=65.0, geo_verified=True, within_contact_hours=True,
+                 distance_from_customer_metres=65.0, geo_verified=True,
                  customer_met=False, outcome=VisitOutcome.NOT_AVAILABLE,
                  not_met_reason=NotMetReason.CUSTOMER_AWAY,
                  agent_recording_transcript="Husband answered door — refused to call Fatima. Culturally sensitive. Requires female agent only.",
                  visit_number=1, property_type="OWNED", occupancy_status="OCCUPIED"))
     # Visit 2 — 10 days ago, EMP0006 (female): met customer, partial commitment
-    _vf2 = Visit(id=_uid(), case_id=fc.id, agent_id=_pa6.id,
+    _vf2 = _visit(id=_uid(), case_id=fc.id, agent_id=_pa6.id,
                  check_in_latitude=28.4495, check_in_longitude=77.0580,
                  check_in_time=_past(10, 14, 30), check_out_time=_past(10, 15, 20),
-                 distance_from_customer_metres=38.0, geo_verified=True, within_contact_hours=True,
+                 distance_from_customer_metres=38.0, geo_verified=True,
                  customer_met=True, outcome=VisitOutcome.PTP,
                  person_met=PersonMet.BORROWER, default_reason=DefaultReason.MEDICAL,
                  agent_recording_transcript="Met Fatima — husband ill, no income. Agreed to pay ₹20,000 once husband recovers. PTP in 15 days.",
@@ -2464,40 +2484,40 @@ def seed():
     # ── demo_cases[13]: Rohit Kumar Singh (Sector 66, ~5.2km S) — NPA 210 DPD, LEGAL ──
     rhc = demo_cases[13]
     # Visit 1 — 55 days ago, EMP0001: initial NPA contact
-    db.add(Visit(id=_uid(), case_id=rhc.id, agent_id=_pa1.id,
+    db.add(_visit(id=_uid(), case_id=rhc.id, agent_id=_pa1.id,
                  check_in_latitude=28.4082, check_in_longitude=77.0927,
                  check_in_time=_past(55, 10, 0), check_out_time=_past(55, 10, 30),
-                 distance_from_customer_metres=50.0, geo_verified=True, within_contact_hours=True,
+                 distance_from_customer_metres=50.0, geo_verified=True,
                  customer_met=True, outcome=VisitOutcome.RTP,
                  person_met=PersonMet.BORROWER, default_reason=DefaultReason.BUSINESS_FAILURE,
                  agent_recording_transcript="Customer unresponsive. Job loss 7 months ago. No visible income. Demand letter issued.",
                  visit_number=1, property_type="OWNED", occupancy_status="OCCUPIED",
                  vehicle_present=True, business_running=False))
     # Visit 2 — 40 days ago, EMP0005: legal notice served
-    db.add(Visit(id=_uid(), case_id=rhc.id, agent_id=_pa5.id,
+    db.add(_visit(id=_uid(), case_id=rhc.id, agent_id=_pa5.id,
                  check_in_latitude=28.4081, check_in_longitude=77.0926,
                  check_in_time=_past(40, 11, 45), check_out_time=_past(40, 12, 10),
-                 distance_from_customer_metres=42.0, geo_verified=True, within_contact_hours=True,
+                 distance_from_customer_metres=42.0, geo_verified=True,
                  customer_met=True, outcome=VisitOutcome.RTP,
                  person_met=PersonMet.BORROWER, default_reason=DefaultReason.BUSINESS_FAILURE,
                  agent_recording_transcript="Legal demand notice served in person. Customer asked for 30-day settlement window. Referred to legal team.",
                  visit_number=2, property_type="OWNED", occupancy_status="OCCUPIED",
                  vehicle_present=True, business_running=False))
     # Visit 3 — 22 days ago, EMP0003: customer hired lawyer, dispute
-    db.add(Visit(id=_uid(), case_id=rhc.id, agent_id=_pa3.id,
+    db.add(_visit(id=_uid(), case_id=rhc.id, agent_id=_pa3.id,
                  check_in_latitude=28.4082, check_in_longitude=77.0927,
                  check_in_time=_past(22, 10, 30), check_out_time=_past(22, 11, 0),
-                 distance_from_customer_metres=58.0, geo_verified=True, within_contact_hours=True,
+                 distance_from_customer_metres=58.0, geo_verified=True,
                  customer_met=True, outcome=VisitOutcome.DISPUTE,
                  person_met=PersonMet.BORROWER, default_reason=DefaultReason.AMOUNT_DISPUTED,
                  agent_recording_transcript="Customer's lawyer present. Disputes interest calculation. Demands settlement with waiver. Case in pre-litigation.",
                  visit_number=3, property_type="OWNED", occupancy_status="OCCUPIED",
                  vehicle_present=True, business_running=False))
     # Visit 4 — 8 days ago, agent002: confirming legal path, case escalated
-    _vrh4 = Visit(id=_uid(), case_id=rhc.id, agent_id=agent002.id,
+    _vrh4 = _visit(id=_uid(), case_id=rhc.id, agent_id=agent002.id,
                   check_in_latitude=28.4081, check_in_longitude=77.0925,
                   check_in_time=_past(8, 15, 0), check_out_time=_past(8, 15, 45),
-                  distance_from_customer_metres=35.0, geo_verified=True, within_contact_hours=True,
+                  distance_from_customer_metres=35.0, geo_verified=True,
                   customer_met=True, outcome=VisitOutcome.RTP,
                   person_met=PersonMet.BORROWER, default_reason=DefaultReason.AMOUNT_DISPUTED,
                   agent_recording_transcript="Lawyer still involved. Customer refuses to pay pending court outcome. Escalated to legal recovery unit.",
@@ -2513,20 +2533,20 @@ def seed():
     # ── demo_cases[14]: Seema Agarwal Joshi (Sector 31, ~2.5km W) — HANDOVER ──
     sec14 = demo_cases[14]
     # Visit 1 — 20 days ago, EMP0009: initial contact, set payment plan
-    db.add(Visit(id=_uid(), case_id=sec14.id, agent_id=_pa9.id,
+    db.add(_visit(id=_uid(), case_id=sec14.id, agent_id=_pa9.id,
                  check_in_latitude=28.4565, check_in_longitude=77.0442,
                  check_in_time=_past(20, 10, 45), check_out_time=_past(20, 11, 20),
-                 distance_from_customer_metres=72.0, geo_verified=True, within_contact_hours=True,
+                 distance_from_customer_metres=72.0, geo_verified=True,
                  customer_met=True, outcome=VisitOutcome.PTP,
                  person_met=PersonMet.BORROWER, default_reason=DefaultReason.SALARY_CUT,
                  agent_recording_transcript="Cooperative borrower. Income reduced post job change. Agreed on ₹10K/month repayment schedule.",
                  visit_number=1, property_type="RENTED", occupancy_status="OCCUPIED",
                  vehicle_present=False, business_running=False))
     # Visit 2 — 8 days ago, EMP0007: missed appointment, handed over
-    _vs14 = Visit(id=_uid(), case_id=sec14.id, agent_id=_pa7.id,
+    _vs14 = _visit(id=_uid(), case_id=sec14.id, agent_id=_pa7.id,
                   check_in_latitude=28.4564, check_in_longitude=77.0441,
                   check_in_time=_past(8, 12, 0), check_out_time=_past(8, 12, 20),
-                  distance_from_customer_metres=55.0, geo_verified=True, within_contact_hours=True,
+                  distance_from_customer_metres=55.0, geo_verified=True,
                   customer_met=False, outcome=VisitOutcome.NOT_AVAILABLE,
                   not_met_reason=NotMetReason.CUSTOMER_AWAY,
                   agent_recording_transcript="Flat locked at agreed time. Called — phone switched off. Case handed over to EMP0002 for follow-up.",
@@ -2537,10 +2557,10 @@ def seed():
     sec14.visit_count = 2
     # ── demo_cases[3]: Priya Singh Rawat — visit 2 by agent002 (in-range ~50m) ──
     # First visit (EMP0001, 15d ago) collected ₹5,000. Now agent002 gets another ₹8K.
-    _vp2 = Visit(id=_uid(), case_id=pc.id, agent_id=agent002.id,
+    _vp2 = _visit(id=_uid(), case_id=pc.id, agent_id=agent002.id,
                  check_in_latitude=28.454800, check_in_longitude=77.071300,
                  check_in_time=_past(7, 12, 0), check_out_time=_past(7, 12, 35),
-                 distance_from_customer_metres=48.0, geo_verified=True, within_contact_hours=True,
+                 distance_from_customer_metres=48.0, geo_verified=True,
                  customer_met=True, outcome=VisitOutcome.PART_PAID_PTP,
                  person_met=PersonMet.BORROWER, default_reason=DefaultReason.SALARY_CUT,
                  agent_recording_transcript="Revisited at home. Customer cooperative. Paid ₹8,000 via UPI. Salary cut still ongoing — promised final ₹4,300 by month-end.",
@@ -2560,10 +2580,10 @@ def seed():
     pc.visit_count = 2
     # ── demo_cases[5]: Anita Kapoor Malhotra (Palam Vihar, ~7.9km) — add visit 2 ──
     # Only had 1 revisit (relative was home). Now agent002 follows up and gets a PTP.
-    _va2 = Visit(id=_uid(), case_id=ac.id, agent_id=agent002.id,
+    _va2 = _visit(id=_uid(), case_id=ac.id, agent_id=agent002.id,
                  check_in_latitude=28.5226, check_in_longitude=77.0514,
                  check_in_time=_past(6, 10, 0), check_out_time=_past(6, 10, 45),
-                 distance_from_customer_metres=82.0, geo_verified=True, within_contact_hours=True,
+                 distance_from_customer_metres=82.0, geo_verified=True,
                  customer_met=True, outcome=VisitOutcome.PTP,
                  person_met=PersonMet.BORROWER, default_reason=DefaultReason.SALARY_CUT,
                  agent_recording_transcript="Anita finally home. Cooperative — salary delayed 3 weeks due to company restructuring. Agreed to pay full ₹8,100 target as soon as salary credited.",
@@ -2579,10 +2599,10 @@ def seed():
     ac.visit_count = 2
     # ── demo_cases[11]: Arun Prasad Singh (Sector 48, ~4.1km) — add visit 2 ──
     # Was locked on first visit. EMP0009 makes a second attempt and sets a PTP.
-    _va11b = Visit(id=_uid(), case_id=ac11.id, agent_id=_pa9.id,
+    _va11b = _visit(id=_uid(), case_id=ac11.id, agent_id=_pa9.id,
                    check_in_latitude=28.4210, check_in_longitude=77.0740,
                    check_in_time=_past(4, 18, 0), check_out_time=_past(4, 18, 40),
-                   distance_from_customer_metres=72.0, geo_verified=True, within_contact_hours=True,
+                   distance_from_customer_metres=72.0, geo_verified=True,
                    customer_met=True, outcome=VisitOutcome.PTP,
                    person_met=PersonMet.BORROWER, default_reason=DefaultReason.JOB_LOSS,
                    agent_recording_transcript="Met customer on second attempt (evening). Recently laid off — 30 days into job search. New offer letter received. PTP full ₹15,600 by month-end. Case transferred to EMP0002.",
@@ -2600,15 +2620,15 @@ def seed():
     # ── Today's demo visit activity for agent002 ───────────────────────────────
     def today_at(h: int, m: int = 0) -> datetime:
         return datetime.combine(today, datetime.min.time()).replace(
-            hour=h, minute=m, second=0, tzinfo=timezone.utc
+            hour=h, minute=m, second=0, tzinfo=IST
         )
     # Rajesh Kumar Sharma (Sector 44): PART_PAID_PTP at 9:30 AM
     rajesh_case = demo_cases[0]
-    v_rajesh = Visit(
+    v_rajesh = _visit(
         id=_uid(), case_id=rajesh_case.id, agent_id=agent002.id,
         check_in_latitude=28.4614, check_in_longitude=77.0682,
         check_in_time=today_at(9, 30), check_out_time=today_at(10, 5),
-        distance_from_customer_metres=40.0, geo_verified=True, within_contact_hours=True,
+        distance_from_customer_metres=40.0, geo_verified=True,
         customer_met=True, outcome=VisitOutcome.PART_PAID_PTP,
         person_met=PersonMet.BORROWER, default_reason=DefaultReason.JOB_LOSS,
         agent_recording_transcript="Paid Rs 50,000 cash. PTP Rs 1,35,000 on 25-Jun. Layoff - awaiting severance.",
@@ -2635,13 +2655,13 @@ def seed():
     # Sunita Devi Agarwal: PTP due today (visited 3 days ago)
     sunita_case = demo_cases[1]
     past3 = datetime.combine(today - timedelta(days=3), datetime.min.time()).replace(
-        hour=10, minute=15, tzinfo=timezone.utc
+        hour=10, minute=15, tzinfo=IST
     )
-    v_sunita = Visit(
+    v_sunita = _visit(
         id=_uid(), case_id=sunita_case.id, agent_id=agent002.id,
         check_in_latitude=28.4912, check_in_longitude=77.0873,
         check_in_time=past3, check_out_time=past3 + timedelta(minutes=20),
-        distance_from_customer_metres=55.0, geo_verified=True, within_contact_hours=True,
+        distance_from_customer_metres=55.0, geo_verified=True,
         customer_met=True, outcome=VisitOutcome.PTP,
         person_met=PersonMet.SPOUSE, default_reason=DefaultReason.MEDICAL,
         agent_recording_transcript="Spouse met. Borrower hospitalised. PTP full amount today on discharge.",
@@ -2659,11 +2679,11 @@ def seed():
     sunita_case.status = CaseStatus.PTP_SET
     sunita_case.visit_count = 3
     # Sunita Devi Agarwal: today's PTP follow-up — full recovery at 11:45 AM
-    v_sunita_today = Visit(
+    v_sunita_today = _visit(
         id=_uid(), case_id=sunita_case.id, agent_id=agent002.id,
         check_in_latitude=28.4912, check_in_longitude=77.0873,
         check_in_time=today_at(11, 45), check_out_time=today_at(12, 20),
-        distance_from_customer_metres=30.0, geo_verified=True, within_contact_hours=True,
+        distance_from_customer_metres=30.0, geo_verified=True,
         customer_met=True, outcome=VisitOutcome.PAID_FULL,
         person_met=PersonMet.BORROWER,
         agent_recording_transcript="PTP honoured. Borrower discharged this morning. Transferred remaining ₹86,500 via UPI. Requested NOC.",
@@ -2682,11 +2702,11 @@ def seed():
     sunita_case.visit_count = 4
     # Deepak Verma Gupta (MG Road): RTP / escalation at 10:30 AM
     deepak_case = demo_cases[4]
-    v_deepak = Visit(
+    v_deepak = _visit(
         id=_uid(), case_id=deepak_case.id, agent_id=agent002.id,
         check_in_latitude=28.4793, check_in_longitude=77.0998,
         check_in_time=today_at(10, 30), check_out_time=today_at(11, 0),
-        distance_from_customer_metres=45.0, geo_verified=True, within_contact_hours=True,
+        distance_from_customer_metres=45.0, geo_verified=True,
         customer_met=True, outcome=VisitOutcome.RTP,
         person_met=PersonMet.BORROWER, default_reason=DefaultReason.AMOUNT_DISPUTED,
         agent_recording_transcript="Claims bank overcharged interest. Refuses until bank sends corrected statement.",
@@ -2848,13 +2868,13 @@ def seed():
             visit_hour = 8 + int(i * (9 / max(len(visit_cases), 1)))
             cin = today_at(min(visit_hour, 17), random.randint(5, 55))
             met = outcome not in (VisitOutcome.NOT_AVAILABLE, VisitOutcome.ADDRESS_ISSUE)
-            v = Visit(
+            v = _visit(
                 id=_uid(), case_id=act_case.id, agent_id=act_agent.id,
                 check_in_latitude=cust_obj.latitude, check_in_longitude=cust_obj.longitude,
                 check_in_time=cin,
                 check_out_time=cin + timedelta(minutes=random.randint(18, 45)),
                 distance_from_customer_metres=round(random.uniform(15, 90), 1),
-                geo_verified=True, within_contact_hours=True,
+                geo_verified=True,
                 customer_met=met, outcome=outcome,
                 person_met=PersonMet.BORROWER if met else None,
                 agent_recording_transcript=random.choice(AGENT_TRANSCRIPTS.get(outcome.value, AGENT_TRANSCRIPTS["REVISIT"])),

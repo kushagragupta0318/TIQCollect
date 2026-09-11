@@ -2148,27 +2148,95 @@ def export_audit_log_csv(current_user: ManagerOnly, db: DbSession):
 # GET /manager/compliance
 # ---------------------------------------------------------------------------
 
+def _audit_action_coverage(db) -> dict:
+    """Declared audit action types versus those EVER RECORDED IN THIS DATABASE.
+
+    This is an observed-data figure and it is named as one. It is NOT
+    implementation coverage, and the two differ: on 2026-09-11 a source scan
+    found 13 of 25 action types written somewhere in app/, while this
+    database had ever recorded 6. Both numbers are true; they answer different
+    questions.
+
+    Why the observed figure and not the wired one. "Wired" cannot be derived
+    reliably at runtime: the only method is scanning source for
+    `AuditAction.X` references, and a reference is not a write — this very
+    endpoint reads CONTACT_HOUR_VIOLATION_ATTEMPT in a filter without writing
+    it. A heuristic dressed up as coverage is how the page came to say
+    "8 of 22 written" for five days after it was 13 of 25. The observed count
+    is exact, cheap, cannot drift, and is a strict lower bound on wired: an
+    action that is wired and has never fired reads as never recorded, which
+    is the honest direction to err in. The page says "recorded", never
+    "implemented".
+
+    SYSTEM-WIDE, unlike every other figure on this page: which action types
+    this deployment has ever produced is a property of the deployment, and a
+    tenant-scoped count would read low for a quiet team. Only action NAMES
+    leave this function — never a row, never a tenant's content.
+    """
+    declared = [a.name for a in AuditAction]
+    recorded = {
+        (r[0].name if hasattr(r[0], "name") else str(r[0]))
+        for r in db.query(AuditLog.action).distinct().all()
+    }
+    return {
+        "declared": len(declared),
+        "ever_recorded": sum(1 for a in declared if a in recorded),
+        "never_recorded": sorted(a for a in declared if a not in recorded),
+        # Carried on the wire so no consumer can read this as implementation
+        # coverage by accident.
+        "semantics": "observed in this database; not implementation coverage",
+    }
+
+
 @router.get("/compliance")
 def compliance_metrics(current_user: ManagerOnly, db: DbSession):
+    """Month-to-date, this manager's team.
+
+    ON out_of_hours_visits AND compliance_rate. They count STORED visits whose
+    within_contact_hours flag is False. Through the real API that can only be
+    zero: record_visit refuses an out-of-hours attempt with 403 and stores
+    nothing, so the flag is False only on rows written by seed or demo
+    scripts. Both fields are kept — they are a data-integrity signal for a
+    seeded book and other callers may read them — but the page no longer
+    presents them as a compliance measurement. The measurement is
+    blocked_contact_attempts: CONTACT_HOUR_VIOLATION_ATTEMPT rows, one per
+    refused visit, same month, same team.
+    """
     # Scoped to this manager's own agents, like every other figure in this
     # router — compliance numbers are per-team, not company-wide.
     my_agent_ids = [
         a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()
     ]
 
+    start_of_month = date.today().replace(day=1)
+    start_of_month_dt = datetime.combine(start_of_month, datetime.min.time()).replace(tzinfo=timezone.utc)
+
+    # Refused out-of-hours visit attempts, attributed to the agent's user id —
+    # which is exactly the scope _audit_visible_user_ids gives the audit panel,
+    # so the tile and the trail cannot disagree about whose attempts these are.
+    blocked_attempts = (
+        db.query(func.count(AuditLog.id))
+        .filter(
+            AuditLog.action == AuditAction.CONTACT_HOUR_VIOLATION_ATTEMPT,
+            AuditLog.user_id.in_(_audit_visible_user_ids(db, current_user)),
+            AuditLog.created_at >= start_of_month_dt,
+        )
+        .scalar() or 0
+    )
+    audit_actions = _audit_action_coverage(db)
+
     if not my_agent_ids:
         return {
             "month": date.today().strftime("%Y-%m"),
             "total_visits": 0,
             "out_of_hours_visits": 0,
+            "blocked_contact_attempts": int(blocked_attempts),
             "geo_violations": 0,
             "sos_active_count": 0,
             "compliance_rate": 1.0,
             "geo_verification_rate": 1.0,
+            "audit_actions": audit_actions,
         }
-
-    start_of_month = date.today().replace(day=1)
-    start_of_month_dt = datetime.combine(start_of_month, datetime.min.time()).replace(tzinfo=timezone.utc)
 
     stats = (
         db.query(
@@ -2192,10 +2260,12 @@ def compliance_metrics(current_user: ManagerOnly, db: DbSession):
         "month": date.today().strftime("%Y-%m"),
         "total_visits": total_visits,
         "out_of_hours_visits": out_of_hours,
+        "blocked_contact_attempts": int(blocked_attempts),
         "geo_violations": geo_violations,
         "sos_active_count": sos_active,
         "compliance_rate": round(1 - (out_of_hours / total_visits), 4) if total_visits > 0 else 1.0,
         "geo_verification_rate": round(1 - (geo_violations / total_visits), 4) if total_visits > 0 else 1.0,
+        "audit_actions": audit_actions,
     }
 
 
