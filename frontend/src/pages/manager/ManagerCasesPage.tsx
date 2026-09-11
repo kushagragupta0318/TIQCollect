@@ -1218,11 +1218,11 @@ export default function ManagerCasesPage() {
               <option value="NPA">NPA 90+</option>
             </select>
             <label className="flex items-center gap-2 text-xs min-w-0" style={{ color: "#6B6D76" }}>
-              <span className="flex-shrink-0">From</span>
+              <span className="flex-shrink-0">Beat from</span>
               <input type="date" className="input text-xs py-1.5 px-2 w-full lg:w-36 tap-target-h" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
             </label>
             <label className="flex items-center gap-2 text-xs min-w-0" style={{ color: "#6B6D76" }}>
-              <span className="flex-shrink-0">To</span>
+              <span className="flex-shrink-0">to</span>
               <input type="date" className="input text-xs py-1.5 px-2 w-full lg:w-36 tap-target-h" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
             </label>
           </div>
@@ -1245,7 +1245,21 @@ export default function ManagerCasesPage() {
             <span>Status</span>
             <span>Target / Collected</span>
             <span>Agent</span>
-            <span>Date</span>
+            {/* "Next Beat", not "Date". 2026-09-10.
+                The column renders `allocation_date`, which is the day the case
+                is NEXT SCHEDULED for — not the day it was created or worked.
+                Every still-open case is re-stamped by each nightly plan run, so
+                a case an agent visited this morning shows TOMORROW here, and a
+                reader seeing "Date: 2026-09-11" on a list they are working today
+                reasonably concluded the page was broken.
+
+                Measured that day: 44 of the 45 cases visited, and 16 of the 16
+                that collected money, all carried tomorrow's date. The first fix
+                attempted was to clamp the range to today — which hid every one
+                of them, i.e. exactly the rows a manager looks for after a day in
+                the field. Reverted. The column was never showing the wrong data,
+                it was answering a different question than its label implied. */}
+            <span>Next Beat</span>
           </div>
 
           {view === "loading" ? (

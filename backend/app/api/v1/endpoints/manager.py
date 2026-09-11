@@ -1207,6 +1207,25 @@ def cases_date_range(current_user: ManagerOnly, db: DbSession):
     newest allocation_date trails the wall clock. Returning the real span lets
     the page open on exactly the data that exists.
 
+    *(That last sentence is no longer true of the DATA — the nightly allocator
+    stamps TOMORROW's date on everything it plans, so the newest value now LEADS
+    the clock, and on 2026-09-10 that put 229 of one manager's 877 cases on a
+    date nobody could work yet. A clamp to today was added for exactly that
+    reason and REVERTED the same day, because it was the wrong fix and the
+    measurement says so plainly:
+
+        cases visited today                   45
+        of those carrying tomorrow's date     44
+        cases that collected money today      16
+        of those carrying tomorrow's date     16
+
+    `allocation_date` is not "when this case was worked". It is "which beat this
+    case is next on", and every still-open case is re-stamped by each plan run —
+    including the ones an agent visited hours earlier. Clamping it therefore hid
+    every case that had collected money that day, which is the first thing a
+    manager looks for. The confusing part was never the range; it was a column
+    labelled DATE that means "next beat". That is fixed in the page instead.)*
+
     Both are null when the manager has no cases; the page then leaves its date
     inputs empty, which list_cases above treats as unbounded.
     """
