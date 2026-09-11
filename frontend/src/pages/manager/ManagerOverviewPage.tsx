@@ -1277,11 +1277,59 @@ function TomorrowAllocationCard() {
               </p>
             </div>
 
-            <div className="p-3 bg-white rounded-xl border border-slate-200/80">
+            {/* 2026-09-10 — this tile showed the expected figure ALONE, and a
+                manager reading it beside the dashboard's "Today's Collections"
+                saw ₹10.3L against ₹71.2L and asked why the plan had written off
+                most of the book. It had not. The forecast is the collectable
+                balance weighted by each borrower's modelled chance of paying,
+                and without its base on screen there was no way to see that.
+
+                THE PERCENTAGE COMES FROM THE NUMBERS IT EXPLAINS — collectable,
+                not target, because collectable is what the allocator actually
+                multiplies. Dividing by the lifetime target would print a rate
+                the model never computed, which is the mistake the decision panel
+                made on 2026-09-09. The target is shown too, unlabelled as a
+                denominator, because it is the figure the dashboard states and a
+                manager needs to be able to tie the two cards together. */}
+            {/* ONE DENOMINATOR ON SCREEN. 2026-09-10.
+                The first version of this tile printed both bases — "₹10.3L /
+                ₹65.2L collectable" over "16% modelled recovery · ₹71.2L target"
+                — and a reader's immediate reaction was that one of the two must
+                be wrong. Fair: two large rupee figures, stacked, differing, with
+                nothing on screen saying why. Both were correct (₹71.2L lifetime
+                target less ₹5.9L already collected leaves ₹65.2L still owed),
+                but a number that has to be defended is a number badly presented.
+
+                So the visible line carries only the base the percentage is
+                actually computed from, and the reconciliation to the dashboard's
+                target moved into the hover text — available to whoever asks the
+                question, absent for everyone else. The rate still comes from the
+                two numbers beside it. */}
+            <div
+              className="p-3 bg-white rounded-xl border border-slate-200/80"
+              title={
+                (plan.allocated_target_total ?? 0) > 0
+                  ? `₹${((plan.allocated_target_total ?? 0) / 100000).toFixed(1)}L is the lifetime target on these ` +
+                    `${plan.total_cases_allocated ?? 0} cases. ₹` +
+                    `${(((plan.allocated_target_total ?? 0) - (plan.allocated_collectable_total ?? 0)) / 100000).toFixed(1)}L ` +
+                    `of it has already been paid, leaving ₹${((plan.allocated_collectable_total ?? 0) / 100000).toFixed(1)}L ` +
+                    `still owed. The model expects ` +
+                    `${Math.round(((plan.expected_recovery_total ?? 0) / (plan.allocated_collectable_total || 1)) * 100)}% ` +
+                    `of that to come in over the next cycle, case by case.`
+                  : undefined
+              }
+            >
               <span className="text-[11px] font-medium text-slate-500">Expected Recovery</span>
               <p className="text-lg font-bold text-emerald-600 mt-0.5">
                 ₹{((plan.expected_recovery_total ?? 0) / 100000).toFixed(1)}L
               </p>
+              {(plan.allocated_collectable_total ?? 0) > 0 && (
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  {Math.round(((plan.expected_recovery_total ?? 0) /
+                               (plan.allocated_collectable_total ?? 1)) * 100)}% of ₹
+                  {((plan.allocated_collectable_total ?? 0) / 100000).toFixed(1)}L still collectable
+                </p>
+              )}
             </div>
 
             <div className="p-3 bg-white rounded-xl border border-slate-200/80">

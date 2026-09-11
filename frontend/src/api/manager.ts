@@ -766,6 +766,13 @@ export interface AllocationPlanReport {
   total_cases_blocked?: number;
   total_agents_planned?: number;
   expected_recovery_total?: number;
+  /** Sum of `Case.target_amount` over the ALLOCATED cases — the lifetime figure,
+   *  the same quantity the dashboard's "Today's Collections" target uses. */
+  allocated_target_total?: number;
+  /** Sum of `target_amount - collected_amount` over the ALLOCATED cases. This,
+   *  not the target, is what the allocator multiplies by `prob_recovery_ml`, so
+   *  it is the only denominator that yields the model's own recovery rate. */
+  allocated_collectable_total?: number;
   created_at?: string;
   beats?: AllocationBeatItem[];
   decisions?: AllocationDecisionItem[];

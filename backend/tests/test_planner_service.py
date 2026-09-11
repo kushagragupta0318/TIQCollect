@@ -331,6 +331,76 @@ def test_manager_allocation_endpoints(client, db_session, test_data):
     assert resp_rb.json()["success"] is True
 
 
+def test_the_plan_reports_what_the_forecast_is_a_fraction_of(client, db_session, test_data):
+    """`expected_recovery_total` alone is not interpretable, and was misread.
+
+    A manager comparing the plan card's Rs 10.3L with the dashboard's "Today's
+    Collections" target of Rs 71.2L asked why the plan had written off most of
+    the book. It had not — the forecast is the collectable balance weighted by
+    each borrower's modelled chance of paying — but neither card carried the
+    base, so there was no way to see that from the screen.
+
+    THE TWO BASES ARE NOT INTERCHANGEABLE, which is the whole reason both are
+    returned:
+
+      allocated_target_total       sum(target_amount), the LIFETIME figure the
+                                   dashboard uses. Includes money banked in
+                                   earlier months.
+      allocated_collectable_total  sum(target_amount - collected_amount), the
+                                   exact base the allocator multiplies by
+                                   prob_recovery_ml.
+
+    Only the second divides into the expected figure to give the model's own
+    rate. Dividing by the target yields a number the model never computed — the
+    mistake the decision panel made on 2026-09-09, when it explained a rupee
+    figure with a rate that had not produced it.
+    """
+    mgr = test_data["manager"]
+    token = create_access_token(user_id=mgr.id, role=mgr.role.value, device_id="test_device_01")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # PART-PAY ONE CASE FIRST, or this test cannot see the subtraction it exists
+    # to check. Every fixture case carries collected_amount=0, so target and
+    # collectable are identical and `collectable <= target` holds even if the
+    # endpoint never subtracts anything — verified by mutation: dropping the
+    # subtraction left the first version of this test green.
+    PART_PAID = 12_000.0
+    test_data["case1"].collected_amount = PART_PAID
+    db_session.commit()
+
+    client.post("/api/v1/manager/allocation/plan", json={"strategy": "SMART"}, headers=headers)
+    body = client.get("/api/v1/manager/allocation/latest", headers=headers).json()
+
+    target = body["allocated_target_total"]
+    collectable = body["allocated_collectable_total"]
+    expected = body["expected_recovery_total"]
+
+    # Present at all — the card renders nothing without them.
+    assert target > 0 and collectable > 0
+
+    # THE SUBTRACTION ITSELF, to the rupee. case1 is in the plan and has been
+    # part-paid, so collectable must be exactly that much below target.
+    assert collectable == pytest.approx(target - PART_PAID, rel=1e-6)
+    assert collectable < target
+
+    # The forecast is a FRACTION of the collectable balance, never more than it.
+    # `prob_recovery_ml` is clamped to [0.02, 0.85], so the expected figure
+    # cannot reach the base it is drawn from.
+    assert 0 < expected < collectable
+
+    # ALLOCATED ONLY. Deferred and blocked cases are not on tomorrow's plan, so
+    # their balances must not inflate what the plan claims to be worth.
+    allocated = [d for d in body["decisions"] if d["outcome"] == "ALLOCATED"]
+    assert len(allocated) == body["total_cases_allocated"]
+    assert target == pytest.approx(sum(d["target_amount"] for d in allocated), rel=1e-6)
+
+    # And the base really is narrower than "every case we looked at" whenever
+    # anything was held back — otherwise the ALLOCATED filter above is vacuous.
+    every_case = sum(d["target_amount"] for d in body["decisions"])
+    if len(allocated) < len(body["decisions"]):
+        assert target < every_case
+
+
 def test_planning_does_not_stamp_a_future_date_on_a_case(client, db_session, test_data):
     """`allocation_date` is when the assignment was MADE, never when it is for.
 

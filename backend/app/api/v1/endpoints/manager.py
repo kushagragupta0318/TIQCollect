@@ -4058,10 +4058,44 @@ def get_latest_allocation_plan(
             .filter(ModelPrediction.id.in_(_pred_ids)).all()
         }
 
+    # ── what the plan is worth, beside what it is forecast to bring in ──────
+    # 2026-09-10. The card showed `expected_recovery_total` alone, and a manager
+    # comparing it with the dashboard's "Today's Collections" saw Rs 10.3L
+    # against Rs 71.2L and reasonably asked why the plan had written off 86% of
+    # the book. It had not: the two figures answer different questions, and
+    # neither card said which.
+    #
+    # BOTH DENOMINATORS ARE RETURNED, because they are not interchangeable:
+    #   target      sum(Case.target_amount) — the LIFETIME figure the dashboard
+    #               uses. It includes money banked in earlier months, so a single
+    #               day can never collect it; see the note on amount_target_today.
+    #   collectable sum(target_amount - collected_amount) — what is actually
+    #               still owed, and the exact base the allocator multiplies by
+    #               `prob_recovery_ml` to produce expected_recovery_total.
+    #
+    # Only `collectable` divides into the expected figure to give the model's own
+    # recovery rate. Dividing by `target` gives a different, smaller number
+    # corresponding to nothing the model computed — the same trap the decision
+    # panel fell into on 2026-09-09, when it explained a rupee figure with a rate
+    # that had not produced it.
+    #
+    # ALLOCATED ONLY: a deferred or blocked case is not on tomorrow's plan, so
+    # its balance is not part of what tomorrow's plan is worth.
+    #
+    # Summed here rather than stored on AllocationRun — the Case rows are already
+    # loaded for the rows below, so this costs no extra query, needs no
+    # migration, and works on plans built before this code existed.
+    allocated_target_total = 0.0
+    allocated_collectable_total = 0.0
+
     decision_list = []
     for d in decisions:
         case_num = d.case.case_number if d.case else ""
         target_amt = float(d.case.target_amount or 0) if d.case else 0.0
+        if str(d.outcome) == "ALLOCATED" and d.case:
+            allocated_target_total += target_amt
+            allocated_collectable_total += max(
+                0.0, target_amt - float(d.case.collected_amount or 0))
         agent_name = (
             d.allocated_agent.user.full_name
             if d.allocated_agent and d.allocated_agent.user
@@ -4135,6 +4169,11 @@ def get_latest_allocation_plan(
         "total_cases_blocked": run.total_cases_blocked,
         "total_agents_planned": run.total_agents_planned,
         "expected_recovery_total": run.expected_recovery_total,
+        # The two bases for the figure above. `expected_recovery_total /
+        # allocated_collectable_total` is the model's own mean recovery rate;
+        # dividing by the target is not.
+        "allocated_target_total": round(allocated_target_total, 2),
+        "allocated_collectable_total": round(allocated_collectable_total, 2),
         "created_at": run.created_at.isoformat() if run.created_at else "",
         "beats": beat_list,
         "decisions": decision_list,
