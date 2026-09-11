@@ -51,6 +51,9 @@ from app.models.audit_log import AuditLog, AuditAction
 from app.models.case import Case
 from app.models.payment import Payment, PaymentStatus
 from app.services.notification_service import NotificationService
+import structlog
+
+logger = structlog.get_logger()
 from app.services.payment_service import PaymentService
 
 
@@ -291,13 +294,31 @@ class OtpService:
             f"Valid {ttl_min} min. Share it ONLY with the visiting agent to confirm YOUR own payment. "
             f"Never share otherwise. - ABC Bank"
         )
-        NotificationService.send_sms(e164, sms_body)
+        # 2026-09-11 — the result was discarded, so this method answered 200
+        # whether or not the borrower could ever receive the code, and the
+        # agent's screen said "OTP sent" over a transport that had failed or was
+        # never configured. The OTP itself is still issued and stored either
+        # way: a borrower who is told the code by another route can still
+        # confirm with it, the throttle and cap still apply, and nothing
+        # about verification changes. What changes is that the caller is told.
+        sms_sent = NotificationService.send_sms(e164, sms_body)
+        if not sms_sent:
+            # send_sms has already logged a real transport failure at ERROR.
+            # This is the OTP-specific consequence, and it fires for the
+            # unconfigured case too, where send_sms is silent by design.
+            logger.warning("otp.sms_not_delivered", otp_id=otp_id, case_id=case.id,
+                           masked_phone=self._masked(e164),
+                           transport_configured=bool(settings.TWILIO_ACCOUNT_SID and settings.TWILIO_AUTH_TOKEN))
 
         ret = {
             "otp_id": otp_id,
             "masked_phone": self._masked(e164),
             "expires_at": (now + timedelta(seconds=settings.OTP_TTL_SECONDS)).isoformat(),
             "resend_available_at": (now + timedelta(seconds=settings.OTP_RESEND_THROTTLE_SECONDS)).isoformat(),
+            # Whether the code reached the SMS transport. Additive; every
+            # existing field is unchanged. False when Twilio is unconfigured
+            # (demo/dev, where demo_otp below carries the code instead).
+            "sms_sent": bool(sms_sent),
         }
         if getattr(settings, "DEMO_MODE", False) or getattr(settings, "ENVIRONMENT", "") == "development":
             ret["demo_otp"] = code

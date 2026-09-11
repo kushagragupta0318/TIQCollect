@@ -479,6 +479,17 @@ class Settings(BaseSettings):
     LOCATION_MAX_INTERVAL_SECONDS: int = 60
 
     # Rate limiting
+    # Audit rows are kept for at least this long. A FLOOR the application
+    # promises, not a backup guarantee: nothing in app/ deletes from audit_logs
+    # at all (the retention sweep touches agent_locations only, and
+    # tests/test_compliance_hardening.py trips if that ever changes), so today
+    # the effective retention is "forever". The constant exists so the promise
+    # has a name, a number and a test, and so a future pruning job — if one is
+    # ever written — has a floor it cannot go under. Durability of the database
+    # itself (backups, disk encryption) is a deployment concern and is not
+    # claimed here. 1825 days = 5 years.
+    AUDIT_LOG_RETENTION_DAYS: int = 1825
+
     RATE_LIMIT_PER_MINUTE: int = 60
     AUTH_RATE_LIMIT_PER_MINUTE: int = 10
 

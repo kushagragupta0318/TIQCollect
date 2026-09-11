@@ -44,6 +44,9 @@ def test_payment_response_shape():
         "payment_date": "2026-07-21T10:00:00+00:00",
         "case_status": "PARTIALLY_PAID",
         "total_collected": 1500.0,
+        # 2026-09-11 — whether the receipt reached the transport. Defaults to
+        # False; the caller passes the real result. No column behind it.
+        "receipt_sent": False,
     }
 
 

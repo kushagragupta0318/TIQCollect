@@ -6,6 +6,8 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.security import decode_token
 from app.models.user import User, UserRole
+from app.core.audit import write_audit
+from app.models.audit_log import AuditAction
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -43,8 +45,29 @@ CurrentUser = Annotated[User, Depends(get_current_user)]
 
 
 def require_roles(*roles: UserRole):
-    def _checker(current_user: CurrentUser) -> User:
+    def _checker(current_user: CurrentUser, request: Request, db: DbSession) -> User:
         if current_user.role not in roles:
+            # 2026-09-11 — ROLE_VIOLATION_ATTEMPT had been declared since the
+            # first schema and written by nothing, so an agent's token being
+            # pointed at a manager route left no trace anywhere. It is a
+            # security event and it is recorded as one, before the refusal.
+            # Attributed to the caller, so it appears in their own manager's
+            # audit view. The 403 itself is unchanged, and write_audit cannot
+            # raise: a failed row is logged at ERROR and the refusal proceeds.
+            #
+            # `db` is the request's session, not a second one — FastAPI caches
+            # get_db per request, so this and the endpoint share it.
+            write_audit(
+                db, action=AuditAction.ROLE_VIOLATION_ATTEMPT,
+                user_id=current_user.id, entity_type="Route",
+                entity_id=f"{request.method} {request.url.path}",
+                details={"required_roles": [r.value for r in roles],
+                         "actual_role": current_user.role.value,
+                         "method": request.method, "path": request.url.path},
+                ip_address=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent"),
+                success=False, failure_reason="role not permitted",
+            )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Access denied. Required roles: {[r.value for r in roles]}",

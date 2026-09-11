@@ -44,6 +44,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.core.geo import GEO_FENCE_METRES, IST, RBI_CONTACT_END, RBI_CONTACT_START, is_within_contact_hours, within_geo_fence
 from app.models.audit_log import AuditAction, AuditLog
+from app.core.audit import write_audit
 from app.models.agent import Agent
 from app.models.case import Case, CaseStatus, EscalationReason
 from app.models.visit import Visit, VisitOutcome
@@ -244,6 +245,19 @@ class VisitService:
 
         self.db.commit()
         self.db.refresh(visit)
+
+        # 2026-09-11 — VISIT_RECORDED, declared since the first schema and
+        # written by nothing. After the commit, on its own commit, so a
+        # failure to record the event cannot un-record the visit.
+        write_audit(
+            self.db, action=AuditAction.VISIT_RECORDED, user_id=agent.user_id,
+            entity_type="Visit", entity_id=visit.id,
+            details={"case_id": case.id, "case_number": case.case_number,
+                     "agent_id": agent.id, "outcome": str(getattr(visit.outcome, "value", visit.outcome)),
+                     "customer_met": bool(visit.customer_met),
+                     "geo_verified": bool(visit.geo_verified),
+                     "distance_m": visit.distance_from_customer_metres},
+        )
 
         # Generate AI audit report in the background — saved back to visit
         ai_visit_note = AIReportService.generate_visit_report(visit, case)

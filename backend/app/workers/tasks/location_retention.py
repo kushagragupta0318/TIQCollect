@@ -13,6 +13,16 @@ logger = structlog.get_logger()
 
 @celery_app.task(name="app.workers.tasks.location_retention.prune_location_trail", bind=True)
 def prune_location_trail(self):
+    """Delete old AgentLocation rows. AGENT LOCATIONS ONLY.
+
+    2026-09-11 — stated, not assumed: this is the only automated deletion in
+    the codebase, and audit_logs are explicitly outside its scope. The audit
+    trail is kept for at least settings.AUDIT_LOG_RETENTION_DAYS (1825, five
+    years) and nothing here or anywhere else in app/ may shorten that;
+    tests/test_compliance_hardening.py runs this sweep over audit rows older
+    than the cutoff and fails if any of them go. If a second sweep is ever
+    added it must carry the same exclusion and the same test.
+    """
     from datetime import datetime, timedelta, timezone
 
     from app.core.config import settings

@@ -42,6 +42,7 @@ from app.core.errors import AppException, ErrorCode
 # test exercises a same-manager colleague's case. Fixed 2026-09-06.
 from app.models.agent import Agent
 from app.models.audit_log import AuditLog, AuditAction
+from app.core.audit import write_audit
 from app.models.case import Case, CaseStatus
 from app.models.customer import Customer
 from app.models.loan import Loan
@@ -169,8 +170,21 @@ class PaymentService:
         self.db.commit()
         self.db.refresh(payment)
 
-        self._notify_payment_received(agent, case, payment, req)
-        return self._payment_response(payment, case)
+        # 2026-09-11 — PAYMENT_SUBMITTED, declared and never written. The
+        # VERIFIED transition is already audited (PAYMENT_VERIFIED, on the OTP
+        # path); this is the submission itself, whatever status it lands in.
+        write_audit(
+            self.db, action=AuditAction.PAYMENT_SUBMITTED, user_id=agent.user_id,
+            entity_type="Payment", entity_id=payment.id,
+            details={"case_id": case.id, "case_number": case.case_number,
+                     "agent_id": agent.id, "amount": payment.amount,
+                     "mode": str(getattr(payment.mode, "value", payment.mode)),
+                     "status": str(getattr(payment.status, "value", payment.status)),
+                     "receipt_number": payment.receipt_number},
+        )
+
+        receipt_sent = self._notify_payment_received(agent, case, payment, req)
+        return self._payment_response(payment, case, receipt_sent=receipt_sent)
 
     def _honor_active_ptps_paid_by_due_date(self, case_id: str, agent_id: str, paid_at: datetime) -> None:
         """Keep PTP status in sync when an OTP-verified payment satisfies it."""
@@ -242,11 +256,15 @@ class PaymentService:
             .first()
         )
 
-    def _notify_payment_received(self, agent, case, payment, req) -> None:
+    def _notify_payment_received(self, agent, case, payment, req) -> bool:
+        """Returns whether a receipt was handed to the transport. False when
+        the borrower has no phone, Twilio is unconfigured, or the send failed —
+        the failure is logged at ERROR inside send_twilio; this only reports
+        it, so the payment response can say so instead of implying delivery."""
         customer = self.db.query(Customer).filter(Customer.id == case.customer_id).first()
         loan = self.db.query(Loan).filter(Loan.id == case.loan_id).first()
         if not customer or not customer.phone_primary:
-            return
+            return False
         e164 = "+" + NotificationService.normalize_phone(customer.phone_primary)
         masked_phone = "XXXXXX" + e164[-4:]
         masked_acct = "XXXX" + loan.loan_account_number[-4:] if loan else "XXXXXXXX"
@@ -267,10 +285,10 @@ class PaymentService:
             f"\U0001f4f1 Mobile: {masked_phone}\n\n"
             f"Thank you for your payment.\n– ABC Bank"
         )
-        NotificationService.send_twilio(e164, sms_body, wa_body)
+        return NotificationService.send_twilio(e164, sms_body, wa_body)
 
     @staticmethod
-    def _payment_response(payment: Payment, case: Case) -> dict:
+    def _payment_response(payment: Payment, case: Case, *, receipt_sent: bool = False) -> dict:
         return {
             "id": payment.id,
             "receipt_number": payment.receipt_number,
@@ -280,6 +298,10 @@ class PaymentService:
             "payment_date": payment.payment_date.isoformat(),
             "case_status": case.status,
             "total_collected": case.collected_amount,
+            # Whether the receipt reached the transport. Response-level only —
+            # no column, no migration. Until 2026-09-11 a failed receipt was
+            # logged and nobody in the field was told; now the agent's screen can be.
+            "receipt_sent": bool(receipt_sent),
         }
 
     # -----------------------------------------------------------------
@@ -339,6 +361,17 @@ class PaymentService:
 
         self.db.commit()
         self.db.refresh(ptp)
+
+        # 2026-09-11 — PTP_SET, declared and never written. PTP_UPDATED (the
+        # payment honouring a promise) has been audited for some time; the
+        # promise being TAKEN had not. Same post-commit, own-commit contract.
+        write_audit(
+            self.db, action=AuditAction.PTP_SET, user_id=agent.user_id,
+            entity_type="PTP", entity_id=ptp.id,
+            details={"case_id": case.id, "case_number": case.case_number,
+                     "agent_id": agent.id, "committed_amount": ptp.committed_amount,
+                     "committed_date": ptp.committed_date.isoformat() if ptp.committed_date else None},
+        )
 
         return self._ptp_response(ptp)
 

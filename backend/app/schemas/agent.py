@@ -219,6 +219,10 @@ class PaymentResponse(BaseModel):
     payment_date: str   # already .isoformat()'d before being returned
     case_status: CaseStatus
     total_collected: float
+    # Whether the borrower's receipt reached the SMS/WhatsApp transport. False
+    # covers no phone, Twilio unconfigured, and a failed send; the payment is
+    # recorded either way. Defaulted so any older construction still validates.
+    receipt_sent: bool = False
 
 
 class PaymentLinkResponse(BaseModel):
@@ -252,6 +256,10 @@ class OtpSendResponse(BaseModel):
     expires_at: str            # ISO — already .isoformat()'d
     resend_available_at: str   # ISO — earliest a resend is allowed (throttle)
     demo_otp: Optional[str] = None
+    # Whether the code reached the SMS transport. Until 2026-09-11 this
+    # endpoint could not say, and answered 200 over a failed send. Defaulted so
+    # any older construction still validates.
+    sms_sent: bool = False
 
 
 class OtpVerifyRequest(BaseModel):

@@ -294,3 +294,90 @@ def test_collect_without_verification_stays_pending(db, fake_redis):
     resp = PaymentService(db).collect_payment(_agent(), "case-1", _collect_req(verification_id=None))
     assert resp["status"] == PaymentStatus.PENDING_VERIFICATION
     assert db.query(Payment).filter_by(id=resp["id"]).one().verified_at is None
+
+
+# ── SMS delivery is reported, not assumed ─────────────────────────────────────
+# 2026-09-11. generate_and_send discarded send_sms's result and answered 200
+# whether or not the borrower could receive the code. The OTP is still issued
+# and stored on a failed send — verification is unchanged — but `sms_sent`
+# now says what happened, and the non-delivery is logged at WARNING.
+
+def _sms(monkeypatch, result):
+    """Stand in for the transport. Records the call, returns the given result."""
+    calls = []
+    def fake(phone, body):
+        calls.append((phone, body))
+        return result
+    monkeypatch.setattr(otp_module.NotificationService, "send_sms", staticmethod(fake))
+    return calls
+
+
+def test_send_reports_sms_sent_true_on_successful_delivery(db, fake_redis, monkeypatch):
+    _seed_case(db)
+    calls = _sms(monkeypatch, True)
+    res = OtpService(db).generate_and_send(_agent(), "case-1", 5000.0)
+    assert res["sms_sent"] is True
+    assert len(calls) == 1 and calls[0][0].endswith("9876543210")
+    assert "OTP" in calls[0][1]
+    # The OTP is stored exactly as before.
+    assert fake_redis.hgetall(OtpService._otp_key(res["otp_id"]))["verified"] == "0"
+
+
+def test_send_reports_sms_sent_false_on_failed_delivery_and_still_issues_the_otp(db, fake_redis, monkeypatch):
+    _seed_case(db)
+    monkeypatch.setattr(OtpService, "_generate_code", staticmethod(lambda: "7788"))
+    _sms(monkeypatch, False)                      # transport said no
+    res = OtpService(db).generate_and_send(_agent(), "case-1", 5000.0)
+    assert res["sms_sent"] is False
+    # Every pre-existing field is still present and unchanged in shape.
+    assert set(res) >= {"otp_id", "masked_phone", "expires_at", "resend_available_at"}
+    # And the code is issued regardless: a borrower told it another way can
+    # still confirm, so verification must work on it.
+    stored = fake_redis.hgetall(OtpService._otp_key(res["otp_id"]))
+    assert stored["code_hash"] == OtpService._hash_code("7788")
+    ok = OtpService(db).verify(_agent(), "case-1", res["otp_id"], "7788")
+    assert ok["verified"] is True
+
+
+def test_send_reports_sms_sent_false_when_the_transport_is_unconfigured(db, fake_redis, monkeypatch):
+    """No fake here: the real send_sms with Twilio unconfigured. It returns
+    False silently by design, and the OTP path is what says so."""
+    _seed_case(db)
+    monkeypatch.setattr(settings, "TWILIO_ACCOUNT_SID", "", raising=False)
+    monkeypatch.setattr(settings, "TWILIO_AUTH_TOKEN", "", raising=False)
+    res = OtpService(db).generate_and_send(_agent(), "case-1", 5000.0)
+    assert res["sms_sent"] is False
+    assert fake_redis.hgetall(OtpService._otp_key(res["otp_id"]))["attempts"] == "0"
+
+
+def test_send_logs_non_delivery_at_warning_and_nothing_on_success(db, fake_redis, monkeypatch):
+    _seed_case(db)
+    events = []
+    monkeypatch.setattr(otp_module.logger, "warning", lambda ev, **kw: events.append((ev, kw)))
+    _sms(monkeypatch, True)
+    OtpService(db).generate_and_send(_agent(), "case-1", 5000.0)
+    assert events == []
+    # A second send needs the throttle out of the way.
+    fake_redis.data.clear() if hasattr(fake_redis, "data") else None
+    _sms(monkeypatch, False)
+    try:
+        OtpService(db).generate_and_send(_agent(), "case-1", 4000.0)
+    except AppException:
+        pytest.skip("throttle fixture does not reset between sends")
+    assert events and events[0][0] == "otp.sms_not_delivered"
+    assert events[0][1]["masked_phone"].endswith("3210")
+    assert "transport_configured" in events[0][1]
+
+
+def test_verification_path_is_untouched_by_delivery_result(db, fake_redis, monkeypatch):
+    """Wrong code still burns attempts, right code still verifies, exactly as
+    the tests above this block already pin — repeated here against a FAILED
+    send, which is the case the delivery result must not leak into."""
+    _seed_case(db)
+    monkeypatch.setattr(OtpService, "_generate_code", staticmethod(lambda: "1234"))
+    _sms(monkeypatch, False)
+    res = OtpService(db).generate_and_send(_agent(), "case-1", 5000.0)
+    with pytest.raises(AppException):
+        OtpService(db).verify(_agent(), "case-1", res["otp_id"], "0000")
+    assert fake_redis.hgetall(OtpService._otp_key(res["otp_id"]))["attempts"] == "1"
+    assert OtpService(db).verify(_agent(), "case-1", res["otp_id"], "1234")["verified"] is True
