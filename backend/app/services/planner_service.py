@@ -352,8 +352,31 @@ class PlannerService:
 
         candidate_cases = workable
 
-        # Score cases for visit priority
-        scored_priorities = score_cases_priority(self.db, candidate_cases, today=date.today())
+        # Scored for THE DAY THE BEAT WILL BE WORKED, not the day it is built.
+        #
+        # 2026-09-10 — this passed `date.today()` while the plan being built is
+        # for `target_date`, normally tomorrow. The PTP hold rule twenty lines
+        # above already uses `target_date` (`committed_date > target_date`), so
+        # one method was answering "which day is this plan for?" two ways.
+        #
+        # The visible consequence is in the timing lift. `visit_priority_service`
+        # derives `ptp_due_in_days = committed_date - today` and
+        # `_ptp_follow_up` pays 8 points when that is < 1 and 5 otherwise, so:
+        #
+        #   promise due on the day the agent actually visits  ->  5 points
+        #   promise due the day BEFORE, already overdue       ->  8 points
+        #
+        # exactly inverted. Every other component that reads the reference day
+        # (urgency around the NPA line, effort, value) was one day early for the
+        # same reason; this corrects the input, not any weight.
+        #
+        # NOT CHANGED HERE, deliberately, and each is its own decision: the
+        # protection window (PTP_PROTECTION_DAYS = 1), the handling of a promise
+        # already overdue (still filtered out by `today <= committed_date` in
+        # visit_priority_service), the PTP weights, and the absence of any rule
+        # returning a case to the agent who took the promise.
+        scored_priorities = score_cases_priority(self.db, candidate_cases,
+                                                 today=target_date)
 
         # Sort candidate cases by visit priority score (highest first)
         def _get_prio(c: Case) -> float:

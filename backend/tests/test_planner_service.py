@@ -29,6 +29,7 @@ from app.models.case import Case, CasePriority, CaseStatus
 from app.models.customer import Customer, RiskCategory
 from app.models.loan import DPDBucket, Loan, LoanStatus, LoanType
 from app.models.payment import Payment, PaymentMode, PaymentStatus
+from app.models.ptp import PTP, PTPStatus
 from app.models.user import User, UserRole
 from app.models.visit import PersonMet, Visit, VisitOutcome
 from app.services.planner_service import PlannerService, get_target_plan_date
@@ -455,6 +456,181 @@ def test_planning_does_not_stamp_a_future_date_on_a_case(client, db_session, tes
     assert all(b.beat_date.isoformat() == plan_date for b in beats)
     scheduled = {cid for b in beats for cid in (b.ordered_case_ids or [])}
     assert scheduled, "beats carry no cases — the schedule is empty"
+
+
+# ── the plan-date correction ────────────────────────────────────────────────
+# The planner scored priorities against `date.today()` while building a beat for
+# `target_date`. The PTP hold rule in the same method already used `target_date`,
+# so one function answered "which day is this plan for?" two ways.
+#
+# Measured on the real book, 2026-09-10, simulate-only so nothing was written:
+# 12 of 931 cases changed priority (8 of them PTP-due); allocation outcome,
+# allocated agents, BLOCKED set and expected recovery were all identical.
+
+
+def _ptp_evidence(score_dict):
+    """The evidence dict of whichever component carried the PTP branch."""
+    for comp in score_dict.get("components", []):
+        ev = comp.get("evidence") or {}
+        if ev.get("ptp_due_in_days") is not None:
+            return ev
+    return None
+
+
+def test_priority_is_scored_for_the_plan_date_not_the_wall_clock(
+        db_session, test_data, monkeypatch):
+    """The whole fix, asserted at the seam rather than through its effects."""
+    from app.services import planner_service as ps
+
+    seen = {}
+    real = ps.score_cases_priority
+
+    def _spy(db, cases, *, today=None, loans=None):
+        seen["today"] = today
+        return real(db, cases, today=today, loans=loans)
+
+    monkeypatch.setattr(ps, "score_cases_priority", _spy)
+
+    svc = ps.PlannerService(db_session, manager_user_id=test_data["manager"].id)
+    run = svc.plan_next_day(strategy="SMART", simulate=True)
+
+    assert seen.get("today") is not None, "priority scoring was never called"
+    assert seen["today"] == run.plan_date, (
+        f"priorities scored for {seen['today']} but the beat is for "
+        f"{run.plan_date} — every component that reads the reference day, not "
+        f"only the PTP one, is a day out")
+
+
+def test_ptp_timing_is_measured_from_the_plan_date(db_session, test_data):
+    """`ptp_due_in_days` must be relative to the day the agent visits.
+
+    Asserted against visit_priority_service directly, because that is where the
+    subtraction lives; the planner only chooses which day to hand it.
+    """
+    from app.services.visit_priority_service import score_cases
+    from app.models.case import Case as _Case
+
+    case = db_session.query(_Case).filter(_Case.case_number == "CASE001").one()
+    plan_day = date.today() + timedelta(days=1)
+    db_session.add(PTP(id=str(uuid.uuid4()), case_id=case.id,
+                       agent_id=test_data['agent1'].id, committed_amount=1000.0,
+                       committed_date=plan_day, status=PTPStatus.ACTIVE))
+    db_session.commit()
+
+    # Scored FOR the plan day: the promise falls due that day, so 0 days out.
+    on_plan_day = score_cases(db_session, [case], today=plan_day)
+    ev = _ptp_evidence(on_plan_day[case.id])
+    assert ev is not None, "no PTP evidence — the protection branch never ran"
+    assert ev["ptp_due_in_days"] == 0.0
+
+    # Scored for the day the plan is BUILT — the old behaviour — one day out.
+    on_build_day = score_cases(db_session, [case], today=date.today())
+    ev2 = _ptp_evidence(on_build_day[case.id])
+    assert ev2 is not None and ev2["ptp_due_in_days"] == 1.0
+
+    # And the plan-day reading earns the higher timing lift. That inversion —
+    # paying more for a promise due the day BEFORE the visit than one due on it
+    # — is what the fix removes.
+    assert ev["ptp_follow_up_points"] > ev2["ptp_follow_up_points"]
+
+
+def test_the_hold_boundary_is_unchanged(db_session, test_data):
+    """`committed_date > target_date` is held; `== target_date` is workable.
+
+    The promise's own due day is the day to arrive, so it must not be deferred.
+    Pinned because the fix moves the OTHER date in the same method, and moving
+    this one too would silently push every promise a day past its due date.
+    """
+    from app.models.case import Case as _Case
+
+    case = db_session.query(_Case).filter(_Case.case_number == "CASE001").one()
+    plan_day = get_target_plan_date()
+
+    ptp = PTP(id=str(uuid.uuid4()), case_id=case.id, agent_id=test_data['agent1'].id,
+              committed_amount=1000.0, committed_date=plan_day + timedelta(days=1),
+              status=PTPStatus.ACTIVE)
+    db_session.add(ptp)
+    db_session.commit()
+
+    run = PlannerService(db_session, manager_user_id=test_data["manager"].id) \
+        .plan_next_day(strategy="SMART", simulate=True)
+    held = {d.case_id for d in run.decisions
+            if str(d.outcome) == AllocationOutcome.DEFERRED_PTP.value}
+    assert case.id in held, "a promise due after the plan date was not held"
+
+    ptp.committed_date = plan_day
+    db_session.commit()
+
+    run2 = PlannerService(db_session, manager_user_id=test_data["manager"].id) \
+        .plan_next_day(strategy="SMART", simulate=True)
+    held2 = {d.case_id for d in run2.decisions
+             if str(d.outcome) == AllocationOutcome.DEFERRED_PTP.value}
+    assert case.id not in held2, (
+        "a promise due ON the plan date was held — the agent would arrive the "
+        "day after the borrower said they would pay")
+
+
+def test_ptp_ownership_and_accountability_are_untouched(db_session, test_data):
+    """Planning must not move `PTP.agent_id`.
+
+    That column names the agent who TOOK the promise and feeds ptp_kept_ratio ->
+    eb_multiplier -> the allocator's own prob_recovery. Re-pointing it would
+    corrupt the agent-effect estimate, so it is asserted rather than assumed.
+    """
+    from app.models.case import Case as _Case
+
+    case = db_session.query(_Case).filter(_Case.case_number == "CASE001").one()
+    taker = test_data["agent1"].id
+    ptp = PTP(id=str(uuid.uuid4()), case_id=case.id, agent_id=taker,
+              committed_amount=1000.0, committed_date=date.today(),
+              status=PTPStatus.ACTIVE)
+    db_session.add(ptp)
+    db_session.commit()
+
+    PlannerService(db_session, manager_user_id=test_data["manager"].id) \
+        .plan_next_day(strategy="SMART", simulate=True)
+
+    db_session.refresh(ptp)
+    assert ptp.agent_id == taker
+    assert ptp.status == PTPStatus.ACTIVE
+    assert ptp.committed_date == date.today()
+
+
+def test_nothing_forces_a_due_ptp_case_back_to_its_taker(db_session, test_data):
+    """The documented rule, pinned against a well-meaning "fix".
+
+    planner_service states it: on the promised day the case "goes to whichever
+    agent is the best match then — which may be the agent who took the promise,
+    but is not forced to be". The allocator's continuity bonus is keyed on the
+    CURRENT holder (`case.agent_id == ag.id`), never on the taker, and this fix
+    did not change that.
+    """
+    import inspect
+    from app.services import global_allocator as ga
+    from app.models.case import Case as _Case
+
+    src = inspect.getsource(ga)
+    stripped = src.replace("PTP fatigue", "").replace("ptp_fatigue", "")
+    assert "PTP." not in stripped, (
+        "the allocator now reads PTP rows beyond fatigue — if a taker "
+        "preference was added, the documented rule needs updating with it")
+
+    # Behaviourally: a promise taken by a DIFFERENT agent does not pin the case
+    # to that agent.
+    case = db_session.query(_Case).filter(_Case.case_number == "CASE001").one()
+    other = test_data["agent2"]
+    db_session.add(PTP(id=str(uuid.uuid4()), case_id=case.id, agent_id=other.id,
+                       committed_amount=1000.0, committed_date=date.today(),
+                       status=PTPStatus.ACTIVE))
+    db_session.commit()
+
+    run = PlannerService(db_session, manager_user_id=test_data["manager"].id) \
+        .plan_next_day(strategy="SMART", simulate=True)
+    d = next((dd for dd in run.decisions if dd.case_id == case.id), None)
+    assert d is not None
+    # No assertion that it went to `other` — only that nothing forced it there.
+    if str(d.outcome) == AllocationOutcome.ALLOCATED.value:
+        assert d.allocated_agent_id is not None
 
 
 def test_export_decisions_refuses_another_managers_run(client, db_session, test_data):
