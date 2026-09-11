@@ -331,6 +331,62 @@ def test_manager_allocation_endpoints(client, db_session, test_data):
     assert resp_rb.json()["success"] is True
 
 
+def test_planning_does_not_stamp_a_future_date_on_a_case(client, db_session, test_data):
+    """`allocation_date` is when the assignment was MADE, never when it is for.
+
+    The planner used to write `target_date` — tomorrow — so a case a manager was
+    looking at today claimed it belonged to a beat that had not happened yet.
+    Measured 2026-09-10 on one manager's book: 229 of 877 cases carried
+    tomorrow's date, and 44 of the 45 an agent had already visited that morning
+    were among them.
+
+    It also gave one column two meanings: the stale-clearing sweep resets DROPPED
+    cases to the day they were last worked, while the assignment branch was
+    writing the day they are next planned for. `ml/allocator.py` has always
+    written `today` and documents it; this is that rule in one more place.
+
+    THE SCHEDULE IS NOT LOST — it lives on the Beat, asserted here too, because
+    "stop writing tomorrow" would be a bad fix if it left nothing saying when the
+    work is due.
+    """
+    from datetime import date as _date
+    mgr = test_data["manager"]
+    token = create_access_token(user_id=mgr.id, role=mgr.role.value, device_id="test_device_01")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    resp = client.post("/api/v1/manager/allocation/plan", json={"strategy": "SMART"},
+                       headers=headers)
+    assert resp.status_code == 200
+    plan_date = resp.json()["plan_date"]
+    today = _date.today().isoformat()
+    assert plan_date > today, "the plan is for a future day, or this test proves nothing"
+
+    body = client.get("/api/v1/manager/allocation/latest", headers=headers).json()
+    allocated = [d for d in body["decisions"] if d["outcome"] == "ALLOCATED"]
+    assert allocated, "nothing was allocated — the assertions below would be vacuous"
+
+    from app.models.case import Case as _Case
+    ids = [d["case_id"] for d in allocated]
+    rows = db_session.query(_Case).filter(_Case.id.in_(ids)).all()
+    assert rows
+    for c in rows:
+        assert c.allocation_date == today, (
+            f"case {c.case_number} stamped {c.allocation_date}, but the assignment "
+            f"was made {today} — a manager would see a date that has not arrived")
+        assert c.allocation_date <= today
+
+    # The beat still carries the schedule, so nothing about WHEN the work is due
+    # was lost by taking it off the case. Asserted against the Beat rows rather
+    # than the response, which does not serialise beat_date at all.
+    from app.models.beat import Beat as _Beat
+    beats = db_session.query(_Beat).filter(
+        _Beat.allocation_run_id == body["run_id"]).all()
+    assert beats, "no beats — the schedule has nowhere to live"
+    assert all(b.beat_date.isoformat() == plan_date for b in beats)
+    scheduled = {cid for b in beats for cid in (b.ordered_case_ids or [])}
+    assert scheduled, "beats carry no cases — the schedule is empty"
+
+
 def test_export_decisions_refuses_another_managers_run(client, db_session, test_data):
     """A manager must not export another agency's allocation audit.
 

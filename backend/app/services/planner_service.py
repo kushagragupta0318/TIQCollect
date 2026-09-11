@@ -648,9 +648,36 @@ class PlannerService:
 
             # Update case assignments if not simulation
             if not simulate:
+                # THE DAY THE ASSIGNMENT WAS MADE, NOT THE DAY IT IS FOR.
+                #
+                # 2026-09-10 — this stamped `target_date`, which is TOMORROW,
+                # and that put a future date on a case a manager is looking at
+                # today. It also gave the column two meanings at once: the
+                # stale-clearing block below resets DROPPED cases to "the day the
+                # case was last worked" and says so in as many words, while this
+                # line was writing "the day it is next planned for". Which of the
+                # two a given row meant depended on whether it survived the most
+                # recent plan.
+                #
+                # Measured that day on one manager's book: 229 of 877 cases
+                # carried tomorrow's date, and 44 of the 45 visited that morning
+                # were among them — a case an agent had already worked claiming
+                # it belonged to a beat that had not happened yet.
+                #
+                # `ml/allocator.py` — the other implementation of this same step
+                # — has always written `self.today`, and its docstring says
+                # "Assign: set agent_id, status=ASSIGNED, allocation_date=today".
+                # This is that rule, applied in one more place rather than
+                # invented here.
+                #
+                # NOTHING IS LOST. The schedule lives on the Beat, which is where
+                # it belongs: `beat_date` plus `ordered_case_ids` say exactly
+                # which cases are worked when, and the agent's day is built from
+                # those, never from this column.
+                assigned_on = date.today().strftime("%Y-%m-%d")
                 for c in cases_for_agent:
                     c.agent_id = ag.id
-                    c.allocation_date = target_date.strftime("%Y-%m-%d")
+                    c.allocation_date = assigned_on
                     c.status = CaseStatus.ASSIGNED if c.status == CaseStatus.UNASSIGNED else c.status
                 self.db.add(beat)
 
@@ -670,7 +697,9 @@ class PlannerService:
         # the top with no visited or resolved tag against them.
         if not simulate:
             allocated_ids = {c.id for lst in assigned_cases_by_agent.values() for c in lst}
-            stamp = target_date.strftime("%Y-%m-%d")
+            # Must match what the loop above actually wrote, or the sweep looks
+            # for a stamp nobody made and silently clears nothing.
+            stamp = date.today().strftime("%Y-%m-%d")
             stale = [
                 c for c in self.db.query(Case)
                 .filter(Case.allocation_date == stamp).all()
