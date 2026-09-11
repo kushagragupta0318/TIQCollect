@@ -176,6 +176,17 @@ export interface RecoveryScore {
   as_of: string | null;
 }
 
+export interface CaseReassignment {
+  reason: string | null;
+  from_agent_id: string | null;
+  from_agent_name: string | null;
+  to_agent_id: string | null;
+  to_agent_name: string | null;
+  /** Manager who made the move. */
+  by: string | null;
+  at: string | null;
+}
+
 export interface Case {
   id: string;
   case_number: string;
@@ -192,6 +203,10 @@ export interface Case {
   recovery?: RecoveryScore | null;
   agent_id: string | null;
   agent_name?: string | null;
+  /** The most recent manager reassignment, from the audit trail. Null when
+   *  the nightly plan alone put the case where it is. Since 2026-09-11 an
+   *  owned case stays with its agent, so this is the ONLY way it moves. */
+  last_reassignment?: CaseReassignment | null;
   status: CaseStatus;
   priority: CasePriority;
   target_amount: number;

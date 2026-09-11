@@ -14,8 +14,9 @@
 //   six-month window, so the applied-filter chip compares against that span.
 // ─────────────────────────────────────────────────────────────────────────
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { casesView } from "./casesViewState";
+import { rowChip, reassignProblem, PROBLEM_TEXT } from "./reassignValidation";
 import { useSearchParams } from "react-router";
 import { createPortal } from "react-dom";
 import {
@@ -23,7 +24,8 @@ import {
   Calendar, User, FileText, ChevronRight, SlidersHorizontal, ListOrdered,
 } from "lucide-react";
 import { toast } from "react-hot-toast";
-import { getCases, getCaseDetail, getCasesDateRange } from "@/api/manager";
+import { getCases, getCaseDetail, getCasesDateRange, getAgents, reassignCase } from "@/api/manager";
+import { errorDetail } from "@/lib/apiError";
 import type { ManagerCaseDetail, VisitRecord, VisitPriority } from "@/api/manager";
 import { Input } from "@/components/ui/Input";
 import { DPDBadge, VisitPriorityBadge, CaseStatusBadge, RecoveryBadge } from "@/components/ui/Badge";
@@ -202,11 +204,134 @@ function VisitPriorityPanel({ vp }: { vp: VisitPriority }) {
   );
 }
 
+/**
+ * Move a case to another agent, with a reason. The only way an owned case
+ * changes hands since 2026-09-11: the nightly plan keeps a case with its agent,
+ * exploration cannot touch it, so if a manager wants it elsewhere they say so
+ * here and the sentence goes on the audit trail.
+ *
+ * Validation is reassignProblem() — a pure function, tested on its own — and
+ * the server enforces the same rules again plus the hard gates for the
+ * incoming agent (female-agent requirement, territory, PTP fatigue, DNC), so
+ * a refusal from there is shown verbatim rather than paraphrased.
+ */
+function ReassignDialog({ detail, onClose, onMoved }: {
+  detail: ManagerCaseDetail;
+  onClose: () => void;
+  onMoved: (next: { agent_id: string; agent_name: string | null; reason: string; by_when: string }) => void;
+}) {
+  const [newAgentId, setNewAgentId] = useState<string>("");
+  const [reason, setReason] = useState("");
+  const [touched, setTouched] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
+  useModalA11y(true, panelRef, onClose);
+
+  const agentsQ = useQuery({ queryKey: ["manager", "agents"], queryFn: getAgents, staleTime: 60_000 });
+  const problem = reassignProblem({ currentAgentId: detail.agent_id, newAgentId: newAgentId || null, reason });
+
+  const move = useMutation({
+    mutationFn: () => reassignCase(detail.id, { new_agent_id: newAgentId, reason: reason.trim() }),
+    onSuccess: (res) => {
+      toast.success(`Moved to ${res.to_agent_name ?? "the new agent"} — takes effect at tonight's plan`);
+      onMoved({ agent_id: res.to_agent_id, agent_name: res.to_agent_name, reason: res.reason, by_when: res.reassigned_at });
+      onClose();
+    },
+    // 409s carry a sentence from the same gate the nightly run applies
+    // ("The borrower is outside this agent's territory."); show it as-is.
+    onError: (err) => toast.error(errorDetail(err, "Could not reassign this case")),
+  });
+
+  const agents = (agentsQ.data ?? []).filter((a) => a.id !== detail.agent_id);
+
+  return createPortal(
+    <div role="dialog" aria-modal="true" aria-label="Reassign case"
+         className="fixed inset-0 z-[10000] flex items-center justify-center p-3 sm:p-4"
+         style={{ background: "rgba(0,0,0,0.45)", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)" }}
+         onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div ref={panelRef} className="w-full max-w-md flex flex-col rounded-2xl overflow-hidden"
+           style={{ background: "#FFFFFF", boxShadow: "0 24px 64px rgba(0,0,0,0.25)" }}>
+        <div className="flex items-start justify-between gap-3 px-5 pt-5 pb-3" style={{ borderBottom: "1px solid #EAEBEF" }}>
+          <div className="min-w-0">
+            <p className="text-xs font-semibold uppercase tracking-widest" style={{ color: "#6B6D76" }}>Reassign case</p>
+            <p className="text-base font-bold font-mono truncate mt-0.5" style={{ color: "#1C1C1F" }}>{detail.case_number}</p>
+            <p className="text-xs mt-1" style={{ color: "#6B6D76" }}>
+              Currently with <span className="font-semibold" style={{ color: "#1C1C1F" }}>{detail.agent_name ?? "nobody"}</span>.
+              The move takes effect at tonight's plan; today's beat is unchanged.
+            </p>
+          </div>
+          <button onClick={onClose} aria-label="Close reassign dialog"
+                  className="tap-target flex items-center justify-center flex-shrink-0 hover:bg-black/10"
+                  style={{ width: 32, height: 32, borderRadius: 10, background: "rgba(0,0,0,0.06)", border: "none" }}>
+            <X className="w-4 h-4" style={{ color: "#6B6D76" }} />
+          </button>
+        </div>
+
+        {/* noValidate: the browser's own "required" bubble would fire before
+            reassignProblem() and hide the agent-first message. One validator,
+            ours, so the sentence a manager sees is the one we wrote and tested. */}
+        <form className="px-5 py-4 space-y-4" noValidate
+              onSubmit={(e) => { e.preventDefault(); setTouched(true); if (!problem) move.mutate(); }}>
+          <label className="block">
+            <span className="text-xs font-medium" style={{ color: "#6B6D76" }}>New agent</span>
+            <select id="reassign-agent" value={newAgentId} onChange={(e) => setNewAgentId(e.target.value)}
+                    className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
+                    style={{ borderColor: "#D9DFE4", color: "#1C1C1F", background: "#fff" }}>
+              <option value="">{agentsQ.isPending ? "Loading agents…" : "Choose an agent"}</option>
+              {agents.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.full_name} · {a.employee_code} · {a.territory}{a.status !== "ON_DUTY" ? ` (${String(a.status).toLowerCase().replace("_", " ")})` : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block">
+            <span className="text-xs font-medium" style={{ color: "#6B6D76" }}>
+              Reason <span style={{ color: "#A93B2C" }}>*</span>
+            </span>
+            <textarea id="reassign-reason" value={reason} rows={3} aria-required="true"
+                      onChange={(e) => setReason(e.target.value)} onBlur={() => setTouched(true)}
+                      placeholder="Why this case is moving — it is recorded on the case's audit trail"
+                      className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
+                      style={{ borderColor: touched && problem?.startsWith("reason") ? "#A93B2C" : "#D9DFE4", color: "#1C1C1F" }} />
+          </label>
+
+          {touched && problem && (
+            <p role="alert" className="text-xs" style={{ color: "#A93B2C" }}>{PROBLEM_TEXT[problem]}</p>
+          )}
+
+          <div className="flex justify-end gap-2 pt-1">
+            <button type="button" onClick={onClose} className="px-3 py-2 text-sm rounded-lg"
+                    style={{ color: "#6B6D76", background: "transparent", border: "1px solid #D9DFE4" }}>
+              Cancel
+            </button>
+            {/* Enabled whenever nothing is in flight. Disabling on a validation
+                problem looked tidy and was wrong: the focus trap blurs the
+                reason field on open, which marked the form touched and locked
+                the button before the manager had typed a character — with no
+                message, because the message only appears on submit. Found in
+                browser QA. A click now always produces either a request or a
+                sentence saying why not. */}
+            <button type="submit" disabled={move.isPending}
+                    className="px-4 py-2 text-sm font-semibold rounded-lg disabled:opacity-50"
+                    style={{ color: "#fff", background: "#0F5C5A", border: "none" }}>
+              {move.isPending ? "Moving…" : "Reassign"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 function CaseDetailModal({ caseId, onClose }: { caseId: string; onClose: () => void }) {
   const [detail, setDetail] = useState<ManagerCaseDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<"visits" | "payments" | "ptps" | "photos">("visits");
+  const [reassigning, setReassigning] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
+  const queryClient = useQueryClient();
 
   useEffect(() => {
     getCaseDetail(caseId)
@@ -220,7 +345,24 @@ function CaseDetailModal({ caseId, onClose }: { caseId: string; onClose: () => v
 
   const photos = detail?.photos ?? [];
 
+  const onMoved = (next: { agent_id: string; agent_name: string | null; reason: string; by_when: string }) => {
+    setDetail((d) => d && {
+      ...d, agent_id: next.agent_id, agent_name: next.agent_name,
+      last_reassignment: {
+        reason: next.reason, from_agent_id: d.agent_id, from_agent_name: d.agent_name,
+        to_agent_id: next.agent_id, to_agent_name: next.agent_name, by: null, at: next.by_when,
+      },
+    });
+    // The list behind this modal carries agent_name and last_reassignment per
+    // row; the prefix key invalidates every page/filter variant at once.
+    queryClient.invalidateQueries({ queryKey: ["manager", "cases"] });
+  };
+
   return createPortal(
+    <>
+    {reassigning && detail && (
+      <ReassignDialog detail={detail} onClose={() => setReassigning(false)} onMoved={onMoved} />
+    )}
     <div
       role="dialog"
       aria-modal="true"
@@ -283,7 +425,22 @@ function CaseDetailModal({ caseId, onClose }: { caseId: string; onClose: () => v
             <div className="px-4 sm:px-5 py-4" style={{ borderBottom: "1px solid #EAEBEF" }}>
               <div className="grid grid-cols-2 gap-3">
                 <InfoRow label="Customer" value={detail.customer.full_name} />
-                <InfoRow label="Agent" value={detail.agent_name ?? "Unassigned"} />
+                <InfoRow label="Agent">
+                  <div className="flex items-center gap-2 mt-0.5">
+                    <p className="text-sm font-semibold truncate" style={{ color: "#1C1C1F" }}>{detail.agent_name ?? "Unassigned"}</p>
+                    <button type="button" onClick={() => setReassigning(true)}
+                            className="text-xs font-semibold px-2 py-0.5 rounded-md flex-shrink-0 hover:bg-black/5"
+                            style={{ color: "#0F5C5A", border: "1px solid #CFE3E1", background: "transparent" }}>
+                      Reassign
+                    </button>
+                  </div>
+                  {detail.last_reassignment?.reason && (
+                    <p className="text-xs mt-1" style={{ color: "#6B6D76" }}
+                       title={detail.last_reassignment.at ?? undefined}>
+                      Moved from {detail.last_reassignment.from_agent_name ?? "unassigned"} by {detail.last_reassignment.by ?? "a manager"}: “{detail.last_reassignment.reason}”
+                    </p>
+                  )}
+                </InfoRow>
                 <InfoRow label="City" value={`${detail.customer.city}, ${detail.customer.state}`} />
                 <InfoRow label="Collection Stage" value={detail.collection_stage ?? "—"} />
                 <InfoRow label="DPD" value={`${detail.loan.dpd} days (${detail.loan.dpd_bucket.replace("_", " ")})`} />
@@ -550,7 +707,8 @@ function CaseDetailModal({ caseId, onClose }: { caseId: string; onClose: () => v
           to   { opacity: 1; transform: scale(1) translateY(0); }
         }
       `}</style>
-    </div>,
+    </div>
+    </>,
     document.body
   );
 }
@@ -734,8 +892,18 @@ function CaseRow({ c, onOpen }: { c: Case; onOpen: () => void }) {
   // Measured on the live book the day this was found: 0 cases had been visited
   // that day and 421 were wearing the chip. Every one of them was telling a
   // manager that work had happened today when it had happened weeks earlier.
-  const visitedToday = !!c.is_visited_today;
-  const visitCount = c.visit_count ?? 0;
+  //
+  // 2026-09-11 — the grey "Visited ×N" chip that used to follow is gone. It
+  // counted lifetime visits, and with sticky ownership the count stopped
+  // meaning what it was put there to mean: it was added on 2026-09-03 to
+  // separate "seen once" from "absorbed four visits", back when a case could
+  // pass through four agents. Now the same agent keeps it until it resolves,
+  // so the count is that agent's own history, already on their profile and in
+  // the detail panel's visit tab — and on a book where 449 of 977 open cases
+  // have been worked, it was decorating nearly half the rows with a number
+  // nobody acted on. The two chips that remain each answer a live question.
+  // The decision lives in rowChip() so it can be tested without a mount.
+  const chip = rowChip(c);
 
   const accent = isPaid
     ? " row-accent-done"
@@ -743,14 +911,14 @@ function CaseRow({ c, onOpen }: { c: Case; onOpen: () => void }) {
     ? " row-accent-danger"
     : "";
 
-  const statusChip = isPaid ? (
+  const statusChip = chip === "resolved" ? (
     <span
       className="font-semibold px-1.5 py-0.5 rounded-full flex-shrink-0"
       style={{ background: "rgba(34,197,94,0.15)", color: "#15803D", fontSize: 10 }}
     >
       ✓ Resolved
     </span>
-  ) : visitedToday ? (
+  ) : chip === "visited_today" ? (
     // Today only. The one state a manager scanning this list is actually
     // asking about: has someone been to this door yet today.
     <span
@@ -759,17 +927,7 @@ function CaseRow({ c, onOpen }: { c: Case; onOpen: () => void }) {
     >
       ✓ Visited today
     </span>
-  ) : visitCount > 0 ? (
-    // Worked before, not today. Deliberately quieter than the blue: it is
-    // history, not progress. The count is the useful part — it separates a case
-    // seen once from one that has absorbed four visits and still owes money.
-    <span
-      className="font-semibold px-1.5 py-0.5 rounded-full flex-shrink-0"
-      style={{ background: "rgba(100,116,139,0.12)", color: "#475569", fontSize: 10 }}
-    >
-      Visited ×{visitCount}
-    </span>
-  ) : null;   // never visited — no chip, which is what makes fresh work obvious
+  ) : null;   // never visited, or not today — no chip
 
   return (
     <div
@@ -822,9 +980,18 @@ function CaseRow({ c, onOpen }: { c: Case; onOpen: () => void }) {
             <p className="text-xs text-success-600 truncate">₹{c.collected_amount.toLocaleString("en-IN")} paid</p>
           )}
         </div>
-        <div className="text-xs truncate min-w-0" style={{ color: "#6B6D76" }}
+        <div className="text-xs min-w-0" style={{ color: "#6B6D76" }}
              title={c.agent_name ?? "Unassigned"}>
-          {c.agent_name ?? <span style={{ color: "#C4C6CF" }}>Unassigned</span>}
+          <p className="truncate">{c.agent_name ?? <span style={{ color: "#C4C6CF" }}>Unassigned</span>}</p>
+          {/* The owner is sticky now, so when a case DID move somebody decided
+              it and said why. That sentence is the most useful thing this cell
+              can carry; the full text sits in the title. */}
+          {c.last_reassignment?.reason && (
+            <p className="truncate mt-0.5" style={{ color: "#94a3b8", fontSize: 11 }}
+               title={`Reassigned by ${c.last_reassignment.by ?? "a manager"}: ${c.last_reassignment.reason}`}>
+              ↳ {c.last_reassignment.reason}
+            </p>
+          )}
         </div>
         <div className="text-xs whitespace-nowrap min-w-0" style={{ color: "#6B6D76" }}>{c.allocation_date}</div>
       </div>

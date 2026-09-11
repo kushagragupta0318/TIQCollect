@@ -9,7 +9,7 @@
 //   silently, since visit.ai_report was always undefined).
 // ─────────────────────────────────────────────────────────────────────────
 import api, { LONG_RUNNING_MS } from "./axios";
-import type { DashboardSummary, Agent } from "@/types";
+import type { DashboardSummary, Agent, CaseReassignment } from "@/types";
 
 export async function getDashboard(): Promise<DashboardSummary> {
   const { data } = await api.get<DashboardSummary>("/manager/dashboard");
@@ -82,6 +82,22 @@ export async function getAnalytics() {
 export async function getCaseDetail(caseId: string) {
   const { data } = await api.get(`/manager/cases/${caseId}`);
   return data as ManagerCaseDetail;
+}
+
+/** Move a case to another of this manager's agents, with a reason that is
+ *  mandatory and audited. Since 2026-09-11 an owned case is sticky in the
+ *  nightly plan, so this is the one sanctioned way it changes hands. The
+ *  server re-checks every hard gate for the incoming agent and answers 409
+ *  with a plain sentence when one refuses; 422 when the reason is blank.
+ *  Takes effect at the next nightly plan — today's beat is untouched. */
+export async function reassignCase(caseId: string, body: { new_agent_id: string; reason: string }) {
+  const { data } = await api.post<{
+    case_id: string; case_number: string;
+    from_agent_id: string | null; from_agent_name: string | null;
+    to_agent_id: string; to_agent_name: string | null;
+    reason: string; reassigned_at: string; takes_effect: string;
+  }>(`/manager/cases/${caseId}/reassign`, body);
+  return data;
 }
 
 export async function getAgentsPerformance(months = 6) {
@@ -179,6 +195,7 @@ export interface ManagerCaseDetail {
   is_escalated: boolean;
   agent_id: string | null;
   agent_name: string | null;
+  last_reassignment?: CaseReassignment | null;
   collection_stage: string | null;
   bank_ptp_date: string | null;
   bank_ptp_amount: number | null;

@@ -22,7 +22,7 @@ from datetime import datetime, date, timezone, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
-from sqlalchemy import and_, func
+from sqlalchemy import and_, func, or_
 from sqlalchemy.exc import IntegrityError
 # Aliased: `Case` in this module is the SQLAlchemy model for a collections
 # case, so importing the SQL CASE construct under its own name would read as
@@ -171,7 +171,8 @@ def _loan_ids_with_recovery(db, band: str) -> list[str]:
 
 def _format_case(case: Case, agent_name_map: dict | None = None,
                  visited_today_ids: set[str] | None = None,
-                 recovery_map: dict[str, dict] | None = None) -> dict:
+                 recovery_map: dict[str, dict] | None = None,
+                 reassignment_map: dict[str, dict] | None = None) -> dict:
     c = case.customer
     l = case.loan
     agent_name = None
@@ -189,6 +190,10 @@ def _format_case(case: Case, agent_name_map: dict | None = None,
         "is_escalated": case.is_escalated,
         "agent_id": case.agent_id,
         "agent_name": agent_name,
+        # The most recent manager reassignment, read from the audit trail. None
+        # when the case has never been moved by hand — which, with sticky
+        # ownership, means the nightly plan alone put it where it is.
+        "last_reassignment": (reassignment_map or {}).get(case.id),
         "max_visits_allowed": case.max_visits_allowed,
         "handover_notes": case.handover_notes,
         "customer": {
@@ -954,10 +959,13 @@ def _cases_payload(db, cases: list, my_agent_ids: list[str], total: int,
             .distinct().all()
         }
 
+    reassignment_map = _latest_reassignments(db, list(page_case_ids)) if page_case_ids else {}
+
     return {
         "total": total,
         "cases": [
-            {**_format_case(c, agent_name_map, visited_today_ids, recovery_map),
+            {**_format_case(c, agent_name_map, visited_today_ids, recovery_map,
+                            reassignment_map),
              # The SAME score object the case-detail panel renders. Attached per
              # page rather than per book: 50 rows cost three bounded queries.
              "visit_priority": (scored or {}).get(c.id)}
@@ -1291,6 +1299,7 @@ def get_case_detail(case_id: str, current_user: ManagerOnly, db: DbSession):
     base = _format_case(
         case, {case.agent_id: agent_name} if agent_name else None,
         recovery_map=_latest_recovery_by_loan(db, [case.loan_id] if case.loan_id else []),
+        reassignment_map=_latest_reassignments(db, [case.id]),
     )
 
     # Why this case sits where it does in the visit queue: the three named
@@ -4385,3 +4394,204 @@ def export_allocation_decisions_csv(
         headers={"Content-Disposition": f"attachment; filename=allocation_decisions_{run_id}.csv"},
     )
 
+
+# ---------------------------------------------------------------------------
+# Manager reassignment — the ONE sanctioned way to move an owned case
+# ---------------------------------------------------------------------------
+# Added 2026-09-11 with sticky case ownership. Until then a case could change
+# agent three ways and none of them asked anybody: the nightly Hungarian
+# re-solve (35 of 214 allocated cases in one measured night), the 10%
+# exploration swap, and any agent who recorded a visit or payment on it. The
+# first two now hold an owned case in place; the third is deliberately left
+# as it was — a separate product decision, see visit_service.py:112.
+#
+# So this endpoint is where a case moves on purpose — an EXISTING owner to a
+# new one. It is not how a case gets its first agent: that is the nightly
+# allocator's job, and an UNASSIGNED case is refused here with a sentence
+# saying so. Three things follow:
+#
+#   * a REASON is mandatory and whitespace does not count. The audit trail is
+#     the product here; a reassignment nobody can explain later is exactly the
+#     silent churn the change removed.
+#   * the incoming agent is re-checked against the SAME hard gates the nightly
+#     run applies — case_bar() and pair_bar() from global_allocator, not a
+#     restatement — so a manager cannot hand a borrower to an agent the
+#     safety, territory or PTP-fatigue rules exclude. Ownership is the one
+#     gate NOT applied, because a manager moving a case is the override.
+#   * it writes AuditAction.CASE_ASSIGNED, which had been declared since the
+#     first schema and written by nothing.
+#
+# What it does NOT do, on purpose: it does not touch today's Beat. The move
+# takes effect at the next nightly plan; if the case is on the outgoing
+# agent's beat right now it stays there for the rest of the day. Rewriting a
+# planned route mid-day is its own change with its own failure modes.
+
+from pydantic import BaseModel as _ReassignBase, field_validator as _reassign_validator
+
+
+class _ReassignBody(_ReassignBase):
+    new_agent_id: str
+    reason: str
+
+    @_reassign_validator("reason")
+    @classmethod
+    def _reason_must_say_something(cls, v: str) -> str:
+        # Rejected at the schema boundary so an empty reason is a 422 with a
+        # field name, not a 400 with prose — and so no handler can forget.
+        if v is None or not v.strip():
+            raise ValueError("reason is required and may not be blank")
+        return v.strip()
+
+
+def _latest_reassignments(db, case_ids: list[str]) -> dict[str, dict]:
+    """case_id -> the most recent manager reassignment, or absent.
+
+    One batched query for the whole page. Read from the audit trail rather
+    than a new column, because the trail already holds from/to/reason/who/when
+    and a second copy on Case would be one more thing to keep in step.
+    """
+    if not case_ids:
+        return {}
+    rows = (
+        db.query(AuditLog, User.full_name)
+        .outerjoin(User, User.id == AuditLog.user_id)
+        .filter(AuditLog.action == AuditAction.CASE_ASSIGNED,
+                AuditLog.entity_type == "Case",
+                AuditLog.entity_id.in_(case_ids))
+        .order_by(AuditLog.created_at.desc())
+        .all()
+    )
+    out: dict[str, dict] = {}
+    for log, who in rows:
+        if log.entity_id in out:
+            continue                      # newest first; keep only the newest
+        d = log.details or {}
+        out[log.entity_id] = {
+            "reason": d.get("reason"),
+            "from_agent_id": (log.old_values or {}).get("agent_id"),
+            "from_agent_name": d.get("from_agent_name"),
+            "to_agent_id": (log.new_values or {}).get("agent_id"),
+            "to_agent_name": d.get("to_agent_name"),
+            "by": who,
+            "at": log.created_at.isoformat() if log.created_at else None,
+        }
+    return out
+
+
+@router.post("/cases/{case_id}/reassign")
+def reassign_case(
+    case_id: str,
+    body: _ReassignBody,
+    current_user: ManagerOnly,
+    db: DbSession,
+):
+    from app.models.case import RESOLVED_STATUSES
+    from app.services.global_allocator import (
+        BAR_MESSAGES, DEFAULT_TERRITORY_RADIUS_KM, GlobalAllocator,
+        case_bar, pair_bar)
+    from app.services.planner_service import PlannerService
+
+    my_agent_ids = [
+        a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()
+    ]
+    # The case must be inside this manager's pool — held by one of their agents,
+    # or unassigned. 404 rather than 403 so the id cannot be used to probe
+    # another agency.
+    #
+    # Unassigned cases are looked up ON PURPOSE, and then refused below with a
+    # sentence rather than falling into this 404. They are visible to every
+    # manager through GET /cases/unallocated, so there is nothing to hide, and
+    # "not found" would send somebody hunting for a scoping bug when the real
+    # answer is "not yet — wait for tonight".
+    case = (
+        db.query(Case)
+        .options(joinedload(Case.customer))
+        .filter(Case.id == case_id,
+                or_(Case.agent_id.in_(my_agent_ids), Case.agent_id.is_(None)))
+        .first()
+    )
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    # PRODUCT INVARIANT, 2026-09-11: an UNASSIGNED case is a NEW case. Its
+    # lifecycle is UNASSIGNED -> nightly allocator -> ASSIGNED + owner ->
+    # manager may REASSIGN. This endpoint moves ownership that already exists;
+    # it is not a first-assignment mechanism, and the first version of it was
+    # one by accident — the lookup above was copied from the planner's pool
+    # filter, which rightly includes unassigned cases because the planner is
+    # what assigns them. Nothing in the product could reach that state (the
+    # case list and detail both filter on agent_id IN my agents, so the
+    # Reassign button cannot be opened for an unowned case), but a hand-made
+    # request could, and it left a case with an agent and a status of
+    # UNASSIGNED. The tempting fix — set status ASSIGNED here — would have
+    # quietly turned reassignment into manual first assignment. Refused
+    # instead. The status is NOT touched by this endpoint on any path.
+    if case.agent_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail=("This case has no agent yet — tonight's plan will assign it. "
+                    "Only an assigned case can be reassigned."))
+
+    if case.status in RESOLVED_STATUSES or case.status == CaseStatus.PAID:
+        raise HTTPException(status_code=409,
+                            detail="This case is resolved and cannot be reassigned.")
+
+    incoming = _require_own_agent(db, current_user, body.new_agent_id)
+    if case.agent_id == incoming.id:
+        raise HTTPException(status_code=409,
+                            detail="The case is already assigned to this agent.")
+
+    # ── The same gates the nightly run applies, in the same order ──────────
+    blocked = case_bar(case.customer)
+    if blocked is not None:
+        raise HTTPException(status_code=409, detail=BAR_MESSAGES[blocked])
+
+    cust = case.customer
+    cust_lat = cust.latitude if cust.latitude is not None else GlobalAllocator.FALLBACK_LAT
+    cust_lon = cust.longitude if cust.longitude is not None else GlobalAllocator.FALLBACK_LON
+    base_lat = incoming.base_latitude if incoming.base_latitude is not None else GlobalAllocator.FALLBACK_LAT
+    base_lon = incoming.base_longitude if incoming.base_longitude is not None else GlobalAllocator.FALLBACK_LON
+    dist_km = GlobalAllocator.haversine_km(base_lat, base_lon, cust_lat, cust_lon)
+    fatigued = PlannerService(db, manager_user_id=current_user.id) \
+        ._ptp_fatigue_map([case.id]).get(case.id, set())
+    barred = pair_bar(case, cust, incoming, dist_km=dist_km,
+                      territory_radius_km=DEFAULT_TERRITORY_RADIUS_KM,
+                      fatigued_agent_ids=fatigued, enforce_ownership=False)
+    if barred is not None:
+        raise HTTPException(status_code=409, detail=BAR_MESSAGES[barred])
+
+    # ── Move it, and say so ─────────────────────────────────────────────────
+    from_id = case.agent_id
+    names = dict(
+        db.query(Agent.id, User.full_name).join(User, User.id == Agent.user_id)
+        .filter(Agent.id.in_([x for x in (from_id, incoming.id) if x])).all()
+    )
+    now = datetime.now(timezone.utc)
+    case.agent_id = incoming.id
+    db.add(AuditLog(
+        created_at=now, user_id=current_user.id,
+        action=AuditAction.CASE_ASSIGNED,
+        entity_type="Case", entity_id=case.id,
+        old_values={"agent_id": from_id},
+        new_values={"agent_id": incoming.id},
+        details={"reason": body.reason,
+                 "from_agent_id": from_id,
+                 "from_agent_name": names.get(from_id),
+                 "to_agent_id": incoming.id,
+                 "to_agent_name": names.get(incoming.id),
+                 "source": "manager_reassign",
+                 "distance_km": round(dist_km, 1)},
+        success=True))
+    db.commit()
+
+    return {
+        "case_id": case.id,
+        "case_number": case.case_number,
+        "from_agent_id": from_id,
+        "from_agent_name": names.get(from_id),
+        "to_agent_id": incoming.id,
+        "to_agent_name": names.get(incoming.id),
+        "reason": body.reason,
+        "reassigned_at": now.isoformat(),
+        "takes_effect": "next nightly plan; today's beat is unchanged",
+    }

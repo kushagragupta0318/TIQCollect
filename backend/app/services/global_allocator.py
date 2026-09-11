@@ -28,6 +28,84 @@ from app.ml.empirical_bayes import EmpiricalBayesAgentAdjuster
 logger = structlog.get_logger()
 
 
+# ── The hard gates, in one place ─────────────────────────────────────────────
+# Added 2026-09-11, when manager-initiated reassignment gave these rules a
+# SECOND caller. Until then the cost-matrix loop below was the only place they
+# were evaluated and inlining them there was correct. A second caller changes
+# that calculus completely: this repo's worst bugs have all been one rule
+# written twice and then drifting — two risk_score formulas, two recovery
+# writers, two sets of allocator weights, seven DPD-bucket spellings. An
+# endpoint that let a manager hand a case to an agent the nightly run would
+# never give it to is the same failure wearing a new hat.
+#
+# Behaviour is unchanged: same predicates, same order, same outcomes. The
+# existing gate tests (DNC, hostility, female-agent, PTP fatigue, territory,
+# capacity, determinism) all pass against this, which is what makes the
+# extraction safe to ship.
+#: The nightly run's territory radius. Named so manager reassignment applies
+#: the SAME radius rather than restating 16.0 — the planner constructs
+#: GlobalAllocator without passing one, so this default IS production.
+DEFAULT_TERRITORY_RADIUS_KM = 16.0
+
+BAR_DNC = "DNC"
+BAR_HOSTILITY = "HOSTILITY"
+BAR_REQUIRES_FEMALE_AGENT = "REQUIRES_FEMALE_AGENT"
+BAR_PTP_FATIGUE = "PTP_FATIGUE"
+BAR_OUTSIDE_TERRITORY = "OUTSIDE_TERRITORY"
+BAR_OWNED_BY_ANOTHER_AGENT = "OWNED_BY_ANOTHER_AGENT"
+
+#: Sentences for a human. The codes above are for machines and tests.
+BAR_MESSAGES = {
+    BAR_DNC: "Borrower is on the Do-Not-Contact (DNC) list.",
+    BAR_HOSTILITY: "Withheld due to safety/hostility risk flag.",
+    BAR_REQUIRES_FEMALE_AGENT: "This borrower must be visited by a female agent.",
+    BAR_PTP_FATIGUE: ("Three promises to this agent have gone unpaid; the "
+                      "pairing is barred."),
+    BAR_OUTSIDE_TERRITORY: "The borrower is outside this agent's territory.",
+    BAR_OWNED_BY_ANOTHER_AGENT: "The case is assigned to a different agent.",
+}
+
+
+def case_bar(customer) -> str | None:
+    """Gates that bar a case from EVERY agent. None means the case is workable.
+
+    Unknown is never permissive: `requires_female_agent`, `do_not_contact` and
+    `is_hostile` are read with a False default, matching the columns' nullable
+    history — a missing flag means "no such requirement recorded", not "waived".
+    """
+    if customer is None:
+        return None
+    if getattr(customer, "do_not_contact", False):
+        return BAR_DNC
+    if getattr(customer, "is_hostile", False):
+        return BAR_HOSTILITY
+    return None
+
+
+def pair_bar(case, customer, agent, *, dist_km: float,
+             territory_radius_km: float,
+             fatigued_agent_ids=(), enforce_ownership: bool = True) -> str | None:
+    """Gates that bar THIS agent from THIS case. None means the pairing is legal.
+
+    `enforce_ownership` is the one parameter a caller may vary, and only
+    manager reassignment passes False — a manager moving a case IS the override
+    for ownership, and re-applying it there would make the endpoint refuse
+    every reassignment it exists to perform. No other gate is optional: a
+    manager cannot hand a borrower to an agent the territory, safety or
+    PTP-fatigue rules exclude.
+    """
+    if enforce_ownership and case.agent_id is not None and agent.id != case.agent_id:
+        return BAR_OWNED_BY_ANOTHER_AGENT
+    is_female_ag = str(getattr(agent, "gender", "")).upper() in ("F", "FEMALE")
+    if getattr(customer, "requires_female_agent", False) and not is_female_ag:
+        return BAR_REQUIRES_FEMALE_AGENT
+    if agent.id in (fatigued_agent_ids or ()):
+        return BAR_PTP_FATIGUE
+    if dist_km > territory_radius_km:
+        return BAR_OUTSIDE_TERRITORY
+    return None
+
+
 class GlobalAllocator:
     """Solves portfolio-wide case allocation using Two-Stage Bipartite Optimization + Route Validation."""
 
@@ -168,7 +246,20 @@ class GlobalAllocator:
         holder = {c.id: aid for aid, cs in assigned_by_agent.items() for c in cs}
         case_by_id = {c.id: c for cs in assigned_by_agent.values() for c in cs}
 
-        candidates = sorted(holder)                 # sorted -> seed reproducible
+        # ONLY UNASSIGNED CASES MAY BE RANDOMISED, from 2026-09-11. A swap moves
+        # BOTH of its cases, so an owned case had to be excluded as a partner as
+        # well as an initiator — filtering only the initiators would still have
+        # moved owned cases, silently, as the other half of somebody else's swap.
+        #
+        # The ownership gate in the cost-matrix loop already makes this
+        # unreachable: an owned case's `eligible_agents` set contains just its
+        # owner, so `allowed` comes out empty and the swap is skipped. This
+        # filter is stated anyway because "exploration never moves an owned
+        # case" is a property the product now promises, and a promise that holds
+        # only as a side effect of another rule breaks the moment that rule is
+        # rephrased. It is also what makes the property directly testable here.
+        unowned = {cid for cid, c in case_by_id.items() if c.agent_id is None}
+        candidates = sorted(cid for cid in holder if cid in unowned)
         # HALVED ON PURPOSE. Exploration proceeds by SWAPS, and a swap randomises
         # BOTH of its cases — so selecting `N * epsilon` initiators randomised
         # 2 * epsilon of the book. Measured before this correction: a configured
@@ -196,6 +287,7 @@ class GlobalAllocator:
             # Find a case held by `target` that could legally sit with `current`.
             partners = [cid for cid, aid in sorted(holder.items())
                         if aid == target and cid not in swapped
+                        and cid in unowned
                         and current in eligible_agents.get(cid, ())]
             if not partners:
                 continue
@@ -468,7 +560,7 @@ class GlobalAllocator:
     def __init__(
         self,
         objective: str = AllocationObjective.BALANCED.value,
-        territory_radius_km: float = 16.0,
+        territory_radius_km: float = DEFAULT_TERRITORY_RADIUS_KM,
         eb_adjuster: EmpiricalBayesAgentAdjuster | None = None,
         ml_recovery_probability: dict[str, float] | None = None,
         use_ml_affinity: bool = False,
@@ -646,8 +738,11 @@ class GlobalAllocator:
             if not customer:
                 continue
 
-            # Hard Gate: DNC
-            if getattr(customer, "do_not_contact", False):
+            # Hard Gates: DNC and Hostility — case-level, one call. The reason
+            # strings and block_type values are the ones this run has always
+            # written; only where they are defined has moved (case_bar, above).
+            blocked_by = case_bar(customer)
+            if blocked_by is not None:
                 decisions.append(AllocationDecision(
                     id=str(uuid.uuid4()),
                     run_id="",
@@ -655,26 +750,10 @@ class GlobalAllocator:
                     previous_agent_id=case.agent_id,
                     allocated_agent_id=None,
                     outcome=AllocationOutcome.BLOCKED.value,
-                    reason="Borrower is on the Do-Not-Contact (DNC) list.",
+                    reason=BAR_MESSAGES[blocked_by],
                     visit_priority_score=prio,
                     fit_score=0.0,
-                    score_breakdown={"block_type": "DNC"},
-                ))
-                continue
-
-            # Hard Gate: Hostility
-            if getattr(customer, "is_hostile", False):
-                decisions.append(AllocationDecision(
-                    id=str(uuid.uuid4()),
-                    run_id="",
-                    case_id=case.id,
-                    previous_agent_id=case.agent_id,
-                    allocated_agent_id=None,
-                    outcome=AllocationOutcome.BLOCKED.value,
-                    reason="Withheld due to safety/hostility risk flag.",
-                    visit_priority_score=prio,
-                    fit_score=0.0,
-                    score_breakdown={"block_type": "HOSTILITY"},
+                    score_breakdown={"block_type": blocked_by},
                 ))
                 continue
 
@@ -699,11 +778,47 @@ class GlobalAllocator:
             fatigued = (ptp_fatigue or {}).get(case.id) or frozenset()
 
             for s_idx, (ag, slot_num) in enumerate(slots):
-                # Hard Gate: Female agent constraint
-                is_female_ag = str(getattr(ag, "gender", "")).upper() in ("F", "FEMALE")
-                if getattr(customer, "requires_female_agent", False) and not is_female_ag:
-                    continue
-
+                # Hard Gate: STICKY CASE OWNERSHIP.
+                #
+                # A case that already has an agent is only ever offered back to
+                # THAT agent. Until 2026-09-11 ownership was a soft preference —
+                # CONTINUITY_BONUS, one indicator at objective weight 0.05 — and
+                # it lost routinely: measured on the real book, 35 of 214
+                # allocated cases (16%) changed hands in a single night, with
+                # nothing recording why beyond "a better score elsewhere". A
+                # borrower met three different agents in a week and each one
+                # arrived knowing nothing about the household.
+                #
+                # This gate is written here, beside the other four, because this
+                # loop is the single place eligibility is decided; expressing
+                # ownership anywhere else would mean a second copy of the rule.
+                # Three consequences follow from it being a gate rather than a
+                # score, and all three are wanted:
+                #
+                #   * the OTHER gates still win. An owner who is barred by PTP
+                #     fatigue, the female-agent requirement or the territory
+                #     radius is skipped exactly as before, which leaves the case
+                #     with no eligible column at all — so it is deferred by the
+                #     existing unallocated path rather than handed to somebody
+                #     else. Releasing it to the next-best agent is a manager's
+                #     decision now, through POST /manager/cases/{id}/reassign.
+                #   * capacity cannot be breached. The owner's columns are their
+                #     own capacity slots, so an owner holding more cases than
+                #     they can work gets exactly max_cases_per_day of them and
+                #     the remainder defer.
+                #   * exploration cannot move an owned case, because
+                #     `eligible_agents` below is built from what survives this
+                #     loop and will contain only the owner.
+                #
+                # CONTINUITY_BONUS is deliberately left in place and still
+                # scored. It now only ever applies to the owner's own columns,
+                # where it is a constant and cannot change the choice, but it
+                # remains in the decision breakdown the audit panel reads, and
+                # it is what still expresses the preference for an UNASSIGNED
+                # case that this agent worked before.
+                #
+                # Hard Gate: Female agent constraint — see pair_bar().
+                #
                 # Hard Gate: PTP fatigue. Three promises to the same agent with
                 # nothing collected means the pairing is not working, whatever the
                 # score says. Barring the agent rather than the case is deliberate:
@@ -711,14 +826,21 @@ class GlobalAllocator:
                 # just by somebody else. Because this only removes one column from
                 # the row, the bipartite solve then picks that case's next best
                 # agent by itself — no reassignment pass, no special casing.
-                if ag.id in fatigued:
-                    continue
-
-                # Hard Gate: Territory Radius Boundary
+                # (Under sticky ownership "next best" is the owner or nobody, and
+                # "nobody" is a deferral the manager can see and act on.)
+                #
+                # Hard Gate: Territory Radius Boundary.
+                #
+                # All four pair-level gates are evaluated by pair_bar() at module
+                # scope — one definition, shared with manager reassignment —
+                # and the distance it needs is computed here because the
+                # proximity score below reuses it.
                 base_lat = ag.base_latitude if ag.base_latitude is not None else self.FALLBACK_LAT
                 base_lon = ag.base_longitude if ag.base_longitude is not None else self.FALLBACK_LON
                 dist_km = self.haversine_km(base_lat, base_lon, cust_lat, cust_lon)
-                if dist_km > self.territory_radius_km:
+                if pair_bar(case, customer, ag, dist_km=dist_km,
+                            territory_radius_km=self.territory_radius_km,
+                            fatigued_agent_ids=fatigued) is not None:
                     continue
 
                 # A SET, NOT A LIST. The loop below iterates over capacity
@@ -1016,6 +1138,23 @@ class GlobalAllocator:
 
         for case in cases:
             if case.id not in allocated_case_ids and case.id not in decided_case_ids:
+                # The OUTCOME is unchanged — still DEFERRED, still the same
+                # existing path. Only the sentence changes, and it has to:
+                # sticky ownership gives a second way to land here, and
+                # "all nearby agents reached daily capacity limit" would be
+                # flatly untrue of a case whose owner was barred by PTP fatigue
+                # while fourteen other agents sat idle. A manager reading the
+                # audit trail to decide whether to reassign needs to know which
+                # of the two happened.
+                owned = case.agent_id is not None
+                reason = (
+                    "Deferred: this case stays with its assigned agent, who "
+                    "could not take it tomorrow — their day is full, or a "
+                    "hard rule (PTP fatigue, territory, safety) bars the "
+                    "pairing. Reassign the case to move it."
+                    if owned else
+                    "Deferred to next cycle: all nearby agents reached daily capacity limit."
+                )
                 decisions.append(AllocationDecision(
                     id=str(uuid.uuid4()),
                     run_id="",
@@ -1023,10 +1162,11 @@ class GlobalAllocator:
                     previous_agent_id=case.agent_id,
                     allocated_agent_id=None,
                     outcome=AllocationOutcome.DEFERRED.value,
-                    reason="Deferred to next cycle: all nearby agents reached daily capacity limit.",
+                    reason=reason,
                     visit_priority_score=prio_scores.get(case.id, 50.0),
                     fit_score=0.0,
-                    score_breakdown={"objective": self.objective},
+                    score_breakdown={"objective": self.objective,
+                                     "owner_unavailable": owned},
                 ))
 
         return assigned_by_agent, decisions, expected_recovery_sum
