@@ -1,0 +1,502 @@
+{
+  "written_at": "2026-09-10T10:42:27.345753+00:00",
+  "beat_date": "2026-09-10",
+  "seed": 20260910,
+  "visit_ids": [
+    "6fefbc70-7717-45ca-b38e-b1e3dd89eed1",
+    "74ccfcbe-44bd-4d19-831c-ae92e965a84c",
+    "974f82e5-c9ca-4436-9166-d092ff3f0644",
+    "aed42066-2df3-473e-8b9d-e7732974989e",
+    "41bc1c57-eea7-4b41-92a4-8cd79131e1a3",
+    "a14f3b01-d290-4ca0-bb04-2414d5ffc2ef",
+    "3817d4ab-64cb-4839-95ff-c1d918be8e2d",
+    "6849f2bf-07d3-40b4-bf1f-1066b0fca9fd",
+    "59030e80-6b86-4033-83f4-4ae7fa525ffd",
+    "df22ef95-6267-4c85-b6bc-3edc7b9fcfad",
+    "edffcd0d-5d5f-4d26-9363-8236f752bacf",
+    "285f1808-fd52-49d2-9d10-40d440f894f7",
+    "2eee40ff-ee09-4e17-91f5-8f0b76d130cc",
+    "4829a5cc-69e7-4508-8f9f-2e170ce4e96d",
+    "0f839c3b-70ca-4e4a-a55c-fd6476133aa8",
+    "e35d0a45-10e6-4af4-9306-4a7b10f09634",
+    "87f9468b-5a8d-4177-9cea-f77ef3ca5f7e",
+    "2fb5c7e2-3a92-40a2-bc71-683b43fb1855",
+    "4af71620-d353-4f3e-bde6-f5edd744d059",
+    "575f448a-10bf-45d7-976f-ab85052e4312",
+    "bf5adc14-1089-47a5-89ed-10eb8979c1b3",
+    "6808c182-96a4-409d-ad2c-bc988039aaef",
+    "10333e9a-e300-4744-b5cd-ba460e968eba",
+    "217eabe3-f642-42be-b5b7-d0bb40faa85c",
+    "5de59f4f-f938-4c1f-9adb-7fb1867d3cf5",
+    "05e02a9b-be15-40f6-90ba-f6e867615f7d",
+    "0531ac3b-dadf-4783-8a72-634ca2aefcc1",
+    "7c5df7c2-343f-471e-8ab1-a4917f130ed2",
+    "b00683fa-3df0-485c-be5e-0c4fa65b2ec1",
+    "ff1d0541-17d7-4bb7-817f-a6e0baa9d50a",
+    "922239ca-e039-40e9-ac92-0d84609901ad",
+    "b370d869-90e1-491b-847b-d945b3ca0375",
+    "ff35b4fd-f659-496d-97a3-4108ec80046b",
+    "1e69bae2-0094-4a10-a6d1-008b88014451",
+    "64364bb8-5728-439d-99b5-80c444e364ce",
+    "34719c4e-04d4-49c0-a57a-808125cb0e33",
+    "338e8611-6c00-45c1-8b00-85e993d4135c",
+    "270a91de-9653-45bd-8b2c-fe0c26fe7e3f",
+    "2bf30c40-51f0-46de-ac92-0c94badd96eb",
+    "26571676-a81e-4565-8798-ce4f5336a028",
+    "bb6fdf9e-6c31-406a-b383-f1facb3f012b",
+    "a4ed8987-1a8b-43cf-bf66-abdb6a478053",
+    "060ff700-946d-4518-981c-e694680da2b9",
+    "2f6d65be-780c-416c-826c-f16967b11d5e",
+    "aadf50c0-b498-4ca1-ae0e-9c93020af207",
+    "56bb4e9a-cd46-4bee-9fc0-2fc441c8f241",
+    "858517a9-3bf7-4d1f-9ee1-4a28431881e4",
+    "4fc91ac8-06d9-4e30-8c0f-9de4055614d1",
+    "35bda3f8-c417-471e-9bcb-d767fc419c2c",
+    "ac989200-908f-4761-8c82-72972ed2b410",
+    "6815b800-efee-4b04-a70e-ee69c60541e9",
+    "05db9f5b-a4e7-437c-8156-a8901ba46ac9",
+    "913ab4c1-c087-46c2-88de-2a1962a47745",
+    "e04517fa-45f6-47fa-a835-03f943d86f3b"
+  ],
+  "payment_ids": [
+    "26bb853b-1158-4fe9-bb6c-65cf4e91f526",
+    "13cebf50-e2e6-4fad-8cf6-f52f78a9afe0",
+    "162c7301-0112-43ff-8918-a17581275fa0",
+    "8a4f1a2f-027e-4f6d-9de2-2782d43356c3",
+    "0919cf02-797e-4700-87f2-3878ad2e63ec",
+    "787bc8ad-da13-4e33-ab45-c54da88d5104",
+    "b8e26306-59fc-4ea2-bf0b-db15506765cf",
+    "8e92cd8a-c697-41b5-a5c7-99ae59d6b01e",
+    "6ede0267-68a1-4b4b-be3c-d8b6d18ed8be",
+    "d84e8cb2-7a07-47f6-8c41-2bf3a303d3ce",
+    "9eefc74e-9174-4976-b3c7-30d16656a34f",
+    "2e2709d7-2fb1-49b9-adfc-513fa48d2fe5",
+    "db0802f2-a646-4398-96c4-e85ee8617c36",
+    "bc744dd3-a0e6-40d7-924b-db533652840e",
+    "4834769b-7b39-4e69-aa90-69ce129c4227",
+    "4454c47c-a23e-4885-a83e-fbfc32186083",
+    "e2c38486-6f89-4971-b3fb-e67c687272ca",
+    "610e93c9-d3e4-4850-962e-03b2dd75d76f",
+    "3958c889-481a-486a-b146-c7daf0fa354b",
+    "786a32e5-fd96-49f7-a2e4-a952787f2322"
+  ],
+  "ptp_ids": [
+    "93dd61cf-223e-46be-a0f0-9c133bcd11c9",
+    "57aa3ca9-bd7b-4312-b5ce-a370c452cc00",
+    "e44a30e4-5587-47e8-89e8-2937263a7ca2",
+    "a2954918-f03e-4550-89ba-d4ad2e037832",
+    "1b484b4a-33ec-4630-9fa8-44673be4917f",
+    "5b9682af-70f8-4eda-a704-2bf5bb8c1fc2",
+    "678eb35f-4ca3-4d80-aea8-dd125d9c9971",
+    "e63d4c3b-455e-4a60-98f1-2bab855764f8",
+    "48530d9e-1e3d-419c-bd80-2114ee6e220f",
+    "4309d86d-684e-431d-9c5b-e373d0b96052",
+    "0c164178-34f1-4893-a315-8a9cdfb5e675",
+    "27293175-dea6-48d8-bb91-dedeea8f387f",
+    "4d9354fa-e034-43c6-b079-551b79e4bfed",
+    "8813ce6d-2474-4a99-b649-08a18a605639",
+    "6c98ad78-156b-4aa0-bd85-89e4a76d5d9b",
+    "75240400-964b-47c0-aa21-4fc793565900",
+    "a990b0c4-0a10-4c77-95d0-c64ad38ac964"
+  ],
+  "cases_before": {
+    "d1ddcca9-c5de-4d00-a5b3-9d0bc91dac44": {
+      "collected_amount": 22642.8,
+      "visit_count": 5,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null
+    },
+    "2f6c83a1-b4af-454c-bac1-4e13d65435e2": {
+      "collected_amount": 6254.23,
+      "visit_count": 3,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null
+    },
+    "5ddcba28-0f00-4e30-b083-baece89b7858": {
+      "collected_amount": 15884.32,
+      "visit_count": 2,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null
+    },
+    "da73b133-4ffb-473d-a1cf-faca95f0a318": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null
+    },
+    "665d80b4-5571-4293-8947-e8ac5a92d539": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null
+    },
+    "578198a4-cf53-4ca5-a3a2-3f5066daf113": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null
+    },
+    "fb7525c6-6804-4e7d-a8fb-b49dd824b4e0": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null
+    },
+    "2be44aa4-b49b-4b64-a9da-c40aadb57ee7": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null
+    },
+    "93993985-c111-4838-9bc1-1f04f4d77303": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null
+    },
+    "02c8f96d-6643-470e-b0e9-4e349f1b3de4": {
+      "collected_amount": 20821.92,
+      "visit_count": 2,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null
+    },
+    "d1483dff-17f9-45b3-a291-e57d854c32a4": {
+      "collected_amount": 0.0,
+      "visit_count": 3,
+      "status": "ASSIGNED",
+      "resolved_at": null
+    },
+    "2f356325-7463-446f-90d3-45cab93106d2": {
+      "collected_amount": 0.0,
+      "visit_count": 3,
+      "status": "ASSIGNED",
+      "resolved_at": null
+    },
+    "009b5ac4-994a-4b15-84a2-1b69a6304f42": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null
+    },
+    "61eb82f0-ce2d-4a8e-8d60-c03b85454bf4": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null
+    },
+    "dc95f817-c541-486d-9b01-4c88eb5b5e79": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null
+    },
+    "4297f49f-ebb3-4f5c-a638-50637aa18533": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null
+    },
+    "5fd1413d-4975-48fa-a46c-e9a077122ad4": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null
+    },
+    "faae1aba-6a78-41f8-b757-687ae75899d2": {
+      "collected_amount": 0.0,
+      "visit_count": 1,
+      "status": "ASSIGNED",
+      "resolved_at": null
+    },
+    "764a395d-f72f-4849-bee0-7ff04ce5d506": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null
+    },
+    "59c59b25-6240-408f-a173-60906d265833": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null
+    },
+    "f1a9ae9c-e76f-4576-a5f2-ba3e6eb257b5": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null
+    },
+    "465bbd5c-6bf0-4c97-92eb-cb0d54da4747": {
+      "collected_amount": 0.0,
+      "visit_count": 2,
+      "status": "ESCALATED",
+      "resolved_at": null
+    },
+    "3cfbc763-04d4-4c78-bd38-db876da6efe4": {
+      "collected_amount": 11913.9,
+      "visit_count": 2,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null
+    },
+    "11f85ef0-010d-4aac-b797-36231234cada": {
+      "collected_amount": 21095.21,
+      "visit_count": 3,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null
+    },
+    "d397060f-996d-44eb-afe8-5de486bbd411": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null
+    },
+    "26bdf503-7fd2-44b1-9065-93841530fe3f": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null
+    },
+    "f8ea6cef-bba3-4281-bf4a-79266dc0077b": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null
+    },
+    "02cf8890-d819-437e-abeb-bae033b19c03": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null
+    },
+    "b6efe7bb-38b7-4282-b585-6b3a41260367": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null
+    },
+    "3fb7b92e-6135-42bc-8fe8-f8c4d0443483": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null
+    },
+    "31286e1e-a18d-4955-8905-2717afcd7ef1": {
+      "collected_amount": 0.0,
+      "visit_count": 1,
+      "status": "ESCALATED",
+      "resolved_at": null
+    },
+    "1d09cd5e-7624-409b-9722-566194e3323b": {
+      "collected_amount": 30184.18,
+      "visit_count": 2,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null
+    },
+    "6ec7dd21-0b29-4e6e-b9ef-cf46d17c86ce": {
+      "collected_amount": 30325.65,
+      "visit_count": 2,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null
+    },
+    "f0e13135-fc84-417e-9bcb-9a06e95c69e1": {
+      "collected_amount": 27951.21,
+      "visit_count": 4,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null
+    },
+    "c4a9556c-8149-4e19-a977-75a54bd4102b": {
+      "collected_amount": 0.0,
+      "visit_count": 3,
+      "status": "ESCALATED",
+      "resolved_at": null
+    },
+    "ffe94d1b-afe5-497e-bcb7-0fe8fbe13169": {
+      "collected_amount": 0.0,
+      "visit_count": 4,
+      "status": "PTP_SET",
+      "resolved_at": null
+    },
+    "a8651e2d-af97-4fed-860f-9b4d12d1c472": {
+      "collected_amount": 14125.84,
+      "visit_count": 4,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null
+    },
+    "dd59d29b-4bd9-476f-9fae-75e5a5d1b921": {
+      "collected_amount": 23557.45,
+      "visit_count": 3,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null
+    },
+    "42021baa-0ca4-4055-8217-d9d4f63cdb2e": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null
+    },
+    "165b7cb2-5601-48c6-a255-a94d78031e60": {
+      "collected_amount": 0.0,
+      "visit_count": 2,
+      "status": "IN_PROGRESS",
+      "resolved_at": null
+    },
+    "8abb3c89-e63d-4bb6-9cfd-a72942f4fcd2": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null
+    },
+    "94f0cda2-110e-4b23-8669-2d48049891f1": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null
+    },
+    "f4f8dd22-78f4-40f3-8b26-4f8567da2da4": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null
+    },
+    "bccbd26e-82b3-464c-a44f-2ff8b9130a63": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null
+    },
+    "cb992b92-f559-42c8-b063-409c884cc1ce": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null
+    },
+    "7ec158f4-1f70-44f4-acdb-8edf6d8b9657": {
+      "collected_amount": 0.0,
+      "visit_count": 2,
+      "status": "ASSIGNED",
+      "resolved_at": null
+    },
+    "56a636c7-ac45-48bd-bc8f-d0e46920e8e2": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null
+    },
+    "8bf80df2-c17e-4c73-9eb3-be0abeb52885": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null
+    },
+    "ff9de9f9-14e8-4bfe-863a-8a6f58ee3147": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null
+    },
+    "6aa74f00-3b33-47cb-bc69-343917e53638": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null
+    },
+    "e4b8ebd5-54a3-4e1c-ad9a-02c303bc79b6": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null
+    },
+    "6d08c32d-ae6d-4acb-aca1-b48e3be8c64d": {
+      "collected_amount": 53663.16,
+      "visit_count": 2,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null
+    },
+    "2abb2db2-c967-4273-9fdc-c95bbc36897e": {
+      "collected_amount": 0.0,
+      "visit_count": 3,
+      "status": "ASSIGNED",
+      "resolved_at": null
+    },
+    "aa7879bb-bb87-4d9c-9d1a-f62d3fe2cc80": {
+      "collected_amount": 0.0,
+      "visit_count": 2,
+      "status": "ASSIGNED",
+      "resolved_at": null
+    }
+  },
+  "agents_before": {
+    "1d5e58e8-954e-4d6c-b13c-6e6d614cb588": {
+      "current_month_visits": 11,
+      "current_month_collections": 52747.8
+    },
+    "2b6de8aa-0976-4be0-8a40-043ff86ffa54": {
+      "current_month_visits": 21,
+      "current_month_collections": 88106.79
+    },
+    "2dfc73e0-dba9-4aa5-babf-d5141ded5497": {
+      "current_month_visits": 17,
+      "current_month_collections": 58731.9
+    },
+    "357e2e09-b637-468e-818b-57a5dce18e9c": {
+      "current_month_visits": 12,
+      "current_month_collections": 108004.71
+    },
+    "3aa13103-bd03-4578-9292-44d88d58da00": {
+      "current_month_visits": 23,
+      "current_month_collections": 110743.05
+    },
+    "3e9c4168-1de9-43e8-b9f2-fbf3f931949d": {
+      "current_month_visits": 19,
+      "current_month_collections": 110535.6
+    },
+    "4a182f53-a1a1-4f15-945a-6a56f4e04b64": {
+      "current_month_visits": 19,
+      "current_month_collections": 93216.43
+    },
+    "5fbae4d6-59d1-4e6c-8a80-fe57244a45bb": {
+      "current_month_visits": 15,
+      "current_month_collections": 138409.19
+    },
+    "8e59153e-dc8e-4efa-af65-1db304a6f3f1": {
+      "current_month_visits": 12,
+      "current_month_collections": 59672.09
+    },
+    "a13886ca-739b-47b4-a473-724e03f7332a": {
+      "current_month_visits": 9,
+      "current_month_collections": 98243.47
+    },
+    "a2e2555c-f597-43af-a77a-fe708f967218": {
+      "current_month_visits": 16,
+      "current_month_collections": 23000.19
+    },
+    "b06cd5a3-f1c0-4cdb-b241-9ce2d6c5e791": {
+      "current_month_visits": 14,
+      "current_month_collections": 80580.05
+    },
+    "c2f2e0ce-5aeb-4ece-8325-2167edfe139e": {
+      "current_month_visits": 12,
+      "current_month_collections": 25205.0
+    },
+    "c33350cc-f581-492e-807f-14262d56ebcb": {
+      "current_month_visits": 15,
+      "current_month_collections": 69504.04
+    },
+    "c37b6a5c-9d1c-46d4-8ece-dfce290dc74b": {
+      "current_month_visits": 11,
+      "current_month_collections": 39497.56
+    },
+    "c6ca60b7-2143-412b-887e-c30ae9cda031": {
+      "current_month_visits": 18,
+      "current_month_collections": 110504.42
+    },
+    "cd9e6eca-028e-4c61-8e82-048327bc4476": {
+      "current_month_visits": 11,
+      "current_month_collections": 64565.49
+    },
+    "e9dced65-f61b-4c24-bae7-d4170299ed46": {
+      "current_month_visits": 13,
+      "current_month_collections": 65552.52
+    }
+  }
+}
