@@ -53,5 +53,14 @@ jobs:
       # itself runs. Corrected 2026-09-06.
       - name: Typecheck
         run: npx tsc -b
+      # Added 2026-09-14. The frontend gained vitest on 2026-09-09 and had 44
+      # tests by 2026-09-11, none of which CI had ever run — the allocation
+      # explanation arithmetic, the reassignment dialog rules, the compliance
+      # chip logic all passed only on whichever laptop last ran `npm test`.
+      # Before Lint on purpose: lint has failed on 7 pre-existing
+      # set-state-in-effect errors since 2026-09-06 (CLAUDE.md issue 1), and a
+      # step placed after it would never execute.
+      - name: Test
+        run: npm test
       - name: Lint
         run: npm run lint

@@ -21,18 +21,23 @@ return the same 404 with the same body. Distinguishing them would tell a
 forger which part of their card to fix. The reason is logged server-side at
 INFO, where an operator can read it and a caller cannot.
 
-Rate limiting follows /auth/login exactly: the application-wide default in
-main.py (RATE_LIMIT_PER_MINUTE per client address). No per-route limit, for
-the same reason login has none — the limiter object lives in main.py and the
-endpoint modules cannot import it without a cycle.
+Rate limited at AUTH_RATE_LIMIT_PER_MINUTE per client address, the same
+limit as /auth/login. (This docstring used to say the route relied on the
+application-wide default "exactly as login does" — true, and vacuous: on
+2026-09-14 that default was found to be enforced on nothing. See
+app/core/ratelimit.py.)
 """
-from __future__ import annotations
-
+# No `from __future__ import annotations` here, on purpose. slowapi's decorator
+# wraps the handler in its own module, and FastAPI resolves string annotations
+# against the WRAPPER's globals — so a postponed `DbSession` became an
+# unresolvable name and FastAPI read `db` as a required query parameter
+# (422 "loc": ["query", "db"]). Real annotations survive the wrap.
 import structlog
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from app.core.dependencies import DbSession
+from app.core.ratelimit import AUTH_LIMIT, limiter
 from app.core.security import decode_token
 from app.models.agent import Agent, AgentStatus
 from app.models.user import User
@@ -55,7 +60,9 @@ class AgentVerification(BaseModel):
 
 @router.get("/verify-agent", response_model=AgentVerification,
             summary="Verify the signed QR on an agent's ID card — public, no login")
-def verify_agent(db: DbSession, token: str = Query(..., min_length=1, max_length=2048)):
+@limiter.limit(AUTH_LIMIT)
+def verify_agent(request: Request, db: DbSession,
+                 token: str = Query(..., min_length=1, max_length=2048)):
     try:
         payload = decode_token(token)
     except ValueError:

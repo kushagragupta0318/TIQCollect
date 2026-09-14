@@ -33,7 +33,7 @@ estimated" is exactly the kind a reader quotes without re-running it.)*
 This repo was extracted on **2026-08-17** from the `Collections` platform monorepo
 (`field-ops-stub/`) via `git subtree split`, so its 20 inherited commits are that
 subdirectory's history with paths rebased to root. Everything after `7c30095` was
-written here. 86 commits in total.
+written here. 131 commits at `9100d6d` (2026-09-14; this read "86" from 2026-08-17 until then).
 
 **Three copies of this codebase exist.** This one is the only one that should be
 edited:
@@ -57,10 +57,12 @@ still is. Pushing to the personal remote is fine on explicit instruction.
 local-only." That stopped being true some time before 2026-08-21 and misled
 anyone reading it; corrected rather than deleted so the change is visible.)*
 
-**Branch state, verified 2026-09-07.** `origin/main` is still `8d27a14`
-(2026-08-17) — `main` has not moved in three weeks. Work lives on the
-`TIQCollect-v*` branches; the current branch `TIQCollect-v2-2` is at `86eb6d0`
-and **is** pushed (`origin/TIQCollect-v2-2` matches). Nine remote branches exist.
+**Branch state, verified 2026-09-14.** `origin/main` is still `8d27a14`
+(2026-08-17) — `main` has not moved in four weeks. Work lives on the
+`TIQCollect-v*` branches; the current branch is **`TIQCollect-v3`**, pushed
+through `4790741` with the docs commit `9100d6d` local at the time of writing.
+Fourteen remote branches exist. *(This read "`TIQCollect-v2-2` at `86eb6d0`
+... Nine remote branches", verified 2026-09-07; both had moved.)*
 
 Command Center (in the platform monorepo) consumes this service's
 `/api/v1/manager/*` endpoints through a per-agency service login. Its
@@ -102,10 +104,11 @@ the showcase case is provably clean.
 Verify a change with all four, because each catches what the others miss:
 
 ```bash
-cd backend  && python -m pytest          # 945 tests, ~320s, no DB or network
+cd backend  && python -m pytest          # 1,115 tests, ~5 min, no DB or network
 cd backend  && python -m compileall app
 cd frontend && npm run build             # tsc -b + vite — the real typecheck
-cd frontend && npm run lint              # 16 errors left (was 53) — see issue 1
+cd frontend && npm test                  # 44 vitest tests — in CI since 2026-09-14
+cd frontend && npm run lint              # 7 errors left (was 53) — see issue 1
 ```
 
 **Use `npm run build`, never `npx tsc --noEmit`.** The root `tsconfig.json` is a
@@ -122,16 +125,20 @@ typecheck both pass. The workflow triggers on pushes to `main` and on PRs.
 
 ```
 backend/app/
-  api/v1/endpoints/   agent.py (33 routes, 1.1k lines) · manager.py (33, 4.0k)
+  api/v1/endpoints/   agent.py (33 routes, 1.1k lines) · manager.py (40, 4.7k)
+                      verify.py (1, public: the ID-card check, 2026-09-11)
                       auth.py (5) · field_ops.py (4, Command Centre contract)
                       health.py (2)
   services/           case · visit · payment · otp · auth · agent · media · notification
                       ai_report · demo · fraud · location · repayment · visit_priority
-                      planner · global_allocator · ml_scoring   (17 files)
+                      planner · global_allocator · ml_scoring   (18 files)
   core/               config · security · database · dependencies · errors · geo
+                      audit (write_audit) · ratelimit (the one Limiter, 2026-09-14)
                       routing (OSRM + OR-Tools VRPTW) · llm (provider seam)
                       transcription (Whisper seam) · storage (MinIO)
-  models/             22 files → 21 mapped tables (base.py is the only non-table)
+  models/             21 files → 21 mapped tables (base.py is the only non-table;
+                      the two dead files went 2026-09-10, model_prediction and
+                      model_candidate arrived 2026-09-09)
   ml/                 repayment_scorecard · recovery_scorecard · visit_priority
                       empirical_bayes · eligibility · allocator · repayment (tier seam)
                       recovery_validation · shadow_evaluator · train_shadow_model
@@ -1732,7 +1739,17 @@ Full specification: [docs/PLAN.md](docs/PLAN.md).
 - **Do not regress these**, they are load-bearing and were each fixed once: JWT
   with `jti` + `device_id` binding; bcrypt; single-use quick-login tokens (the
   90-day-reusable-token incident is documented in `core/security.py:1`); slowapi
-  rate limiting; presigned MinIO URLs; the SPA catch-all in `main.py` that refuses
+  rate limiting — **which was never actually active until 2026-09-14**: `main.py`
+  built the Limiter and registered the 429 handler but added neither
+  `SlowAPIMiddleware` nor a single `@limiter.limit`, so the 60/minute default
+  applied to nothing; measured, 80 hits on a public route and 70 on login with
+  zero 429s. It now lives in `core/ratelimit.py` and limits the three public
+  routes (`/auth/login`, `/auth/quick-login`, `/verify-agent`) at
+  `AUTH_RATE_LIMIT_PER_MINUTE` (10, declared since the start and used by
+  nothing until then). The global default is deliberately still not enforced —
+  the overview issues a dozen requests on load, the live map polls, and one
+  office NAT is one client address — and `tests/test_rate_limits.py` pins both
+  halves; presigned MinIO URLs; the SPA catch-all in `main.py` that refuses
   to swallow `/api` paths; and `core/transcription.py`, which is visibly debugged
   against real mic audio rather than clean test files — every filter in it is a
   fallback, not a hard gate, because hard gates made it return empty strings.
@@ -1751,7 +1768,7 @@ document. Re-verified against the code on 2026-09-07: **6 built · 10 partial ·
 | 4 | AI Next-Best-Action Engine | ❌ | No endpoint. Nothing chooses visit vs call vs reminder vs settle vs escalate |
 | 5 | Recovery-Optimized Route Planning | 🟡 | The *assignment* weights expected recovery, and the planner now keeps the road matrix it fetches, applies RBI + preference time windows, and persists real per-leg figures. A prize-collecting multi-vehicle CVRPTW (`plan_fleet`) exists and is tested but is **not yet wired into the nightly run** — the sequence inside a beat is still travel-time TSP |
 | 6 | Borrower 360° Profile | ✅ | `AgentCaseDetailPage`, 6 tabs. Disputes are still a visit outcome, not an object with a lifecycle |
-| 7 | AI Recovery Probability & Expected Recovery | 🟡 | `ml/recovery_scorecard.py` computes rate 30/60/90 + `expected_recoverable_amount`, snapshotted and surfaced. Hand-weighted and **uncalibrated** — no real outcome matures before 2026-11-22. A *trained*, calibrated alternative now exists (`ml/artifacts/recovery_risk`, Gini 0.515 out-of-time) but is gated off and fitted on synthetic data |
+| 7 | AI Recovery Probability & Expected Recovery | 🟡 | `ml/recovery_scorecard.py` computes rate 30/60/90 + `expected_recoverable_amount`, snapshotted and surfaced. Hand-weighted and **uncalibrated** — no real outcome matures before 2026-11-22. A *trained*, calibrated alternative now exists (`ml/artifacts/recovery_risk`, Gini 0.515 out-of-time) and — since the 2026-09-08 promotion — **drives the nightly allocation** (`ML_SCORING_ENABLED=True`); still fitted on synthetic data. *(This cell read "but is gated off" from 2026-09-07 until 2026-09-14 — the same stale claim the scoring-layers section had already corrected once.)* |
 | 8 | AI Settlement Recommendation | ❌ | `loan.settlement_status` is a read-only bank flag. No range, no policy, no approval workflow |
 | 9 | AI Agent Performance Intelligence | ✅ | Performance, AI insight, reallocation plan, monthly report, leaderboard, DPD and attendance breakdowns |
 | 10 | AI Fraud & Anomaly Detection | ✅ | `services/fraud_service.py` — 7 finding types (impossible travel, overlapping visits, photo-location mismatch, duplicate photos, short visits, far-from-customer, trail contradiction) over evidence already captured. Manager review; verdicts stored as future training labels. Rules, not a model, deliberately |
@@ -1874,16 +1891,24 @@ depend on judgement layers that do not exist yet.
    `alembic_version` at all**. `docker-entrypoint.sh` arbitrates by checking for
    `public.agents`. Fine for a demo box; for production `alembic upgrade head` has
    to be the only path.
-6. **`manager.py` is 3,967 lines of business logic in the route layer** — 33
-   routes and **114 `db.query()` calls** sitting directly in endpoints while a
+6. **`manager.py` is 4,667 lines of business logic in the route layer** — 40
+   routes and **124 `db.query()` calls** sitting directly in endpoints while a
    working `services/` layer exists and is used by every agent flow. There is no
    `manager_service.py`. This is *why* the tenancy leaks happened: there is no
    single place where "the agents this manager owns" is defined, so it gets
-   retyped. (Flagged at 2,316 lines on 2026-08-17 and 3,756 on 2026-09-06; still
-   growing.)
-7. **Frontend has no test tooling at all** — no vitest, jest, playwright or
-   cypress. TS `strict` and eslint are configured, which is a good base. The six
-   largest pages are 1.2k–2.3k lines each.
+   retyped. (Flagged at 2,316 lines on 2026-08-17, 3,756 on 2026-09-06, 3,967 on
+   2026-09-10; measured 4,667 on 2026-09-14 — still growing, and the 2026-09-11
+   reassignment and compliance endpoints went in here too, for want of a
+   `manager_service.py` to put them in.)
+7. **Frontend test coverage is thin, not absent.** *(This read "Frontend has
+   no test tooling at all — no vitest, jest, playwright or cypress" and was
+   false from 2026-09-09, when vitest arrived with the allocation-explanation
+   tests; corrected 2026-09-14.)* `npm test` runs **44 vitest tests** over
+   three pure modules — `allocationReasons`, `casesViewState` and
+   `reassignValidation` — and CI runs them since 2026-09-14. Nothing mounts a
+   page: there is no component or browser test, and the six largest pages
+   (1.2k–2.3k lines each) are still covered only by the build. TS `strict`
+   and eslint remain configured.
 8. **Analytics have three dimensions: agent, DPD bucket, month.** Every `group_by`
    in the manager router is one of those (plus beat date). There is no breakdown by
    branch, city/geography or loan product — though `Customer.city`, `Loan.loan_type`

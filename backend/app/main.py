@@ -14,20 +14,22 @@ from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 import structlog
 
 from app.core.config import settings
 from app.core.database import engine
 from app.core.errors import AppException
+from app.core.ratelimit import limiter
 from app.api.v1.router import api_router
 from app.api.v1.endpoints import field_ops
 
 logger = structlog.get_logger()
 
-limiter = Limiter(key_func=get_remote_address, default_limits=[f"{settings.RATE_LIMIT_PER_MINUTE}/minute"])
+# `limiter` comes from app.core.ratelimit — see that module for why it is not
+# built here and why no SlowAPIMiddleware is added. Only the routes decorated
+# with @limiter.limit are limited; nothing was, before 2026-09-14.
 
 
 def _sync_demo_contact() -> None:

@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Request
 from app.core.dependencies import DbSession, CurrentUser
+from app.core.ratelimit import AUTH_LIMIT, limiter
 from app.schemas.auth import LoginRequest, LoginResponse, QuickLoginRequest, RefreshRequest, TokenResponse, MessageResponse
 from app.services import auth_service
 
@@ -7,12 +8,14 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
 @router.post("/login", response_model=LoginResponse, summary="Login — returns JWT access + refresh tokens")
+@limiter.limit(AUTH_LIMIT)
 async def login(body: LoginRequest, request: Request, db: DbSession):
     return auth_service.login(db, body.email, body.password, body.device_id, request)
 
 
 # collection_dashboard: lets the multi-agency dashboard deep-link into a manager's session
 @router.post("/quick-login", response_model=LoginResponse, summary="Exchange a pre-signed link token for a real session")
+@limiter.limit(AUTH_LIMIT)
 async def quick_login(body: QuickLoginRequest, request: Request, db: DbSession):
     return auth_service.quick_login(db, body.token, request)
 

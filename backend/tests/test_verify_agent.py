@@ -20,6 +20,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.core.config import settings
 from app.core.database import Base, get_db
+from app.core.ratelimit import limiter
 from app.core.security import _make_token, create_access_token, create_agent_verify_token
 from app.main import app
 from app.models.agent import Agent, AgentSpecialization, AgentStatus, AgentTier
@@ -34,6 +35,17 @@ ALLOWED = {"agent_name", "employee_code", "agency", "active"}
 
 def _uid():
     return str(uuid.uuid4())
+
+
+@pytest.fixture(autouse=True)
+def _fresh_rate_limit_window():
+    """The route is limited to AUTH_RATE_LIMIT_PER_MINUTE per client address
+    (tests/test_rate_limits.py proves it), and TestClient is one address. Each
+    test here gets its own window so the limit is exercised where it is the
+    subject and invisible where it is not."""
+    limiter.reset()
+    yield
+    limiter.reset()
 
 
 @pytest.fixture(scope="module")
