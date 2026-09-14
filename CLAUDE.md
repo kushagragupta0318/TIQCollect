@@ -9,17 +9,16 @@ detection and an LLM performance narrative over their own team.
 FastAPI + Postgres + Redis + MinIO + Celery on the backend; React 19 + Vite +
 TypeScript + Tailwind on the frontend. Python >= 3.12.
 
-**Measured 2026-09-10**, not estimated: 32,833 lines under `backend/app`,
-13,179 under `backend/scripts`, 18,805 under `frontend/src`, and **1,044 backend
-tests + 23 frontend tests, all passing** (full suite: 1038 passed in 493s on
-2026-09-10; the collected count is higher because it includes the four-eyes
-tests added after that run).
+**Measured 2026-09-11**, not estimated: 33,864 lines under `backend/app`,
+13,562 under `backend/scripts`, 19,700 under `frontend/src`, and **1,110 backend
+tests + 44 frontend tests, all passing** (full suite: 1110 passed in 314s on
+2026-09-11, after the compliance-hardening commit `4790741`).
 
-*(These read 28,187 / 12,061 / 17,863 and "945 backend + 15 frontend", dated
-2026-09-08. Every one had drifted by the 2026-09-10 audit — `backend/app` grew
-16% while the file went on quoting a two-day-old figure. Corrected rather than
-deleted, because a number presented as "measured, not estimated" is exactly the
-kind a reader quotes without re-running it.)*
+*(These read 32,833 / 13,179 / 18,805 and "1,044 backend + 23 frontend", dated
+2026-09-10, and before that 28,187 / 12,061 / 17,863 and "945 + 15", dated
+2026-09-08. Every one had drifted within a day or two of being written.
+Corrected rather than deleted, because a number presented as "measured, not
+estimated" is exactly the kind a reader quotes without re-running it.)*
 
 > **Run `git status` before assuming the tree matches the last commit.**
 >
@@ -1761,7 +1760,7 @@ document. Re-verified against the code on 2026-09-07: **6 built · 10 partial ·
 | 13 | Recovery Risk Radar | ❌ | Every input already exists and is already on the wire. **Pure frontend work — cheapest item on this list** |
 | 14 | Digital Payment & Instant Receipt | ✅ | Unique receipt numbers, Razorpay UPI QR, SMS + WhatsApp receipts, borrower-OTP verification. No reconciliation workflow |
 | 15 | Offline-First Field App | ❌ | The banner is honest and text drafts persist per case, but — verified — there is **no service worker, no IndexedDB, no outbox** anywhere. An agent still cannot complete a visit without signal |
-| 16 | Evidence & Immutable Case Timeline | 🟡 | Capture is thorough. The audit trail is 8 of 22 actions (issue 4) and there is no unified timeline view — evidence is scattered across tabs |
+| 16 | Evidence & Immutable Case Timeline | 🟡 | Capture is thorough. The audit trail writes 18 of 25 declared actions (issue 3; it read "8 of 22" until 2026-09-11) and there is no unified timeline view — evidence is scattered across tabs |
 | 17 | Customer Engagement Hub | 🟡 | Agent-triggered one-offs only. No campaigns, scheduling, PTP follow-up automation, templates or unified comms log |
 | 18 | Smart Work Queue & Gamification | 🟡 | The queue is real. Gamification is manager-side only — the agent cannot see their own standing |
 | 19 | Recovery Forecasting & Portfolio Analytics | 🟡 | Analytics are strong and all historical or current-state. **No forecasting anywhere** |
@@ -1788,21 +1787,63 @@ depend on judgement layers that do not exist yet.
    behaviour-affecting restructure on pages with **no test coverage at all**
    (issue 6), which is why they were not swept up with the rest. This is the only
    thing between CI and green.
-2. **No `/verify-agent` endpoint exists.** `core/security.py:78`'s
-   `create_agent_verify_token` mints a signed token for the QR on the agent's ID
-   card, and its own docstring describes "the public /verify-agent endpoint" that
-   validates it. Verified: no such route exists anywhere in `api/`. A borrower
-   scanning the card has nothing to check it against, so the anti-impersonation
-   control is inert. The Compliance page states this rather than claiming ID
-   verification.
-3. **The audit trail is mostly declared and unwritten.** `AuditLog` defines **25**
-   action types and **12 are emitted** — `LOGIN`, `LOGIN_FAILED`, `LOGOUT`,
+2. **`/verify-agent` — CLOSED 2026-09-11.** *(This item used to read "No
+   `/verify-agent` endpoint exists" — `create_agent_verify_token` had minted a
+   signed token for the QR on the agent's ID card since the first release, and
+   its docstring had always described a public endpoint that validated it,
+   while no such route existed anywhere in `api/`. Kept here rather than
+   deleted so the gap and its closing are both on record.)*
+   `GET /api/v1/verify-agent?token=…` (`endpoints/verify.py`) is public — no
+   authentication — decodes the token with the existing `decode_token`,
+   requires `type == "agent_verify"`, and returns **exactly four fields**:
+   agent name, employee code, agency, and `active` (false for a suspended
+   agent or a disabled login; off-duty and on-leave still read true — the
+   card is genuine). Every failure — forged signature, expired, wrong token
+   type, unknown agent, malformed — returns **the same 404 with the same
+   body**, so a forger learns nothing about which part to fix; the reason
+   is logged server-side. Rate limiting is the application default, the
+   same as `/auth/login`. Six tests in `tests/test_verify_agent.py`, verified
+   live against the running API. Still open on this control, verified: `agent_service.py`
+   *imports* `create_agent_verify_token` and never calls it, no API response
+   carries the token, and the agent's profile renders no verification QR —
+   so the endpoint now exists before the card that would send a borrower
+   to it. Wiring the token onto the profile is the next step, not this one.
+3. **The audit trail: 18 of 25 declared actions are written; 7 are not.**
+   `AuditLog` defines **25** action types. **18 have a write site** —
+   established 2026-09-11 by scanning `app/` for `action=AuditAction.X`
+   passed to an `AuditLog(...)` constructor or `write_audit(...)`, which is a
+   write and not merely a reference: `LOGIN`, `LOGIN_FAILED`, `LOGOUT`,
    `TOKEN_REFRESH`, `DEVICE_MISMATCH`, `PAYMENT_VERIFIED`, `PTP_UPDATED`,
-   `ANOMALY_REVIEWED`, the three `MODEL_*` actions, and `DATA_EXPORT`.
-   `VISIT_RECORDED`, `PTP_SET`, `CASE_ASSIGNED`, `BEAT_GENERATED`,
-   `CONTACT_HOUR_VIOLATION_ATTEMPT`, `ROLE_VIOLATION_ATTEMPT` and seven others
-   are defined and never written. Immutability is convention only — no trigger,
-   no revoked grant.
+   `ANOMALY_REVIEWED`, the three `MODEL_*` actions, `DATA_EXPORT`,
+   `CASE_ASSIGNED` (manager reassignment, 2026-09-11),
+   `CONTACT_HOUR_VIOLATION_ATTEMPT` (the refused out-of-hours visit,
+   2026-09-11), and the four wired in the compliance-hardening commit
+   `4790741`: **`ROLE_VIOLATION_ATTEMPT`** at the 403 in `require_roles`,
+   **`VISIT_RECORDED`**, **`PTP_SET`** and **`PAYMENT_SUBMITTED`** at their
+   service commit points. **Seven remain declared and never written:**
+   `CASE_UPDATED`, `DOCUMENT_UPLOADED`, `SOS_TRIGGERED`, `SOS_RESOLVED`,
+   `BEAT_GENERATED`, `BEAT_MODIFIED`, `AGENT_STATUS_CHANGED`.
+
+   Two numbers, two questions — do not conflate them. The 18 above is
+   *implementation* coverage, from source. The Compliance page shows a
+   different figure, "N of 25 declared audit action types have ever been
+   recorded in this database", which is *observed data* from the audit table
+   and is deliberately labelled as not implementation coverage: a wired
+   action that has never fired reads as never recorded there. Both are
+   true; only the source scan answers "is it wired".
+
+   The four new writers go through `core/audit.write_audit`, which commits
+   the row on its own (`get_db` never commits) and, on failure, rolls back,
+   logs at ERROR and returns False — the trail records what happened, it does
+   not decide whether it happens; the 403 and the three business writes are
+   byte-identical to before. Immutability is still convention only — no
+   trigger, no revoked grant — but the retention side now has a name:
+   `AUDIT_LOG_RETENTION_DAYS = 1825`, an application-level floor, with the one
+   deletion sweep in the codebase (`location_retention`, agent locations
+   only) stating the exclusion and two tripwires in
+   `tests/test_compliance_hardening.py` failing if any code path ever deletes
+   from `audit_logs`. **Not a backup guarantee** — durability of the database
+   itself is a deployment concern and is not claimed anywhere.
 
    *(This read "22 action types; 8 are emitted" and listed `DATA_EXPORT` among
    the unwritten. **`DATA_EXPORT` was wired on 2026-09-10** — both
@@ -1814,7 +1855,9 @@ depend on judgement layers that do not exist yet.
    audit table would duplicate the very data being logged. An export of the
    audit trail that was itself unaudited is the one worth fixing first; the
    other 13 are still open, and the two `*_VIOLATION_ATTEMPT` actions are the
-   next most valuable, being security events declared and not recorded.)*
+   next most valuable, being security events declared and not recorded.
+   **Both `*_VIOLATION_ATTEMPT` actions were wired on 2026-09-11**, along
+   with four others, which is what took the count from 12 to 18 above.)*
 4. **The audit-log read path has one deliberate blind spot.** `GET
    /manager/audit-log` and `/audit-log/export` share `_audit_log_query`, so the
    tenant scope cannot be dropped on one path and not the other. But the scope is
@@ -1891,12 +1934,21 @@ depend on judgement layers that do not exist yet.
     payment — but until 2026-09-10 they did it with a bare `pass`, so an outage,
     a bad credential and a successful send were indistinguishable afterwards.
     They now log at ERROR with the exception type and traceback. **It is still a
-    swallow**: no caller learns that delivery failed, and the borrower-facing
-    consequence is real — `send_sms`'s only caller is `OtpService`, so an agent
-    sees "OTP sent" while the borrower who must approve the payment gets nothing.
-    A delivery-status column or a retry queue is the actual fix and is not built.
-    Verified NOT to be the `ptp_reminders` defect: no caller of either function
-    writes a delivery flag.
+    swallow** in the sense that matters — neither function ever raises, and a
+    failed receipt never blocks a payment — but as of 2026-09-11 (commit
+    `4790741`) it is no longer a *silent* one for the caller: both return
+    `bool` (False for unconfigured, no sending number, no phone, or a failed
+    send), `collect_payment` surfaces it as `receipt_sent` on the payment
+    response, and `OtpService.generate_and_send` surfaces it as `sms_sent` on
+    the OTP response with a WARNING on non-delivery. *(This paragraph used to
+    end: "no caller learns that delivery failed … an agent sees 'OTP sent'
+    while the borrower who must approve the payment gets nothing. A
+    delivery-status column or a retry queue is the actual fix and is not
+    built." The first half is closed; the second is still true — there is no
+    column, no retry, and the frontend does not yet render either flag, so the
+    agent's screen still says nothing. Response-level only, by design: no
+    migration.)* Verified NOT to be the `ptp_reminders` defect: that task still
+    sends nothing, and says so.
 
 ## Fixed on 2026-09-08 — routing (Workstream D)
 

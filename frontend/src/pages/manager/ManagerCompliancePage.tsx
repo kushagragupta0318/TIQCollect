@@ -19,6 +19,12 @@
 //       audit_logs at all.
 //     * "PTP follow-up reminders automated"     — the task sent nothing.
 //
+//   2026-09-11 — two of the rows below moved, each for a reason the code can
+//   show: /verify-agent exists (ID card row stays Partial because no screen
+//   carries the QR yet), and AUDIT_LOG_RETENTION_DAYS names a five-year
+//   application floor (retention row moves to Partial; backups are not
+//   claimed). Encryption at rest and Sunday blocking are unchanged: absent.
+//
 //   On an RBI Fair Practices screen that is the worst place in the product to
 //   assert a control that is not there: it is read by exactly the person who
 //   would otherwise go and implement it. This is the same failure as the offline
@@ -72,8 +78,12 @@ const RBI_RULES: { rule: string; state: RuleState; detail: RuleDetail }[] = [
     detail: "A code to the borrower's registered phone promotes a payment to VERIFIED. Optional: with no signal the payment is recorded PENDING_VERIFICATION and confirmed later." },
   { rule: "Payment receipt to the borrower", state: "partial",
     detail: "SMS and WhatsApp on every collection — best-effort. A delivery failure is logged at ERROR and never blocks the payment; nothing tells the agent or the borrower it failed." },
+  // 2026-09-11 — this read "no public endpoint validates it yet, so a borrower
+  // cannot check it". GET /verify-agent now exists. Still Partial, for a
+  // verified reason: agent_service imports the token minter and never calls
+  // it, so no screen carries the QR yet — the check exists before the card.
   { rule: "Agent ID card carries a signed token", state: "partial",
-    detail: "The QR is signed and cannot be forged without the server secret, but no public endpoint validates it yet, so a borrower cannot check it." },
+    detail: "Signed verification tokens are supported, and GET /verify-agent is public — no login — validating the signature and the agent_verify token type. It returns only the agent's name, employee code, agency and active status; an invalid, expired, wrong-type or unknown token gets the same 404. Not yet on the card: no screen renders the QR, so a borrower has nothing to scan." },
   { rule: "Immutable audit trail", state: "partial",
     // Observed data, named as such. "Implemented" cannot be derived at runtime
     // (a source reference is not a write), so the page never claims it.
@@ -86,8 +96,11 @@ const RBI_RULES: { rule: string; state: RuleState; detail: RuleDetail }[] = [
     detail: "Not implemented. The scheduled task reports what is due and sends nothing." },
   { rule: "Borrower data encrypted at rest", state: "absent",
     detail: "Not implemented. Identifiers are masked; the database itself is not encrypted by this application." },
-  { rule: "5-year audit log retention", state: "absent",
-    detail: "Not implemented. Audit rows are never pruned, and nothing guarantees they are kept either." },
+  // 2026-09-11 — was Not implemented: "never pruned, and nothing guarantees
+  // they are kept either". The application-level half now has a name and a
+  // test. The infrastructure half is not claimed.
+  { rule: "5-year audit log retention", state: "partial",
+    detail: "Application floor of 1825 days (5 years): nothing in the application deletes audit rows, and the one automated retention sweep — agent locations — excludes them, by statement and by test. This is an application-level retention floor, not a backup or infrastructure retention guarantee; database durability remains a deployment concern." },
 ];
 
 const RULE_STATE_META: Record<RuleState, { label: string; icon: typeof CheckCircle; fg: string }> = {
