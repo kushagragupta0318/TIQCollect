@@ -36,6 +36,13 @@ FUTURE_TOLERANCE_SECONDS = 120
 # Server-side echo of the client distance filter. The client already thins
 # fixes; this catches a stationary phone whose GPS jitters a few metres and
 # would otherwise write hundreds of near-identical rows overnight.
+#
+# 2026-09-14 — a fix dropped by THIS filter is still the agent reporting in.
+# It used to be counted as `rejected` and forgotten, and `last_location_update`
+# advanced only from stored rows, so a parked agent's "last seen" on the live
+# map never moved however often the phone reported: measured, an agent at
+# "28 min ago" while uploading every minute. The row is still not written —
+# that is the filter's whole point — but the agent's heard-from time is.
 MIN_MOVE_METRES = 25.0
 
 
@@ -85,6 +92,8 @@ class LocationService:
         accepted = 0
         rejected = 0
         newest: datetime | None = None
+        # Newest fix that was real but stationary — heard from, not stored.
+        heard: datetime | None = None
         rows: list[AgentLocation] = []
 
         for p in ordered:
@@ -112,6 +121,7 @@ class LocationService:
                 moved = haversine_metres(prev_lat, prev_lon, p.latitude, p.longitude)
                 if moved < MIN_MOVE_METRES:
                     rejected += 1
+                    heard = at if heard is None or at > heard else heard
                     continue
 
             rows.append(AgentLocation(
@@ -137,6 +147,11 @@ class LocationService:
                 agent.last_known_latitude = rows[-1].latitude
                 agent.last_known_longitude = rows[-1].longitude
                 agent.last_location_update = newest.isoformat()
+        # A stationary heartbeat moves the clock and nothing else: the position
+        # is within MIN_MOVE_METRES of what is already stored.
+        if heard is not None and (newest is None or heard > newest)                 and self._is_newer(agent.last_location_update, heard):
+            agent.last_location_update = heard.isoformat()
+        if rows or heard is not None:
             self.db.commit()
 
         return {
@@ -187,7 +202,13 @@ class LocationService:
             fix = latest.get(a.id)
             lat = fix.latitude if fix else a.last_known_latitude
             lon = fix.longitude if fix else a.last_known_longitude
-            at = self._as_utc(fix.recorded_at) if fix else self._parse(a.last_location_update)
+            # The later of the newest STORED fix and the newest HEARD-FROM time
+            # (record_batch advances the latter for stationary heartbeats that
+            # were deliberately not stored). Position comes from the row; the
+            # two are within MIN_MOVE_METRES of each other by construction.
+            stored_at = self._as_utc(fix.recorded_at) if fix else None
+            heard_at = self._parse(a.last_location_update)
+            at = max((t for t in (stored_at, heard_at) if t is not None), default=None)
             out.append({
                 "agent_id": a.id,
                 "employee_code": a.employee_code,

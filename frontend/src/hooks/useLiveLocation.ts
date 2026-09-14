@@ -266,6 +266,58 @@ function subscribe(listener: () => void): () => void {
   };
 }
 
+/**
+ * Agent-initiated refresh — the header button.
+ *
+ * 2026-09-14. The watcher already runs continuously, so this is not about
+ * making a good fix better; it is the agent's one lever when the line is
+ * stuck. Three things it forces that nothing else does: a fresh fix with
+ * `maximumAge: 0` (the watcher accepts one up to 30 s old, and after a
+ * TIMEOUT indoors it may not deliver again for a while); a re-request of
+ * permission after the agent has turned GPS back on in settings, which a
+ * "denied" watcher never retries; and a re-geocode, which otherwise waits for
+ * GEOCODE_MOVE_M of movement. The fresh fix is also pushed to `fixListeners`,
+ * so the trail (locationReporter) sees it like any other.
+ *
+ * Resolves true when a fix arrived, false when it did not — the caller shows
+ * the outcome; this module only knows positions.
+ */
+export function refreshLocation(): Promise<boolean> {
+  if (!("geolocation" in navigator)) {
+    publish({ status: "error", address: null, coords: null });
+    return Promise.resolve(false);
+  }
+  // Keep the last coords visible while locating: a list ordered by distance
+  // must not re-sort to nothing for the two seconds this takes.
+  publish({ ...snapshot, status: "locating" });
+  lastGeocoded = null;
+  hasAddress = false;
+
+  // Restart the watch so a stalled or denied one re-acquires with the same
+  // options the app always uses; the one-shot below is what answers now.
+  if (watchId !== undefined) {
+    navigator.geolocation.clearWatch(watchId);
+    watchId = navigator.geolocation.watchPosition(onPos, onErr, {
+      enableHighAccuracy: true, maximumAge: 30_000, timeout: 20_000,
+    });
+  }
+  return new Promise((resolve) => {
+    navigator.geolocation.getCurrentPosition(
+      (p) => { void onPos(p); resolve(true); },
+      (e) => {
+        onErr(e);
+        // onErr keeps stale coords on a transient error, on purpose; but a
+        // refresh that found nothing must still stop saying "Locating…".
+        if (snapshot.status === "locating") {
+          publish({ ...snapshot, status: snapshot.coords ? "ready" : "error" });
+        }
+        resolve(false);
+      },
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 15_000 },
+    );
+  });
+}
+
 const getSnapshot = () => snapshot;
 
 export function useLiveLocation(): LiveLocation {

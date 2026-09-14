@@ -7,6 +7,15 @@
 //   A module singleton rather than a hook: the queue has to survive route
 //   changes and component unmounts, and there must be exactly one uploader per
 //   tab regardless of how many components ask for tracking.
+// 2026-09-14 — Cadence 60s → 15s on both the queue and the upload, and a
+//   stationary heartbeat. Measured on the live map: a manager saw agents at
+//   "28 min ago" and "6 d ago" while they were logged in, because (a) a fix
+//   was queued at most once a minute and uploaded at most once a minute, and
+//   (b) watchPosition only fires when the phone MOVES, so a parked agent
+//   produced nothing at all. The heartbeat re-queues the last known fix with a
+//   fresh timestamp when nothing has been queued for MAX_INTERVAL_MS, so a
+//   still phone is "still here", not "silent". Battery cost is one small
+//   request every 15s; the 50 m movement gate is unchanged.
 // ────────────────────────────────────────────────────────────────────────────
 import { sendLocationBatch } from "@/api/agent";
 import { subscribeToFixes, type RawFix } from "@/hooks/useLiveLocation";
@@ -22,13 +31,13 @@ export interface QueuedPing {
 
 // Queue a fix once the agent has moved this far, OR once this long has passed —
 // whichever comes first. Distance-first is what keeps battery drain sane: a
-// stationary agent produces one point a minute, not one a second.
+// stationary agent produces one point every 15 seconds, not one a second.
 const MIN_MOVE_M = 50;
-const MAX_INTERVAL_MS = 60_000;
+const MAX_INTERVAL_MS = 15_000;
 
-// Upload cadence. Batching means a 30-minute walk is ~30 rows in one request
-// rather than 30 requests.
-const FLUSH_INTERVAL_MS = 60_000;
+// Upload cadence. Batching still applies (a burst of movement is one request,
+// not twenty), but the timer is what bounds how stale the manager's map can be.
+const FLUSH_INTERVAL_MS = 15_000;
 const FLUSH_AT_SIZE = 20;
 
 // Hard ceiling on the offline queue. Matches MAX_BATCH server-side. Beyond
@@ -44,6 +53,9 @@ const STORAGE_KEY = "tiq.location.queue.v1";
 let queue: QueuedPing[] = [];
 let unsubscribe: (() => void) | null = null;
 let flushTimer: ReturnType<typeof setInterval> | undefined;
+let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+// The most recent raw fix, queued or not — what the heartbeat re-sends.
+let lastFix: RawFix | null = null;
 let lastQueued: { lat: number; lon: number; at: number } | null = null;
 let flushing = false;
 let running = false;
@@ -95,12 +107,16 @@ function metresBetween(aLat: number, aLon: number, bLat: number, bLon: number): 
 }
 
 function onFix(fix: RawFix): void {
+  lastFix = fix;
   if (lastQueued) {
     const moved = metresBetween(lastQueued.lat, lastQueued.lon, fix.lat, fix.lon);
     const elapsed = fix.at - lastQueued.at;
     if (moved < MIN_MOVE_M && elapsed < MAX_INTERVAL_MS) return;
   }
+  enqueue(fix);
+}
 
+function enqueue(fix: RawFix): void {
   queue.push({
     latitude: fix.lat,
     longitude: fix.lon,
@@ -115,6 +131,21 @@ function onFix(fix: RawFix): void {
   persist();
 
   if (queue.length >= FLUSH_AT_SIZE) void flush();
+}
+
+// A phone that has not moved gets no watchPosition callback, so onFix never
+// runs and the trail simply stops. Re-queue the last fix, stamped now, once
+// MAX_INTERVAL_MS has passed with nothing queued. Goes straight to enqueue,
+// not through onFix's gate: two setIntervals on the same period drift by a
+// few ms, and a heartbeat that landed at 14,995 ms was being refused by a
+// `< 15_000` check — measured as uploads at 15 s, 30 s, then nothing at 45 s.
+// The slack absorbs that.
+const HEARTBEAT_SLACK_MS = 1_000;
+function heartbeat(): void {
+  if (!lastFix) return;
+  const now = Date.now();
+  if (lastQueued && now - lastQueued.at < MAX_INTERVAL_MS - HEARTBEAT_SLACK_MS) return;
+  enqueue({ ...lastFix, at: now });
 }
 
 // ── upload ──────────────────────────────────────────────────────────────────
@@ -149,6 +180,7 @@ export function startLocationReporting(): void {
   watchBattery();
   unsubscribe = subscribeToFixes(onFix);
   flushTimer = setInterval(() => { void flush(); }, FLUSH_INTERVAL_MS);
+  heartbeatTimer = setInterval(heartbeat, MAX_INTERVAL_MS);
   window.addEventListener("online", flush);
   // The tab being hidden is the most likely moment for the OS to discard it,
   // and is also when the agent has just pocketed the phone — flush what we have.
@@ -162,6 +194,7 @@ export function stopLocationReporting(): void {
   unsubscribe?.();
   unsubscribe = null;
   if (flushTimer !== undefined) { clearInterval(flushTimer); flushTimer = undefined; }
+  if (heartbeatTimer !== undefined) { clearInterval(heartbeatTimer); heartbeatTimer = undefined; }
   window.removeEventListener("online", flush);
   document.removeEventListener("visibilitychange", onVisibility);
   lastQueued = null;

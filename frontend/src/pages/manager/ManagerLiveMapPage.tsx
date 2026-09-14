@@ -430,7 +430,7 @@ export default function ManagerLiveMapPage() {
             <div className="flex items-center gap-2">
               <Route className="w-4 h-4 flex-shrink-0" style={{ color: "#2563EB" }} />
               <span className="font-semibold text-sm" style={{ color: "#1C1C1F" }}>
-                {shownTrail.full_name} — today
+                {shownTrail.full_name}
               </span>
             </div>
             <Stat label="Distance" value={`${(shownTrail.distance_metres / 1000).toFixed(2)} km`} />

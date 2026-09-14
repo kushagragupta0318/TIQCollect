@@ -169,11 +169,15 @@ export default function ManagerOverviewPage() {
   const s = summary!;
   const collectionPct = Math.round(s.collection_rate_today);
 
-  // Drill-through has to filter on the same day the cards counted. On seeded
-  // data the newest allocation_date trails the wall clock, so date.today()
-  // matches nothing. Falls back to the wall clock when the backend predates
-  // this field (e.g. a captured offline snapshot).
-  const effectiveDate = s.effective_date ?? new Date().toISOString().slice(0, 10);
+  // Leaderboard drill-through filters the cases page on TODAY, by the local
+  // calendar. 2026-09-14: this used `s.effective_date` — the newest beat date
+  // on or before today — so on any day without a plan (a Monday after a
+  // weekend, a seeded book whose plans trail the clock) the link opened on a
+  // stale date; the manager saw 12-09 on the 14th. Local date rather than
+  // toISOString(), which is UTC and reads yesterday until 05:30 IST.
+  const now = new Date();
+  const effectiveDate =
+    `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 
   return (
     <div className="manager-overview-page space-y-5">

@@ -11,7 +11,7 @@
 //   the agent's live address.
 // ─────────────────────────────────────────────────────────────────────────
 import { NavLink, Outlet, useNavigate, useLocation } from "react-router";
-import { Home, Briefcase, User, Map, LogOut, WifiOff, MapPin, LocateFixed } from "lucide-react";
+import { Home, Briefcase, User, Map, LogOut, WifiOff, MapPin, LocateFixed, RotateCcw } from "lucide-react";
 import { BrandLogo } from "@/components/ui/BrandLogo";
 import { useEffect, useState, useCallback } from "react";
 import { toast } from "react-hot-toast";
@@ -21,8 +21,8 @@ import { SOSButton } from "@/components/ui/SOSButton";
 import { AccountMenu } from "@/components/layout/AccountMenu";
 import { BeatProvider } from "@/contexts/BeatContext";
 import { useBeat } from "@/contexts/useBeat";
-import { useLiveLocation } from "@/hooks/useLiveLocation";
-import { startLocationReporting, stopLocationReporting } from "@/lib/locationReporter";
+import { refreshLocation, useLiveLocation } from "@/hooks/useLiveLocation";
+import { flush as flushLocationQueue, startLocationReporting, stopLocationReporting } from "@/lib/locationReporter";
 import api from "@/api/axios";
 
 const SIDEBAR_KEY  = "tiq:agent-sidebar";
@@ -77,6 +77,7 @@ const navItemStyle = (isActive: boolean, open: boolean): React.CSSProperties => 
  *  earth, so the demo reads as live rather than pinned to a fixed city. */
 function LiveLocationLine({ tone = "light" }: { tone?: "light" | "dark" }) {
   const loc = useLiveLocation();
+  const [refreshing, setRefreshing] = useState(false);
   const text =
     loc.status === "ready"   ? loc.address :
     loc.status === "locating" ? "Locating…" :
@@ -84,10 +85,28 @@ function LiveLocationLine({ tone = "light" }: { tone?: "light" | "dark" }) {
                                "Location unavailable";
   const Icon = loc.status === "ready" ? MapPin : LocateFixed;
   const color = tone === "light" ? "rgba(255,255,255,0.85)" : "hsl(var(--muted-foreground))";
+
+  // 2026-09-14 — the refresh button. The watcher runs on its own, so this is
+  // the agent's retry when the line is stuck ("Locating…" indoors, "Location
+  // off" after they re-enabled GPS, an address that lags a lane behind), and
+  // it pushes the fresh fix to the manager's map at once rather than on the
+  // next 15 s tick.
+  const onRefresh = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      const ok = await refreshLocation();
+      if (ok) { void flushLocationQueue(); toast.success("Location updated"); }
+      else toast.error("Couldn't get a fix — check GPS and try again");
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
   return (
     <div
       title={loc.coords ? `${loc.coords.lat.toFixed(5)}, ${loc.coords.lon.toFixed(5)}` : undefined}
-      style={{ display: "flex", alignItems: "flex-start", gap: 4, marginTop: 2, maxWidth: 280 }}
+      style={{ display: "flex", alignItems: "flex-start", gap: 4, marginTop: 2, maxWidth: 300 }}
     >
       <Icon size={11} color={color} style={{ marginTop: 2, flexShrink: 0 }}
             className={loc.status === "locating" ? "animate-pulse" : undefined} />
@@ -95,6 +114,17 @@ function LiveLocationLine({ tone = "light" }: { tone?: "light" | "dark" }) {
                      display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
         {text}
       </span>
+      <button
+        type="button"
+        onClick={() => { void onRefresh(); }}
+        disabled={refreshing}
+        aria-label="Refresh location"
+        title="Refresh location"
+        style={{ background: "none", border: 0, padding: 2, marginTop: 0, marginLeft: 2, cursor: refreshing ? "default" : "pointer",
+                 color, display: "inline-flex", flexShrink: 0, borderRadius: 4 }}
+      >
+        <RotateCcw size={11} className={refreshing ? "animate-spin" : undefined} />
+      </button>
     </div>
   );
 }
@@ -125,20 +155,27 @@ function AgentLayoutInner() {
   // recording an employee's movements outside their working hours is
   // employee monitoring we have no business doing, and the retention sweep in
   // workers/tasks/location_retention.py cannot un-collect it afterwards.
-  // Checking in is the agent's own action, which makes it the consent
-  // boundary. Same test AgentHomePage uses for "checked in".
+  // Location reporting runs for as long as the agent is logged in — this
+  // layout is only mounted for an authenticated agent, so mount/unmount IS
+  // the login boundary.
+  //
+  // 2026-09-14: this used to start only when `beat?.check_in_status ===
+  // "ON_DUTY"`, on the reasoning that checking in is the agent's own action
+  // and therefore the consent boundary. In practice that made the live map
+  // blind on any day without a plan: no beat, no check-in, no trail, and the
+  // manager saw "6 d ago" beside an agent who was logged in and working.
+  // Decided 2026-09-14 that a logged-in agent is a tracked agent; the consent
+  // boundary is the login. Beat check-in still marks the working day.
   //
   // Mounted in the layout rather than per-page so the trail does not develop
   // holes every time the agent navigates between screens. It rides on the
   // single watchPosition subscription LiveLocationLine below already holds —
   // no second GPS watcher, which would double power draw on a phone that has
   // to last a full shift.
-  const onDuty = beat?.check_in_status === "ON_DUTY";
   useEffect(() => {
-    if (!onDuty) return;
     startLocationReporting();
     return () => stopLocationReporting();
-  }, [onDuty]);
+  }, []);
 
   useEffect(() => {
     const onOnline  = () => { setIsOnline(true);  toast.success("Back online — you can submit now"); };
