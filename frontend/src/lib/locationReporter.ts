@@ -40,10 +40,19 @@ const MAX_INTERVAL_MS = 15_000;
 const FLUSH_INTERVAL_MS = 15_000;
 const FLUSH_AT_SIZE = 20;
 
-// Hard ceiling on the offline queue. Matches MAX_BATCH server-side. Beyond
-// this the OLDEST fixes are dropped: during a long outage the recent trail is
-// what matters for finding someone.
-const MAX_QUEUE = 500;
+// Hard ceiling on the offline queue. Beyond this the OLDEST fixes are dropped:
+// during a long outage the recent trail is what matters for finding someone.
+//
+// 2026-09-15 — was 500, which doubled as the per-request ceiling because it
+// matched MAX_BATCH server-side. At the old 60 s cadence 500 fixes buffered
+// ~8 h of dead zone; at 15 s it buffers ~2 h, so the 15 s change quietly cut
+// offline endurance fourfold. The queue is sized in TIME now (8 h) and the
+// request ceiling is its own constant, which is what MAX_BATCH always was.
+const QUEUE_HOURS = 8;
+const MAX_QUEUE = (QUEUE_HOURS * 3_600_000) / MAX_INTERVAL_MS;   // 1,920 at 15 s
+// Must not exceed MAX_BATCH in app/services/location_service.py — the server
+// rejects an oversized batch outright, which would strand the whole backlog.
+const MAX_BATCH_SEND = 500;
 
 // localStorage, not memory: a phone that reloads, crashes or is backgrounded
 // out of memory mid-shift must not lose the queue. The payload is small —
@@ -141,11 +150,40 @@ function enqueue(fix: RawFix): void {
 // `< 15_000` check — measured as uploads at 15 s, 30 s, then nothing at 45 s.
 // The slack absorbs that.
 const HEARTBEAT_SLACK_MS = 1_000;
+
+// How old the last real fix may be before the heartbeat stops re-sending it.
+//
+// 2026-09-15 — there was no bound, and `lastFix` is never invalidated, so a
+// phone whose GPS was revoked or that walked into a basement went on
+// reporting its last known point stamped `now`, every 15 s, for as long as
+// the app stayed open. The server advances the agent's heard-from time on
+// those, so the manager's map read a confident "just now" at a position that
+// could be hours old. On the screen used to find a lone worker, an honest
+// "40 min ago" is worth more than a fresh-looking lie. The watcher retries on
+// its own 20 s timeout, so two minutes of silence is a real outage, not a gap
+// between fixes.
+const STALE_FIX_MS = 120_000;
+
 function heartbeat(): void {
   if (!lastFix) return;
   const now = Date.now();
+  if (now - lastFix.at > STALE_FIX_MS) return;     // we no longer know where they are
   if (lastQueued && now - lastQueued.at < MAX_INTERVAL_MS - HEARTBEAT_SLACK_MS) return;
   enqueue({ ...lastFix, at: now });
+}
+
+/**
+ * Queue the current position immediately and upload it, bypassing the movement
+ * gate. The agent asked to be seen — the refresh button — so "you have not
+ * moved 50 m" is not a reason to stay silent. Returns false when there is no
+ * fix recent enough to stand behind, and the caller must not claim otherwise.
+ */
+export function reportNow(): boolean {
+  const now = Date.now();
+  if (!lastFix || now - lastFix.at > STALE_FIX_MS) return false;
+  enqueue({ ...lastFix, at: now });
+  void flush();
+  return true;
 }
 
 // ── upload ──────────────────────────────────────────────────────────────────
@@ -156,7 +194,7 @@ export async function flush(): Promise<void> {
   flushing = true;
   // Take a snapshot and clear optimistically, so fixes arriving mid-request are
   // not lost to the splice. On failure the snapshot is put back in front.
-  const batch = queue.slice(0, MAX_QUEUE);
+  const batch = queue.slice(0, MAX_BATCH_SEND);
   queue = queue.slice(batch.length);
   persist();
 
@@ -198,6 +236,10 @@ export function stopLocationReporting(): void {
   window.removeEventListener("online", flush);
   document.removeEventListener("visibilitychange", onVisibility);
   lastQueued = null;
+  // Dropped with it: a logout/login in the same tab would otherwise let the
+  // first heartbeat of the new session upload the previous session's position
+  // stamped now — the same fabricated freshness STALE_FIX_MS guards against.
+  lastFix = null;
   // The queue is intentionally NOT cleared: fixes captured before going off
   // duty are still that day's trail and should upload on the next start.
   void flush();

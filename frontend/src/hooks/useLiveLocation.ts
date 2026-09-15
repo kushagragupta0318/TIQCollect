@@ -43,7 +43,14 @@ async function reverseGeocode(lat: number, lon: number): Promise<string> {
   const url =
     `https://nominatim.openstreetmap.org/reverse` +
     `?format=jsonv2&lat=${lat}&lon=${lon}&zoom=18&addressdetails=1`;
-  const res = await fetch(url, { headers: { Accept: "application/json" } });
+  // 2026-09-15 — no timeout here meant a hung Nominatim call held
+  // `geocodeInFlight` true indefinitely, and every later fix returned at that
+  // guard without publishing. The header then sat on "Locating…" with no way
+  // out, including via the refresh button whose whole job is to clear it.
+  const res = await fetch(url, {
+    headers: { Accept: "application/json" },
+    signal: AbortSignal.timeout(8_000),
+  });
   if (!res.ok) throw new Error(`geocode ${res.status}`);
   const d = await res.json();
   const a = d.address || {};
@@ -186,7 +193,12 @@ async function onPos(p: GeolocationPosition) {
   // Only publish new coords when the agent has actually moved. Recovering from
   // an error also has to publish, or a transient failure would strand the UI.
   const cur = snapshot.coords;
-  if (!cur || metresBetween(cur.lat, cur.lon, lat, lon) >= COORD_STABLE_M || snapshot.status === "error") {
+  // "locating" joins "error" here: a refresh that lands the agent back on the
+  // same spot moves less than COORD_STABLE_M, and without this the publish is
+  // skipped and the line stays on "Locating…" until a geocode happens to
+  // finish. Recovering from a non-ready state is not a movement question.
+  if (!cur || metresBetween(cur.lat, cur.lon, lat, lon) >= COORD_STABLE_M
+      || snapshot.status === "error" || snapshot.status === "locating") {
     publish({ ...snapshot, status: hasAddress ? "ready" : snapshot.status, coords: { lat, lon } });
   }
 
@@ -290,8 +302,12 @@ export function refreshLocation(): Promise<boolean> {
   // Keep the last coords visible while locating: a list ordered by distance
   // must not re-sort to nothing for the two seconds this takes.
   publish({ ...snapshot, status: "locating" });
+  // Clear only the "where we last geocoded" anchor, which is what forces a
+  // re-geocode. `hasAddress` is deliberately LEFT ALONE: clearing it made
+  // onPos publish "locating" instead of "ready", so a refresh taken while a
+  // geocode was already in flight stranded the line on "Locating…" — the
+  // exact state this button exists to clear.
   lastGeocoded = null;
-  hasAddress = false;
 
   // Restart the watch so a stalled or denied one re-acquires with the same
   // options the app always uses; the one-shot below is what answers now.

@@ -200,15 +200,48 @@ class LocationService:
         out: list[dict] = []
         for a in agents:
             fix = latest.get(a.id)
-            lat = fix.latitude if fix else a.last_known_latitude
-            lon = fix.longitude if fix else a.last_known_longitude
-            # The later of the newest STORED fix and the newest HEARD-FROM time
-            # (record_batch advances the latter for stationary heartbeats that
-            # were deliberately not stored). Position comes from the row; the
-            # two are within MIN_MOVE_METRES of each other by construction.
+            # WHICHEVER SOURCE IS NEWER SUPPLIES BOTH THE POSITION AND THE TIME.
+            #
+            # Two things can carry an agent's whereabouts and they are written
+            # independently:
+            #   * an AgentLocation row — the trail, written by record_batch;
+            #   * agent.last_known_lat/lon + last_location_update — written by
+            #     record_batch for a stationary heartbeat it deliberately did
+            #     NOT store, and ALSO by agent_service.checkin, trigger_sos and
+            #     visit_service, none of which are constrained to be near the
+            #     newest row.
+            #
+            # 2026-09-15 — this took the position from the row and the time from
+            # max(row, agent), which is only safe if the two are always within
+            # MIN_MOVE_METRES. Check-in and visit recording break that: an agent
+            # checking in 10 km from their last stored fix appeared AT THE OLD
+            # FIX with age_seconds ~ 0 — a stale position wearing a fresh
+            # timestamp, on the screen a manager uses to find someone. Reading
+            # both fields off one source cannot produce that, whoever wrote it.
             stored_at = self._as_utc(fix.recorded_at) if fix else None
             heard_at = self._parse(a.last_location_update)
-            at = max((t for t in (stored_at, heard_at) if t is not None), default=None)
+            use_agent_row = (
+                heard_at is not None
+                and (stored_at is None or heard_at > stored_at)
+                and a.last_known_latitude is not None
+                and a.last_known_longitude is not None
+            )
+            # Accuracy and battery describe the STORED fix. They still describe
+            # this position when the agent row is merely the stationary
+            # heartbeat's clock — same place by construction — and describe a
+            # different place entirely after a check-in elsewhere. Measure it
+            # rather than guess: the two paths are indistinguishable here.
+            same_place = True
+            if use_agent_row:
+                same_place = fix is not None and haversine_metres(
+                    fix.latitude, fix.longitude,
+                    a.last_known_latitude, a.last_known_longitude,
+                ) < MIN_MOVE_METRES
+                lat, lon, at = a.last_known_latitude, a.last_known_longitude, heard_at
+            else:
+                lat = fix.latitude if fix else a.last_known_latitude
+                lon = fix.longitude if fix else a.last_known_longitude
+                at = stored_at if stored_at is not None else heard_at
             out.append({
                 "agent_id": a.id,
                 "employee_code": a.employee_code,
@@ -218,8 +251,8 @@ class LocationService:
                 "sos_triggered_at": a.sos_triggered_at,
                 "latitude": lat,
                 "longitude": lon,
-                "accuracy_metres": fix.accuracy_metres if fix else None,
-                "battery_pct": fix.battery_pct if fix else None,
+                "accuracy_metres": fix.accuracy_metres if (fix and same_place) else None,
+                "battery_pct": fix.battery_pct if (fix and same_place) else None,
                 "recorded_at": at.isoformat() if at else None,
                 # Age is computed server-side so every client agrees on what
                 # counts as stale, and so the UI never has to reason about

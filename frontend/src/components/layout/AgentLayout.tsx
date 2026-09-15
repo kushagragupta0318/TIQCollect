@@ -22,7 +22,7 @@ import { AccountMenu } from "@/components/layout/AccountMenu";
 import { BeatProvider } from "@/contexts/BeatContext";
 import { useBeat } from "@/contexts/useBeat";
 import { refreshLocation, useLiveLocation } from "@/hooks/useLiveLocation";
-import { flush as flushLocationQueue, startLocationReporting, stopLocationReporting } from "@/lib/locationReporter";
+import { reportNow, startLocationReporting, stopLocationReporting } from "@/lib/locationReporter";
 import api from "@/api/axios";
 
 const SIDEBAR_KEY  = "tiq:agent-sidebar";
@@ -96,8 +96,12 @@ function LiveLocationLine({ tone = "light" }: { tone?: "light" | "dark" }) {
     setRefreshing(true);
     try {
       const ok = await refreshLocation();
-      if (ok) { void flushLocationQueue(); toast.success("Location updated"); }
-      else toast.error("Couldn't get a fix — check GPS and try again");
+      if (!ok) { toast.error("Couldn't get a fix — check GPS and try again"); return; }
+      // `flush()` was wrong here: the refreshed fix only reaches the queue if
+      // it clears the reporter's 50 m / 15 s gate, so flushing usually sent
+      // nothing while the toast said otherwise. reportNow() bypasses the gate
+      // — the agent asked to be seen — and reports whether it could.
+      toast.success(reportNow() ? "Location updated" : "Location updated on this device only");
     } finally {
       setRefreshing(false);
     }
@@ -149,15 +153,20 @@ function AgentLayoutInner() {
     if (beat != null) setSosActive(beat.sos_active);
   }, [beat?.sos_active, setSosActive]);
 
-  // Upload the location trail, but ONLY while the agent is checked in.
-  //
-  // Gated on duty status rather than merely on being logged in: continuously
-  // recording an employee's movements outside their working hours is
-  // employee monitoring we have no business doing, and the retention sweep in
-  // workers/tasks/location_retention.py cannot un-collect it afterwards.
-  // Location reporting runs for as long as the agent is logged in — this
+  // Upload the location trail for as long as the agent is logged in — this
   // layout is only mounted for an authenticated agent, so mount/unmount IS
   // the login boundary.
+  //
+  // This block used to read: "ONLY while the agent is checked in. Gated on
+  // duty status rather than merely on being logged in: continuously recording
+  // an employee's movements outside their working hours is employee
+  // monitoring we have no business doing, and the retention sweep in
+  // workers/tasks/location_retention.py cannot un-collect it afterwards."
+  // That is no longer what the code does, and the two statements sat one
+  // above the other for a day. The concern it raises is real and is now the
+  // deployment's to answer: agents must be told that the app reports position
+  // whenever it is open, and closing the app — not going off duty — is what
+  // stops it. LOCATION_RETENTION_DAYS still bounds how long it is kept.
   //
   // 2026-09-14: this used to start only when `beat?.check_in_status ===
   // "ON_DUTY"`, on the reasoning that checking in is the agent's own action

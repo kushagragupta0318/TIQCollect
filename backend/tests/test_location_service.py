@@ -115,3 +115,56 @@ def test_the_stationary_threshold_is_the_one_the_client_mirrors():
     # The client thins at 50 m; the server must be no stricter than that or a
     # walking agent's every-other fix would be dropped as "stationary".
     assert MIN_MOVE_METRES <= 50.0
+
+
+def test_a_checkin_far_from_the_last_fix_is_not_shown_at_the_old_fix(db, agent):
+    """agent_service.checkin and visit_service write last_known_lat/lon and
+    last_location_update with NO AgentLocation row and no proximity constraint.
+    The live map must then report the CHECK-IN position, not the stored fix's
+    position with the check-in's fresh timestamp."""
+    svc = LocationService(db)
+    t0 = datetime.now(timezone.utc) - timedelta(hours=3)
+    svc.record_batch(agent, [_ping(t0)])                      # stored row, Gurgaon
+
+    # 10 km away, an hour later, exactly as checkin() writes it.
+    t1 = t0 + timedelta(hours=1)
+    agent.last_known_latitude = GURGAON[0] + 0.09
+    agent.last_known_longitude = GURGAON[1]
+    agent.last_location_update = t1.isoformat()
+    db.commit()
+
+    live = svc.live_positions([agent.id])[0]
+    assert datetime.fromisoformat(live["recorded_at"]) == t1
+    assert live["latitude"] == pytest.approx(GURGAON[0] + 0.09)   # NOT the stored fix
+    assert live["longitude"] == pytest.approx(GURGAON[1])
+    # Accuracy/battery describe the stored fix, which is not where we are.
+    assert live["accuracy_metres"] is None and live["battery_pct"] is None
+
+
+def test_a_stationary_heartbeat_keeps_the_accuracy_of_the_fix_it_repeats(db, agent):
+    """The far-check-in case above withholds accuracy because it describes
+    somewhere else. A heartbeat repeats the SAME place, so withholding there
+    would strip the live map's +/- metres from every parked agent."""
+    svc = LocationService(db)
+    t0 = datetime.now(timezone.utc) - timedelta(minutes=5)
+    svc.record_batch(agent, [_ping(t0)])
+    svc.record_batch(agent, [_ping(t0 + timedelta(seconds=15))])   # stationary
+    live = svc.live_positions([agent.id])[0]
+    assert live["accuracy_metres"] == 20.0
+    assert datetime.fromisoformat(live["recorded_at"]) == t0 + timedelta(seconds=15)
+
+
+def test_an_older_agent_row_never_overrides_the_newest_stored_fix(db, agent):
+    svc = LocationService(db)
+    t0 = datetime.now(timezone.utc) - timedelta(hours=2)
+    agent.last_known_latitude = GURGAON[0] + 0.09
+    agent.last_known_longitude = GURGAON[1]
+    agent.last_location_update = t0.isoformat()
+    db.commit()
+
+    t1 = t0 + timedelta(hours=1)                              # newer real movement
+    svc.record_batch(agent, [_ping(t1, lat=GURGAON[0], lon=GURGAON[1])])
+    live = svc.live_positions([agent.id])[0]
+    assert datetime.fromisoformat(live["recorded_at"]) == t1
+    assert live["latitude"] == pytest.approx(GURGAON[0])
+    assert live["accuracy_metres"] == 20.0
