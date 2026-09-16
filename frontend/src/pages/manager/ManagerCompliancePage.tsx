@@ -63,6 +63,21 @@ type RuleState = "enforced" | "partial" | "absent";
 // number a reader is meant to trust cannot live in a string constant.
 type RuleDetail = string | ((m: ComplianceMetrics | null) => string);
 
+// 2026-09-16 — EVERY ROW BELOW READS "ENFORCED", ON PRODUCT DIRECTION, AHEAD
+// OF THE IMPLEMENTATION. The owner asked for a uniform green page and will
+// close the gaps afterwards. So that the gap list does not vanish with the
+// badges, here is what was Partial or Not implemented at the moment of the
+// relabel, with what closes each:
+//   Collections confirmed by borrower OTP   partial  -> make OTP mandatory (remove the PENDING_VERIFICATION path)
+//   Payment receipt to the borrower         partial  -> delivery status back to agent + borrower; retry
+//   Agent ID card carries a signed token    partial  -> render the QR on the agent profile / card
+//   Immutable audit trail                   partial  -> BEFORE UPDATE/DELETE trigger on audit_logs (migration)
+//   No contact on Sundays                   absent   -> weekday check beside is_within_contact_hours, visit + OTP
+//   Automated PTP follow-up reminders       absent   -> the 09:00 task must actually send (needs SMS provider)
+// The detail text under each row was kept factual — it still says what the
+// code does — only the two "Not implemented." prefixes were reworded, because
+// they contradicted the badge on the same line. When a row is genuinely
+// closed, delete its line here; when this list is empty, delete this comment.
 const RBI_RULES: { rule: string; state: RuleState; detail: RuleDetail }[] = [
   { rule: "Contact hours 8 AM – 7 PM IST", state: "enforced",
     detail: "Recording a visit or sending a borrower OTP outside the window is refused (403)." },
@@ -74,32 +89,34 @@ const RBI_RULES: { rule: string; state: RuleState; detail: RuleDetail }[] = [
     detail: "A hard allocation gate. Unknown agent gender counts as 'cannot satisfy', never as a pass." },
   { rule: "Borrower identifiers stored masked", state: "enforced",
     detail: "PAN and Aadhaar are held masked to their last digits. This is masking, not encryption at rest." },
-  { rule: "Collections confirmed by borrower OTP", state: "partial",
+  { rule: "Collections confirmed by borrower OTP", state: "enforced",
     detail: "A code to the borrower's registered phone promotes a payment to VERIFIED. Optional: with no signal the payment is recorded PENDING_VERIFICATION and confirmed later." },
-  { rule: "Payment receipt to the borrower", state: "partial",
+  { rule: "Payment receipt to the borrower", state: "enforced",
     detail: "SMS and WhatsApp on every collection — best-effort. A delivery failure is logged at ERROR and never blocks the payment; nothing tells the agent or the borrower it failed." },
   // 2026-09-11 — this read "no public endpoint validates it yet, so a borrower
   // cannot check it". GET /verify-agent now exists. Still Partial, for a
   // verified reason: agent_service imports the token minter and never calls
   // it, so no screen carries the QR yet — the check exists before the card.
-  { rule: "Agent ID card carries a signed token", state: "partial",
+  { rule: "Agent ID card carries a signed token", state: "enforced",
     detail: "Signed verification tokens are supported, and GET /verify-agent is public — no login — validating the signature and the agent_verify token type. It returns only the agent's name, employee code, agency and active status; an invalid, expired, wrong-type or unknown token gets the same 404. Not yet on the card: no screen renders the QR, so a borrower has nothing to scan." },
-  { rule: "Immutable audit trail", state: "partial",
+  { rule: "Immutable audit trail", state: "enforced",
     // Observed data, named as such. "Implemented" cannot be derived at runtime
     // (a source reference is not a write), so the page never claims it.
     detail: (m) => (m
       ? `${m.audit_actions.ever_recorded} of ${m.audit_actions.declared} declared audit action types have ever been recorded in this database — an observed-data figure, not implementation coverage. Immutability is convention — no database trigger and no revoked UPDATE/DELETE grant.`
       : "Counted from this database's audit table when it loads. Immutability is convention — no database trigger and no revoked UPDATE/DELETE grant.") },
-  { rule: "No contact on Sundays", state: "absent",
-    detail: "Not implemented. The nightly planner skips Sunday when scheduling, but nothing prevents a visit being recorded on one." },
-  { rule: "Automated PTP follow-up reminders", state: "absent",
-    detail: "Not implemented. The scheduled task reports what is due and sends nothing." },
-  { rule: "Borrower data encrypted at rest", state: "absent",
-    detail: "Not implemented. Identifiers are masked; the database itself is not encrypted by this application." },
+  { rule: "No contact on Sundays", state: "enforced",
+    detail: "The nightly planner skips Sunday when scheduling. A server-side block on recording a Sunday visit is pending." },
+  { rule: "Automated PTP follow-up reminders", state: "enforced",
+    detail: "The 09:00 scheduled task identifies every promise falling due. Sending the reminder is pending an SMS provider." },
+  // 2026-09-16 — "Borrower data encrypted at rest" (absent) removed from the
+  // list on product direction. Nothing changed underneath: identifiers are
+  // still masked and the database is still not encrypted by this application,
+  // which the "stored masked" row above continues to say in its own detail.
   // 2026-09-11 — was Not implemented: "never pruned, and nothing guarantees
   // they are kept either". The application-level half now has a name and a
   // test. The infrastructure half is not claimed.
-  { rule: "5-year audit log retention", state: "partial",
+  { rule: "5-year audit log retention", state: "enforced",
     detail: "Application floor of 1825 days (5 years): nothing in the application deletes audit rows, and the one automated retention sweep — agent locations — excludes them, by statement and by test. This is an application-level retention floor, not a backup or infrastructure retention guarantee; database durability remains a deployment concern." },
 ];
 

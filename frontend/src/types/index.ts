@@ -288,6 +288,19 @@ export interface DashboardSummary {
   agents_on_duty: number;
   total_cases: number;
   cases_assigned: number;
+  /** Every case held by this manager's agents, keyed by CaseStatus, zero-filled
+   *  for statuses with no cases. Added 2026-09-16 for the overview's pipeline
+   *  donut. Optional: an offline snapshot from before the field existed. */
+  case_status_counts?: Record<string, number>;
+  /** Today's beat cases (the same set as cases_today) by the loan's current DPD
+   *  bucket. Added 2026-09-16 for the overview's donut. Optional: an offline
+   *  snapshot from before the field existed. */
+  today_dpd_breakdown?: Array<{
+    bucket: string;
+    case_count: number;
+    target_amount: number;
+    collectable_amount: number;
+  }>;
   cases_today: number;
   cases_resolved_today: number;
   visits_today: number;

@@ -743,6 +743,10 @@ export interface AllocationBeatItem {
   estimated_distance_km: number;
   estimated_duration_minutes: number;
   total_target_amount: number;
+  /** Balance still owed across this beat's stops (target − collected). The
+   *  beat cards show this so fifteen of them sum to the KPI above. Absent on a
+   *  response from before 2026-09-16. */
+  total_collectable_amount?: number;
   status: string;
 }
 
@@ -751,6 +755,9 @@ export interface AllocationDecisionItem {
   case_id: string;
   case_number: string;
   target_amount: number;
+  /** target − collected: what is still owed on the case, the base the allocator
+   *  multiplies. The reason line prints this. Absent before 2026-09-16. */
+  collectable_amount?: number;
   outcome: "ALLOCATED" | "DEFERRED" | "DEFERRED_ROUTE_INFEASIBLE" | "BLOCKED" | string;
   allocated_agent_id: string | null;
   allocated_agent_name: string | null;

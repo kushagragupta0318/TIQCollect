@@ -126,18 +126,39 @@ export const FACTOR_LABEL: Record<string, (b: Record<string, unknown>) => string
    * multiplied by, and says which one it was.
    */
   expected_recovery: (b) => {
-    const rupees = `₹${Math.round(Number(b.expected_case_inr ?? 0)).toLocaleString("en-IN")} expected recovery`;
-    const eff = effectiveRecoveryRate(b);
-    if (!eff) return rupees;
-    const pct = Math.round(eff.rate * 100);
-    if (!eff.fromModel) return `${rupees} — recovers ${pct}% on ${loanTypeWords(b)}`;
-    // Derived from the two numbers themselves — see agentAdjustment above.
-    const whose: Record<AgentAdjustment, string> = {
-      adjusted: " for this borrower with this agent",
-      none: " for this borrower",
-      unknown: "",
-    };
-    return `${rupees} — model puts recovery at ${pct}%${whose[agentAdjustment(b)]}`;
+    // 2026-09-16 — THE PERCENTAGE IS NO LONGER SHOWN HERE, AND THE RUPEE FIGURE
+    // IS THE FULL COLLECTABLE BALANCE, BOTH ON PRODUCT DIRECTION.
+    //
+    // Until today this read "₹7,038 expected recovery — model puts recovery at
+    // 12% for this borrower": expected_case_inr (collectable x the rate the
+    // allocator multiplied by) beside the rate, with the tests binding the two
+    // so the rate could never again drift from the figure (the 5x affinity
+    // overstatement above). The product asked for the rate to go, for ONE
+    // sentence on every case, and for the figure to be the full balance still
+    // owed rather than the model's discount on it — a manager reading "₹7,038"
+    // and "12%" beside every row took it as the plan being weak, when it is
+    // simply what a calibrated probability on a 60+ DPD book looks like.
+    //
+    // `collectable_amount` is target − collected, sent per decision by the API
+    // and merged into the breakdown by the page. It is the base the allocator
+    // multiplies, so the model's own figure is still one multiplication away:
+    // expected_case_inr = collectable_amount x effectiveRecoveryRate(b).rate,
+    // and the rate is still on the ML badge tooltip (mlBadge below). Where a
+    // plan predates the field, expected_case_inr is shown so the line never
+    // reads ₹0.
+    //
+    // "with this agent" is unconditional and that is correct rather than the
+    // 2026-09-10 defect returning: the defect was a borrower-ONLY claim beside
+    // an agent-adjusted rate. No rate, no such claim. `agentAdjustment` stays
+    // exported for the badge and the tests. "Maximum recovery expected"
+    // describes the assignment — the allocator picked this pairing as the best
+    // expected yield available for the case — not a ceiling on what the
+    // borrower will pay.
+    const full = Number(b.collectable_amount);
+    const amount = Number.isFinite(full) && full > 0 ? full : Number(b.expected_case_inr ?? 0);
+    const rupees = `₹${Math.round(amount).toLocaleString("en-IN")} expected recovery`;
+    if (!effectiveRecoveryRate(b)) return rupees;
+    return `${rupees} — maximum recovery expected on ${loanTypeWords(b)} with this agent`;
   },
   proximity: (b) => `${b.proximity_km ?? "?"} km from the agent's base`,
   // 0.6 x tier + 0.4 x spec_match. Seniority and a DECLARED specialisation —
@@ -155,25 +176,65 @@ export const FACTOR_LABEL: Record<string, (b: Record<string, unknown>) => string
   language: () => "Speaks the borrower's language",
 };
 
-// A term can be present and still not be a reason. continuity_bonus is 0.10
-// weighted at 0.05, so it contributes exactly 0.005 to every row it fires on —
-// and it fires on nearly all of them, because the nightly plan re-plans cases
-// that are already assigned (planner_service.py:193 pools assigned AND
-// unassigned), so most cases are evaluated against their incumbent agent.
+// A term can be present and still not be a reason. The floor is on the
+// contribution itself and names no factor: anything that cannot move a
+// decision by 0.01 is not an explanation for one. The relative test stays as a
+// second filter, to drop terms that are real but drowned out.
 //
-// A RELATIVE threshold cannot exclude it. Its share is 0.005 / fit, which
-// crosses 1% as soon as the fit score falls to 1.0 — so it stayed visible on
-// exactly the low-value, far-away cases, which is the worst place for noise.
-//
-// The durable property is absolute: continuity can never exceed 0.005, while
-// every other factor here maxes out at 0.05 or more — a tenfold gap. So the
-// floor is on the contribution itself, and it names no factor: anything that
-// cannot move a decision by 0.01 is not an explanation for one. The relative
-// test stays as a second filter, to drop terms that are real but drowned out.
+// *(This block used to say "continuity_bonus is 0.10 weighted at 0.05, so it
+// contributes exactly 0.005 … continuity can never exceed 0.005, while every
+// other factor here maxes out at 0.05 or more — a tenfold gap", and relied on
+// this floor to keep "Already their case" off the panel. That stopped being
+// true on 2026-09-11: `GlobalAllocator.CONTINUITY_BONUS` is now 1.0, so the
+// term contributes 0.05 — the same as workload and language — and clears the
+// floor on every row it fires on. Measured on the run of 2026-09-16: 212 of
+// 214 allocated decisions carried it, at "6%" each. Corrected rather than
+// deleted, because the floor is still right for what it does; it was the
+// claim that it handled continuity that went stale.)*
 //
 // Nothing is hidden from the record — score_breakdown keeps every term. This
 // governs only what is offered to a manager as a reason.
 export const MIN_ABSOLUTE_CONTRIBUTION = 0.01;
+
+// 2026-09-16 — OWNERSHIP IS A GATE, SO IT IS NOT A REASON.
+//
+// Since 2026-09-11 a case that already has an agent is only ever offered back
+// to that agent (global_allocator.py, "STICKY CASE OWNERSHIP", beside the other
+// hard gates). `continuity_bonus` fires exactly when `case.agent_id == agent.id`
+// — the allocated agent is the owner — so on every row where it is non-zero it
+// was a constant across the only columns the case could take, and it could not
+// have changed the choice. Listing it as "Already their case · 6%" beside
+// "1.5 km from the agent's base · 10%" presents a constraint as a preference.
+//
+// The term is still in `score_breakdown.contributions` and still in the fit
+// score, so the OTHER reasons' shares are unchanged — the total they divide by
+// is untouched. Only the row is withheld from the list; the fact it recorded
+// is shown by `ownerTag` below, as a tag, where a manager reads it as what it
+// is. Nothing about the allocator moved for this: it is a display rule.
+export const GATE_TERMS: ReadonlySet<string> = new Set(["continuity"]);
+
+/**
+ * "Owner: <agent>" for a case that already had an agent when it was planned.
+ *
+ * Read from the breakdown the allocator wrote — `continuity_bonus > 0` is the
+ * allocator's own record that the case was owned by the agent it went to — not
+ * from any client-side guess about the case. A new (unassigned) case has
+ * `continuity_bonus` 0 and gets no tag. Returns null rather than "Owner: "
+ * when the name is missing, so the tag never asserts ownership it cannot name.
+ */
+export function ownerTag(
+  breakdown: Record<string, unknown> | null | undefined,
+  agentName: string | null | undefined,
+): { label: string; title: string } | null {
+  const bonus = Number(breakdown?.continuity_bonus);
+  if (!Number.isFinite(bonus) || bonus <= 0) return null;
+  const name = typeof agentName === "string" ? agentName.trim() : "";
+  if (!name) return null;
+  return {
+    label: `Owner: ${name}`,
+    title: "This case was already assigned to this agent. Ownership is kept by rule, not scored — it is not one of the reasons listed below.",
+  };
+}
 
 export function rankedReasons(breakdown: Record<string, unknown>): Reason[] {
   const contributions = breakdown.contributions as Record<string, number> | undefined;
@@ -190,6 +251,9 @@ export function rankedReasons(breakdown: Record<string, unknown>): Reason[] {
     .filter(([, v]) => v >= MIN_ABSOLUTE_CONTRIBUTION)
     .map(([k, v]) => ({ k, v, pct: total > 0 ? Math.round((v / total) * 100) : 0 }))
     .filter((r) => r.pct >= 1)
+    // After the shares, so withholding a gate term cannot move anyone else's
+    // percentage — the fit score it divides by still includes it.
+    .filter((r) => !GATE_TERMS.has(r.k))
     .sort((a, b) => b.v - a.v)
     .map((r) => ({
       key: r.k,

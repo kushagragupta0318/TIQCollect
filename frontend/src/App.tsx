@@ -25,6 +25,7 @@ const BeatMapPage = lazy(() => import("@/pages/agent/BeatMapPage"));
 const ManagerOverviewPage = lazy(() => import("@/pages/manager/ManagerOverviewPage"));
 const ManagerAgentsPage = lazy(() => import("@/pages/manager/ManagerAgentsPage"));
 const ManagerLiveMapPage = lazy(() => import("@/pages/manager/ManagerLiveMapPage"));
+const ManagerBeatPlanPage = lazy(() => import("@/pages/manager/ManagerBeatPlanPage"));
 const ManagerCasesPage = lazy(() => import("@/pages/manager/ManagerCasesPage"));
 const ManagerAnalyticsPage = lazy(() => import("@/pages/manager/ManagerAnalyticsPage"));
 const ManagerCompliancePage = lazy(() => import("@/pages/manager/ManagerCompliancePage"));
@@ -136,6 +137,7 @@ export default function App() {
               <Route path="overview" element={<ManagerOverviewPage />} />
               <Route path="agents" element={<ManagerAgentsPage />} />
               <Route path="live-map" element={<ManagerLiveMapPage />} />
+              <Route path="beat-plan" element={<ManagerBeatPlanPage />} />
               <Route path="cases" element={<ManagerCasesPage />} />
               <Route path="analytics" element={<ManagerAnalyticsPage />} />
               <Route path="compliance" element={<ManagerCompliancePage />} />

@@ -10,12 +10,19 @@
  * overstatement, shown to the manager deciding whether the plan was sensible.
  *
  * The binding property these tests hold is arithmetic, not wording:
- *   expected_case_inr = target_amount x (the rate the label states)
+ *   expected_case_inr = target_amount x (the rate the panel states)
  * so a future edit that swaps the source back fails here rather than shipping.
+ *
+ * 2026-09-16 — the REASON LINE no longer prints the rate; the product asked for
+ * the rupee figure and the wording only. The rate is still on the ML badge
+ * tooltip, from the same `effectiveRecoveryRate`, so the arithmetic binding
+ * moved there ("the ML badge" below) rather than being dropped. The reason-line
+ * tests now hold the inverse: no percentage of ANY kind may appear in it, which
+ * is what stops affinity_score (94%) creeping back in through the wording.
  */
 import { describe, expect, it } from "vitest";
 import {
-  agentAdjustment, effectiveRecoveryRate, mlBadge, rankedReasons,
+  agentAdjustment, effectiveRecoveryRate, mlBadge, ownerTag, rankedReasons,
 } from "./allocationReasons";
 
 /** A real row, copied from allocation_decisions on the live demo book. */
@@ -27,12 +34,16 @@ const ML_ROW: Record<string, unknown> = {
   ml_used_for_decision: true,
   value_transform: "log_rescaled",
   expected_case_inr: 6524.64,   // = 48070 x 0.1357
+  collectable_amount: 48070,    // target - collected: what the line prints
   loan_type: "PERSONAL",
   tier_weight: 1.0,
   proximity_km: 4.2,
+  // CONTINUITY_BONUS is 1.0 since 2026-09-11, weighted at 0.05: an OWNED case
+  // as the allocator writes it today, not the 0.005 the pre-gate value gave.
+  continuity_bonus: 1.0,
   contributions: {
     expected_recovery: 0.4792, proximity: 0.0759, skills: 0.076,
-    workload: 0.05, continuity: 0.005, language: 0.05,
+    workload: 0.05, continuity: 0.05, language: 0.05,
   },
 };
 const TARGET_AMOUNT = 48070;
@@ -40,52 +51,56 @@ const TARGET_AMOUNT = 48070;
 function reasonFor(row: Record<string, unknown>, key: string) {
   return rankedReasons(row).find((r) => r.key === key);
 }
-function percentIn(label: string): number {
-  const m = label.match(/(\d+)%/);
-  if (!m) throw new Error(`no percentage in: ${label}`);
-  return Number(m[1]);
-}
 
 describe("the expected-recovery explanation", () => {
-  it("states the rate that actually produced the rupee figure", () => {
+  it("prints the FULL collectable balance, not the model's discount on it", () => {
+    // Product direction 2026-09-16. The discounted figure is one multiplication
+    // away and still recoverable — see the arithmetic test below.
     const label = reasonFor(ML_ROW, "expected_recovery")!.label;
-    const shown = percentIn(label) / 100;
-    const implied =
-      Number(ML_ROW.expected_case_inr) / TARGET_AMOUNT; // what the allocator used
-    expect(shown).toBeCloseTo(implied, 2);
+    expect(label).toContain("₹48,070 expected recovery");
+    expect(label).not.toContain("6,525");
   });
 
-  it("does NOT state affinity_score when the model drove the decision", () => {
+  it("falls back to the discounted figure on a plan that predates collectable_amount", () => {
+    const old = { ...ML_ROW, collectable_amount: undefined };
+    expect(reasonFor(old, "expected_recovery")!.label).toContain("₹6,525 expected recovery");
+  });
+
+  it("prints NO percentage — neither the model's rate nor affinity_score", () => {
     const label = reasonFor(ML_ROW, "expected_recovery")!.label;
-    // 94% would be affinity_score. That is the 5x overstatement.
-    expect(percentIn(label)).not.toBe(94);
-    expect(percentIn(label)).toBe(14);
+    expect(label).not.toMatch(/\d+%/);
     expect(label).not.toMatch(/recovers 94%/);
   });
 
-  it("says the figure came from the model, so a manager can weigh it", () => {
-    const label = reasonFor(ML_ROW, "expected_recovery")!.label;
-    expect(label).toMatch(/model/i);
-    expect(label).toContain("6,525");
+  it("the rate the rupees came from is still recoverable, from the row not the words", () => {
+    // The arithmetic the old label was tested on. It now binds the SOURCE the
+    // badge reads, so the number a manager can hover for is still the one the
+    // rupee figure was built from.
+    const rate = effectiveRecoveryRate(ML_ROW)!.rate;
+    expect(rate).toBeCloseTo(Number(ML_ROW.expected_case_inr) / TARGET_AMOUNT, 2);
   });
 
-  it("falls back to the agent's own rate when the model did NOT drive it", () => {
+  it("reads the same one sentence whether or not the model drove it", () => {
+    // Product direction, 2026-09-16: one sentence for every case. The only
+    // thing that may differ between rows is the rupee figure and the loan type.
+    const ml = reasonFor(ML_ROW, "expected_recovery")!.label;
+    expect(ml).toBe("₹48,070 expected recovery — maximum recovery expected on personal loans with this agent");
+
     const legacy = {
       ...ML_ROW,
       ml_used_for_decision: false,
       prob_recovery: 0.85,
       expected_case_inr: 40859.5, // = 48070 x 0.85
     };
-    const label = reasonFor(legacy, "expected_recovery")!.label;
-    const shown = percentIn(label) / 100;
-    expect(shown).toBeCloseTo(Number(legacy.expected_case_inr) / TARGET_AMOUNT, 2);
-    expect(label).not.toMatch(/model/i);
+    const lg = reasonFor(legacy, "expected_recovery")!.label;
+    expect(lg).toBe(ml); // the same balance is owed whichever rate priced it
+    expect(lg).not.toMatch(/\d+%/);
   });
 
   it("shows the rupees alone rather than inventing a rate", () => {
     const bare = { ...ML_ROW, prob_recovery_ml: null, prob_recovery: null };
     const label = reasonFor(bare, "expected_recovery")!.label;
-    expect(label).toBe("₹6,525 expected recovery");
+    expect(label).toBe("₹48,070 expected recovery");
   });
 });
 
@@ -107,6 +122,7 @@ const ADJUSTED_ROW: Record<string, unknown> = {
   ml_used_for_decision: true,
   value_transform: "log_rescaled",
   expected_case_inr: 3560.05,     // = 15140 x 0.235142
+  collectable_amount: 15140,
   loan_type: "AUTO",
   proximity_km: 1.0,
   contributions: {
@@ -146,60 +162,42 @@ const ADJUSTED_COLLECTABLE = 15140;
  * asserting an agent effect from a value nobody recorded. That is why the
  * unknown case is tested at all.
  */
-describe("borrower-vs-agent wording is derived, not asserted", () => {
-  it("does NOT claim borrower-only when the agent adjustment moved the rate", () => {
-    const label = reasonFor(ADJUSTED_ROW, "expected_recovery")!.label;
-    expect(label).toContain("for this borrower with this agent");
-    // The failing shape: the sentence ending at the borrower and stopping.
-    expect(label).not.toMatch(/for this borrower$/);
+describe("the sentence no longer carries the borrower-vs-agent qualifier", () => {
+  // Until 2026-09-16 the label ended "for this borrower" or "for this borrower
+  // with this agent", DERIVED from whether the agent adjustment had moved the
+  // rate — because a rate was printed and a borrower-only claim beside an
+  // agent-adjusted rate was the defect. With no rate in the sentence there is
+  // no such claim to get wrong, and the product asked for one sentence. These
+  // hold that the wording is now invariant to the adjustment, while the
+  // classifier itself (agentAdjustment, below) still answers the question for
+  // anything that needs it.
+  it("reads identically on an adjusted and an unadjusted row", () => {
+    const adjusted = reasonFor(ADJUSTED_ROW, "expected_recovery")!.label;
+    const nudged = reasonFor({ ...ML_ROW, ml_borrower_p_recover: 0.1400 }, "expected_recovery")!.label;
+    const plain = reasonFor(ML_ROW, "expected_recovery")!.label;
+    expect(agentAdjustment(ADJUSTED_ROW)).toBe("adjusted");
+    expect(agentAdjustment(ML_ROW)).toBe("none");
+    expect(adjusted).toBe("₹15,140 expected recovery — maximum recovery expected on auto loans with this agent");
+    expect(plain).toBe(nudged);
+    expect(plain).not.toMatch(/\d+%/);
+    expect(adjusted).not.toMatch(/\d+%/);
   });
 
-  it("allows borrower-only wording when there is no agent adjustment", () => {
-    const label = reasonFor(ML_ROW, "expected_recovery")!.label;
-    expect(label).toMatch(/for this borrower$/);
-    expect(label).not.toContain("with this agent");
-  });
-
-  it("reads the data rather than the row's shape — one field flips it", () => {
-    // Identical to the unadjusted row but for the borrower-side probability.
-    // If the qualifier were hardcoded, both would render the same phrase.
-    const nudged = { ...ML_ROW, ml_borrower_p_recover: 0.1400 };
-    expect(reasonFor(ML_ROW, "expected_recovery")!.label)
-      .not.toContain("with this agent");
-    expect(reasonFor(nudged, "expected_recovery")!.label)
-      .toContain("with this agent");
-  });
-
-  it("states neither when agent-independence cannot be established", () => {
-    // A decision recorded before ml_borrower_p_recover existed. Guessing either
-    // way would be inventing evidence.
+  it("says nothing different when agent-independence cannot be established", () => {
     const legacy = { ...ML_ROW, ml_borrower_p_recover: null };
-    const label = reasonFor(legacy, "expected_recovery")!.label;
     expect(agentAdjustment(legacy)).toBe("unknown");
-    expect(label).not.toContain("for this borrower");
-    expect(label).not.toContain("with this agent");
-    expect(label).toMatch(/model puts recovery at 14%$/);
+    expect(reasonFor(legacy, "expected_recovery")!.label)
+      .toBe(reasonFor(ML_ROW, "expected_recovery")!.label);
   });
 
   it("leaves the expected-recovery arithmetic untouched on the adjusted row", () => {
-    const label = reasonFor(ADJUSTED_ROW, "expected_recovery")!.label;
-    const shown = percentIn(label) / 100;
-    const implied = Number(ADJUSTED_ROW.expected_case_inr) / ADJUSTED_COLLECTABLE;
-    expect(shown).toBeCloseTo(implied, 2);
-    // The rate stated is the one the allocator MULTIPLIED BY, not the borrower's
-    // own — changing the wording must not change which number is shown.
-    expect(percentIn(label)).toBe(24);
-    expect(percentIn(label)).not.toBe(26);
-    expect(label).toContain("3,560");
-  });
-
-  it("never touches the non-model path", () => {
-    const legacy = {
-      ...ADJUSTED_ROW, ml_used_for_decision: false, expected_case_inr: 12869,
-    };
-    const label = reasonFor(legacy, "expected_recovery")!.label;
-    expect(label).toContain("recovers 85% on auto loans");
-    expect(label).not.toContain("borrower");
+    // The rate behind the rupees is the one the allocator MULTIPLIED BY, not the
+    // borrower's own. It no longer appears in the sentence, so it is held on
+    // the source the badge reads instead.
+    const rate = effectiveRecoveryRate(ADJUSTED_ROW)!.rate;
+    expect(rate).toBeCloseTo(Number(ADJUSTED_ROW.expected_case_inr) / ADJUSTED_COLLECTABLE, 2);
+    expect(Math.round(rate * 100)).toBe(24);
+    expect(Math.round(rate * 100)).not.toBe(26);
   });
 });
 
@@ -236,11 +234,85 @@ describe("the rest of the panel is unchanged", () => {
   it("still ranks by contribution and drops sub-threshold terms", () => {
     const reasons = rankedReasons(ML_ROW);
     expect(reasons[0].key).toBe("expected_recovery");
-    // continuity contributes 0.005, below MIN_ABSOLUTE_CONTRIBUTION.
-    expect(reasons.map((r) => r.key)).not.toContain("continuity");
     expect(reasons.map((r) => r.key)).toEqual(
       ["expected_recovery", "skills", "proximity", "workload", "language"]
     );
+  });
+});
+
+/**
+ * Ownership is a gate, so it is a tag and not a reason. 2026-09-16.
+ *
+ * Measured on the live run that prompted this: 212 of 214 allocated decisions
+ * carried continuity_bonus 1.0 and every one of them listed "Already their
+ * case · 6%" — a constant on the only columns the case could take, presented
+ * as a preference. These tests hold the display rule and, separately, that
+ * withholding the row moved nothing else: the other reasons' shares are
+ * computed against the SAME total as before, because the term is still in
+ * the fit score.
+ */
+describe("ownership is shown as a tag, never as a reason", () => {
+  const OWNED = ML_ROW; // continuity_bonus 1.0, contributions.continuity 0.05
+  const NEW_CASE: Record<string, unknown> = {
+    ...ML_ROW,
+    continuity_bonus: 0.0,
+    contributions: { ...(ML_ROW.contributions as Record<string, number>), continuity: 0 },
+  };
+
+  it("(a) an owned case does NOT get 'Already their case' in its reasons", () => {
+    const reasons = rankedReasons(OWNED);
+    expect(reasons.map((r) => r.key)).not.toContain("continuity");
+    expect(reasons.map((r) => r.label)).not.toContain("Already their case");
+    // And it is not hidden by the floor — 0.05 clears 0.01. It is withheld
+    // because it is a gate term, which is the claim under test.
+    expect((OWNED.contributions as Record<string, number>).continuity).toBeGreaterThan(0.01);
+  });
+
+  it("(b) the owner tag is present for an owned case", () => {
+    const tag = ownerTag(OWNED, "Deepak Narayan Joshi");
+    expect(tag).not.toBeNull();
+    expect(tag!.label).toBe("Owner: Deepak Narayan Joshi");
+  });
+
+  it("(c) a new / unassigned case does NOT receive the owner tag", () => {
+    expect(ownerTag(NEW_CASE, "Deepak Narayan Joshi")).toBeNull();
+    // Nor a row from before the field, nor a row with nobody to name.
+    expect(ownerTag({ ...ML_ROW, continuity_bonus: undefined }, "X")).toBeNull();
+    expect(ownerTag(OWNED, null)).toBeNull();
+    expect(ownerTag(OWNED, "   ")).toBeNull();
+  });
+
+  it("(d) every non-continuity reason is unchanged — same keys, labels and shares", () => {
+    // What the list read BEFORE the gate term was withheld, computed the same
+    // way rankedReasons does it, with continuity left in.
+    const c = OWNED.contributions as Record<string, number>;
+    const total = Object.values(c).reduce((a, b) => a + b, 0);
+    const before = Object.entries(c)
+      .filter(([, v]) => v >= 0.01)
+      .map(([k, v]) => ({ k, v, pct: Math.round((v / total) * 100) }))
+      .filter((r) => r.pct >= 1)
+      .sort((a, b) => b.v - a.v);
+    const after = rankedReasons(OWNED);
+    const beforeMinusContinuity = before.filter((r) => r.k !== "continuity");
+    expect(after.map((r) => r.key)).toEqual(beforeMinusContinuity.map((r) => r.k));
+    expect(after.map((r) => r.share)).toEqual(beforeMinusContinuity.map((r) => `${r.pct}%`));
+    // Withholding the row did not re-normalise anyone: the shares still sum to
+    // less than 100 by exactly continuity's share.
+    const shown = after.reduce((s, r) => s + Number(r.share.replace("%", "")), 0);
+    expect(shown).toBe(before.reduce((s, r) => s + r.pct, 0) - Math.round((c.continuity / total) * 100));
+  });
+
+  it("(d) the tag does not count as a reason — reasons on an owned and a new case are identical", () => {
+    // Same case, same agent, only ownership differs: the ranked list must not
+    // change length or content, because ownership is not in it either way.
+    expect(rankedReasons(OWNED).map((r) => r.key)).toEqual(rankedReasons(NEW_CASE).map((r) => r.key));
+  });
+
+  it("(e) nothing is recomputed or mutated — the breakdown is read, not written", () => {
+    const snapshot = JSON.stringify(OWNED);
+    rankedReasons(OWNED);
+    ownerTag(OWNED, "Deepak Narayan Joshi");
+    expect(JSON.stringify(OWNED)).toBe(snapshot);
   });
 });
 

@@ -313,6 +313,23 @@ def dashboard(current_user: ManagerOnly, db: DbSession):
         )
         .scalar() or 0
     )
+    # 2026-09-16 — every case this manager's agents hold, by status, for the
+    # overview's case-pipeline donut. One GROUP BY rather than a query per
+    # status. Every CaseStatus member is emitted, zero-filled, so a client can
+    # tell "no ESCALATED cases" from "the field was not sent". The grouping into
+    # resolved / in progress / not started is the CLIENT's, deliberately: the
+    # server hands over facts, and RESOLVED_STATUSES (models/case.py) is the one
+    # definition of "resolved" the client mirrors — see the frontend note.
+    status_rows = (
+        db.query(Case.status, func.count(Case.id))
+        .filter(Case.agent_id.in_(my_agent_ids))
+        .group_by(Case.status)
+        .all()
+    )
+    case_status_counts = {st.value: 0 for st in CaseStatus}
+    for st, n in status_rows:
+        key = st.value if hasattr(st, "value") else str(st)
+        case_status_counts[key] = int(n or 0)
     cases_resolved_today = (
         db.query(func.count(Case.id))
         .filter(
@@ -391,6 +408,37 @@ def dashboard(current_user: ManagerOnly, db: DbSession):
         .scalar() or 0.0
     ) if all_beat_case_ids else 0.0
 
+    # 2026-09-16 — TODAY'S cases by DPD bucket, for the overview's donut. The
+    # same case set as cases_today / amount_target_today (the effective day's
+    # beats), grouped by the loan's current bucket. The overview used to show
+    # the LIFETIME portfolio by bucket here — every case the agents have ever
+    # held, resolved ones included — which duplicated the Analytics page's
+    # "Collection by DPD Bucket" card row for row. This answers a different
+    # question: what is on the team's plate today, and how old is it.
+    # `collectable` is target − collected, the figure the planner works from.
+    today_dpd_breakdown: list[dict] = []
+    if all_beat_case_ids:
+        for bucket, n, target, collected in (
+            db.query(
+                Loan.dpd_bucket,
+                func.count(func.distinct(Case.id)),
+                func.coalesce(func.sum(Case.target_amount), 0.0),
+                func.coalesce(func.sum(Case.collected_amount), 0.0),
+            )
+            .join(Loan, Loan.id == Case.loan_id)
+            .filter(Case.id.in_(all_beat_case_ids))
+            .group_by(Loan.dpd_bucket)
+            .all()
+        ):
+            key = bucket.value if hasattr(bucket, "value") else str(bucket)
+            t = float(target or 0.0); c = float(collected or 0.0)
+            today_dpd_breakdown.append({
+                "bucket": key,
+                "case_count": int(n or 0),
+                "target_amount": round(t, 2),
+                "collectable_amount": round(max(t - c, 0.0), 2),
+            })
+
     # Return as percentage (0-100) so the frontend doesn't need to multiply
     collection_rate_pct = (
         round(amount_collected_today / amount_target_today * 100, 1) if amount_target_today > 0 else 0.0
@@ -401,6 +449,8 @@ def dashboard(current_user: ManagerOnly, db: DbSession):
         "agents_on_duty": agents_on_duty,
         "total_cases": total_cases,
         "cases_assigned": cases_assigned,
+        "case_status_counts": case_status_counts,
+        "today_dpd_breakdown": today_dpd_breakdown,
         "cases_today": cases_today,
         "cases_resolved_today": cases_resolved_today,
         "visits_today": visits_today,
@@ -4185,15 +4235,29 @@ def get_latest_allocation_plan(
     # migration, and works on plans built before this code existed.
     allocated_target_total = 0.0
     allocated_collectable_total = 0.0
+    # 2026-09-16. The same balance, per agent, so the beat cards can show what
+    # each agent is going after in the units the KPI above them uses. Beat
+    # carries `total_target_amount` — the LIFETIME target, summed by the planner
+    # — and fifteen cards of that summed to ~Rs 71L under a tile reading
+    # Rs 63.8L, with nothing on screen explaining the gap (money already banked).
+    # Summed from the decision rows already loaded, keyed on the agent the case
+    # actually went to, so it survives an exploration swap.
+    collectable_by_agent: dict[str, float] = {}
 
     decision_list = []
     for d in decisions:
         case_num = d.case.case_number if d.case else ""
         target_amt = float(d.case.target_amount or 0) if d.case else 0.0
+        collectable_amt = (
+            max(0.0, target_amt - float(d.case.collected_amount or 0)) if d.case else 0.0
+        )
         if str(d.outcome) == "ALLOCATED" and d.case:
             allocated_target_total += target_amt
-            allocated_collectable_total += max(
-                0.0, target_amt - float(d.case.collected_amount or 0))
+            allocated_collectable_total += collectable_amt
+            if d.allocated_agent_id:
+                collectable_by_agent[d.allocated_agent_id] = (
+                    collectable_by_agent.get(d.allocated_agent_id, 0.0) + collectable_amt
+                )
         agent_name = (
             d.allocated_agent.user.full_name
             if d.allocated_agent and d.allocated_agent.user
@@ -4220,6 +4284,11 @@ def get_latest_allocation_plan(
             "case_id": d.case_id,
             "case_number": case_num,
             "target_amount": target_amt,
+            # What is still owed on the case — target less collected — the base
+            # the allocator multiplies. The decision panel prints this as the
+            # case's recovery figure (2026-09-16, product direction), so it is
+            # sent rather than left for the client to derive from two fields.
+            "collectable_amount": round(collectable_amt, 2),
             "outcome": d.outcome,
             "allocated_agent_id": d.allocated_agent_id,
             "allocated_agent_name": agent_name,
@@ -4248,6 +4317,9 @@ def get_latest_allocation_plan(
                 "feature_coverage": _pred.feature_coverage if _pred else None,
             },
         })
+
+    for _b in beat_list:
+        _b["total_collectable_amount"] = round(collectable_by_agent.get(_b["agent_id"], 0.0), 2)
 
     return {
         "has_plan": True,

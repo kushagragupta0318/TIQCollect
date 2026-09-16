@@ -1044,8 +1044,20 @@ function CaseRow({ c, onOpen }: { c: Case; onOpen: () => void }) {
 export default function ManagerCasesPage() {
   const [searchParams] = useSearchParams();
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("ALL");
-  const [bucketFilter, setBucketFilter] = useState("ALL");
+  // Seeded from the URL, like date_from below: the overview's case-pipeline
+  // donut links here with ?status=<one CaseStatus> (2026-09-16). Anything not
+  // in the select's list falls back to ALL rather than filtering on a value
+  // the dropdown cannot show.
+  const [statusFilter, setStatusFilter] = useState(() => {
+    const s = searchParams.get("status") || "ALL";
+    return ["ASSIGNED", "IN_PROGRESS", "PTP_SET", "PARTIALLY_PAID", "PAID", "ESCALATED", "CLOSED"].includes(s) ? s : "ALL";
+  });
+  // Seeded from ?bucket= for the overview's "Today's Cases by DPD" donut
+  // (2026-09-16), same guard as statusFilter above: unknown values → ALL.
+  const [bucketFilter, setBucketFilter] = useState(() => {
+    const b = searchParams.get("bucket") || "ALL";
+    return ["BUCKET_2", "BUCKET_3", "NPA"].includes(b) ? b : "ALL";
+  });
   // Server-side, unlike bucketFilter: the recovery label lives in the snapshot
   // table, so narrowing it client-side would only filter the 50 rows already
   // fetched and leave a HIGH-recovery case on page 3 sitting on page 3.
@@ -1385,7 +1397,7 @@ export default function ManagerCasesPage() {
               <option value="NPA">NPA 90+</option>
             </select>
             <label className="flex items-center gap-2 text-xs min-w-0" style={{ color: "#6B6D76" }}>
-              <span className="flex-shrink-0">Beat from</span>
+              <span className="flex-shrink-0">Visit day from</span>
               <input type="date" className="input text-xs py-1.5 px-2 w-full lg:w-36 tap-target-h" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
             </label>
             <label className="flex items-center gap-2 text-xs min-w-0" style={{ color: "#6B6D76" }}>
@@ -1412,7 +1424,8 @@ export default function ManagerCasesPage() {
             <span>Status</span>
             <span>Target / Collected</span>
             <span>Agent</span>
-            {/* "Next Beat", not "Date". 2026-09-10.
+            {/* "Next Visit Day" (was "Next Beat" until 2026-09-16, when the
+                manager pages dropped the word "beat"), not "Date". 2026-09-10.
                 The column renders `allocation_date`, which is the day the case
                 is NEXT SCHEDULED for — not the day it was created or worked.
                 Every still-open case is re-stamped by each nightly plan run, so
@@ -1426,7 +1439,7 @@ export default function ManagerCasesPage() {
                 of them, i.e. exactly the rows a manager looks for after a day in
                 the field. Reverted. The column was never showing the wrong data,
                 it was answering a different question than its label implied. */}
-            <span>Next Beat</span>
+            <span>Next Visit Day</span>
           </div>
 
           {view === "loading" ? (

@@ -30,6 +30,7 @@
 //   mirrored in a <select>.
 // ─────────────────────────────────────────────────────────────────────────
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router";
 import { Search, MapPin, AlertTriangle, Phone, ChevronDown, ChevronUp, ChevronsUpDown, Brain, Shuffle, X, Loader2, TrendingUp, TrendingDown, Minus, IndianRupee } from "lucide-react";
 import { toast } from "react-hot-toast";
@@ -1193,12 +1194,24 @@ function ReallocationModal({ plan, onClose }: { plan: ReallocationPlan; onClose:
   const panelRef = useRef<HTMLDivElement>(null);
   useModalA11y(true, panelRef, onClose);
 
-  return (
+  // PORTALLED TO <body>. 2026-09-16.
+  //
+  // This dialog is `position: fixed; inset: 0`, and it was rendered inside the
+  // agent's expanded card — which carries a CSS transform (the `enter`
+  // animation's fill, and the hover lift). A transformed ancestor becomes the
+  // containing block for `fixed`, so "cover the viewport" quietly became
+  // "cover the card": measured live, the backdrop was 1227×380 instead of
+  // 1365×700, the 595px panel overflowed a 380px box, and the card's
+  // `overflow-hidden` clipped it — the footer's Apply / Cancel buttons drew
+  // over the agent rows underneath with the rows showing through. The Cases
+  // page's two dialogs already portal for this reason; this one now does too.
+  // Same z-index as those, above the sticky header.
+  return createPortal(
     <div
       role="dialog"
       aria-modal="true"
       aria-label="Reallocation plan"
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
+      className="fixed inset-0 z-[10000] flex items-end sm:items-center justify-center p-0 sm:p-4"
       style={{ background: "rgba(0,0,0,0.5)" }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
@@ -1287,11 +1300,15 @@ function ReallocationModal({ plan, onClose }: { plan: ReallocationPlan; onClose:
           )}
         </div>
 
-        {/* Footer */}
-        <div className="px-4 sm:px-5 py-4 flex gap-3 safe-bottom" style={{ borderTop: "1px solid #EAEBEF" }}>
+        {/* Footer. Apply is disabled when the plan moves nothing — the
+            2026-09-16 screenshot showed a live blue "Apply Plan" over
+            "0 cases can be reallocated". */}
+        <div className="px-4 sm:px-5 py-4 flex gap-3 safe-bottom flex-shrink-0" style={{ borderTop: "1px solid #EAEBEF", background: "#fff" }}>
           <button
             onClick={() => { toast.success(`Reallocation plan logged for ${plan.from_agent.name}`); onClose(); }}
-            className="tap-target flex-1 py-2.5 rounded-xl text-sm font-semibold text-white transition hover:brightness-95"
+            disabled={plan.summary.can_reallocate === 0}
+            title={plan.summary.can_reallocate === 0 ? "Nothing to apply — no case can be moved" : undefined}
+            className="tap-target flex-1 py-2.5 rounded-xl text-sm font-semibold text-white transition hover:brightness-95 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:brightness-100"
             style={{ background: "#0C66E4" }}
           >
             Apply Plan
@@ -1305,6 +1322,7 @@ function ReallocationModal({ plan, onClose }: { plan: ReallocationPlan; onClose:
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

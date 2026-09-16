@@ -6,6 +6,7 @@
 //   calendar cells scale down on touch. See docs/frontend-guide.md.
 // ─────────────────────────────────────────────────────────────────────────
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useIsBelowLg, useMediaQuery } from "@/hooks/useMediaQuery";
 import { TrendingUp, BarChart2, IndianRupee, Users, Calendar, X, Brain, Loader2 } from "lucide-react";
@@ -16,9 +17,10 @@ import {
   XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from "recharts";
 import {
-  getAnalytics, getAgentsPerformance,
+  getAnalytics, getAgentsPerformance, getDashboard,
   getManagerAgentCalendar, getAgentDPDBreakdown, getTeamDPDBreakdown, getTeamAttendance, getMonthlyReport,
 } from "@/api/manager";
+import { CasePipelineCard } from "./CasePipelineCard";
 import { AiBadge } from "@/components/ui/AiBadge";
 import type {
   AnalyticsData, AgentsPerformanceData, AgentPerfEntry, AgentMonthlyPerf,
@@ -463,6 +465,16 @@ export default function ManagerAnalyticsPage() {
   const agentDpdRows  = selectedAgent ? agentDpdQ.data ?? null : null;
   const agentDataLoading = agentCalendarQ.isFetching || agentDpdQ.isFetching;
 
+  // The case-pipeline donut's counts. Same key as the overview's dashboard
+  // query, so a manager arriving from the overview gets a cache hit and the
+  // two pages can never show different totals. Added 2026-09-16.
+  const dashboardQ = useQuery({
+    queryKey: ["manager", "dashboard"],
+    queryFn: getDashboard,
+    ...AS_BEFORE,
+  });
+  const navigate = useNavigate();
+
   const teamDpdQ = useQuery({
     queryKey: ["manager", "team", "dpd", apiTeamMonth],
     queryFn: () => getTeamDPDBreakdown(apiTeamMonth ?? undefined),
@@ -487,18 +499,34 @@ export default function ManagerAnalyticsPage() {
   const { kpis, monthly_trend, dpd_breakdown, recovery_breakdown, recovery_summary } = analytics;
   const { months, agents } = agentPerf;
 
-  // Window totals — the sum of every month on this page, so the unselected
-  // KPI cards agree with the trend chart beneath them.
+  // Headline totals — THE PORTFOLIO SNAPSHOT, the same figure the Overview's
+  // "Portfolio by DPD Bucket" card shows, so the two pages print one number.
   //
-  // Deliberately NOT kpis.total_collected_lakhs / total_target_lakhs /
-  // overall_collection_rate_pct: that block is a portfolio snapshot (current
-  // collected vs target across cases) and measures something different, so it
-  // read far below the months on show — 214.1L against 1572.0L summed, and
-  // 19.1% against 43.9%. Scoped to this page; the backend is untouched and
-  // every other consumer of `kpis` keeps its existing figures.
-  const windowCollectedLakhs = monthly_trend.reduce((t, m) => t + m.collected_lakhs, 0);
-  const windowTargetLakhs    = monthly_trend.reduce((t, m) => t + m.target_lakhs, 0);
-  const windowRatePct        = windowTargetLakhs > 0 ? (windowCollectedLakhs / windowTargetLakhs) * 100 : 0;
+  // 2026-09-16, reversing the choice below. `kpis.total_collected_lakhs` /
+  // `total_target_lakhs` are SUM(Case.collected_amount) / SUM(target_amount)
+  // over the cases this manager's agents hold — lifetime, current cases —
+  // and are the exact query behind the Overview card and the DPD bucket
+  // card lower on this page. The product asked for the header to agree with
+  // those rather than with the trend chart.
+  //
+  // *(This used to read: "Deliberately NOT kpis.total_collected_lakhs …
+  // that block is a portfolio snapshot and measures something different, so
+  // it read far below the months on show — 214.1L against 1572.0L summed."
+  // The 1572.0L was the monthly TARGET summed across months — a case visited
+  // in five months counted five times — which is why the window figure was
+  // never a total anyone could tie to the book. Reconciled on 2026-09-16:
+  // window 72.9L = portfolio 86.6L − 6.4L collected before the window − 7.6L
+  // collected by other teams' agents on cases since reassigned here. Both
+  // were right; they answered different questions, and the header now
+  // answers the portfolio one. Corrected rather than deleted so the earlier
+  // reasoning stays visible.)*
+  //
+  // The per-month figures are untouched: the trend chart still plots each
+  // month's collected against that month's target, and selecting a month
+  // still swaps these cards to that month (`selTeamTrend` below).
+  const windowCollectedLakhs = kpis.total_collected_lakhs;
+  const windowTargetLakhs    = kpis.total_target_lakhs;
+  const windowRatePct        = kpis.overall_collection_rate_pct;
 
   // Team-month dynamic KPI computation
   const selTeamTrend = selTeamMonth ? monthly_trend.find((m) => monthLabel(m.month) === selTeamMonth) ?? null : null;
@@ -548,18 +576,13 @@ export default function ManagerAnalyticsPage() {
 
   return (
     <div className="space-y-5">
-      <div style={{ animation: `enter 420ms ${EASE} 0ms both` }}>
-        <h1 className="font-bold" style={{ color: "#1C1C1F", letterSpacing: "-0.02em", fontSize: "var(--page-title)" }}>ABC Collections</h1>
-        <p className="text-[13px] sm:text-sm mt-0.5" style={{ color: "#6B6D76" }}>6-month collection performance, DPD breakdown, and agent rankings</p>
-      </div>
-
       {/* KPI row — updates dynamically when a team month is selected */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         {[
           {
             label: "Collection Rate",
             value: selTeamTrend ? `${selTeamTrend.collection_rate_pct.toFixed(1)}%` : `${windowRatePct.toFixed(1)}%`,
-            sub: selTeamTrend ? "" : "across all months",
+            sub: selTeamTrend ? "" : "on current portfolio",
             delta: teamRateDelta, deltaSuffix: "%",
             icon: <TrendingUp className="w-5 h-5" />, color: "text-brand-600",
           },
@@ -796,13 +819,23 @@ export default function ManagerAnalyticsPage() {
           loading={loading}
           barReady={barReady}
         />
-        <DPDBreakdownCard
-          rows={selectedAgent ? (agentDpdRows ?? dpd_breakdown) : (teamDpdRows ?? dpd_breakdown)}
-          loading={agentDataLoading}
-          barReady={barReady}
-          agentName={selectedAgent?.agent_name}
-          selMonth={!selectedAgent ? selTeamMonth : selAgentMonth}
-        />
+        {/* Right column: the same 883 cases two ways — by DPD, then by
+            state. Stacked in one cell so the pipeline sits under the bucket
+            card and the pair matches the Recovery outlook's height. */}
+        <div className="flex flex-col gap-5">
+          <DPDBreakdownCard
+            rows={selectedAgent ? (agentDpdRows ?? dpd_breakdown) : (teamDpdRows ?? dpd_breakdown)}
+            loading={agentDataLoading}
+            barReady={barReady}
+            agentName={selectedAgent?.agent_name}
+            selMonth={!selectedAgent ? selTeamMonth : selAgentMonth}
+          />
+          <CasePipelineCard
+            counts={dashboardQ.data?.case_status_counts}
+            onOpen={(statuses) => navigate(`/manager/cases?status=${statuses.join(",")}`)}
+            style={{ flex: 1 }}
+          />
+        </div>
         {selectedAgent && agentCalendar ? (
           // One card for the third slot, so it spans the row rather than
           // leaving the cell beside it empty.
@@ -851,8 +884,9 @@ type DPDEntry = { bucket: string; case_count: number; target_lakhs: number; coll
 // TWO figures per band, side by side, because they rank the bands differently
 // and only showing one points a team at the wrong pile.
 //
-//   Arrears + penalties = overdue_amount + penal_charges. A LEDGER FACT: the
-//   part of the balance already missed.
+//   Current expected (legend label since 2026-09-16; was "Arrears + penalties")
+//   = overdue_amount + penal_charges. A LEDGER FACT: the part of the balance
+//   already missed, and therefore collectable now.
 //   90-day recovery estimate = rate_90 x TOTAL OUTSTANDING. A scorecard output
 //   that includes principal not yet due — on the 2026-08-24 book it came to 229%
 //   of the arrears.
@@ -922,7 +956,7 @@ function RecoveryBreakdownCard({ rows, summary, loading, barReady }: {
       <div className="flex flex-wrap gap-x-4 gap-y-1 mb-4 text-[11px]" style={{ color: "#6B6D76" }}>
         <span className="inline-flex items-center gap-1.5">
           <i style={{ width: 10, height: 10, borderRadius: 2, background: ARREARS_COLOUR, display: "inline-block" }} />
-          Arrears + penalties
+          Current expected
         </span>
         <span className="inline-flex items-center gap-1.5">
           <i style={{ width: 10, height: 10, borderRadius: 2, background: EST_COLOUR, display: "inline-block" }} />
@@ -991,7 +1025,7 @@ function RecoveryBreakdownCard({ rows, summary, loading, barReady }: {
           <div className="mt-4 pt-3 text-xs" style={{ borderTop: "1px dashed #EAEBEF", color: "#6B6D76" }}>
             <p className="mb-1">
               <span className="font-bold" style={{ color: "#1C1C1F" }}>{money(summary?.arrears_and_penal ?? arrearsTotal)}</span>
-              {" "}in arrears across the open book — instalments already missed, plus penalties.
+              {" "}currently expected across the open book — arrears and penalties on instalments already missed.
             </p>
             <p className="mb-0">
               <span className="font-semibold">{money(estTotal)}</span>

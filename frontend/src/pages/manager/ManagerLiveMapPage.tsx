@@ -12,8 +12,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { AlertTriangle, BatteryLow, Crosshair, RefreshCw, Route } from "lucide-react";
+import { AlertTriangle, BatteryLow, Crosshair, Navigation, RefreshCw, Route } from "lucide-react";
 import { getAgentsLive, getAgentTrail, type AgentTrail, type LiveAgentPosition } from "@/api/manager";
+import { STALE_AFTER_S } from "./liveMapConstants";
+import { navigateAction } from "./liveMapNavigate";
 
 const EASE = "cubic-bezier(0.2,0,0,1)";
 
@@ -25,7 +27,8 @@ const POLL_MS = 15_000;
 // A fix older than this is drawn hollow. The agent has not necessarily stopped
 // moving — more often their phone is in a pocket or out of signal — so it is
 // shown as low confidence rather than hidden.
-const STALE_AFTER_S = 600;
+// STALE_AFTER_S moved to ./liveMapConstants on 2026-09-16 so the Navigate
+// helper can read the same threshold; it is imported above.
 
 // Fallback view when nobody is being tracked yet: all of Delhi NCR, so an empty
 // map still reads as a map rather than an ocean. Deliberately not used as a
@@ -78,6 +81,13 @@ function ageLabel(seconds: number | null): string {
   const h = Math.round(m / 60);
   return h < 24 ? `${h} hr ago` : `${Math.round(h / 24)} d ago`;
 }
+
+function escapeHtml(v: string): string {
+  return v.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
+}
+
+// lucide "navigation" glyph, inlined because the popup is an HTML string.
+const NAVIGATE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="3 11 22 2 13 21 11 13 3 11"/></svg>`;
 
 /** Distinct vibrant colored marker with initials & pin pointer for each agent */
 function agentIcon(a: LiveAgentPosition, isSelected: boolean = false): L.DivIcon {
@@ -144,8 +154,12 @@ export default function ManagerLiveMapPage() {
   // ── map bootstrap ─────────────────────────────────────────────────────────
   useEffect(() => {
     if (!mapEl.current || mapRef.current) return;
+    // Opens wide over the region and flies in to the team once the first
+    // positions arrive (see the fit below). Zoom 9 is the whole NCR at a
+    // glance, so the fly-in has somewhere to come from; 11 used to be both the
+    // opening view and roughly where the fit landed, so the page just appeared.
     const map = L.map(mapEl.current, { zoomControl: true, attributionControl: true })
-      .setView(DEFAULT_CENTRE, 11);
+      .setView(DEFAULT_CENTRE, 9);
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       maxZoom: 19,
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
@@ -227,10 +241,32 @@ export default function ManagerLiveMapPage() {
           .on("click", () => setSelected(a.agent_id));
         markersRef.current.set(a.agent_id, m);
       }
-      markersRef.current.get(a.agent_id)!.bindTooltip(
+      const marker = markersRef.current.get(a.agent_id)!;
+      marker.bindTooltip(
         `<b>${a.full_name}</b><br/>${a.employee_code} · ${ageLabel(a.age_seconds)}` +
         (a.sos_active ? "<br/><b style='color:#DC2626'>SOS ACTIVE</b>" : ""),
         { direction: "top", offset: [0, -16] },
+      );
+      // Click → popup with a Navigate link to wherever the marker is. A plain
+      // anchor rather than a handler: Leaflet popups are HTML strings, and an
+      // <a target=_blank> needs no listener to survive the popup being
+      // re-rendered on the next poll. `escapeHtml` on the name because it is
+      // user-entered data going into innerHTML.
+      const nav = navigateAction(a, ageLabel);
+      marker.bindPopup(
+        `<div style="font:12px system-ui,-apple-system,sans-serif;min-width:180px">
+           <div style="font-weight:700;color:#1C1C1F">${escapeHtml(a.full_name)}</div>
+           <div style="color:#6B6D76;margin-top:2px">${escapeHtml(a.employee_code)} · ${ageLabel(a.age_seconds)}</div>
+           ${nav ? `
+             <a href="${nav.url}" target="_blank" rel="noopener noreferrer"
+                style="display:inline-flex;align-items:center;gap:6px;margin-top:8px;padding:6px 10px;border-radius:8px;
+                       background:#2563EB;color:#fff;font-weight:600;text-decoration:none">
+               ${NAVIGATE_SVG} ${nav.label}
+             </a>
+             <div style="color:${nav.stale ? "#B45309" : "#6B6D76"};margin-top:6px;font-size:11px">${nav.note}</div>
+           ` : `<div style="color:#B45309;margin-top:6px;font-size:11px">No position to navigate to</div>`}
+         </div>`,
+        { offset: [0, -28], closeButton: false, className: "agent-nav-popup" },
       );
     }
 
@@ -241,12 +277,22 @@ export default function ManagerLiveMapPage() {
 
     // Fit once, on the first data that has anything in it. Re-fitting on every
     // poll would yank the view out from under a manager who has panned.
+    //
+    // flyToBounds, not fitBounds: an animated zoom from the regional view down
+    // to the team's extent, so the page reads as "here is where everyone is"
+    // rather than snapping to a pre-framed rectangle. Plain fitBounds under
+    // prefers-reduced-motion — a fly-in is a courtesy, never a requirement.
     if (!fittedRef.current && seen.size > 0) {
       const bounds = L.latLngBounds(
         agents.filter((a) => a.latitude != null)
               .map((a) => [a.latitude as number, a.longitude as number] as [number, number]),
       );
-      map.fitBounds(bounds, { padding: [48, 48], maxZoom: 15 });
+      const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+      if (reduceMotion) {
+        map.fitBounds(bounds, { padding: [48, 48], maxZoom: 15 });
+      } else {
+        map.flyToBounds(bounds, { padding: [48, 48], maxZoom: 15, duration: 1.6, easeLinearity: 0.2 });
+      }
       fittedRef.current = true;
     }
   }, [agents, selected]);
@@ -300,7 +346,16 @@ export default function ManagerLiveMapPage() {
 
   return (
     <div className="space-y-4">
-      <style>{`@keyframes sospulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.35);opacity:.65}}`}</style>
+      <style>{`
+        @keyframes sospulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.35);opacity:.65}}
+        /* Markers pop in as the fly-in lands. Scoped to the icon's inner pin so
+           Leaflet's own transform on .leaflet-marker-icon (which positions the
+           marker) is never overridden. Plays on the element's first paint only;
+           a poll that updates an existing marker re-uses the element. */
+        @keyframes markerPop{0%{transform:scale(.4) translateY(6px);opacity:0}70%{transform:scale(1.08) translateY(-1px);opacity:1}100%{transform:scale(1) translateY(0);opacity:1}}
+        .custom-agent-marker > div{animation:markerPop .45s cubic-bezier(.2,.8,.2,1) both;transform-origin:50% 100%}
+        @media (prefers-reduced-motion: reduce){.custom-agent-marker > div{animation:none}}
+      `}</style>
 
       {/* Header */}
       <div className="flex items-center justify-between gap-3"
@@ -444,6 +499,25 @@ export default function ManagerLiveMapPage() {
                 <Crosshair className="w-3.5 h-3.5" /> No fixes recorded today
               </span>
             )}
+            {/* Same action as the marker popup, built by the same helper, for
+                the manager who clicked the list rather than the map. */}
+            {(() => {
+              const nav = navigateAction(selectedAgent, ageLabel);
+              return nav ? (
+                <a
+                  href={nav.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="ml-auto inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition-colors hover:opacity-90"
+                  style={{ background: "#2563EB" }}
+                  title={`Open Google Maps directions ${nav.note}`}
+                >
+                  <Navigation className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>{nav.label}</span>
+                  <span className={`font-normal ${nav.stale ? "text-amber-200" : "text-blue-100"}`}>· {nav.note.replace(/^to /, "")}</span>
+                </a>
+              ) : null;
+            })()}
           </div>
         )}
       </div>
