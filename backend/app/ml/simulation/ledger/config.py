@@ -163,6 +163,70 @@ BANDS: dict[str, Band] = {
         "beat telephony on this, which is why the band sits above typical "
         "call-centre figures. Still an assumption."),
 
+    # ── 6b. Telephony and refusals — 2026-09-15, with the v2 channels ───────
+    "call_answer_rate": Band(
+        "call_answer_rate", 0.20, 0.60, Provenance.ASSUMPTION,
+        "Share of call attempts the borrower answered. Telephony reaches fewer "
+        "people than a doorstep visit, so the band sits below `rpc_rate`. "
+        "NOT sourced."),
+    "rtp_share_of_met_visits": Band(
+        "rtp_share_of_met_visits", 0.04, 0.30, Provenance.ASSUMPTION,
+        "Share of visits where the borrower was met and REFUSED to pay. A "
+        "book where nobody refuses is as implausible as one where most do. "
+        "NOT sourced."),
+    "intent_share_of_answered_calls": Band(
+        "intent_share_of_answered_calls", 0.15, 0.65, Provenance.ASSUMPTION,
+        "Share of answered calls where the borrower signalled intent to pay. "
+        "People tell agents what ends the call, so this sits well above the "
+        "material-payment rate. NOT sourced."),
+    "hardship_share_of_met_visits": Band(
+        "hardship_share_of_met_visits", 0.02, 0.30, Provenance.ASSUMPTION,
+        "Share of met visits where a hardship reason (job loss, salary cut, "
+        "business failure, medical) was recorded. Bounded by the shock "
+        "prevalence the generator produces, roughly 10-15%. NOT sourced."),
+    # ── 6c. The willingness-observability channels — 2026-09-15 (later) ────
+    # Reported and gated only when the channel is on; an off channel reports
+    # None and is skipped, so the pre-existing world still passes 17/17.
+    "declined_share_of_reached": Band(
+        "declined_share_of_reached", 0.03, 0.25, Provenance.ASSUMPTION,
+        "Share of calls that were picked up and then cut short by the "
+        "borrower (`CallOutcome.DECLINED`), over all calls that were picked "
+        "up. A refusal on the phone. NOT sourced."),
+    "commitment_share_of_answered": Band(
+        "commitment_share_of_answered", 0.15, 0.60, Provenance.ASSUMPTION,
+        "Share of answered calls on which the borrower named a payment date "
+        "(`CallLog.verbal_payment_date`). Below the intent share because a "
+        "date is a stronger statement than an intention. NOT sourced."),
+    "commitment_kept_rate": Band(
+        "commitment_kept_rate", 0.15, 0.70, Provenance.ASSUMPTION,
+        "Share of verbal commitments met by VERIFIED money of at least half "
+        "an instalment between the call and due + grace. WRITTEN AS 0.30-0.70 "
+        "and corrected after measuring 0.23: the first band was copied from "
+        "the PTP-kept band, and a phone promise is not a doorstep PTP - its "
+        "horizon is 2-10 days against 3-15, it is judged 2 days after due "
+        "against 3, no agent is present and nothing is signed, and the 0.49 "
+        "PTP figure includes the +1.20 the hazard gives a doorstep promise "
+        "where this channel gets +0.60. The construct was wrong, not the "
+        "world; the effect size was NOT raised to meet the band. NOT sourced."),
+    "median_call_duration_s": Band(
+        "median_call_duration_s", 30.0, 240.0, Provenance.ASSUMPTION,
+        "Median length of an answered collections call, seconds. NOT sourced."),
+    "disposition_positive_share": Band(
+        "disposition_positive_share", 0.30, 0.70, Provenance.ASSUMPTION,
+        "Share of recorded dispositions that are WILL_PAY or MAY_PAY. People "
+        "tell agents what ends the conversation, so this sits above the "
+        "material-payment rate, as the intent share does. NOT sourced."),
+    "disposition_refuse_share": Band(
+        "disposition_refuse_share", 0.08, 0.35, Provenance.ASSUMPTION,
+        "Share of recorded dispositions that are REFUSES or DISPUTE. Above "
+        "the RTP share of met visits (a refusal is easier on the phone), "
+        "below a third. NOT sourced."),
+    "hostile_share": Band(
+        "hostile_share", 0.0, 1.0, Provenance.ASSUMPTION,
+        "REPORTED, NOT GATED. Share of loans carrying a hostility flag by the "
+        "end of the book. Printed so a collapse to zero (the flag stopped "
+        "being raised) or a runaway (every RTP flagged forever) is visible."),
+
     # ── Reported, not gated ─────────────────────────────────────────────────
     "material_payment_rate": Band(
         "material_payment_rate", 0.20, 0.40, Provenance.CALIBRATION_TARGET,
@@ -245,6 +309,33 @@ class LedgerConfig:
     ptp_horizon_lo: int = 3
     ptp_horizon_hi: int = 15
 
+    # ── Telephony — 2026-09-15 ──────────────────────────────────────────────
+    # A call is cheaper than a visit, so agents make more of them. ASSUMPTION.
+    # The product stores every attempt in `call_logs`; the ledger now emits one
+    # event per attempt so `panel.py` and the adapter can both derive the same
+    # answer-rate and no-answer-streak features from it.
+    call_hazard_current: float = 0.012    # per day
+    call_hazard_delinquent: float = 0.090
+    #: An answered call prompts payment for about a week — the same mechanism
+    #: as `recent_contact` for a visit, weaker because nobody was at the door.
+    call_contact_effect: float = 0.30
+    call_contact_days: int = 7
+
+    # ── Refusals and flags — 2026-09-15 ─────────────────────────────────────
+    #: Chance that a refuse-to-pay outcome gets the borrower's `is_hostile`
+    #: flag raised by the agent. Below 1 because agents do not flag every
+    #: refusal, and the flag is a product fact with its own event.
+    p_hostile_flag_on_rtp: float = 0.50
+    #: Share of borrowers the bank has flagged for fraud at origination. Static
+    #: and observable from day 0, exactly as `Customer.fraud_flag` is.
+    fraud_rate: float = 0.02
+    #: When met, how often a borrower IN an income shock gives a hardship
+    #: reason (`Visit.default_reason`), and how often one who is not does
+    #: anyway. ASSUMPTION. The gap between the two is what makes the recorded
+    #: reason an observation of the shock rather than noise.
+    p_hardship_reported_when_shocked: float = 0.55
+    p_hardship_reported_when_not: float = 0.04
+
     # ── Payment status lifecycle ────────────────────────────────────────────
     # These exist so the ledger carries a real status HISTORY. The live demo
     # database has none — every PTP status and payment status is the current
@@ -273,6 +364,86 @@ class LedgerConfig:
     agent_churn_per_year: float = 0.18
 
     # ── Drift ───────────────────────────────────────────────────────────────
+    # ── observability of CURRENT willingness — 2026-09-15 (later) ─────────
+    # Three channels `CallLog` has stored since before the ML work and this
+    # ledger never emitted: a call that is picked up and cut short
+    # (`CallOutcome.DECLINED`), how long an answered call lasted
+    # (`duration_seconds`), and a payment date the borrower names on the
+    # phone (`verbal_payment_date`) whose keeping or breaking is then visible
+    # in the payment ledger. Each is a NOISY read of the willingness latent
+    # at the moment of the call — the quantity the 2.1.0 information-gap
+    # analysis measured as the least observed (observables recover it at
+    # R^2 0.41; perfect knowledge of it alone is worth +0.059 Gini). None of
+    # them touches the payment hazard, signal_scale, observation_noise, the
+    # latents or their drift: they add OBSERVATIONS, not outcome.
+    #
+    # Off by default until the experiment ladder
+    # (scripts/research/recovery_risk_obs) has been read; with all three off
+    # the random stream is untouched and the book is bit-identical to before.
+    observe_declines: bool = False
+    observe_call_duration: bool = False
+    observe_verbal_commitments: bool = False
+    commitment_horizon_lo: int = 2
+    commitment_horizon_hi: int = 10
+    commitment_grace_days: int = 2
+    #: A verbal commitment counts as kept when VERIFIED money of at least this
+    #: share of an instalment lands between the call and due + grace.
+    commitment_kept_ratio: float = 0.5
+    #: A LIVE verbal commitment (named, not yet due + grace, not yet kept)
+    #: adds this to the daily payment logit — the same mechanism the hazard
+    #: already gives a doorstep PTP (+1.20), at half the size: no agent
+    #: present, nothing signed. Without it the first build kept 16% of phone
+    #: promises against a 30-70% band, because a date named on the phone
+    #: changed nothing about what the borrower then did — a promise that is
+    #: not a commitment device is not a promise. Set once, before any model
+    #: was run on it. NOT a latent weight, NOT a noise term.
+    commitment_hazard_effect: float = 0.60
+    #: Multiplies the sd of every CHANNEL observation noise (met, refusal,
+    #: answered, declined, intent, duration, commitment). 1.0 is the world as
+    #: built; anything else is a what-if for the information-gap analysis
+    #: (scripts/research/recovery_risk_obs) and is NOT adopted by it. Distinct
+    #: from `observation_noise`, which scales the noise on the OUTCOME.
+    channel_noise_scale: float = 1.0
+    #: A PRE-SCORING SWEEP: in the last k days before each monthly snapshot,
+    #: every live delinquent account gets one call attempt (on a fixed day of
+    #: the k, by loan id), on top of the ordinary hazard. The tele-calling
+    #: pass a collections floor runs over its pool before an allocation cycle,
+    #: whose outcomes then feed the allocation. Answering, intent, duration,
+    #: decline and any date named are drawn exactly as for any other call —
+    #: the sweep changes WHEN the record gets a reading, not what the reading
+    #: says. 0 = off, and off draws nothing. Motivated by the read-precision
+    #: measurement in scripts/research/recovery_risk_obs: the observables
+    #: recover willingness to residual sd 0.18 from stale events, and a
+    #: reading taken AT as_of with sd 0.30 is worth more than all of them.
+    pre_scoring_call_days: int = 0
+    #: How many of those k days each account is attempted on (1 = one call
+    #: per sweep; k = every day of the window). The second and last sweep
+    #: design tried: one attempt reached 39% of the pool before as_of.
+    pre_scoring_call_attempts: int = 1
+    #: Stop attempting an account once it has been reached (answered or
+    #: declined) in this sweep — tele-calling retries, not blanket dialling.
+    #: Off keeps the EXP5/EXP6 semantics exactly.
+    pre_scoring_until_reached: bool = False
+
+    # ── STRUCTURED DISPOSITION — 2026-09-15 (later still) ─────────────────
+    # What the caller or the agent at the door RECORDS about the borrower's
+    # stance, on every answered call and every met visit:
+    #   WILL_PAY · MAY_PAY · NO_COMMITMENT · REFUSES · HARDSHIP · DISPUTE
+    # Generated as an ordinal read of CURRENT willingness through observation
+    # noise: r = w_t + N(0, disposition_read_noise) cut at fixed thresholds,
+    # with HARDSHIP overriding when the borrower is in an income shock and
+    # says so (the same p as the hardship reason at the door) and DISPUTE
+    # overriding at the dispute rate (higher for fraud-flagged accounts).
+    # It is never the latent itself, never a payment, never the label, and
+    # every reading is an independent draw — two agents on two days do not
+    # agree perfectly. `disposition_read_noise` is the reliability ladder of
+    # the observability report (0.30 / 0.20 / 0.10 on the willingness scale,
+    # whose sd is ~0.25). Off by default; off draws nothing.
+    observe_disposition: bool = False
+    disposition_read_noise: float = 0.30
+    disposition_cut_will: float = 0.62
+    disposition_cut_may: float = 0.45
+    disposition_cut_nocommit: float = 0.30
     seasonality_amplitude: float = 0.18
     shock_month_index: int = 17
     shock_magnitude: float = -0.55

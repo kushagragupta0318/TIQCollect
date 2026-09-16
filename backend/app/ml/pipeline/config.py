@@ -152,6 +152,41 @@ class ModelSpec:
     # Segments the model must work on, not just the book as a whole.
     segment_cols: tuple[str, ...] = ("dpd_bucket", "loan_type", "city")
 
+    # Which synthetic panel this spec is developed on. `book_simulator` is the
+    # 1.x baseline and emits aggregated features directly; `ledger` is the
+    # event-sourced world whose panel can be held equal to the production
+    # adapter. A spec naming features only one of them produces must say so,
+    # or the contract test that checks "every spec feature is produced by the
+    # simulator" would be checking the wrong simulator.
+    training_panel: str = "book_simulator"
+
+    # Features whose ABSENCE is an observation: no bureau pull, no payment
+    # ever, no call ever answered. Their NaN is routed to the WOE Missing bin
+    # the model was fitted with, and the serving engine does NOT count it
+    # against the coverage floor — provided the KEY is present in the vector.
+    # A key that is absent altogether still counts as missing, because that is
+    # what an adapter break looks like and the floor exists to catch it.
+    #
+    # Empty for 1.x specs on purpose: their behaviour (cibil_score None ->
+    # coverage 0.75) is pinned by tests and must not move under a champion
+    # that was validated with it.
+    abstaining_features: tuple[str, ...] = ()
+
+    # 2026-09-16. Which estimator the trainer fits and the engine explains.
+    #   "woe_logistic"  the WOE + logistic scorecard (every 1.x / 2.0 / 2.1
+    #                   artifact; `train.ModelTrainer`, `scorecard.ScoreCard`)
+    #   "gam"           boosted single-feature shape functions plus the
+    #                   declared `interactions`, exactly additive on the logit
+    #                   (`gam.GamModel`; trained by scripts/train_recovery_risk_gam)
+    # The engine reads the ARTIFACT's `model_type`, not this field — the field
+    # says what a spec asks for, the artifact says what was written.
+    model_form: str = "woe_logistic"
+
+    # GAM only: pairs of features allowed to share a tree. Everything not
+    # listed is single-feature by construction, which is what makes the
+    # per-feature decomposition exact. Empty for a scorecard.
+    interactions: tuple[tuple[str, str], ...] = ()
+
     # Scorecard scaling. PDO = points to double the odds.
     pdo: int = 20
     base_score: int = 600
@@ -352,9 +387,303 @@ CONTACT_RISK = ModelSpec(
     expected_sign=_RECOVERY_SIGNS,
 )
 
+# ---------------------------------------------------------------------------
+# recovery_risk 2.0.0 — the widened feature space, 2026-09-15
+# ---------------------------------------------------------------------------
+# A FACTOR-DEFINITION CHANGE IS A MODEL CHANGE, so this is a new major version
+# and a new spec object rather than an edit to RECOVERY_RISK: 1.1.0 is the
+# committed champion, every allocator measurement is expressed against it, and
+# tests pin it as the baseline. Nothing here touches it.
+#
+# Seventeen candidates added, all of them things the product ALREADY STORES
+# and the adapter can compute point-in-time from append-only tables — the
+# constraint that decided the 1.x list (see SERVING AVAILABILITY above) is the
+# same one here. They were "an open question, untestable today only because the
+# synthetic panel does not generate them" until the ledger simulator learned to
+# emit the events they are derived from.
+#
+#   visit outcomes    rtp_visits_6m, dispute_visits_6m, adverse_visit_ratio_6m
+#   telephony         calls_3m, call_answer_rate_6m, no_answer_streak,
+#                     days_since_last_answered_call, intent_calls_3m,
+#                     last_call_intent
+#   what was said     hardship_visits_6m (Visit.default_reason in the four
+#                     hardship reasons) — the one observation of a capacity
+#                     shock the record holds
+#   promises          ptp_broken_6m, ptp_rescheduled_6m, ptp_amount_to_emi
+#   payment shape     payments_6m, partial_payment_share_6m, payment_gap_cv_12m,
+#                     last_payment_to_emi, paid_momentum
+#   customer flags    is_hostile, fraud_flag
+#
+# STILL EXCLUDED, with the reason each time:
+#   settlement_status   a settled loan is CENSORED_SETTLED by the labeller, so
+#                       the flag encodes label exclusion, not behaviour
+#   legal_status        a bank action with no write path in the product beyond
+#                       the seed, and no generating process in the ledger
+#   case_target_amount  one case per loan in the ledger, target = EMI; nothing
+#                       to learn from until multi-case loans are simulated
+#   prior case count    same reason
+#   Loan.last_payment_amount  never updated by the product after the seed
+#                       (verified 2026-09-15) — the ledger is read instead
+#
+# The training panel is the LEDGER. `test_every_spec_feature_is_produced_by_
+# the_simulator` checks each spec against the panel it names.
+_RECOVERY_V2_NUMERIC = _RECOVERY_NUMERIC + (
+    "rtp_visits_6m", "dispute_visits_6m", "adverse_visit_ratio_6m",
+    "calls_3m", "call_answer_rate_6m", "no_answer_streak",
+    "days_since_last_answered_call", "intent_calls_3m", "last_call_intent",
+    "hardship_visits_6m",
+    "ptp_broken_6m", "ptp_rescheduled_6m", "ptp_amount_to_emi",
+    "payments_6m", "partial_payment_share_6m", "payment_gap_cv_12m",
+    "last_payment_to_emi", "paid_momentum",
+    "is_hostile", "fraud_flag",
+)
+
+_RECOVERY_V2_SIGNS = {
+    **_RECOVERY_SIGNS,
+    "rtp_visits_6m": +1, "dispute_visits_6m": +1, "adverse_visit_ratio_6m": +1,
+    "calls_3m": 0, "call_answer_rate_6m": -1, "no_answer_streak": +1,
+    "days_since_last_answered_call": +1,
+    "intent_calls_3m": -1, "last_call_intent": -1, "hardship_visits_6m": +1,
+    "ptp_broken_6m": +1, "ptp_rescheduled_6m": +1, "ptp_amount_to_emi": -1,
+    "payments_6m": -1, "partial_payment_share_6m": +1, "payment_gap_cv_12m": +1,
+    "last_payment_to_emi": -1, "paid_momentum": -1,
+    "is_hostile": +1, "fraud_flag": +1,
+}
+
+RECOVERY_RISK_V2 = ModelSpec(
+    name="recovery_risk",
+    version="2.0.0",
+    description=(
+        "Probability that a delinquent account makes NO material payment in the "
+        "next cycle. Same target, split, gates and scaling as 1.1.0; the "
+        "candidate set is widened with the behavioural channels the product "
+        "already stores (visit outcomes, calls, promise shape, payment shape, "
+        "customer flags) and the development panel is the event-sourced ledger."
+    ),
+    target="y",
+    numeric_features=_RECOVERY_V2_NUMERIC,
+    categorical_features=_RECOVERY_CATEGORICAL,
+    expected_sign=_RECOVERY_V2_SIGNS,
+    training_panel="ledger",
+    # ABSTAIN, DON'T GUESS. The ratios below are NaN where their denominator
+    # is empty, the day-gaps NaN where the event never happened, the bureau
+    # score NaN where no pull exists. On the first 2.0.0 run the engine's
+    # coverage floor — written for four features that are never NaN — declined
+    # 3,202 of 24,424 out-of-time rows for having three of seven inputs "missing"
+    # when every one of the three was an honest no-evidence answer. See
+    # ModelSpec.abstaining_features.
+    abstaining_features=(
+        "cibil_score", "days_since_last_payment", "days_since_last_contact",
+        "days_since_last_answered_call", "adverse_visit_ratio_6m",
+        "call_answer_rate_6m", "ptp_amount_to_emi", "partial_payment_share_6m",
+        "payment_gap_cv_12m", "last_payment_to_emi", "last_call_intent",
+    ),
+)
+
+# ---------------------------------------------------------------------------
+# recovery_risk 2.1.0 - the FRESH development, 2026-09-15
+# ---------------------------------------------------------------------------
+# A second candidate spec, not an edit to 2.0.0, for the same reason 2.0.0 is
+# not an edit to 1.1.0. The 2.0.0 exercise widened the candidate set and let
+# the pipeline choose; this one started from a discovery pass over ~100
+# point-in-time candidates derived straight from the event tables (payment
+# shape, promise endings, telephony, visit outcomes, hardship, cross-channel
+# recency), measured each family's incremental contribution on the validation
+# split, and carries into production ONLY the candidates the forward selection
+# actually reached. Every one of them is computed by the adapter from an
+# append-only product table, and tests/test_ledger_phase3_adapter_equality.py
+# holds the two implementations to each other.
+#
+# Six added, with what each one is and where it comes from:
+#
+#   paid_ratio_1m         VERIFIED money in [as_of-30d, as_of) / EMI, clip 1.5.
+#                         The freshest read of the payment channel there is.
+#                         0 where nothing was paid: that IS the observation.
+#   pay_amount_cv_6m      population std / mean of VERIFIED payment amounts in
+#                         [as_of-180d, as_of); needs two payments, NaN below.
+#                         Regularity of SIZE, beside payment_gap_cv_12m's
+#                         regularity of TIMING.
+#   call_answer_rate_3m   answered / attempted in [as_of-90d, as_of); NaN with
+#                         no attempt. The 6m rate is already a candidate; the
+#                         3m one is the recent-behaviour version.
+#   intent_rate_6m        answered calls on which the borrower signalled intent
+#                         / answered calls, [as_of-180d, as_of); NaN with no
+#                         answered call. `CallLog.payment_intent_signalled`.
+#   days_since_last_call  as_of - day of the most recent call ATTEMPT (answered
+#                         or not) before as_of; NaN if never called.
+#   last_visit_outcome    `Visit.outcome` of the most recent visit before
+#                         as_of, "NONE" if never visited. Categorical.
+#
+# TWO OF THESE HAVE A DIRECTION THE BUSINESS WOULD NOT GUESS, and the sign
+# table below says so with a 0 rather than pretending. `days_since_last_call`
+# and `days_since_last_contact` both read "contacted recently -> HIGHER risk"
+# in this world: attempts follow delinquency (the ledger calls and visits
+# delinquent accounts several times as often as current ones, as a collections
+# floor does), so a long silence mostly means the account was not worth
+# chasing. That is an observation of collections POLICY as much as of the
+# borrower, it is legitimately in the record, and it is the kind of feature
+# that flips if the policy does. Recorded here so that a monitor reading a
+# PSI break on either knows what it is looking at. `days_since_last_contact`
+# carried +1 in the 1.x table; it is 0 here, on this evidence.
+#
+# `last_visit_outcome` in the product can take values the ledger never emits
+# (PAID_FULL, PART_PAID, PART_PAID_PTP, BROKEN_PTP, DECEASED): the ledger
+# records money as payment events, not as a visit outcome. The binner maps an
+# unseen category to WoE 0 - neutral, "no evidence" - and `paid_ratio_1m`
+# carries the payment itself, so a PAID visit is not scored as if it were a
+# refusal; it is scored on the money.
+_RECOVERY_V21_NUMERIC = _RECOVERY_V2_NUMERIC + (
+    "paid_ratio_1m", "pay_amount_cv_6m",
+    "call_answer_rate_3m", "intent_rate_6m", "days_since_last_call",
+)
+_RECOVERY_V21_CATEGORICAL = _RECOVERY_CATEGORICAL + ("last_visit_outcome",)
+
+_RECOVERY_V21_SIGNS = {
+    **_RECOVERY_V2_SIGNS,
+    "paid_ratio_1m": -1, "pay_amount_cv_6m": 0,
+    "call_answer_rate_3m": -1, "intent_rate_6m": -1,
+    "days_since_last_call": 0,
+    "days_since_last_contact": 0,
+    "days_since_last_answered_call": 0,
+}
+
+RECOVERY_RISK_V21 = ModelSpec(
+    name="recovery_risk",
+    version="2.1.0",
+    description=(
+        "Probability that a delinquent account makes NO material payment in the "
+        "next cycle. Same target, split, gates and scaling as 1.1.0 and 2.0.0. "
+        "Fresh development on the ledger world: the candidate set is the 2.0.0 "
+        "set plus the six features a discovery pass over ~100 point-in-time "
+        "candidates found to add validation Gini (payment recency and size "
+        "regularity, recent answer rate, stated intent, call recency, the last "
+        "visit's outcome)."
+    ),
+    target="y",
+    numeric_features=_RECOVERY_V21_NUMERIC,
+    categorical_features=_RECOVERY_V21_CATEGORICAL,
+    expected_sign=_RECOVERY_V21_SIGNS,
+    training_panel="ledger",
+    abstaining_features=RECOVERY_RISK_V2.abstaining_features + (
+        "pay_amount_cv_6m", "call_answer_rate_3m", "intent_rate_6m",
+        "days_since_last_call",
+    ),
+)
+
+# ---------------------------------------------------------------------------
+# recovery_risk 2.2.0 - the interpretable GAM, 2026-09-16
+# ---------------------------------------------------------------------------
+# NOT a widened candidate set and NOT a selection run. The fifteen features are
+# the ones the validation-selected GAM of the observability programme reached
+# (app/ml/artifacts/recovery_risk/2.1.0/observability/GAM_REPORT.md, EXP5),
+# fixed here so the production artifact is a refit of a DECLARED model under
+# the frozen train/validation/OOT protocol rather than a new search. The refit
+# exists because the production-readiness audit found the research fit had its
+# one interaction on the wrong pair (sklearn does not remap `interaction_cst`
+# when it reorders categoricals first); 2.2.0 is fitted with the pair where it
+# was declared, through `gam.interaction_cst_for`.
+#
+# Four of the fifteen were not produced by the adapter until 2026-09-16:
+#
+#   latest_disposition          newest BorrowerDisposition on an answered
+#                               call or met visit before as_of; "NONE" if
+#                               never read. Categorical. NEEDED A SCHEMA
+#                               CHANGE (migration c9a3d5e7f102).
+#   disposition_recency_class   that reading x "_FRESH" if it is <= 7 days
+#                               old, else "_STALE"; "NONE" if never read.
+#   last_commit_status          the newest verbal commitment
+#                               (CallLog.verbal_payment_date) before as_of,
+#                               KEPT / BROKEN / OPEN as known at as_of from
+#                               VERIFIED payments; "NONE" if none was made.
+#   recent_ptp_status           status of the newest PTP created before
+#                               as_of: OPEN / HONORED / BROKEN / RESCHEDULED;
+#                               "NONE" if none.
+#
+# The three constants the two derived statuses depend on are declared here,
+# once, and a test holds them equal to the ledger's defaults; the panel is the
+# other implementation and tests/test_recovery_risk_gam_features.py holds the
+# adapter to it row by row.
+#
+# The signs are the monotone constraints the reference fit used, feature by
+# feature (`observability/gam/audit/gam_exp5_metadata.json`, monotonic_cst);
+# `days_since_last_contact` and `calls_3m` are 0 for the reason given above
+# the 2.1.0 table, and a categorical is always 0.
+
+#: A verbal commitment is KEPT when VERIFIED money >= this share of one EMI
+#: arrives between the call and the named date plus the grace.
+COMMITMENT_KEPT_RATIO: float = 0.5
+#: Days after the named date during which money still keeps the commitment.
+COMMITMENT_GRACE_DAYS: int = 2
+#: A disposition reading this many days old or younger is "_FRESH".
+DISPOSITION_FRESH_DAYS: int = 7
+
+_RECOVERY_GAM_NUMERIC = (
+    "arrears_ratio", "cibil_score", "no_answer_streak", "overdue_amount",
+    "intent_calls_3m", "calls_3m", "paid_ratio_3m", "ptp_amount_to_emi",
+    "days_since_last_contact", "interest_rate",
+)
+_RECOVERY_GAM_CATEGORICAL = (
+    "latest_disposition", "last_commit_status", "recent_ptp_status",
+    "employment_type", "disposition_recency_class",
+)
+_RECOVERY_GAM_SIGNS = {
+    "arrears_ratio": +1, "cibil_score": -1, "no_answer_streak": +1,
+    "overdue_amount": +1, "intent_calls_3m": -1, "calls_3m": 0,
+    "paid_ratio_3m": -1, "ptp_amount_to_emi": -1,
+    "days_since_last_contact": 0, "interest_rate": +1,
+    "latest_disposition": 0, "last_commit_status": 0, "recent_ptp_status": 0,
+    "employment_type": 0, "disposition_recency_class": 0,
+}
+
+RECOVERY_RISK_GAM = ModelSpec(
+    name="recovery_risk",
+    version="2.2.0",
+    description=(
+        "Probability that a delinquent account makes NO material payment in the "
+        "next cycle. Same target, split and gates as 1.1.0-2.1.0. Interpretable "
+        "generalised additive model: boosted single-feature shape functions, "
+        "monotone where a direction is declared, one declared interaction "
+        "(latest_disposition x arrears_ratio), exactly additive on the logit. "
+        "The fifteen inputs are the validation-selected set of the "
+        "observability programme's GAM ladder, refitted with the interaction "
+        "constraint expressed in the estimator's real column order."
+    ),
+    target="y",
+    numeric_features=_RECOVERY_GAM_NUMERIC,
+    categorical_features=_RECOVERY_GAM_CATEGORICAL,
+    expected_sign=_RECOVERY_GAM_SIGNS,
+    training_panel="ledger",
+    model_form="gam",
+    interactions=(("latest_disposition", "arrears_ratio"),),
+    # NaN is an observation on these two: no promise ever made, never met.
+    abstaining_features=("cibil_score", "ptp_amount_to_emi",
+                         "days_since_last_contact"),
+)
+
+#: What `score_cases_and_log` writes into `ModelPrediction.features`: the
+#: WIDEST candidate set any recovery spec names, so a production retrain can
+#: select from all of it rather than from the incumbent's chosen few. One
+#: definition, imported by the adapter; not restated there.
+LOGGED_FEATURES: tuple[str, ...] = tuple(dict.fromkeys(
+    RECOVERY_RISK_V21.all_features + RECOVERY_RISK_V2.all_features
+    + RECOVERY_RISK.all_features + RECOVERY_RISK_GAM.all_features
+    # 2026-09-16 — the day-gap behind disposition_recency_class, emitted by
+    # the adapter beside it so a served row can be re-derived.
+    + ["days_since_disposition"]))
+
 REGISTRY: dict[str, ModelSpec] = {
     RECOVERY_RISK.name: RECOVERY_RISK,
     CONTACT_RISK.name: CONTACT_RISK,
+}
+
+#: Specs that are NOT the champion definition but are trained and compared
+#: against it: keyed by (name, version). `REGISTRY` stays keyed by name because
+#: the health endpoint and the training script iterate it as "the models this
+#: repo serves"; a candidate spec is not that until it is promoted.
+CANDIDATE_SPECS: dict[tuple[str, str], ModelSpec] = {
+    (RECOVERY_RISK_V2.name, RECOVERY_RISK_V2.version): RECOVERY_RISK_V2,
+    (RECOVERY_RISK_V21.name, RECOVERY_RISK_V21.version): RECOVERY_RISK_V21,
+    (RECOVERY_RISK_GAM.name, RECOVERY_RISK_GAM.version): RECOVERY_RISK_GAM,
 }
 
 SplitName = Literal["train", "valid", "oot"]

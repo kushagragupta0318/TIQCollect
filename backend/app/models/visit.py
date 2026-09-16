@@ -11,6 +11,7 @@ from datetime import datetime
 from sqlalchemy import String, Float, Boolean, Enum as SAEnum, ForeignKey, Index, Text, DateTime, Integer
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKey
+from app.models.call_log import BorrowerDisposition
 
 
 class VisitOutcome(str, enum.Enum):
@@ -91,6 +92,12 @@ class Visit(Base, UUIDPrimaryKey, TimestampMixin):
     person_met: Mapped[PersonMet | None] = mapped_column(SAEnum(PersonMet, name="person_met_enum"), nullable=True)
     default_reason: Mapped[DefaultReason | None] = mapped_column(SAEnum(DefaultReason, name="default_reason_enum"), nullable=True)
     not_met_reason: Mapped[NotMetReason | None] = mapped_column(SAEnum(NotMetReason, name="not_met_reason_enum"), nullable=True)
+    # 2026-09-16 — what the borrower said about paying when MET. Same enum and
+    # same Postgres type as CallLog.borrower_disposition, because the model
+    # pools the two channels. NULL when not met or not captured.
+    borrower_disposition: Mapped[BorrowerDisposition | None] = mapped_column(
+        SAEnum(BorrowerDisposition, name="borrower_disposition_enum"), nullable=True
+    )
     visit_number: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 
     # Selfie proof (agent check-in selfie — legacy, kept for backward compat)

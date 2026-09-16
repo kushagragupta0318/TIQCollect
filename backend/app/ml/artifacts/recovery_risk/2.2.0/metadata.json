@@ -1,0 +1,1322 @@
+{
+  "spec": {
+    "name": "recovery_risk",
+    "version": "2.2.0",
+    "description": "Probability that a delinquent account makes NO material payment in the next cycle. Same target, split and gates as 1.1.0-2.1.0. Interpretable generalised additive model: boosted single-feature shape functions, monotone where a direction is declared, one declared interaction (latest_disposition x arrears_ratio), exactly additive on the logit. The fifteen inputs are the validation-selected set of the observability programme's GAM ladder, refitted with the interaction constraint expressed in the estimator's real column order.",
+    "target": "y",
+    "time_col": "as_of_date",
+    "split_col": "month_index",
+    "id_cols": [
+      "loan_id",
+      "borrower_id"
+    ],
+    "numeric_features": [
+      "arrears_ratio",
+      "cibil_score",
+      "no_answer_streak",
+      "overdue_amount",
+      "intent_calls_3m",
+      "calls_3m",
+      "paid_ratio_3m",
+      "ptp_amount_to_emi",
+      "days_since_last_contact",
+      "interest_rate"
+    ],
+    "categorical_features": [
+      "latest_disposition",
+      "last_commit_status",
+      "recent_ptp_status",
+      "employment_type",
+      "disposition_recency_class"
+    ],
+    "train_frac": 0.6,
+    "valid_frac": 0.15,
+    "expected_sign": {
+      "arrears_ratio": 1,
+      "cibil_score": -1,
+      "no_answer_streak": 1,
+      "overdue_amount": 1,
+      "intent_calls_3m": -1,
+      "calls_3m": 0,
+      "paid_ratio_3m": -1,
+      "ptp_amount_to_emi": -1,
+      "days_since_last_contact": 0,
+      "interest_rate": 1,
+      "latest_disposition": 0,
+      "last_commit_status": 0,
+      "recent_ptp_status": 0,
+      "employment_type": 0,
+      "disposition_recency_class": 0
+    },
+    "segment_cols": [
+      "dpd_bucket",
+      "loan_type",
+      "city"
+    ],
+    "training_panel": "ledger",
+    "abstaining_features": [
+      "cibil_score",
+      "ptp_amount_to_emi",
+      "days_since_last_contact"
+    ],
+    "model_form": "gam",
+    "interactions": [
+      [
+        "latest_disposition",
+        "arrears_ratio"
+      ]
+    ],
+    "pdo": 20,
+    "base_score": 600,
+    "base_odds": 50.0,
+    "gates": {
+      "gini_min": 0.25,
+      "gini_target_low": 0.35,
+      "gini_target_high": 0.55,
+      "gini_suspicious": 0.6,
+      "ks_min": 20.0,
+      "ks_suspicious": 60.0,
+      "max_breaks_total": 1,
+      "max_breaks_top5": 0,
+      "lift_capture_min": 0.55,
+      "lift_capture_suspicious": 0.995,
+      "max_train_test_gini_gap": 0.1,
+      "psi_warn": 0.1,
+      "psi_fail": 0.25,
+      "iv_min": 0.02,
+      "iv_review": 0.5,
+      "iv_max": 0.8,
+      "vif_max": 5.0,
+      "corr_max": 0.7,
+      "min_bin_fraction": 0.05,
+      "min_bin_events": 30,
+      "segment_gini_min": 0.2
+    },
+    "forbidden": [
+      "y",
+      "recovered_amount",
+      "visit_made",
+      "customer_met",
+      "ptp_set",
+      "ptp_kept",
+      "_willingness",
+      "_capacity",
+      "_willingness_anchor",
+      "_capacity_anchor",
+      "risk_score",
+      "recovery_potential",
+      "repayment_likelihood",
+      "allocation_score",
+      "visit_priority_score"
+    ]
+  },
+  "model_type": "gam",
+  "champion_kind": "gam",
+  "selected_features": [
+    "arrears_ratio",
+    "cibil_score",
+    "no_answer_streak",
+    "overdue_amount",
+    "intent_calls_3m",
+    "calls_3m",
+    "paid_ratio_3m",
+    "ptp_amount_to_emi",
+    "days_since_last_contact",
+    "interest_rate",
+    "latest_disposition",
+    "last_commit_status",
+    "recent_ptp_status",
+    "employment_type",
+    "disposition_recency_class"
+  ],
+  "n_candidate_features": 15,
+  "gam": {
+    "features": [
+      "arrears_ratio",
+      "cibil_score",
+      "no_answer_streak",
+      "overdue_amount",
+      "intent_calls_3m",
+      "calls_3m",
+      "paid_ratio_3m",
+      "ptp_amount_to_emi",
+      "days_since_last_contact",
+      "interest_rate",
+      "latest_disposition",
+      "last_commit_status",
+      "recent_ptp_status",
+      "employment_type",
+      "disposition_recency_class"
+    ],
+    "categorical": [
+      "latest_disposition",
+      "last_commit_status",
+      "recent_ptp_status",
+      "employment_type",
+      "disposition_recency_class"
+    ],
+    "cat_levels": {
+      "latest_disposition": [
+        "DISPUTE",
+        "HARDSHIP",
+        "MAY_PAY",
+        "NONE",
+        "NO_COMMITMENT",
+        "REFUSES",
+        "WILL_PAY"
+      ],
+      "last_commit_status": [
+        "BROKEN",
+        "KEPT",
+        "NONE",
+        "OPEN"
+      ],
+      "recent_ptp_status": [
+        "BROKEN",
+        "HONORED",
+        "NONE",
+        "OPEN",
+        "RESCHEDULED"
+      ],
+      "employment_type": [
+        "BUSINESS_OWNER",
+        "SALARIED",
+        "SELF_EMPLOYED"
+      ],
+      "disposition_recency_class": [
+        "DISPUTE_FRESH",
+        "DISPUTE_STALE",
+        "HARDSHIP_FRESH",
+        "HARDSHIP_STALE",
+        "MAY_PAY_FRESH",
+        "MAY_PAY_STALE",
+        "NONE",
+        "NO_COMMITMENT_FRESH",
+        "NO_COMMITMENT_STALE",
+        "REFUSES_FRESH",
+        "REFUSES_STALE",
+        "WILL_PAY_FRESH",
+        "WILL_PAY_STALE"
+      ]
+    },
+    "pairs": [
+      [
+        "latest_disposition",
+        "arrears_ratio"
+      ]
+    ],
+    "monotonic": {
+      "arrears_ratio": 1,
+      "cibil_score": -1,
+      "no_answer_streak": 1,
+      "overdue_amount": 1,
+      "intent_calls_3m": -1,
+      "calls_3m": 0,
+      "paid_ratio_3m": -1,
+      "ptp_amount_to_emi": -1,
+      "days_since_last_contact": 0,
+      "interest_rate": 1,
+      "latest_disposition": 0,
+      "last_commit_status": 0,
+      "recent_ptp_status": 0,
+      "employment_type": 0,
+      "disposition_recency_class": 0
+    },
+    "hyperparameters": {
+      "learning_rate": 0.05,
+      "min_samples_leaf": 300,
+      "l2_regularization": 1.0,
+      "max_bins": 32,
+      "random_state": 0,
+      "early_stopping": false,
+      "max_leaf_nodes": 4,
+      "max_depth": 2,
+      "categorical_features": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "monotonic_cst": [
+        1,
+        -1,
+        1,
+        1,
+        -1,
+        0,
+        -1,
+        -1,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "interaction_cst": [
+        [
+          0
+        ],
+        [
+          1
+        ],
+        [
+          2
+        ],
+        [
+          3
+        ],
+        [
+          4
+        ],
+        [
+          5
+        ],
+        [
+          6
+        ],
+        [
+          7
+        ],
+        [
+          8
+        ],
+        [
+          9
+        ],
+        [
+          10
+        ],
+        [
+          11
+        ],
+        [
+          12
+        ],
+        [
+          13
+        ],
+        [
+          14
+        ],
+        [
+          0,
+          5
+        ]
+      ],
+      "max_iter": 629
+    },
+    "n_trees": 629,
+    "background": {
+      "n": 2000,
+      "hash": "ce37fb98a59672a1",
+      "base_logit": 0.8966921372348561
+    }
+  },
+  "iterations": {
+    "chosen": 629,
+    "rule": "argmax validation KS",
+    "max_probe": 1500,
+    "validation_ks_curve_head": [
+      31.239,
+      31.239,
+      31.277,
+      32.971,
+      33.466
+    ],
+    "validation_ks_at_chosen": 40.499
+  },
+  "interaction_constraint": {
+    "declared_pairs": [
+      [
+        "latest_disposition",
+        "arrears_ratio"
+      ]
+    ],
+    "fitted_groups": [
+      "arrears_ratio",
+      "calls_3m",
+      "cibil_score",
+      "days_since_last_contact",
+      "disposition_recency_class",
+      "employment_type",
+      "intent_calls_3m",
+      "interest_rate",
+      "last_commit_status",
+      "latest_disposition x arrears_ratio",
+      "no_answer_streak",
+      "overdue_amount",
+      "paid_ratio_3m",
+      "ptp_amount_to_emi",
+      "recent_ptp_status"
+    ],
+    "expressed_in": "sklearn's remapped column order (categoricals first) via gam.interaction_cst_for",
+    "defect_reference": "PRODUCTION_READINESS_AUDIT.md \u2014 the research fit of 2026-09-15 had the pair on latest_disposition x last_commit_status; this artifact has it where declared"
+  },
+  "calibration": {
+    "segment_col": "overdue_amount",
+    "method": "platt",
+    "cv_brier_by_method": {
+      "platt": 0.181451,
+      "isotonic": 0.182845
+    },
+    "edges": [
+      4437.8,
+      9049.6,
+      16577.0,
+      32764.2
+    ],
+    "n_segments_fitted": 5,
+    "brier_on_calibration_sample": {
+      "before": 0.181336,
+      "after": 0.181124
+    },
+    "fitted_on": "validation months 14-17 (14,945 rows); OOT never seen"
+  },
+  "calibration_by_segment_oot": [
+    {
+      "segment": 1,
+      "n": 4320,
+      "mean_exposure": 2581.46,
+      "actual": 0.4947,
+      "predicted_raw": 0.4704,
+      "predicted_calibrated": 0.4505,
+      "over_prediction_raw_pct": -4.9,
+      "over_prediction_calibrated_pct": -8.9
+    },
+    {
+      "segment": 2,
+      "n": 4819,
+      "mean_exposure": 6611.57,
+      "actual": 0.6088,
+      "predicted_raw": 0.5847,
+      "predicted_calibrated": 0.5875,
+      "over_prediction_raw_pct": -4.0,
+      "over_prediction_calibrated_pct": -3.5
+    },
+    {
+      "segment": 3,
+      "n": 4803,
+      "mean_exposure": 12394.15,
+      "actual": 0.6748,
+      "predicted_raw": 0.6585,
+      "predicted_calibrated": 0.6584,
+      "over_prediction_raw_pct": -2.4,
+      "over_prediction_calibrated_pct": -2.4
+    },
+    {
+      "segment": 4,
+      "n": 4960,
+      "mean_exposure": 23397.11,
+      "actual": 0.7528,
+      "predicted_raw": 0.7453,
+      "predicted_calibrated": 0.7354,
+      "over_prediction_raw_pct": -1.0,
+      "over_prediction_calibrated_pct": -2.3
+    },
+    {
+      "segment": 5,
+      "n": 4878,
+      "mean_exposure": 71098.84,
+      "actual": 0.8397,
+      "predicted_raw": 0.8399,
+      "predicted_calibrated": 0.834,
+      "over_prediction_raw_pct": 0.0,
+      "over_prediction_calibrated_pct": -0.7
+    }
+  ],
+  "risk_bands": {
+    "version": "recovery-bands-2.2.0",
+    "direction": "higher probability = higher risk; A safest, E riskiest",
+    "edges": [
+      0.4043408233594514,
+      0.5820630028000652,
+      0.7436990637277417,
+      0.8898525419047326
+    ],
+    "mapping": [
+      {
+        "band": "A",
+        "upper_exclusive": 0.4043408233594514
+      },
+      {
+        "band": "B",
+        "upper_exclusive": 0.5820630028000652
+      },
+      {
+        "band": "C",
+        "upper_exclusive": 0.7436990637277417
+      },
+      {
+        "band": "D",
+        "upper_exclusive": 0.8898525419047326
+      },
+      {
+        "band": "E",
+        "upper_exclusive": null
+      }
+    ],
+    "shares_targeted": {
+      "A": 0.15,
+      "B": 0.2,
+      "C": 0.25,
+      "D": 0.25,
+      "E": 0.15
+    },
+    "table": [
+      {
+        "band": "A",
+        "count": 2242,
+        "share": 0.15,
+        "min_probability": 0.044209,
+        "max_probability": 0.404326,
+        "bad_rate": 0.314
+      },
+      {
+        "band": "B",
+        "count": 2989,
+        "share": 0.2,
+        "min_probability": 0.40435,
+        "max_probability": 0.582033,
+        "bad_rate": 0.4788
+      },
+      {
+        "band": "C",
+        "count": 3736,
+        "share": 0.25,
+        "min_probability": 0.582108,
+        "max_probability": 0.743686,
+        "bad_rate": 0.6609
+      },
+      {
+        "band": "D",
+        "count": 3736,
+        "share": 0.25,
+        "min_probability": 0.743718,
+        "max_probability": 0.889852,
+        "bad_rate": 0.8263
+      },
+      {
+        "band": "E",
+        "count": 2242,
+        "share": 0.15,
+        "min_probability": 0.889853,
+        "max_probability": 0.989223,
+        "bad_rate": 0.9313
+      }
+    ],
+    "fitted_on": "validation months 14-17, calibrated probability",
+    "edges_hash": "37426125b719460f"
+  },
+  "bands_oot": [
+    {
+      "band": "A",
+      "count": 3523,
+      "bad_rate": 0.3585,
+      "mean_probability": 0.2993
+    },
+    {
+      "band": "B",
+      "count": 4749,
+      "bad_rate": 0.5205,
+      "mean_probability": 0.5011
+    },
+    {
+      "band": "C",
+      "count": 5821,
+      "bad_rate": 0.683,
+      "mean_probability": 0.6633
+    },
+    {
+      "band": "D",
+      "count": 5932,
+      "bad_rate": 0.8301,
+      "mean_probability": 0.8205
+    },
+    {
+      "band": "E",
+      "count": 3755,
+      "bad_rate": 0.934,
+      "mean_probability": 0.9303
+    }
+  ],
+  "reason_codes": {
+    "version": "recovery-reasons-1.0.0",
+    "labels": {
+      "arrears_ratio": "instalments in arrears",
+      "cibil_score": "bureau score",
+      "no_answer_streak": "consecutive unanswered calls",
+      "overdue_amount": "overdue amount",
+      "intent_calls_3m": "calls with stated intent to pay (3 months)",
+      "calls_3m": "call attempts (3 months)",
+      "paid_ratio_3m": "share of instalments paid (3 months)",
+      "ptp_amount_to_emi": "size of promises relative to the instalment",
+      "days_since_last_contact": "days since the borrower was last met",
+      "interest_rate": "interest rate",
+      "latest_disposition": "latest stated disposition",
+      "last_commit_status": "how the last verbal commitment ended",
+      "recent_ptp_status": "how the last promise to pay ended",
+      "employment_type": "employment type",
+      "disposition_recency_class": "latest disposition and its freshness"
+    },
+    "rule": "top-4 |centred contribution| >= 0.02 logits, either direction; intercept + all contributions == logit exactly",
+    "background": {
+      "rows": 2000,
+      "seed": 0,
+      "hash": "ce37fb98a59672a1",
+      "base_logit": 0.8966921372348561
+    }
+  },
+  "points": {
+    "rule": "offset - factor * logit, the scorecard scaling; display only",
+    "pdo": 20,
+    "base_score": 600,
+    "base_odds": 50.0,
+    "oot_range": [
+      341,
+      567
+    ]
+  },
+  "explanation_reconciliation": {
+    "max_abs_error_oot": 8.881784197001252e-15,
+    "max_abs_sigmoid_error_oot": 0.0,
+    "n_rows": 23780
+  },
+  "metrics": {
+    "train": {
+      "label": "train",
+      "n": 54144,
+      "bad_rate": 0.6691230791962175,
+      "gini": 0.5135,
+      "auc": 0.7568,
+      "ks": 38.13,
+      "ks_cutoff": 0.6694,
+      "ks_decile": 6,
+      "top_decile_bad_rate": 0.9405,
+      "top_decile_lift": 1.406,
+      "max_achievable_lift": 1.494,
+      "lift_capture": 0.9405,
+      "bottom_decile_bad_rate": 0.2893,
+      "rank_order": {
+        "breaks": [],
+        "n_breaks": 0,
+        "n_breaks_top5": 0,
+        "monotonic": true
+      },
+      "brier": 0.18113,
+      "mean_predicted": 0.6691,
+      "calibration_gap": -0.0
+    },
+    "valid": {
+      "label": "valid",
+      "n": 14945,
+      "bad_rate": 0.6543325526932084,
+      "gini": 0.5347,
+      "auc": 0.7674,
+      "ks": 40.5,
+      "ks_cutoff": 0.6643,
+      "ks_decile": 5,
+      "top_decile_bad_rate": 0.9452,
+      "top_decile_lift": 1.444,
+      "max_achievable_lift": 1.528,
+      "lift_capture": 0.9452,
+      "bottom_decile_bad_rate": 0.2771,
+      "rank_order": {
+        "breaks": [],
+        "n_breaks": 0,
+        "n_breaks_top5": 0,
+        "monotonic": true
+      },
+      "brier": 0.18134,
+      "mean_predicted": 0.661,
+      "calibration_gap": 0.0066
+    },
+    "oot_uncalibrated": {
+      "label": "oot_uncalibrated",
+      "n": 23780,
+      "bad_rate": 0.6788057190916736,
+      "gini": 0.5126,
+      "auc": 0.7563,
+      "ks": 38.66,
+      "ks_cutoff": 0.6608,
+      "ks_decile": 5,
+      "top_decile_bad_rate": 0.9525,
+      "top_decile_lift": 1.403,
+      "max_achievable_lift": 1.473,
+      "lift_capture": 0.9525,
+      "bottom_decile_bad_rate": 0.3251,
+      "rank_order": {
+        "breaks": [],
+        "n_breaks": 0,
+        "n_breaks_top5": 0,
+        "monotonic": true
+      },
+      "brier": 0.17978,
+      "mean_predicted": 0.6647,
+      "calibration_gap": -0.0141
+    },
+    "oot": {
+      "label": "oot",
+      "n": 23780,
+      "bad_rate": 0.6788057190916736,
+      "gini": 0.5122,
+      "auc": 0.7561,
+      "ks": 38.66,
+      "ks_cutoff": 0.6657,
+      "ks_decile": 5,
+      "top_decile_bad_rate": 0.9516,
+      "top_decile_lift": 1.402,
+      "max_achievable_lift": 1.473,
+      "lift_capture": 0.9516,
+      "bottom_decile_bad_rate": 0.3255,
+      "rank_order": {
+        "breaks": [],
+        "n_breaks": 0,
+        "n_breaks_top5": 0,
+        "monotonic": true
+      },
+      "brier": 0.18021,
+      "mean_predicted": 0.6584,
+      "calibration_gap": -0.0204
+    },
+    "train_calibrated": {
+      "label": "train_calibrated",
+      "n": 54144,
+      "bad_rate": 0.6691230791962175,
+      "gini": 0.5128,
+      "auc": 0.7564,
+      "ks": 38.13,
+      "ks_cutoff": 0.6694,
+      "ks_decile": 6,
+      "top_decile_bad_rate": 0.9418,
+      "top_decile_lift": 1.408,
+      "max_achievable_lift": 1.494,
+      "lift_capture": 0.9418,
+      "bottom_decile_bad_rate": 0.2878,
+      "rank_order": {
+        "breaks": [],
+        "n_breaks": 0,
+        "n_breaks_top5": 0,
+        "monotonic": true
+      },
+      "brier": 0.1813,
+      "mean_predicted": 0.663,
+      "calibration_gap": -0.0062
+    },
+    "valid_calibrated": {
+      "label": "valid_calibrated",
+      "n": 14945,
+      "bad_rate": 0.6543325526932084,
+      "gini": 0.5356,
+      "auc": 0.7678,
+      "ks": 40.21,
+      "ks_cutoff": 0.661,
+      "ks_decile": 5,
+      "top_decile_bad_rate": 0.9458,
+      "top_decile_lift": 1.445,
+      "max_achievable_lift": 1.528,
+      "lift_capture": 0.9458,
+      "bottom_decile_bad_rate": 0.2691,
+      "rank_order": {
+        "breaks": [],
+        "n_breaks": 0,
+        "n_breaks_top5": 0,
+        "monotonic": true
+      },
+      "brier": 0.18112,
+      "mean_predicted": 0.6543,
+      "calibration_gap": -0.0
+    }
+  },
+  "gate_summary": "PASS",
+  "gates": [
+    {
+      "gate": "gini_min",
+      "observed": 0.5122,
+      "threshold": ">= 0.25",
+      "result": "PASS"
+    },
+    {
+      "gate": "gini_in_target_band",
+      "observed": 0.5122,
+      "threshold": "0.35-0.55",
+      "result": "PASS"
+    },
+    {
+      "gate": "gini_not_suspicious",
+      "observed": 0.5122,
+      "threshold": "< 0.6",
+      "result": "PASS"
+    },
+    {
+      "gate": "ks_min",
+      "observed": 38.66,
+      "threshold": ">= 20.0",
+      "result": "PASS"
+    },
+    {
+      "gate": "ks_not_suspicious",
+      "observed": 38.66,
+      "threshold": "< 60.0",
+      "result": "PASS"
+    },
+    {
+      "gate": "rank_order_breaks_total",
+      "observed": 0.0,
+      "threshold": "<= 1",
+      "result": "PASS"
+    },
+    {
+      "gate": "rank_order_breaks_top5",
+      "observed": 0.0,
+      "threshold": "<= 0",
+      "result": "PASS"
+    },
+    {
+      "gate": "top_decile_lift_capture",
+      "observed": 0.9516,
+      "threshold": ">= 0.55 (of max 1.473x)",
+      "result": "PASS"
+    },
+    {
+      "gate": "top_decile_lift_not_suspicious",
+      "observed": 0.9516,
+      "threshold": "< 0.995",
+      "result": "PASS"
+    },
+    {
+      "gate": "train_test_gini_gap",
+      "observed": 0.0013,
+      "threshold": "< 0.1",
+      "result": "PASS"
+    },
+    {
+      "gate": "max_feature_psi",
+      "observed": 0.07,
+      "threshold": "< 0.25",
+      "result": "PASS"
+    },
+    {
+      "gate": "min_segment_gini",
+      "observed": 0.3533,
+      "threshold": ">= 0.2",
+      "result": "PASS"
+    }
+  ],
+  "business_target": {
+    "gini_min": 0.5,
+    "ks_min": 39.0,
+    "oot_gini": 0.5122,
+    "oot_ks": 38.66,
+    "gini_reached": true,
+    "ks_reached": false,
+    "note": "KS below 39 is a documented model-performance limitation of the frozen world (FINAL_SEARCH_REPORT.md), not an implementation defect"
+  },
+  "score_psi_train_vs_oot": 0.0103,
+  "score_psi_train_vs_oot_uncalibrated": 0.0109,
+  "max_csi": 0.07,
+  "csi": [
+    {
+      "feature": "disposition_recency_class",
+      "psi": 0.07,
+      "verdict": "stable",
+      "in_model": true
+    },
+    {
+      "feature": "latest_disposition",
+      "psi": 0.0694,
+      "verdict": "stable",
+      "in_model": true
+    },
+    {
+      "feature": "last_commit_status",
+      "psi": 0.066,
+      "verdict": "stable",
+      "in_model": true
+    },
+    {
+      "feature": "recent_ptp_status",
+      "psi": 0.064,
+      "verdict": "stable",
+      "in_model": true
+    },
+    {
+      "feature": "calls_3m",
+      "psi": 0.062,
+      "verdict": "stable",
+      "in_model": true
+    },
+    {
+      "feature": "intent_calls_3m",
+      "psi": 0.0337,
+      "verdict": "stable",
+      "in_model": true
+    },
+    {
+      "feature": "paid_ratio_3m",
+      "psi": 0.027,
+      "verdict": "stable",
+      "in_model": true
+    },
+    {
+      "feature": "days_since_last_contact",
+      "psi": 0.0216,
+      "verdict": "stable",
+      "in_model": true
+    },
+    {
+      "feature": "cibil_score",
+      "psi": 0.0108,
+      "verdict": "stable",
+      "in_model": true
+    },
+    {
+      "feature": "ptp_amount_to_emi",
+      "psi": 0.0048,
+      "verdict": "stable",
+      "in_model": true
+    },
+    {
+      "feature": "overdue_amount",
+      "psi": 0.0029,
+      "verdict": "stable",
+      "in_model": true
+    },
+    {
+      "feature": "interest_rate",
+      "psi": 0.0025,
+      "verdict": "stable",
+      "in_model": true
+    },
+    {
+      "feature": "arrears_ratio",
+      "psi": 0.0024,
+      "verdict": "stable",
+      "in_model": true
+    },
+    {
+      "feature": "no_answer_streak",
+      "psi": 0.0008,
+      "verdict": "stable",
+      "in_model": true
+    },
+    {
+      "feature": "employment_type",
+      "psi": 0.0001,
+      "verdict": "stable",
+      "in_model": true
+    }
+  ],
+  "vif": [
+    {
+      "feature": "arrears_ratio",
+      "vif": 2.015
+    },
+    {
+      "feature": "cibil_score",
+      "vif": 1.086
+    },
+    {
+      "feature": "no_answer_streak",
+      "vif": 1.257
+    },
+    {
+      "feature": "overdue_amount",
+      "vif": 1.303
+    },
+    {
+      "feature": "intent_calls_3m",
+      "vif": 1.543
+    },
+    {
+      "feature": "calls_3m",
+      "vif": 2.136
+    },
+    {
+      "feature": "paid_ratio_3m",
+      "vif": 1.506
+    },
+    {
+      "feature": "ptp_amount_to_emi",
+      "vif": 1.051
+    },
+    {
+      "feature": "days_since_last_contact",
+      "vif": 1.035
+    },
+    {
+      "feature": "interest_rate",
+      "vif": 1.005
+    }
+  ],
+  "iv": [
+    {
+      "feature": "arrears_ratio",
+      "iv": 0.5195
+    },
+    {
+      "feature": "overdue_amount",
+      "iv": 0.3466
+    },
+    {
+      "feature": "disposition_recency_class",
+      "iv": 0.3391
+    },
+    {
+      "feature": "latest_disposition",
+      "iv": 0.3122
+    },
+    {
+      "feature": "calls_3m",
+      "iv": 0.2041
+    },
+    {
+      "feature": "paid_ratio_3m",
+      "iv": 0.2039
+    },
+    {
+      "feature": "cibil_score",
+      "iv": 0.1853
+    },
+    {
+      "feature": "no_answer_streak",
+      "iv": 0.0911
+    },
+    {
+      "feature": "last_commit_status",
+      "iv": 0.0897
+    },
+    {
+      "feature": "recent_ptp_status",
+      "iv": 0.0755
+    },
+    {
+      "feature": "intent_calls_3m",
+      "iv": 0.0234
+    },
+    {
+      "feature": "days_since_last_contact",
+      "iv": 0.0191
+    },
+    {
+      "feature": "employment_type",
+      "iv": 0.0102
+    },
+    {
+      "feature": "interest_rate",
+      "iv": 0.0092
+    },
+    {
+      "feature": "ptp_amount_to_emi",
+      "iv": 0.0071
+    }
+  ],
+  "monotonicity": [
+    {
+      "feature": "arrears_ratio",
+      "declared_sign": 1,
+      "range_logits": 0.8098,
+      "monotone_as_declared": true
+    },
+    {
+      "feature": "cibil_score",
+      "declared_sign": -1,
+      "range_logits": 0.8464,
+      "monotone_as_declared": true
+    },
+    {
+      "feature": "no_answer_streak",
+      "declared_sign": 1,
+      "range_logits": 0.1337,
+      "monotone_as_declared": true
+    },
+    {
+      "feature": "overdue_amount",
+      "declared_sign": 1,
+      "range_logits": 1.2326,
+      "monotone_as_declared": true
+    },
+    {
+      "feature": "intent_calls_3m",
+      "declared_sign": -1,
+      "range_logits": 0.564,
+      "monotone_as_declared": true
+    },
+    {
+      "feature": "calls_3m",
+      "declared_sign": 0,
+      "range_logits": 0.9302,
+      "monotone_as_declared": true
+    },
+    {
+      "feature": "paid_ratio_3m",
+      "declared_sign": -1,
+      "range_logits": 0.4566,
+      "monotone_as_declared": true
+    },
+    {
+      "feature": "ptp_amount_to_emi",
+      "declared_sign": -1,
+      "range_logits": 0.6497,
+      "monotone_as_declared": true
+    },
+    {
+      "feature": "days_since_last_contact",
+      "declared_sign": 0,
+      "range_logits": 0.3448,
+      "monotone_as_declared": true
+    },
+    {
+      "feature": "interest_rate",
+      "declared_sign": 1,
+      "range_logits": 0.0988,
+      "monotone_as_declared": true
+    }
+  ],
+  "psi_gated_on": [
+    "arrears_ratio",
+    "cibil_score",
+    "no_answer_streak",
+    "overdue_amount",
+    "intent_calls_3m",
+    "calls_3m",
+    "paid_ratio_3m",
+    "ptp_amount_to_emi",
+    "days_since_last_contact",
+    "interest_rate",
+    "latest_disposition",
+    "last_commit_status",
+    "recent_ptp_status",
+    "employment_type",
+    "disposition_recency_class"
+  ],
+  "segment_dimensions_gated": [
+    "dpd_bucket",
+    "loan_type",
+    "city"
+  ],
+  "split": {
+    "train": 54144,
+    "valid": 14945,
+    "oot": 23780,
+    "train_periods": [
+      0,
+      13
+    ],
+    "valid_periods": [
+      14,
+      17
+    ],
+    "oot_periods": [
+      18,
+      23
+    ]
+  },
+  "dataset": {
+    "panel": "C:\\Users\\TransOrg\\OneDrive\\Desktop\\TIQCollect-product\\backend\\data\\ledger\\obs_wd10\\panel.parquet",
+    "world": "wd10",
+    "intercept": -4.23438,
+    "config": {
+      "n_borrowers": 5000,
+      "months": 24,
+      "n_agents": 30,
+      "seed": 42,
+      "start_date": "2024-10-01",
+      "cycle_days": 30,
+      "grace_days": 5,
+      "penal_rate_monthly": 0.02,
+      "signal_scale": 1.0,
+      "observation_noise": 1.0,
+      "target_material_rate": 0.3,
+      "dpd_start_mix": {
+        "CURRENT": 0.26,
+        "BUCKET_1": 0.21,
+        "BUCKET_2": 0.19,
+        "BUCKET_3": 0.16,
+        "NPA": 0.18
+      },
+      "dpd_origination_mix": {
+        "CURRENT": 0.64,
+        "BUCKET_1": 0.26,
+        "BUCKET_2": 0.1
+      },
+      "latent_rho": 0.985,
+      "latent_sigma": 0.03,
+      "income_shock_in": 0.01,
+      "income_shock_out": 0.075,
+      "income_shock_depth": 0.45,
+      "visit_hazard_current": 0.01,
+      "visit_hazard_delinquent": 0.055,
+      "ptp_grace_days": 3,
+      "ptp_horizon_lo": 3,
+      "ptp_horizon_hi": 15,
+      "call_hazard_current": 0.012,
+      "call_hazard_delinquent": 0.09,
+      "call_contact_effect": 0.3,
+      "call_contact_days": 7,
+      "p_hostile_flag_on_rtp": 0.5,
+      "fraud_rate": 0.02,
+      "p_hardship_reported_when_shocked": 0.55,
+      "p_hardship_reported_when_not": 0.04,
+      "p_pending_then_verified": 0.04,
+      "verify_lag_lo": 1,
+      "verify_lag_hi": 3,
+      "p_rejected": 0.012,
+      "p_reversed": 0.008,
+      "reversal_lag_lo": 5,
+      "reversal_lag_hi": 20,
+      "cure_cycles_to_close": 3,
+      "writeoff_dpd": 180.0,
+      "writeoff_hazard_monthly": 0.5,
+      "settlement_hazard_monthly": 0.15,
+      "recall_hazard_monthly": 0.004,
+      "deceased_hazard_monthly": 0.0012,
+      "missing_bureau_rate": 0.11,
+      "thin_file_missing_boost": 0.35,
+      "bureau_refresh_days": 90,
+      "agent_churn_per_year": 0.18,
+      "observe_declines": true,
+      "observe_call_duration": true,
+      "observe_verbal_commitments": true,
+      "commitment_horizon_lo": 2,
+      "commitment_horizon_hi": 10,
+      "commitment_grace_days": 2,
+      "commitment_kept_ratio": 0.5,
+      "commitment_hazard_effect": 0.6,
+      "channel_noise_scale": 1.0,
+      "pre_scoring_call_days": 3,
+      "pre_scoring_call_attempts": 3,
+      "pre_scoring_until_reached": true,
+      "observe_disposition": true,
+      "disposition_read_noise": 0.1,
+      "disposition_cut_will": 0.62,
+      "disposition_cut_may": 0.45,
+      "disposition_cut_nocommit": 0.3,
+      "seasonality_amplitude": 0.18,
+      "shock_month_index": 17,
+      "shock_magnitude": -0.55,
+      "covariate_drift": 0.55,
+      "concept_drift": false,
+      "concept_drift_onset_frac": 0.35,
+      "concept_drift_target": "latent_signal",
+      "concept_drift_decay": 0.55
+    },
+    "panel_hash": "33c43d46cef6ad71"
+  },
+  "feature_definition": {
+    "features": [
+      "arrears_ratio",
+      "cibil_score",
+      "no_answer_streak",
+      "overdue_amount",
+      "intent_calls_3m",
+      "calls_3m",
+      "paid_ratio_3m",
+      "ptp_amount_to_emi",
+      "days_since_last_contact",
+      "interest_rate",
+      "latest_disposition",
+      "last_commit_status",
+      "recent_ptp_status",
+      "employment_type",
+      "disposition_recency_class"
+    ],
+    "categorical": [
+      "latest_disposition",
+      "last_commit_status",
+      "recent_ptp_status",
+      "employment_type",
+      "disposition_recency_class"
+    ],
+    "cat_levels": {
+      "latest_disposition": [
+        "DISPUTE",
+        "HARDSHIP",
+        "MAY_PAY",
+        "NONE",
+        "NO_COMMITMENT",
+        "REFUSES",
+        "WILL_PAY"
+      ],
+      "last_commit_status": [
+        "BROKEN",
+        "KEPT",
+        "NONE",
+        "OPEN"
+      ],
+      "recent_ptp_status": [
+        "BROKEN",
+        "HONORED",
+        "NONE",
+        "OPEN",
+        "RESCHEDULED"
+      ],
+      "employment_type": [
+        "BUSINESS_OWNER",
+        "SALARIED",
+        "SELF_EMPLOYED"
+      ],
+      "disposition_recency_class": [
+        "DISPUTE_FRESH",
+        "DISPUTE_STALE",
+        "HARDSHIP_FRESH",
+        "HARDSHIP_STALE",
+        "MAY_PAY_FRESH",
+        "MAY_PAY_STALE",
+        "NONE",
+        "NO_COMMITMENT_FRESH",
+        "NO_COMMITMENT_STALE",
+        "REFUSES_FRESH",
+        "REFUSES_STALE",
+        "WILL_PAY_FRESH",
+        "WILL_PAY_STALE"
+      ]
+    },
+    "abstaining": [
+      "cibil_score",
+      "ptp_amount_to_emi",
+      "days_since_last_contact"
+    ],
+    "constants": {
+      "COMMITMENT_KEPT_RATIO": 0.5,
+      "COMMITMENT_GRACE_DAYS": 2,
+      "DISPOSITION_FRESH_DAYS": 7
+    },
+    "point_in_time": "every input from events strictly before midnight of the as_of date; statuses as known at as_of"
+  },
+  "versions": {
+    "model_artifact": "2.2.0",
+    "feature_definition": "recovery-features-2.2.0+f2f533e34496d455",
+    "calibration": "recovery-calibration-2.2.0+c33dd365d1edd493",
+    "risk_bands": "recovery-bands-2.2.0+37426125b719460f",
+    "reason_codes": "recovery-reasons-1.0.0+49a2704c0307e9da",
+    "background": "recovery-background-2.2.0+ce37fb98a59672a1",
+    "training_data": "e9d6e21e6c43e0eb"
+  },
+  "training_data_hash": "e9d6e21e6c43e0eb",
+  "is_modelled": true,
+  "NOT_PROMOTED": true,
+  "SYNTHETIC_WARNING": "Trained on the event-sourced ledger simulator's wd10 world. Every figure here describes synthetic borrowers.",
+  "model": "recovery_risk",
+  "version": "2.2.0",
+  "saved_at": "2026-09-16",
+  "artifact_sha256": "b668209627fae4bf71a836c80ded9ebb78d67a3af637514200c32b46ebfbb0ab",
+  "library_versions": {
+    "python": "3.12.10",
+    "scikit_learn": "1.6.0",
+    "numpy": "2.2.0",
+    "pandas": "2.2.3"
+  }
+}

@@ -27,7 +27,10 @@ from tests.test_planner_service import (  # noqa: F401
     client, db_session, setup_db, test_data,
 )
 
-SERVING = "1.1.0"
+# 2026-09-16 — read from the pointer; see tests/_served_champion.py.
+from tests._served_champion import served_vector, serving_version  # noqa: E402
+
+SERVING = serving_version()
 
 
 @pytest.fixture
@@ -55,8 +58,8 @@ def _matured(db, n, *, outcome_fn, as_of=None):
             entity_type="case", entity_id=f"lc{i}", case_id=f"lc{i}",
             as_of_date=as_of, probability=p, is_modelled=True,
             feature_coverage=1.0,
-            features={"dpd": 40.0, "cibil_score": 600.0,
-                      "ptp_kept_ratio": 0.5, "overdue_amount": 5000.0},
+            features=served_vector(i, dpd=40.0, cibil_score=600.0,
+                                   ptp_kept_ratio=0.5, overdue_amount=5000.0),
             outcome_baseline={"overdue_amount": 5000.0, "emi_amount": 2500.0,
                               "threshold_ratio": 0.8},
         )
@@ -159,6 +162,12 @@ def test_a_degraded_cohort_reports_retrain_recommended_with_its_reasons(
 
 def test_health_reports_what_this_process_is_serving_against_the_pointer(
         client, auth, db_session, champion_guard):
+    # Earlier tests in this process load 1.1.0 by explicit version (the
+    # scorecard-mechanics tests); a cache holding it beside the champion is
+    # exactly the split-fleet state this endpoint exists to expose, but here
+    # it is test pollution, not the process under test. Start clean.
+    from app.ml.pipeline.engine import DecisionEngine
+    DecisionEngine.clear_cache()
     serving = _health(client, auth)["serving"]["recovery_risk"]
     assert serving["pointer_version"] == champion_guard.strip()
     assert serving["serving_matches_pointer"] is True

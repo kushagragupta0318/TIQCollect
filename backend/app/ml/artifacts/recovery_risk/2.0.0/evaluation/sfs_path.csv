@@ -1,0 +1,11 @@
+step,candidate,gini,gain,action
+1,arrears_ratio,0.3835,0.38354,added
+2,cibil_score,0.4298,0.04626,added
+3,paid_ratio_3m,0.4402,0.01043,added
+4,overdue_amount,0.4449,0.00464,added
+5,call_answer_rate_6m,0.448,0.00312,added
+6,days_since_last_contact,0.4505,0.00252,added
+7,payment_gap_cv_12m,0.4529,0.00234,added
+8,adverse_visit_ratio_6m,0.4548,0.00193,added
+9,contact_rate_6m,0.457,0.00223,added
+10,last_call_intent,0.4578,0.00075,stopped

@@ -24,13 +24,15 @@ written by `ml/pipeline/outcomes.py` and by nothing else.
 So the frame cannot contain a post-prediction feature, because the only source
 of features is a row written before the outcome window opened.
 
-WHAT THIS COSTS, STATED PLAINLY. `score_cases_and_log` stores only the CHAMPION'S
-SELECTED features (four, for recovery_risk 1.1.0), not all 33 candidates. A
-challenger trained here therefore selects among the same four and cannot
-discover a new one. That is a property of the prediction log, not of this
-module; widening it means widening what is logged and waiting another horizon
-for those rows to mature. It is recorded on every cohort as `feature_source` so
-no reader mistakes a four-feature challenger for a full re-specification.
+WHAT THIS USED TO COST, AND SINCE WHEN IT DOES NOT. Until 2026-09-15
+`score_cases_and_log` stored only the CHAMPION'S SELECTED features (four, for
+recovery_risk 1.1.0), so a challenger trained here could only re-select among
+the same four. It now stores the full candidate vector (`config.LOGGED_FEATURES`,
+50 keys). The limitation is still real for every row logged BEFORE that date —
+those carry four keys and put the other 46 in the Missing bin — and it is still
+recorded on every cohort as `feature_source`, which now reports the number of
+distinct feature keys the frame actually holds, so a reader can tell a
+four-feature cohort from a fifty-feature one without opening the rows.
 """
 from __future__ import annotations
 
@@ -101,7 +103,8 @@ class TrainingCohort:
     features: list[str] = field(default_factory=list)
     feature_source: str = (
         "ModelPrediction.features — the frozen vector served at prediction "
-        "time. Limited to the serving model's selected features."
+        "time. Rows logged before 2026-09-15 carry only the serving model's "
+        "selected features; later rows carry the full candidate set."
     )
     #: Sorted prediction ids, hashed. Two cohorts with the same digest are the
     #: same rows; a different digest is a different experiment.
@@ -255,6 +258,11 @@ def build_training_frame(
         n_periods=int(periods),
         model_versions=sorted(v for v in versions if v),
         features=sorted(feature_keys),
+        feature_source=(
+            f"ModelPrediction.features — the frozen vector served at prediction "
+            f"time; {len(feature_keys)} distinct feature keys in this cohort "
+            f"(rows logged before 2026-09-15 carry only the serving model's "
+            f"selected features, later rows the full candidate set)"),
         cohort_digest=_digest(ids),
         excluded=excluded,
         built_at=datetime.now(timezone.utc).isoformat(),

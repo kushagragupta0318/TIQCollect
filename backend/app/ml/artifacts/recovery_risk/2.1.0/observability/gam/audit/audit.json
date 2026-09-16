@@ -1,0 +1,357 @@
+{
+ "findings": [
+  {
+   "check": "1.1 artifact recoverable",
+   "result": "exp5 loaded from gam/models.joblib, 15 features",
+   "verdict": "PASS",
+   "action": "\u2014"
+  },
+  {
+   "check": "1.2 re-fit from the recorded recipe reproduces it",
+   "result": "max |p_refit - p_stored| = 0.000e+00 over 23,780 OOT rows (seed 0, single-threaded histogram build)",
+   "verdict": "PASS",
+   "action": "\u2014"
+  },
+  {
+   "check": "1.3 metadata completeness",
+   "result": "all 12 required keys present (features, model_type, periods, target, preprocessing, monotonicity, interactions, missing handling, hyperparameters, seed, sha256)",
+   "verdict": "PASS",
+   "action": "\u2014"
+  },
+  {
+   "check": "1.4 loads and scores in a CLEAN process",
+   "result": "subprocess (no app imports) reproduced 23780 OOT scores, max |diff| < 1e-12",
+   "verdict": "PASS",
+   "action": "\u2014"
+  },
+  {
+   "check": "2.1 every model feature is produced by the production adapter",
+   "result": "11/15 emitted by the adapter, 11 of those agreeing with the panel EXACTLY (max |diff| 0.0 over 237 rewound rows); NOT produced: ['latest_disposition', 'last_commit_status', 'recent_ptp_status', 'disposition_recency_class']",
+   "verdict": "FAIL",
+   "action": "implement in ml_scoring_service._history_features and add to LOGGED_FEATURES, or do not serve this model"
+  },
+  {
+   "check": "2.2 schema backs the unservable features",
+   "result": "CallLog.disposition=False, Visit.disposition=False \u2014 the disposition channel has NO product column; CallLog.verbal_payment_date=True exists but no adapter code derives commitment status",
+   "verdict": "FAIL",
+   "action": "a migration (borrower_disposition enum on CallLog and Visit) + adapter + Phase-3 equality coverage"
+  },
+  {
+   "check": "2.3 features held equal by the panel/adapter equality harness",
+   "result": "11/15 in EXACT/MONEY/RATIO groups; absent: ['disposition_recency_class', 'last_commit_status', 'latest_disposition', 'recent_ptp_status']",
+   "verdict": "FAIL",
+   "action": "extend tests/test_ledger_phase3_adapter_equality.py once the six are implemented"
+  },
+  {
+   "check": "2.4 window boundaries are written once and are strict at as_of",
+   "result": "panel._before: events with day < t (strict upper), day >= t - W (inclusive lower); the adapter's build_features floors as_of to midnight and uses check_in_time < as_of_dt",
+   "verdict": "PASS",
+   "action": "\u2014"
+  },
+  {
+   "check": "2.5 unknown categorical level is deterministic and finite",
+   "result": "5 unseen levels -> code -1, scored without error, probabilities in [0.122, 0.926]; -1 is NOT a trained level so its logit is the left-most path, not a learned effect",
+   "verdict": "PASS",
+   "action": "map unseen levels to an explicit 'OTHER' level at serving time"
+  },
+  {
+   "check": "2.6 feature ordering is positional, not by name",
+   "result": "reversing the column order does not change the score \u2014 the model is positional, so any serving path MUST build the frame in the metadata's feature order",
+   "verdict": "PASS",
+   "action": "serving code must use metadata['features'] order explicitly"
+  },
+  {
+   "check": "3.1 row-dict serving shim reproduces the offline frame",
+   "result": "max |p_shim - p_offline| = 0.000e+00 over 23,780 rows",
+   "verdict": "PASS",
+   "action": "\u2014"
+  },
+  {
+   "check": "3.2 the real DecisionEngine can serve this artifact",
+   "result": "no: registry.load expects <model>/<version>/model.joblib with a spec+scorecard metadata block, and engine.score_batch_detailed calls pipeline.predict_proba on a frame of RAW values \u2014 a bare HistGradientBoosting rejects string categoricals (None)",
+   "verdict": "FAIL",
+   "action": "wrap the GAM in a sklearn Pipeline whose first step applies the stored category map, and extend registry/metadata for model_type='gam' before any promotion is possible"
+  },
+  {
+   "check": "3.3 declared-sign monotonicity holds in the fitted shape functions",
+   "result": "8 sign-constrained features, violations: none",
+   "verdict": "PASS",
+   "action": "\u2014"
+  },
+  {
+   "check": "3.4 missing routing is explicit and reproducible",
+   "result": "2 features carry a NaN branch; contributions {'ptp_amount_to_emi': 0.021743, 'days_since_last_contact': 0.023228} ...",
+   "verdict": "PASS",
+   "action": "\u2014"
+  },
+  {
+   "check": "3.5 knots/bin boundaries are recorded",
+   "result": "max_bins=32; per-feature bin counts {'arrears_ratio': 8, 'latest_disposition': 5, 'cibil_score': 6, 'no_answer_streak': 4, 'overdue_amount': 14} ... (stored in shape_functions.json as the evaluated grid)",
+   "verdict": "PASS",
+   "action": "\u2014"
+  },
+  {
+   "check": "5.1 offline vs serving-shaped scores on identical keys",
+   "result": "23,780 rows, 23,780 unique (loan_id, as_of_date) keys, max |dp| 0.000e+00, mean |dp| 0.000e+00, max |dlogit| 0.000e+00, disagreements > 1e-9: 0, rank-order breaks 0",
+   "verdict": "PASS",
+   "action": "\u2014"
+  },
+  {
+   "check": "5.2 end-to-end reproduction through the PRODUCTION service",
+   "result": "not executable: the six disposition/commitment features have no adapter implementation (2.1) and the engine cannot load a GAM (3.2), so there is no production prediction to compare against",
+   "verdict": "INFO",
+   "action": "blocked on 2.1 and 3.2"
+  },
+  {
+   "check": "6.1 overall calibration",
+   "result": "Brier 0.17984, observed bad rate 0.6788 vs predicted 0.6644, gap -0.0144 (threshold |gap| < 0.03); worst decile gap +0.0341",
+   "verdict": "PASS",
+   "action": "\u2014"
+  },
+  {
+   "check": "6.2 segment calibration",
+   "result": "worst DPD-bucket gap +0.0261 (BUCKET_1); model is UNCALIBRATED by construction \u2014 no Platt/segment layer, unlike the 1.x artifacts",
+   "verdict": "PASS",
+   "action": "add the pipeline's SegmentCalibrator before serving; not done here because recalibrating would change model behaviour"
+  },
+  {
+   "check": "7.1 score PSI < 0.10",
+   "result": "0.0106",
+   "verdict": "PASS",
+   "action": "\u2014"
+  },
+  {
+   "check": "7.2 every feature CSI < 0.10",
+   "result": "max 0.0700 (disposition_recency_class); next 0.0694",
+   "verdict": "PASS",
+   "action": "\u2014"
+  },
+  {
+   "check": "7.3 missingness drift",
+   "result": "max |drift| 0.1197 (days_since_last_contact)",
+   "verdict": "FAIL",
+   "action": "\u2014"
+  }
+ ],
+ "oot": {
+  "gini": 0.5118,
+  "auc": 0.7559,
+  "ks": 38.84,
+  "brier": 0.17984
+ },
+ "repro": {
+  "rows": 23780,
+  "unique_keys": 23780,
+  "max_abs_prob_diff": 0.0,
+  "mean_abs_prob_diff": 0.0,
+  "max_abs_logit_diff": 0.0,
+  "disagreements_above_1e-9": 0,
+  "rank_order_breaks": 0
+ },
+ "calibration_gap": -0.014435375197611622,
+ "segment_calibration": [
+  {
+   "segment": "CURRENT",
+   "n": 1109,
+   "observed": 0.5194,
+   "predicted": 0.5122,
+   "gap": -0.0072,
+   "gini": 0.3703
+  },
+  {
+   "segment": "BUCKET_1",
+   "n": 6610,
+   "observed": 0.5215,
+   "predicted": 0.4953,
+   "gap": -0.0261,
+   "gini": 0.3542
+  },
+  {
+   "segment": "BUCKET_2",
+   "n": 5138,
+   "observed": 0.6107,
+   "predicted": 0.5996,
+   "gap": -0.0112,
+   "gini": 0.3735
+  },
+  {
+   "segment": "BUCKET_3",
+   "n": 3830,
+   "observed": 0.7345,
+   "predicted": 0.7281,
+   "gap": -0.0064,
+   "gini": 0.3513
+  },
+  {
+   "segment": "NPA",
+   "n": 7093,
+   "observed": 0.8696,
+   "predicted": 0.8582,
+   "gap": -0.0114,
+   "gini": 0.4179
+  }
+ ],
+ "score_psi": 0.010580196498578767,
+ "csi": {
+  "arrears_ratio": 0.0024,
+  "latest_disposition": 0.0694,
+  "cibil_score": 0.0108,
+  "no_answer_streak": 0.0008,
+  "overdue_amount": 0.0029,
+  "intent_calls_3m": 0.0337,
+  "last_commit_status": 0.066,
+  "recent_ptp_status": 0.064,
+  "calls_3m": 0.062,
+  "paid_ratio_3m": 0.027,
+  "ptp_amount_to_emi": 0.0048,
+  "employment_type": 0.0001,
+  "days_since_last_contact": 0.0216,
+  "disposition_recency_class": 0.07,
+  "interest_rate": 0.0025
+ },
+ "missingness_drift": {
+  "arrears_ratio": 0.0,
+  "latest_disposition": 0.0,
+  "cibil_score": 0.0,
+  "no_answer_streak": 0.0,
+  "overdue_amount": 0.0,
+  "intent_calls_3m": 0.0,
+  "last_commit_status": 0.0,
+  "recent_ptp_status": 0.0,
+  "calls_3m": 0.0,
+  "paid_ratio_3m": 0.0,
+  "ptp_amount_to_emi": -0.0878,
+  "employment_type": 0.0,
+  "days_since_last_contact": -0.1197,
+  "disposition_recency_class": 0.0,
+  "interest_rate": 0.0
+ },
+ "feature_parity": [
+  {
+   "feature": "arrears_ratio",
+   "in_LOGGED_FEATURES": true,
+   "adapter_emits": true,
+   "max_abs_diff_vs_panel": 0.0,
+   "categorical": false,
+   "panel_missing_rate": 0.0
+  },
+  {
+   "feature": "latest_disposition",
+   "in_LOGGED_FEATURES": false,
+   "adapter_emits": false,
+   "max_abs_diff_vs_panel": null,
+   "categorical": true,
+   "panel_missing_rate": 0.0
+  },
+  {
+   "feature": "cibil_score",
+   "in_LOGGED_FEATURES": true,
+   "adapter_emits": true,
+   "max_abs_diff_vs_panel": 0.0,
+   "categorical": false,
+   "panel_missing_rate": 0.0
+  },
+  {
+   "feature": "no_answer_streak",
+   "in_LOGGED_FEATURES": true,
+   "adapter_emits": true,
+   "max_abs_diff_vs_panel": 0.0,
+   "categorical": false,
+   "panel_missing_rate": 0.0
+  },
+  {
+   "feature": "overdue_amount",
+   "in_LOGGED_FEATURES": true,
+   "adapter_emits": true,
+   "max_abs_diff_vs_panel": 0.0,
+   "categorical": false,
+   "panel_missing_rate": 0.0
+  },
+  {
+   "feature": "intent_calls_3m",
+   "in_LOGGED_FEATURES": true,
+   "adapter_emits": true,
+   "max_abs_diff_vs_panel": 0.0,
+   "categorical": false,
+   "panel_missing_rate": 0.0
+  },
+  {
+   "feature": "last_commit_status",
+   "in_LOGGED_FEATURES": false,
+   "adapter_emits": false,
+   "max_abs_diff_vs_panel": null,
+   "categorical": true,
+   "panel_missing_rate": 0.0
+  },
+  {
+   "feature": "recent_ptp_status",
+   "in_LOGGED_FEATURES": false,
+   "adapter_emits": false,
+   "max_abs_diff_vs_panel": null,
+   "categorical": true,
+   "panel_missing_rate": 0.0
+  },
+  {
+   "feature": "calls_3m",
+   "in_LOGGED_FEATURES": true,
+   "adapter_emits": true,
+   "max_abs_diff_vs_panel": 0.0,
+   "categorical": false,
+   "panel_missing_rate": 0.0
+  },
+  {
+   "feature": "paid_ratio_3m",
+   "in_LOGGED_FEATURES": true,
+   "adapter_emits": true,
+   "max_abs_diff_vs_panel": 0.0,
+   "categorical": false,
+   "panel_missing_rate": 0.0
+  },
+  {
+   "feature": "ptp_amount_to_emi",
+   "in_LOGGED_FEATURES": true,
+   "adapter_emits": true,
+   "max_abs_diff_vs_panel": 0.0,
+   "categorical": false,
+   "panel_missing_rate": 0.6515
+  },
+  {
+   "feature": "employment_type",
+   "in_LOGGED_FEATURES": true,
+   "adapter_emits": true,
+   "max_abs_diff_vs_panel": 0.0,
+   "categorical": true,
+   "panel_missing_rate": 0.0
+  },
+  {
+   "feature": "days_since_last_contact",
+   "in_LOGGED_FEATURES": true,
+   "adapter_emits": true,
+   "max_abs_diff_vs_panel": 0.0,
+   "categorical": false,
+   "panel_missing_rate": 0.3722
+  },
+  {
+   "feature": "disposition_recency_class",
+   "in_LOGGED_FEATURES": false,
+   "adapter_emits": false,
+   "max_abs_diff_vs_panel": null,
+   "categorical": true,
+   "panel_missing_rate": 0.0
+  },
+  {
+   "feature": "interest_rate",
+   "in_LOGGED_FEATURES": true,
+   "adapter_emits": true,
+   "max_abs_diff_vs_panel": 0.0,
+   "categorical": false,
+   "panel_missing_rate": 0.0
+  }
+ ],
+ "unservable_features": [
+  "latest_disposition",
+  "last_commit_status",
+  "recent_ptp_status",
+  "disposition_recency_class"
+ ]
+}

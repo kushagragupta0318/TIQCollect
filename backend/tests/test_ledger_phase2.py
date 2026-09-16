@@ -53,13 +53,17 @@ def test_replace_does_not_mutate_the_shared_spec_object():
     carry the experiment's version."""
     before = RECOVERY_RISK.version
     replace(RECOVERY_RISK, version="9.9.9-scratch")
-    assert RECOVERY_RISK.version == before == "1.1.0"
+    assert RECOVERY_RISK.version == before == "1.1.0"      # the WOE spec's own version, not the pointer
 
 
-def test_the_champion_pointer_still_names_the_committed_model():
+def test_the_champion_pointer_still_names_a_committed_model_not_the_experiment():
+    """1.2.0-ledger is written with make_champion=False; the pointer must name a
+    committed artifact and never this run's. (Read "== 1.1.0" until 2.2.0 was
+    promoted on 2026-09-16.)"""
     from app.ml.pipeline import registry
 
-    assert registry.resolve_version("recovery_risk", "champion") == "1.1.0"
+    v = registry.resolve_version("recovery_risk", "champion")
+    assert v != "1.2.0-ledger" and (registry.version_dir("recovery_risk", v) / "metadata.json").exists()
 
 
 def test_saving_without_make_champion_leaves_the_pointer_alone(tmp_path,

@@ -1,0 +1,54 @@
+{
+ "world": "wd30",
+ "read_noise": 0.3,
+ "n_readings": 207624,
+ "readings_per_account_month": 2.33,
+ "distribution": {
+  "WILL_PAY": 0.328,
+  "REFUSES": 0.286,
+  "MAY_PAY": 0.153,
+  "NO_COMMITMENT": 0.133,
+  "HARDSHIP": 0.066,
+  "DISPUTE": 0.033
+ },
+ "coverage_3d": 0.663,
+ "coverage_30d": 0.815,
+ "coverage_ever": 0.9,
+ "median_days_since_reading": 3.0,
+ "csi_latest_disposition_train_vs_oot": 0.0688,
+ "csi_disposition_3d_train_vs_oot": 0.0218,
+ "mean_willingness_by_disposition_3d": {
+  "DISPUTE": 0.475,
+  "HARDSHIP": 0.5,
+  "MAY_PAY": 0.509,
+  "NO_COMMITMENT": 0.437,
+  "REFUSES": 0.32,
+  "WILL_PAY": 0.645
+ },
+ "bad_rate_by_disposition_3d": {
+  "DISPUTE": 0.651,
+  "HARDSHIP": 0.673,
+  "MAY_PAY": 0.631,
+  "NO_COMMITMENT": 0.678,
+  "REFUSES": 0.754,
+  "WILL_PAY": 0.532
+ },
+ "bad_rate_by_latest_disposition": {
+  "DISPUTE": 0.685,
+  "HARDSHIP": 0.707,
+  "MAY_PAY": 0.657,
+  "NONE": 0.615,
+  "NO_COMMITMENT": 0.704,
+  "REFUSES": 0.782,
+  "WILL_PAY": 0.562
+ },
+ "spearman_score_vs_willingness_at_asof": 0.533,
+ "exact_class_agreement": 0.46,
+ "false_positive_rate_positive_stance": 0.294,
+ "false_negative_rate_positive_stance": 0.262,
+ "hardship_or_dispute_override_share": 0.097,
+ "gini_true_w_only": 0.4082,
+ "gini_true_w_plus_reading": 0.4082,
+ "reading_adds_beyond_true_w": 0.0,
+ "uses_only_readings_before_as_of": "day < t by construction (panel._before); tests/test_ledger_observability.py"
+}

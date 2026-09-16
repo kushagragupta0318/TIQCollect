@@ -140,9 +140,15 @@ class ModelTrainer:
                              "Correlation — raw numeric features")
 
         # ── 3. WOE binning ──────────────────────────────────────────────────
+        # The spec's expected direction is enforced HERE, at the bins. See the
+        # 2026-09-15 note in binning.py: `expected_sign` was declared and read
+        # by nothing, so a feature could enter the card in the wrong business
+        # direction with a perfectly negative WOE coefficient.
         binner = WOEBinner(num, cat,
                            min_bin_fraction=s.gates.min_bin_fraction,
-                           min_bin_events=s.gates.min_bin_events).fit(Xtr, y_tr)
+                           min_bin_events=s.gates.min_bin_events,
+                           trends=WOEBinner.trends_from_signs(s.expected_sign)
+                           ).fit(Xtr, y_tr)
         iv_frame = binner.iv_frame()
         tables["eda/information_value.csv"] = iv_frame
         tables["eda/binning_tables.csv"] = pd.concat(
@@ -349,6 +355,8 @@ class ModelTrainer:
             "segment_dimensions_gated": gated_dims,
             "max_psi_all_candidates": round(float(psi_df.psi.max()), 4) if not psi_df.empty else None,
             "high_iv_flagged_for_review": sel.reviewed_high_iv,
+            "binning_trends_forced": WOEBinner.trends_from_signs(s.expected_sign),
+            "binning_failed": dict(binner.failed_),
             "split": {"train": int(len(train)), "valid": int(len(valid)),
                       "oot": int(len(oot)),
                       "train_periods": [int(train[s.split_col].min()),

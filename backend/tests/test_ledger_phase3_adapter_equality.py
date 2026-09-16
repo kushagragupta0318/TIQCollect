@@ -44,14 +44,29 @@ EXACT = ["dpd", "dpd_bucket", "loan_type", "branch_code", "city",
          "employment_type", "is_secured", "tenure_months", "months_on_book",
          "age", "visits_3m", "visits_6m", "distinct_agents_6m",
          "ptp_set_6m", "ptp_kept_6m", "days_since_last_contact",
-         "days_since_last_payment", "cibil_score"]
+         "days_since_last_payment", "cibil_score",
+         # 2026-09-15 — the v2 channels. Counts, streaks, flags, day gaps.
+         "rtp_visits_6m", "dispute_visits_6m", "calls_3m", "no_answer_streak",
+         "days_since_last_answered_call", "ptp_broken_6m", "ptp_rescheduled_6m",
+         "payments_6m", "is_hostile", "fraud_flag",
+         "intent_calls_3m", "last_call_intent", "hardship_visits_6m",
+         # 2026-09-15 (later) — the 2.1.0 additions that are integral or
+         # categorical: a day gap and the last visit's outcome string.
+         "days_since_last_call", "last_visit_outcome"]
 #: Money. Both sides round to paise; 0.01 is the rounding, not a fudge.
 MONEY = ["emi_amount", "sanction_amount", "overdue_amount", "penal_charges",
          "outstanding_principal", "total_outstanding", "interest_rate"]
 #: Ratios the two sides round at different points in the arithmetic.
 RATIO = ["arrears_ratio", "penal_ratio", "outstanding_to_sanction",
          "contact_rate_6m", "ptp_kept_ratio",
-         "paid_ratio_3m", "paid_ratio_6m", "paid_ratio_12m"]
+         "paid_ratio_3m", "paid_ratio_6m", "paid_ratio_12m",
+         # 2026-09-15 — the v2 ratios.
+         "adverse_visit_ratio_6m", "call_answer_rate_6m", "ptp_amount_to_emi",
+         "partial_payment_share_6m", "payment_gap_cv_12m", "last_payment_to_emi",
+         "paid_momentum",
+         # 2026-09-15 (later) — the 2.1.0 ratios.
+         "paid_ratio_1m", "pay_amount_cv_6m", "call_answer_rate_3m",
+         "intent_rate_6m"]
 
 MONEY_TOL = 0.01
 RATIO_TOL = 0.002
@@ -175,6 +190,74 @@ def test_every_champion_feature_is_covered_by_one_of_the_groups():
                           "overdue_amount", "arrears_ratio", "paid_ratio_3m",
                           "contact_rate_6m", "visits_3m") if f not in covered]
     assert missing == []
+
+
+def test_every_v2_numeric_candidate_is_covered_by_one_of_the_groups():
+    """2026-09-15. The 2.0.0 spec is the reason this harness was widened; a
+    candidate it names that no group compares would be a feature the two
+    implementations are free to disagree on. Categoricals are compared in
+    EXACT; numeric candidates must be in one of the three groups."""
+    from app.ml.pipeline.config import RECOVERY_RISK_V2
+
+    covered = set(EXACT) | set(MONEY) | set(RATIO)
+    missing = [f for f in RECOVERY_RISK_V2.numeric_features if f not in covered]
+    assert missing == [], f"v2 candidates not held equal: {missing}"
+
+
+def test_every_v21_candidate_is_covered_by_one_of_the_groups():
+    """Same rule for the 2.1.0 spec: numeric candidates in one of the three
+    groups, categoricals in EXACT."""
+    from app.ml.pipeline.config import RECOVERY_RISK_V21
+
+    covered = set(EXACT) | set(MONEY) | set(RATIO)
+    missing = [f for f in RECOVERY_RISK_V21.all_features if f not in covered]
+    assert missing == [], f"v2.1 candidates not held equal: {missing}"
+
+
+def test_the_v21_ratios_abstain_on_both_sides(matched):
+    """`pay_amount_cv_6m`, `call_answer_rate_3m`, `intent_rate_6m` and
+    `days_since_last_call` are NaN where their denominator is empty, on BOTH
+    sides; `paid_ratio_1m` is 0.0 (not NaN) where nothing was paid, on BOTH
+    sides; `last_visit_outcome` is the string "NONE", never None, where
+    nobody has visited — a fitted category, not a missing value."""
+    for f in ("pay_amount_cv_6m", "call_answer_rate_3m", "intent_rate_6m",
+              "days_since_last_call"):
+        seen = 0
+        for _, lid, row, feats in matched:
+            a = row.get(f)
+            if a is None or (isinstance(a, float) and math.isnan(a)):
+                seen += 1
+                assert feats.get(f) is None, (f, lid, feats.get(f))
+        assert seen > 0, f"no abstaining row for {f} in the sample"
+    zero = sum(1 for _, _, row, feats in matched
+               if row["paid_ratio_1m"] == 0.0 and feats["paid_ratio_1m"] == 0.0)
+    assert zero > 0
+    for _, lid, row, feats in matched:
+        assert isinstance(feats.get("last_visit_outcome"), str), (lid, feats.get("last_visit_outcome"))
+        assert not (isinstance(row["paid_ratio_1m"], float) and math.isnan(row["paid_ratio_1m"]))
+    assert any(feats["last_visit_outcome"] == "NONE" for _, _, _, feats in matched)
+
+
+def test_the_new_ratios_abstain_on_both_sides(matched):
+    """The v2 ratios are NaN where their denominator is empty, on BOTH sides.
+    None on one side and 0.0 on the other would read as an ordinary value and
+    train a Missing bin against a zero bin."""
+    for f in ("adverse_visit_ratio_6m", "call_answer_rate_6m",
+              "ptp_amount_to_emi", "partial_payment_share_6m",
+              "payment_gap_cv_12m", "last_payment_to_emi", "last_call_intent"):
+        seen = 0
+        for _, lid, row, feats in matched:
+            a = row.get(f)
+            if a is None or (isinstance(a, float) and math.isnan(a)):
+                seen += 1
+                assert feats.get(f) is None, (f, lid, feats.get(f))
+        assert seen > 0, f"no abstaining row for {f} in the sample"
+
+
+def test_the_hostility_flag_is_raised_before_some_snapshots_and_not_others(matched):
+    """A flag that is 0 everywhere, or 1 everywhere, is not being rewound."""
+    vals = {int(feats.get("is_hostile", 0)) for _, _, _, feats in matched}
+    assert vals == {0, 1}, vals
 
 
 # ---------------------------------------------------------------------------

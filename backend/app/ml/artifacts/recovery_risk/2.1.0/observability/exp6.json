@@ -1,0 +1,227 @@
+{
+ "exp": "exp6",
+ "world": "w4",
+ "n_rows": 92436,
+ "bad_rate": 0.6605,
+ "n_candidates": 101,
+ "selected": [
+  "arrears_ratio",
+  "intent_rate_6m",
+  "call_answer_rate_3m",
+  "cibil_score",
+  "overdue_amount",
+  "mean_call_duration_6m",
+  "recent_ptp_status",
+  "no_answer_streak",
+  "commitments_90d",
+  "calls_3m",
+  "contact_rate_6m",
+  "paid_ratio_3m",
+  "declined_rate_30d"
+ ],
+ "n_selected": 13,
+ "train": {
+  "gini": 0.4795,
+  "auc": 0.7398,
+  "ks": 35.41
+ },
+ "valid": {
+  "gini": 0.4814,
+  "auc": 0.7407,
+  "ks": 36.58
+ },
+ "oot": {
+  "gini": 0.486,
+  "auc": 0.743,
+  "ks": 36.41,
+  "brier": 0.18701,
+  "calibration_gap": -0.016,
+  "top_decile_lift": 1.411,
+  "bad_rate": 0.6657677397606607,
+  "n": 23732
+ },
+ "oot_rank_order_breaks": 0,
+ "oot_challenger_gbm_gini": 0.4915,
+ "champion_kind": "scorecard",
+ "bootstrap_ci": {
+  "point": 0.486,
+  "mean": 0.4859,
+  "std": 0.0067,
+  "ci_lower_2.5": 0.4729,
+  "ci_upper_97.5": 0.4994,
+  "n_bootstrap": 300
+ },
+ "iv_selected": {
+  "arrears_ratio": 0.5015,
+  "intent_rate_6m": 0.1499,
+  "call_answer_rate_3m": 0.1687,
+  "cibil_score": 0.1795,
+  "overdue_amount": 0.3329,
+  "mean_call_duration_6m": 0.17,
+  "recent_ptp_status": 0.0705,
+  "no_answer_streak": 0.084,
+  "commitments_90d": 0.0418,
+  "calls_3m": 0.1766,
+  "contact_rate_6m": 0.0553,
+  "paid_ratio_3m": 0.1903,
+  "declined_rate_30d": 0.0372
+ },
+ "iv_min_selected": 0.0372,
+ "iv_max_selected": 0.5015,
+ "max_vif": 4.466,
+ "score_psi": 0.013,
+ "max_csi_selected": 0.0937,
+ "min_segment_gini": 0.2311,
+ "monotone_selected": true,
+ "gates_passed": true,
+ "sfs_path": [
+  {
+   "step": 1,
+   "candidate": "arrears_ratio",
+   "gini": 0.3836,
+   "gain": 0.38361,
+   "action": "added"
+  },
+  {
+   "step": 2,
+   "candidate": "intent_rate_6m",
+   "gini": 0.4284,
+   "gain": 0.04481,
+   "action": "added"
+  },
+  {
+   "step": 3,
+   "candidate": "call_answer_rate_3m",
+   "gini": 0.4472,
+   "gain": 0.01882,
+   "action": "added"
+  },
+  {
+   "step": 4,
+   "candidate": "cibil_score",
+   "gini": 0.4568,
+   "gain": 0.00952,
+   "action": "added"
+  },
+  {
+   "step": 5,
+   "candidate": "overdue_amount",
+   "gini": 0.4643,
+   "gain": 0.00757,
+   "action": "added"
+  },
+  {
+   "step": 6,
+   "candidate": "mean_call_duration_6m",
+   "gini": 0.4681,
+   "gain": 0.00378,
+   "action": "added"
+  },
+  {
+   "step": 7,
+   "candidate": "recent_ptp_status",
+   "gini": 0.4709,
+   "gain": 0.00284,
+   "action": "added"
+  },
+  {
+   "step": 8,
+   "candidate": "no_answer_streak",
+   "gini": 0.4727,
+   "gain": 0.00173,
+   "action": "added"
+  },
+  {
+   "step": 9,
+   "candidate": "commitments_90d",
+   "gini": 0.4747,
+   "gain": 0.00198,
+   "action": "added"
+  },
+  {
+   "step": 10,
+   "candidate": "calls_3m",
+   "gini": 0.4765,
+   "gain": 0.00183,
+   "action": "added"
+  },
+  {
+   "step": 11,
+   "candidate": "contact_rate_6m",
+   "gini": 0.4779,
+   "gain": 0.00139,
+   "action": "added"
+  },
+  {
+   "step": 12,
+   "candidate": "paid_ratio_3m",
+   "gini": 0.4793,
+   "gain": 0.00141,
+   "action": "added"
+  },
+  {
+   "step": 13,
+   "candidate": "ptp_kept_ratio",
+   "gini": 0.4805,
+   "gain": 0.00118,
+   "action": "added"
+  },
+  {
+   "step": 14,
+   "candidate": "declined_rate_30d",
+   "gini": 0.4813,
+   "gain": 0.00087,
+   "action": "added"
+  },
+  {
+   "step": 15,
+   "candidate": "answered_3d",
+   "gini": 0.4817,
+   "gain": 0.00033,
+   "action": "stopped"
+  }
+ ],
+ "sign_dropped": [
+  {
+   "feature": "ptp_kept_ratio",
+   "coefficient": 0.39962,
+   "reason": "positive coefficient on a WOE feature means more evidence of good behaviour raises modelled risk \u2014 inadmissible"
+  }
+ ],
+ "realism_passed": true,
+ "realism": {
+  "forward_flow_rate": 0.4947,
+  "cure_rate": 0.0663,
+  "npa_share": 0.2949,
+  "performing_share": 0.3347,
+  "current_share": 0.0508,
+  "vintage_monotone_frac": 1.0,
+  "exact_emi_share": 0.4943,
+  "round_number_share": 0.1341,
+  "partial_share": 0.3403,
+  "ptp_kept_rate": 0.5261,
+  "rpc_rate": 0.4793,
+  "call_answer_rate": 0.3858,
+  "rtp_share_of_met_visits": 0.161,
+  "intent_share_of_answered_calls": 0.4177,
+  "hardship_share_of_met_visits": 0.0695,
+  "hostile_share": 0.2594,
+  "declined_share_of_reached": 0.1474,
+  "commitment_share_of_answered": 0.3528,
+  "commitment_kept_rate": 0.2752,
+  "median_call_duration_s": 70.0,
+  "material_payment_rate": 0.3395
+ },
+ "observable_ceiling": [
+  0.5091,
+  37.98
+ ],
+ "joint_oracle": [
+  0.579,
+  43.6
+ ],
+ "observables_plus_true_willingness": [
+  0.5514,
+  41.06
+ ]
+}

@@ -285,7 +285,12 @@ def run_candidate(db: Session, candidate_id: str) -> ModelCandidate:
     db.commit()
 
     # ── train ───────────────────────────────────────────────────────────────
-    base = {"recovery_risk": cfg.RECOVERY_RISK,
+    # The WIDEST spec for the model, not the incumbent's. 2026-09-15: since the
+    # prediction log now carries every candidate (`LOGGED_FEATURES`), a
+    # challenger may select a feature the incumbent never used; `_derive_spec`
+    # still narrows to what the frame actually holds, so rows logged before
+    # the widening simply put the new columns in the Missing bin.
+    base = {"recovery_risk": cfg.RECOVERY_RISK_V2,
             "contact_risk": cfg.CONTACT_RISK}.get(cand.model_name)
     if base is None:
         return _terminal(CandidateState.FAILED,

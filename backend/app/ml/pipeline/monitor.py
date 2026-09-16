@@ -530,6 +530,26 @@ def monitor_model(db: Session, model: str, *, version: str | None = None,
                 rep.reasons.append(
                     f"population has shifted past PSI {PSI_RETRAIN_THRESHOLD} on "
                     f"{', '.join(shifted)}")
+            # 2026-09-16 — MISSINGNESS, which PSI cannot see: `evaluate.psi`
+            # drops NaN on both sides, so a feature whose missing share moves
+            # from 49% to 37% reads "stable" (measured on the reference GAM's
+            # own inputs). Its own check, its own threshold, its own action;
+            # `evaluate.psi` is unchanged. A breach is a serving/data finding
+            # like a missing champion feature, and is treated the same way.
+            if feats:
+                from app.ml.pipeline.missingness import breached_features, missingness_report
+                miss_rep = missingness_report(ref, cur, feats)
+                rep.stability["missingness"] = miss_rep
+                breached = breached_features(miss_rep)
+                if breached:
+                    rep.retrain_recommended = True
+                    detail = "; ".join(
+                        f"{r['feature']} {r['baseline_absent_rate']:.1%} -> {r['current_absent_rate']:.1%}"
+                        for r in miss_rep if r["breached"] and r["baseline_absent_rate"] is not None)
+                    rep.reasons.append(
+                        f"the share of rows with NO observation moved on {', '.join(breached)} "
+                        f"({detail}) — invisible to PSI, which drops missing values; see "
+                        f"ml/pipeline/missingness.py for the action")
 
     if rep.retrain_recommended:
         # Stability runs on every row regardless of labels, so a missing

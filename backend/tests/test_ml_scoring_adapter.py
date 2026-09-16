@@ -226,10 +226,22 @@ def _champion_features():
     return meta["selected_features"]
 
 
+def _champion_spec():
+    import json
+
+    from app.ml.pipeline import registry
+    v = registry.resolve_version("recovery_risk")
+    meta = json.loads((registry.version_dir("recovery_risk", v) / "metadata.json").read_text())
+    return meta.get("spec") or {}
+
+
 def test_adapter_supplies_every_feature_the_champion_selected(db, book):
     feats = _champion_features()
     f = MLScoringService(db).build_features(book["loan"])
-    missing = [x for x in feats if f.get(x) is None]
+    # The engine's own rule: a key must be PRESENT; a null is a break only on a
+    # feature the champion does not declare abstaining (2.2.0 declares three).
+    abstaining = set(_champion_spec().get("abstaining_features") or ())
+    missing = [x for x in feats if x not in f or (x not in abstaining and f.get(x) is None)]
     assert missing == [], f"adapter cannot supply: {missing}"
 
 
@@ -356,8 +368,18 @@ def test_scoring_a_case_list_records_a_prediction_row(db, book):
     assert saved.as_of_date is not None
     assert saved.scored_at is not None
     assert saved.feature_coverage == pytest.approx(1.0)
-    # Only the model's own inputs are stored — PSI is computed on those.
-    assert set(saved.features) == set(_champion_features())
+    # THE FULL CANDIDATE VECTOR is stored, 2026-09-15 — every feature the
+    # widest spec names, so a production retrain can select from all of it.
+    # *(This read "Only the model's own inputs are stored — PSI is computed on
+    # those" and asserted equality with the champion's four. That was the
+    # limitation production_dataset.py recorded in its own header: a challenger
+    # could only ever re-select among the incumbent's inputs.)* The champion's
+    # inputs are still a subset, which is what the monitor reads.
+    from app.ml.pipeline.config import LOGGED_FEATURES
+
+    assert set(saved.features) >= set(_champion_features())
+    assert set(saved.features) == set(LOGGED_FEATURES)
+    assert len(saved.features) > len(_champion_features())
     # Not yet linked: the agent is unknown until the solve returns.
     assert saved.agent_id is None
     # Never counted as an outcome until the labeller attaches one.
@@ -440,7 +462,8 @@ def test_the_configured_version_is_what_actually_gets_served(monkeypatch):
 
     monkeypatch.setattr(settings, "ML_MODEL_VERSION", "champion")
     DecisionEngine.clear_cache()
-    assert DecisionEngine.get("recovery_risk").version == "1.1.0"
+    from app.ml.pipeline import registry
+    assert DecisionEngine.get("recovery_risk").version == registry.pointer_version("recovery_risk")
     DecisionEngine.clear_cache()
 
 

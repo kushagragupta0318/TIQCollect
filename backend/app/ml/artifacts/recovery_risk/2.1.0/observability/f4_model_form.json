@@ -1,0 +1,42 @@
+[
+ {
+  "form":"A  WOE + LR (artifact)",
+  "k":11,
+  "gini":0.5003,
+  "ks":37.5,
+  "brier":0.18189,
+  "valid_gini":0.5226
+ },
+ {
+  "form":"B  L1 LR on WOE, C=0.1",
+  "k":11,
+  "gini":0.5013,
+  "ks":37.52,
+  "brier":0.1817,
+  "valid_gini":0.5233
+ },
+ {
+  "form":"B  L2 LR on WOE, C=0.3",
+  "k":11,
+  "gini":0.5014,
+  "ks":37.55,
+  "brier":0.18171,
+  "valid_gini":0.5232
+ },
+ {
+  "form":"C  GBM on the selected features (it=172)",
+  "k":11,
+  "gini":0.517,
+  "ks":38.55,
+  "brier":0.1786,
+  "valid_gini":0.5342
+ },
+ {
+  "form":"C  GBM on the VIF pool (it=211)",
+  "k":43,
+  "gini":0.5194,
+  "ks":39.03,
+  "brier":0.17831,
+  "valid_gini":0.5363
+ }
+]

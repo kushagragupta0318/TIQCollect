@@ -32,9 +32,14 @@ def probs(book):
     from app.ml.pipeline.engine import DecisionEngine
 
     cases, _, feats, _ = book
-    engine = DecisionEngine.get("recovery_risk")
+    # The shadow book is the book_simulator's panel, which carries the four
+    # 1.1.0 inputs and none of the GAM's fifteen; the allocator arithmetic under
+    # test is model-agnostic, so it is measured with the model that can read
+    # this book. (Read DecisionEngine.get("recovery_risk") until 2.2.0 was
+    # promoted on 2026-09-16, when every case would have been declined.)
+    engine = DecisionEngine.get("recovery_risk", "1.1.0")
     if engine is None:
-        pytest.skip("no champion recovery_risk artifact")
+        pytest.skip("no 1.1.0 recovery_risk artifact")
     scored = engine.score_batch([feats[c.id] for c in cases])
     return {c.id: 1.0 - p for c, p in zip(cases, scored) if p is not None}
 

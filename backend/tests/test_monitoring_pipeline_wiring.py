@@ -31,7 +31,12 @@ from app.ml.pipeline.outcomes import OUTCOME_DEFINITION_VERSION, OutcomeStatus
 from app.models.base import Base
 from app.models.model_prediction import ModelPrediction
 
-SERVING = "1.1.0"
+# 2026-09-16 — the served version and its feature set come from the pointer
+# (tests/_served_champion.py); a literal "1.1.0" described nothing once 2.2.0
+# was promoted and the whole chain correctly reported not_ready.
+from tests._served_champion import served_vector, serving_version  # noqa: E402
+
+SERVING = serving_version()
 engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
                        poolclass=StaticPool)
 Session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -59,8 +64,8 @@ def _pred(db, *, case, as_of, prob, outcome=None, version=SERVING,
         id=str(uuid.uuid4()), model_name="recovery_risk", model_version=version,
         entity_type="case", entity_id=case, case_id=case, as_of_date=as_of,
         probability=prob, is_modelled=True, feature_coverage=coverage,
-        features={"dpd": 40.0 + (prob * 100), "cibil_score": 600.0,
-                  "ptp_kept_ratio": 0.5, "overdue_amount": 5000.0},
+        features=served_vector(int(prob * 100), dpd=40.0 + (prob * 100), cibil_score=600.0,
+                               ptp_kept_ratio=0.5, overdue_amount=5000.0),
         outcome_baseline={"overdue_amount": 5000.0, "emi_amount": 2500.0,
                           "threshold_ratio": 0.8},
     )

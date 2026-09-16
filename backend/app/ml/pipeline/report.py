@@ -92,6 +92,21 @@ def _tbl(df: pd.DataFrame | None, max_rows: int = 60, cls: str = "") -> str:
             f"<tbody>{body}</tbody></table></div>{more}")
 
 
+def _n(v) -> str:
+    """A count for the document, or a dash. The ledger dataset records its
+    row counts under `realism.descriptives` rather than at the top level, and
+    `'-':,` is a ValueError — which is how the first 2.0.0 run crashed after
+    training, gating and comparing successfully."""
+    try:
+        return f"{int(v):,}"
+    except (TypeError, ValueError):
+        return "-"
+
+
+def _desc(ds: dict) -> dict:
+    return (ds.get("realism") or {}).get("descriptives") or {}
+
+
 def _csv(d: Path, name: str) -> pd.DataFrame | None:
     p = d / name
     return pd.read_csv(p) if p.exists() else None
@@ -165,10 +180,11 @@ written to the artifact directory so the failure can be inspected, but it has
 <tr><td>Periods — train</td><td>{sp['train_periods'][0]} to {sp['train_periods'][1]}</td></tr>
 <tr><td>Periods — out-of-time</td><td>{sp['oot_periods'][0]} to {sp['oot_periods'][1]}</td></tr>
 <tr><td>Bad rate (train / oot)</td><td>{tr['bad_rate']:.4f} / {oot['bad_rate']:.4f}</td></tr>
-<tr><td>Source rows</td><td>{ds.get('rows','-'):,}</td></tr>
-<tr><td>Distinct accounts</td><td>{ds.get('distinct_loans','-'):,}</td></tr>
+<tr><td>Source rows</td><td>{_n(ds.get('rows', _desc(ds).get('panel_rows')))}</td></tr>
+<tr><td>Distinct accounts</td><td>{_n(ds.get('distinct_loans', _desc(ds).get('distinct_loans')))}</td></tr>
 <tr><td>Training data hash</td><td><code>{meta.get('training_data_hash','')}</code></td></tr>
-<tr><td>Dataset fingerprint</td><td><code>{ds.get('config_fingerprint','')}</code></td></tr>
+<tr><td>Dataset fingerprint</td><td><code>{ds.get('config_fingerprint') or ds.get('config', {}).get('fingerprint', '')}</code></td></tr>
+<tr><td>Development panel</td><td>{meta.get('spec', {}).get('training_panel', 'book_simulator')}</td></tr>
 </tbody></table>""")
     A("""<div class="note">The split is <strong>chronological</strong>, and the
 out-of-time slice is read exactly once, at the end. Outlier caps, WOE bins,

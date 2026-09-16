@@ -1,0 +1,15 @@
+dropped,kept,abs_corr,iv_dropped,iv_kept
+penal_charges,arrears_ratio,0.8328,0.4824,0.4984
+dpd,arrears_ratio,0.8791,0.4769,0.4984
+penal_ratio,arrears_ratio,0.8176,0.4421,0.4984
+dpd_bucket,arrears_ratio,0.8351,0.4265,0.4984
+paid_momentum,paid_ratio_3m,0.8408,0.1649,0.1893
+payments_6m,paid_ratio_3m,0.72,0.1265,0.1893
+paid_ratio_6m,paid_ratio_3m,0.7897,0.1256,0.1893
+paid_ratio_12m,paid_ratio_3m,0.7508,0.0825,0.1893
+visits_6m,visits_3m,0.8857,0.1117,0.122
+rtp_visits_6m,adverse_visit_ratio_6m,0.8835,0.0646,0.0686
+emi_amount,total_outstanding,0.7147,0.0388,0.049
+sanction_amount,total_outstanding,0.8256,0.0302,0.049
+outstanding_principal,total_outstanding,0.9327,0.0221,0.049
+ptp_kept_6m,ptp_kept_ratio,0.7564,0.0276,0.0389

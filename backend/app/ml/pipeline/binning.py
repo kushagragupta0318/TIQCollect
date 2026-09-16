@@ -10,6 +10,23 @@
 #   with a zero in a denominator. optbinning solves it with a CP solver and
 #   handles missing as a first-class bin. The judgement stays here: which
 #   constraints, which gates, what to do with a non-monotonic feature.
+#
+# 2026-09-15 — `trends`: the BUSINESS DIRECTION is enforced at binning.
+#   `ModelSpec.expected_sign` had promised since 2026-09-08 that "a fitted
+#   coefficient that contradicts this is dropped however significant it is",
+#   and nothing read it: grep found the dict declared in config.py and consumed
+#   nowhere. The only sign check in the pipeline is on the WOE coefficient,
+#   which is always negative for a well-binned feature — the binner picks the
+#   direction that fits, so a feature whose EMPIRICAL direction contradicts
+#   the business expectation sails through with a perfectly negative
+#   coefficient and a scorecard row that reads "the more erratic the payer,
+#   the safer". The first 2.0.0 fit did exactly that with payment_gap_cv_12m.
+#
+#   The fix is where a credit-risk function puts it: the monotonic trend of
+#   each binning is FORCED to the expected direction, so a feature that
+#   contradicts it cannot form informative bins, gets an IV near zero, and is
+#   removed by the IV filter with the reason on record. Features with no
+#   expected direction (sign 0) keep `auto_asc_desc`.
 # ───────────────────────────────────────────────────────────────────────────
 """
 Weight of Evidence binning and Information Value.
@@ -62,13 +79,18 @@ class WOEBinner(BaseEstimator, TransformerMixin):
                  monotonic: str = "auto_asc_desc",
                  min_bin_fraction: float = 0.05,
                  min_bin_events: int = 30,
-                 max_n_bins: int = 6):
+                 max_n_bins: int = 6,
+                 trends: dict[str, str] | None = None):
         self.numeric = list(numeric)
         self.categorical = list(categorical)
         self.monotonic = monotonic
         self.min_bin_fraction = min_bin_fraction
         self.min_bin_events = min_bin_events
         self.max_n_bins = max_n_bins
+        # Per-feature forced trend of the EVENT RATE: "ascending" for a feature
+        # whose higher values mean more risk, "descending" for the reverse.
+        # Anything not named falls back to `monotonic`.
+        self.trends = dict(trends or {})
 
     # ── fit ─────────────────────────────────────────────────────────────────
     def fit(self, X: pd.DataFrame, y):
@@ -91,7 +113,8 @@ class WOEBinner(BaseEstimator, TransformerMixin):
                         name=col,
                         dtype="categorical" if is_cat else "numerical",
                         solver="cp",
-                        monotonic_trend=None if is_cat else self.monotonic,
+                        monotonic_trend=(None if is_cat
+                                         else self.trends.get(col, self.monotonic)),
                         min_prebin_size=max(self.min_bin_fraction / 2, 0.01),
                         min_bin_size=self.min_bin_fraction,
                         min_bin_n_event=self.min_bin_events,
@@ -115,6 +138,22 @@ class WOEBinner(BaseEstimator, TransformerMixin):
 
         self.feature_names_ = [f"{c}_woe" for c in self.binners_]
         return self
+
+    @staticmethod
+    def trends_from_signs(expected_sign: dict[str, int]) -> dict[str, str]:
+        """`ModelSpec.expected_sign` -> optbinning trend, on the EVENT rate.
+
+        +1 : higher value -> higher risk -> event rate ascending
+        -1 : higher value -> lower risk  -> event rate descending
+         0 : no expectation             -> not in the dict (auto)
+        """
+        out = {}
+        for feature, sign in (expected_sign or {}).items():
+            if sign > 0:
+                out[feature] = "ascending"
+            elif sign < 0:
+                out[feature] = "descending"
+        return out
 
     @staticmethod
     def _is_monotonic(table: pd.DataFrame) -> bool:

@@ -255,6 +255,38 @@ def test_the_panel_carries_every_feature_the_model_spec_selects(world):
     assert RECOVERY_RISK.split_col in panel.columns
 
 
+def test_the_panel_carries_every_feature_every_candidate_spec_names(world):
+    """2026-09-15. The 2.0.0 spec names features only this panel produces
+    (calls, visit outcomes, flags, promise and payment shape). The
+    book_simulator contract test cannot cover it, so this one does, for every
+    spec that declares the ledger as its development panel."""
+    from app.ml.pipeline.config import CANDIDATE_SPECS
+
+    _, panel = world
+    checked = 0
+    for (name, version), spec in CANDIDATE_SPECS.items():
+        if spec.training_panel != "ledger":
+            continue
+        missing = [f for f in spec.all_features if f not in panel.columns]
+        assert missing == [], f"{name} {version}: panel lacks {missing}"
+        checked += 1
+    assert checked >= 1
+
+
+def test_the_new_channels_are_events_the_panel_derives_from(world):
+    """The calls and flags tables exist, carry the columns the panel reads,
+    and the panel's counts are consistent with them on one snapshot."""
+    ledger, panel = world
+    assert {"loan_id", "day", "answered", "outcome", "payment_intent"} <= set(ledger.calls.columns)
+    assert {"loan_id", "day", "flag"} <= set(ledger.flags.columns)
+    assert {"outcome", "default_reason"} <= set(ledger.visits.columns)
+    t = 6 * SMALL.cycle_days
+    rows = panel[panel.month_index == 6].set_index("loan_id")
+    c = ledger.calls[(ledger.calls.day < t) & (ledger.calls.day >= t - 90)]
+    want = c.groupby("loan_id").size().reindex(rows.index).fillna(0)
+    assert np.array_equal(want.to_numpy(float), rows.calls_3m.to_numpy(float))
+
+
 def test_the_split_column_is_chronological_and_dense(world):
     _, panel = world
     months = sorted(panel.month_index.unique())

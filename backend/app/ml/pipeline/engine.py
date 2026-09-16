@@ -1,4 +1,14 @@
 # ─── CHANGELOG (prototype → product) ─────────────────────────────────────────
+# 2026-09-16 — GAM serving. The production-readiness audit found this engine
+#   could not load recovery_risk 2.2.0 (an exactly-additive boosted model): it
+#   assumed a sklearn Pipeline with WOE steps and a points table. It now reads
+#   the artifact's `model_type`; a "gam" artifact is a `gam.GamModel` that
+#   takes the adapter's raw vector, and its band comes from the artifact's
+#   probability bands, its reason codes from the exact per-tree decomposition
+#   (`_explain_gam`). The 1.x / 2.0 / 2.1 path is untouched — same
+#   predict_proba, same calibrator call, same ScoreCard.explain — and every
+#   ScoreResult now carries `versions` (empty dict on the old path beyond
+#   version + artifact hash), so a served score names what produced it.
 # 2026-09-08 — NEW. The serving seam: load a pickled model once, score a dict,
 #   return a probability, a band, reason codes and — always — whether the number
 #   came from a model at all.
@@ -45,6 +55,7 @@ import numpy as np
 import pandas as pd
 
 from app.ml.pipeline import registry
+from app.ml.pipeline.gam import GamModel, ProbabilityBands, points_from_logit, reason_codes
 from app.ml.pipeline.scorecard import DEFAULT_BANDS, ScoreCard, band_for
 
 logger = logging.getLogger(__name__)
@@ -71,6 +82,13 @@ class ScoreResult:
     feature_coverage: float = 0.0
     missing_features: list[str] = field(default_factory=list)
     fallback_reason: str | None = None
+    # 2026-09-16 — what produced this number: artifact version and hash, and
+    # for a GAM the feature-definition, calibration, band-table, reason-code
+    # and background versions it was scored with. Empty on a declined score.
+    versions: dict = field(default_factory=dict)
+    # GAM only: intercept + every contribution == logit, exactly. Empty for a
+    # scorecard (its per-feature points are `feature_points`).
+    contributions: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -92,6 +110,10 @@ class DecisionEngine:
             + list(self.spec.get("categorical_features", ()))
         )
         self.selected: list[str] = self.metadata.get("selected_features", [])
+        # 2026-09-15. Selected features whose NaN is an observation rather
+        # than a missing input. Absent from every 1.x artifact, so their
+        # coverage arithmetic is exactly what it was.
+        self.abstaining: set[str] = set(self.spec.get("abstaining_features", ()) or ())
 
         # The calibrator sits beside the pipeline, not inside it: it needs the
         # RAW overdue_amount, which the WOE transform has already replaced by
@@ -99,6 +121,33 @@ class DecisionEngine:
         # in which case scores are returned uncalibrated and say so.
         self.calibrator = registry.load_extra(model, version, "calibrator")
         self.calibration_meta = self.metadata.get("calibration")
+
+        # 2026-09-16 — the version stamps a served score carries. Every
+        # artifact has a version and a hash; a 2.2.0 GAM adds the rest.
+        self.model_type: str = self.metadata.get("model_type") or "woe_logistic"
+        self.versions: dict = {
+            "model_artifact": self.version,
+            "artifact_sha256": self.metadata.get("artifact_sha256"),
+            **{k: v for k, v in (self.metadata.get("versions") or {}).items()
+               if k != "model_artifact"},
+        }
+
+        # A GAM explains itself from its own trees rather than from a points
+        # table: bands on the calibrated probability, reason codes from the
+        # exact per-feature decomposition. `gam.py` is the one definition.
+        self.gam: GamModel | None = None
+        self.bands: ProbabilityBands | None = None
+        if self.model_type == "gam":
+            if not isinstance(self.pipeline, GamModel):
+                raise TypeError(f"{model}/{self.version} says model_type=gam but the artifact "
+                                f"is {type(self.pipeline).__name__}")
+            self.gam = self.pipeline
+            self.gam.tree_groups()             # refuses an undeclared interaction
+            rb = self.metadata.get("risk_bands")
+            self.bands = ProbabilityBands.from_dict(rb) if rb else None
+            pts = self.metadata.get("points") or {}
+            self._points_scale = {"pdo": pts.get("pdo", 20), "base_score": pts.get("base_score", 600),
+                                  "base_odds": pts.get("base_odds", 50.0)}
 
         sc = self.metadata.get("scorecard") or {}
         self.card: ScoreCard | None = None
@@ -232,9 +281,18 @@ class DecisionEngine:
         batch path used to have no coverage notion at all, which is how the
         floor below came to be unenforced on the only path the product serves.
         """
+        def _null(v) -> bool:
+            return v is None or (isinstance(v, float) and np.isnan(v))
+
+        # A feature is MISSING when its key is absent from the vector (the
+        # adapter did not produce it — a break), or when it is null and the
+        # spec does not declare it abstaining. A declared-abstaining feature
+        # that is present-but-null is the Missing bin doing its job, not a
+        # missing input; counting it against the floor declined 3,202 honest
+        # rows on the first 2.0.0 run.
         missing = [f for f in self.selected
-                   if f not in features or features.get(f) is None
-                   or (isinstance(features.get(f), float) and np.isnan(features[f]))]
+                   if f not in features
+                   or (f not in self.abstaining and _null(features.get(f)))]
         return 1.0 - (len(missing) / max(len(self.selected), 1)), missing
 
     def _row(self, features: dict[str, Any]) -> dict[str, Any]:
@@ -271,8 +329,13 @@ class DecisionEngine:
                 fallback_reason=f"scoring raised {type(exc).__name__}: {exc}",
             )
 
-        points, band, reasons, fpoints = None, None, [], {}
-        if self.card is not None:
+        points, band, reasons, fpoints, contrib = None, None, [], {}, {}
+        if self.gam is not None:
+            try:
+                points, band, reasons, contrib = self._explain_gam(X, np.array([prob]))[0]
+            except Exception as exc:                        # pragma: no cover
+                logger.warning("ml.engine.explain_failed model=%s error=%s", self.model, exc)
+        elif self.card is not None:
             try:
                 # Step through the fitted transformers explicitly rather than
                 # slicing. `pipeline[:-1]` builds a NEW Pipeline that sklearn
@@ -294,7 +357,32 @@ class DecisionEngine:
             model=self.model, version=self.version, is_modelled=True,
             reason_codes=reasons, feature_points=fpoints,
             feature_coverage=round(coverage, 3), missing_features=missing,
+            versions=dict(self.versions), contributions=contrib,
         )
+
+    def _explain_gam(self, X: pd.DataFrame, prob_cal: np.ndarray) -> list[tuple]:
+        """(points, band, reason_codes, contributions) per row.
+
+        The band is cut on the CALIBRATED probability — the number the
+        allocator consumes; points are the scorecard scaling of the raw
+        logit, for display; the reason codes are the largest centred
+        contributions, and `contributions` carries every one of them plus the
+        intercept and the logit (rounded to 6 decimals, in logits) so the
+        stored row reconciles: intercept + sum(contributions) == logit.
+        """
+        contrib = self.gam.contributions(X)
+        lg = contrib["logit"].to_numpy()
+        pts = points_from_logit(lg, **self._points_scale)
+        records = contrib.to_dict("records")
+        raw_rows = X[self.gam.features].to_dict("records")
+        bands = self.bands.assign(prob_cal) if self.bands is not None else [None] * len(X)
+        out = []
+        for i, (row, values) in enumerate(zip(records, raw_rows)):
+            values = {k: (None if (isinstance(v, float) and np.isnan(v)) else v) for k, v in values.items()}
+            reasons = reason_codes(pd.Series(row), values, self.gam.pairs)
+            fcontrib = {k: round(float(v), 6) for k, v in row.items()}
+            out.append((int(pts[i]), str(bands[i]) if bands[i] is not None else None, reasons, fcontrib))
+        return out
 
     def _calibrate_one(self, prob: float, features: dict[str, Any]) -> float:
         if self.calibrator is None:
@@ -374,7 +462,14 @@ class DecisionEngine:
                     for i in range(len(rows))]
 
         woe = None
-        if self.card is not None:
+        gam_ex: list[tuple] | None = None
+        if self.gam is not None:
+            try:
+                gam_ex = self._explain_gam(X, raw)
+            except Exception as exc:                        # pragma: no cover
+                logger.warning("ml.engine.batch_explain_failed model=%s error=%s",
+                               self.model, exc)
+        elif self.card is not None:
             try:
                 woe = X
                 for _, step in self.pipeline.steps[:-1]:
@@ -396,7 +491,10 @@ class DecisionEngine:
             points = band = None
             reasons: list[dict] = []
             fpoints: dict[str, int] = {}
-            if woe is not None:
+            contrib: dict = {}
+            if gam_ex is not None:
+                points, band, reasons, contrib = gam_ex[i]
+            elif woe is not None:
                 try:
                     ex = self.card.explain(woe.iloc[[i]], prob)
                     points, band = ex.points, ex.band
@@ -408,7 +506,8 @@ class DecisionEngine:
                 probability=prob, points=points, band=band, model=self.model,
                 version=self.version, is_modelled=True, reason_codes=reasons,
                 feature_points=fpoints, feature_coverage=round(cov, 3),
-                missing_features=miss))
+                missing_features=miss, versions=dict(self.versions),
+                contributions=contrib))
         return out
 
     # ── introspection ───────────────────────────────────────────────────────
@@ -427,6 +526,8 @@ class DecisionEngine:
             "metrics_oot": {"gini": m.get("gini"), "ks": m.get("ks"),
                             "bad_rate": m.get("bad_rate"),
                             "top_decile_lift": m.get("top_decile_lift")},
+            "model_type": self.model_type,
+            "versions": self.versions,
             "calibrated": self.calibrator is not None,
             "calibration": self.calibration_meta,
             "synthetic": bool(self.metadata.get("SYNTHETIC_WARNING")),

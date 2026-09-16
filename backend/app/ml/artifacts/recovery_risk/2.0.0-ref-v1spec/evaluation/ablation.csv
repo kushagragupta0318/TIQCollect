@@ -1,0 +1,9 @@
+removed,gini,delta
+cibil_score,0.436,-0.0276
+arrears_ratio,0.446,-0.0177
+paid_ratio_3m,0.4509,-0.0127
+overdue_amount,0.4568,-0.0068
+contact_rate_6m,0.4617,-0.0019
+visits_3m,0.4625,-0.0011
+(none — full model),0.4636,0.0
+days_since_last_contact,0.4638,0.0002

@@ -107,7 +107,7 @@ def test_the_rollout_gate_chose_that_version_not_the_champion(lifecycle):
     setting was inert and every request served the champion regardless."""
     from app.ml.pipeline import registry
 
-    assert registry.resolve_version("recovery_risk", "champion") == "1.1.0"
+    assert registry.resolve_version("recovery_risk", "champion") != "1.2.0-ledger"
     assert DecisionEngine.get("recovery_risk").version == "1.2.0-ledger"
 
 
@@ -310,6 +310,9 @@ def test_a_foreign_outcome_definition_cannot_reach_the_monitor(lifecycle):
 
 
 def test_the_champion_is_untouched_by_the_whole_replay(lifecycle):
+    """Whatever the pointer names (1.1.0 until 2026-09-16, 2.2.0 since), the
+    replay scores 1.2.0-ledger by setting and never moves it."""
     from app.ml.pipeline import registry
 
-    assert registry.resolve_version("recovery_risk", "champion") == "1.1.0"
+    assert registry.resolve_version("recovery_risk", "champion") in {"1.1.0", "2.2.0"}
+    assert registry.resolve_version("recovery_risk", "champion") != "1.2.0-ledger"

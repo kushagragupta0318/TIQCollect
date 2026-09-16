@@ -1,0 +1,6 @@
+step,kept,dropped,dropped_features,reason
+iv_filter,22,11,"['tenure_months', 'interest_rate', 'is_secured', 'outstanding_to_sanction', 'distinct_agents_6m', 'ptp_set_6m', 'age', 'loan_type', 'city', 'employment_type', 'branch_code']","IV outside [0.02, 0.8]; 0 flagged for review above 0.5"
+correlation,11,11,"['penal_charges', 'dpd', 'penal_ratio', 'dpd_bucket', 'paid_ratio_6m', 'paid_ratio_12m', 'visits_6m', 'emi_amount', 'sanction_amount', 'outstanding_principal', 'ptp_kept_6m']",|r| > 0.7; the lower-IV member of each pair goes
+vif,11,0,[],"VIF > 5.0, dropped one at a time worst-first"
+sfs,7,4,"['months_on_book', 'total_outstanding', 'days_since_last_payment', 'ptp_kept_ratio']","forward stepwise, stop when validation Gini gain < 0.0008"
+sign_check,7,0,[],every WOE coefficient must be negative (high WOE = low risk)

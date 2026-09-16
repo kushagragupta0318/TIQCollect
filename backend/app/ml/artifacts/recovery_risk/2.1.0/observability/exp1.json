@@ -1,0 +1,187 @@
+{
+ "exp": "exp1",
+ "world": "w1",
+ "n_rows": 93809,
+ "bad_rate": 0.6825,
+ "n_candidates": 95,
+ "selected": [
+  "arrears_ratio",
+  "cibil_score",
+  "paid_ratio_3m",
+  "overdue_amount",
+  "mean_call_duration_6m",
+  "no_answer_streak",
+  "contact_rate_6m",
+  "intent_rate_6m",
+  "pay_amount_cv_6m",
+  "calls_3m"
+ ],
+ "n_selected": 10,
+ "train": {
+  "gini": 0.4655,
+  "auc": 0.7327,
+  "ks": 34.4
+ },
+ "valid": {
+  "gini": 0.4662,
+  "auc": 0.7331,
+  "ks": 34.72
+ },
+ "oot": {
+  "gini": 0.4652,
+  "auc": 0.7326,
+  "ks": 34.82,
+  "brier": 0.1839,
+  "calibration_gap": -0.0102,
+  "top_decile_lift": 1.354,
+  "bad_rate": 0.6886620185922975,
+  "n": 24096
+ },
+ "oot_rank_order_breaks": 0,
+ "oot_challenger_gbm_gini": 0.4643,
+ "champion_kind": "scorecard",
+ "bootstrap_ci": {
+  "point": 0.4652,
+  "mean": 0.4645,
+  "std": 0.0069,
+  "ci_lower_2.5": 0.4503,
+  "ci_upper_97.5": 0.4765,
+  "n_bootstrap": 300
+ },
+ "iv_selected": {
+  "arrears_ratio": 0.5213,
+  "cibil_score": 0.1817,
+  "paid_ratio_3m": 0.1987,
+  "overdue_amount": 0.3383,
+  "mean_call_duration_6m": 0.1163,
+  "no_answer_streak": 0.1094,
+  "contact_rate_6m": 0.0691,
+  "intent_rate_6m": 0.0909,
+  "pay_amount_cv_6m": 0.0893,
+  "calls_3m": 0.1755
+ },
+ "iv_min_selected": 0.0691,
+ "iv_max_selected": 0.5213,
+ "max_vif": 4.112,
+ "score_psi": 0.0081,
+ "max_csi_selected": 0.045,
+ "min_segment_gini": 0.29,
+ "monotone_selected": true,
+ "gates_passed": true,
+ "sfs_path": [
+  {
+   "step": 1,
+   "candidate": "arrears_ratio",
+   "gini": 0.3884,
+   "gain": 0.38838,
+   "action": "added"
+  },
+  {
+   "step": 2,
+   "candidate": "cibil_score",
+   "gini": 0.4334,
+   "gain": 0.04502,
+   "action": "added"
+  },
+  {
+   "step": 3,
+   "candidate": "paid_ratio_3m",
+   "gini": 0.4469,
+   "gain": 0.01353,
+   "action": "added"
+  },
+  {
+   "step": 4,
+   "candidate": "overdue_amount",
+   "gini": 0.452,
+   "gain": 0.00506,
+   "action": "added"
+  },
+  {
+   "step": 5,
+   "candidate": "mean_call_duration_6m",
+   "gini": 0.4562,
+   "gain": 0.00425,
+   "action": "added"
+  },
+  {
+   "step": 6,
+   "candidate": "no_answer_streak",
+   "gini": 0.4597,
+   "gain": 0.0035,
+   "action": "added"
+  },
+  {
+   "step": 7,
+   "candidate": "contact_rate_6m",
+   "gini": 0.4618,
+   "gain": 0.0021,
+   "action": "added"
+  },
+  {
+   "step": 8,
+   "candidate": "intent_rate_6m",
+   "gini": 0.4635,
+   "gain": 0.00162,
+   "action": "added"
+  },
+  {
+   "step": 9,
+   "candidate": "pay_amount_cv_6m",
+   "gini": 0.4649,
+   "gain": 0.00139,
+   "action": "added"
+  },
+  {
+   "step": 10,
+   "candidate": "calls_3m",
+   "gini": 0.4659,
+   "gain": 0.00101,
+   "action": "added"
+  },
+  {
+   "step": 11,
+   "candidate": "last_visit_outcome",
+   "gini": 0.4666,
+   "gain": 0.00072,
+   "action": "stopped"
+  }
+ ],
+ "sign_dropped": [],
+ "realism_passed": true,
+ "realism": {
+  "forward_flow_rate": 0.5023,
+  "cure_rate": 0.0626,
+  "npa_share": 0.3063,
+  "performing_share": 0.3227,
+  "current_share": 0.0509,
+  "vintage_monotone_frac": 1.0,
+  "exact_emi_share": 0.49,
+  "round_number_share": 0.1353,
+  "partial_share": 0.34,
+  "ptp_kept_rate": 0.5045,
+  "rpc_rate": 0.4794,
+  "call_answer_rate": 0.3775,
+  "rtp_share_of_met_visits": 0.1633,
+  "intent_share_of_answered_calls": 0.4163,
+  "hardship_share_of_met_visits": 0.0672,
+  "hostile_share": 0.2625,
+  "declined_share_of_reached": 0.1491,
+  "commitment_share_of_answered": 0.3516,
+  "commitment_kept_rate": 0.2528,
+  "median_call_duration_s": 69.0,
+  "material_payment_rate": 0.3175
+ },
+ "observable_ceiling": [
+  0.481,
+  35.88
+ ],
+ "joint_oracle": [
+  0.5712,
+  43.02
+ ],
+ "observables_plus_true_willingness": [
+  0.5438,
+  41.23
+ ]
+}

@@ -1,0 +1,163 @@
+{
+ "adapter_keys": [
+  "adverse_visit_ratio_6m",
+  "age",
+  "arrears_ratio",
+  "branch_code",
+  "call_answer_rate_3m",
+  "call_answer_rate_6m",
+  "calls_3m",
+  "cibil_score",
+  "city",
+  "contact_rate_6m",
+  "days_since_last_answered_call",
+  "days_since_last_call",
+  "days_since_last_contact",
+  "days_since_last_payment",
+  "dispute_visits_6m",
+  "distinct_agents_6m",
+  "dpd",
+  "dpd_bucket",
+  "emi_amount",
+  "employment_type",
+  "fraud_flag",
+  "hardship_visits_6m",
+  "intent_calls_3m",
+  "intent_rate_6m",
+  "interest_rate",
+  "is_hostile",
+  "is_secured",
+  "last_call_intent",
+  "last_payment_to_emi",
+  "last_visit_outcome",
+  "loan_type",
+  "months_on_book",
+  "no_answer_streak",
+  "outstanding_principal",
+  "outstanding_to_sanction",
+  "overdue_amount",
+  "paid_momentum",
+  "paid_ratio_12m",
+  "paid_ratio_1m",
+  "paid_ratio_3m",
+  "paid_ratio_6m",
+  "partial_payment_share_6m",
+  "pay_amount_cv_6m",
+  "payment_gap_cv_12m",
+  "payments_6m",
+  "penal_charges",
+  "penal_ratio",
+  "ptp_amount_to_emi",
+  "ptp_broken_6m",
+  "ptp_kept_6m",
+  "ptp_kept_ratio",
+  "ptp_rescheduled_6m",
+  "ptp_set_6m",
+  "rtp_visits_6m",
+  "sanction_amount",
+  "tenure_months",
+  "total_outstanding",
+  "visits_3m",
+  "visits_6m"
+ ],
+ "table": [
+  {
+   "feature": "arrears_ratio",
+   "adapter_emits_key": true,
+   "non_null": 237,
+   "max_abs_diff_vs_panel": 0.0
+  },
+  {
+   "feature": "latest_disposition",
+   "adapter_emits_key": false,
+   "non_null": 0,
+   "max_abs_diff_vs_panel": null
+  },
+  {
+   "feature": "cibil_score",
+   "adapter_emits_key": true,
+   "non_null": 237,
+   "max_abs_diff_vs_panel": 0.0
+  },
+  {
+   "feature": "no_answer_streak",
+   "adapter_emits_key": true,
+   "non_null": 237,
+   "max_abs_diff_vs_panel": 0.0
+  },
+  {
+   "feature": "overdue_amount",
+   "adapter_emits_key": true,
+   "non_null": 237,
+   "max_abs_diff_vs_panel": 0.0
+  },
+  {
+   "feature": "intent_calls_3m",
+   "adapter_emits_key": true,
+   "non_null": 237,
+   "max_abs_diff_vs_panel": 0.0
+  },
+  {
+   "feature": "last_commit_status",
+   "adapter_emits_key": false,
+   "non_null": 0,
+   "max_abs_diff_vs_panel": null
+  },
+  {
+   "feature": "recent_ptp_status",
+   "adapter_emits_key": false,
+   "non_null": 0,
+   "max_abs_diff_vs_panel": null
+  },
+  {
+   "feature": "calls_3m",
+   "adapter_emits_key": true,
+   "non_null": 237,
+   "max_abs_diff_vs_panel": 0.0
+  },
+  {
+   "feature": "paid_ratio_3m",
+   "adapter_emits_key": true,
+   "non_null": 237,
+   "max_abs_diff_vs_panel": 0.0
+  },
+  {
+   "feature": "ptp_amount_to_emi",
+   "adapter_emits_key": true,
+   "non_null": 103,
+   "max_abs_diff_vs_panel": 0.0
+  },
+  {
+   "feature": "employment_type",
+   "adapter_emits_key": true,
+   "non_null": 237,
+   "max_abs_diff_vs_panel": 0.0
+  },
+  {
+   "feature": "days_since_last_contact",
+   "adapter_emits_key": true,
+   "non_null": 165,
+   "max_abs_diff_vs_panel": 0.0
+  },
+  {
+   "feature": "disposition_recency_class",
+   "adapter_emits_key": false,
+   "non_null": 0,
+   "max_abs_diff_vs_panel": null
+  },
+  {
+   "feature": "interest_rate",
+   "adapter_emits_key": true,
+   "non_null": 237,
+   "max_abs_diff_vs_panel": 0.0
+  }
+ ],
+ "missing": [
+  "latest_disposition",
+  "last_commit_status",
+  "recent_ptp_status",
+  "disposition_recency_class"
+ ],
+ "null_always": [],
+ "n_rows": 237
+}

@@ -1,0 +1,2 @@
+feature,coefficient,reason
+days_since_last_contact,0.76756,positive coefficient on a WOE feature means more evidence of good behaviour raises modelled risk — inadmissible

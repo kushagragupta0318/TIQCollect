@@ -1,0 +1,606 @@
+{
+  "version": "2.0.0",
+  "incumbent": "1.1.0",
+  "tier": "full",
+  "dataset_fingerprint": "6588454cc7f0e259",
+  "spec_gates_passed": true,
+  "selected": [
+    "arrears_ratio",
+    "cibil_score",
+    "paid_ratio_3m",
+    "overdue_amount",
+    "call_answer_rate_6m",
+    "days_since_last_contact",
+    "payment_gap_cv_12m",
+    "adverse_visit_ratio_6m",
+    "contact_rate_6m"
+  ],
+  "metrics": {
+    "train": {
+      "label": "train",
+      "n": 54759,
+      "bad_rate": 0.6927993571832941,
+      "gini": 0.4547,
+      "auc": 0.7273,
+      "ks": 33.5,
+      "ks_cutoff": 0.7154,
+      "ks_decile": 5,
+      "top_decile_bad_rate": 0.9332,
+      "top_decile_lift": 1.347,
+      "max_achievable_lift": 1.443,
+      "lift_capture": 0.9332,
+      "bottom_decile_bad_rate": 0.3715,
+      "rank_order": {
+        "breaks": [],
+        "n_breaks": 0,
+        "n_breaks_top5": 0,
+        "monotonic": true
+      },
+      "brier": 0.18388,
+      "mean_predicted": 0.6948,
+      "calibration_gap": 0.002
+    },
+    "valid": {
+      "label": "valid",
+      "n": 15229,
+      "bad_rate": 0.6843522227329437,
+      "gini": 0.458,
+      "auc": 0.729,
+      "ks": 34.9,
+      "ks_cutoff": 0.6856,
+      "ks_decile": 5,
+      "top_decile_bad_rate": 0.9363,
+      "top_decile_lift": 1.368,
+      "max_achievable_lift": 1.461,
+      "lift_capture": 0.9363,
+      "bottom_decile_bad_rate": 0.3804,
+      "rank_order": {
+        "breaks": [],
+        "n_breaks": 0,
+        "n_breaks_top5": 0,
+        "monotonic": true
+      },
+      "brier": 0.18608,
+      "mean_predicted": 0.6843,
+      "calibration_gap": -0.0
+    },
+    "oot": {
+      "label": "oot",
+      "n": 24161,
+      "bad_rate": 0.7003435288274492,
+      "gini": 0.4669,
+      "auc": 0.7334,
+      "ks": 34.6,
+      "ks_cutoff": 0.6888,
+      "ks_decile": 5,
+      "top_decile_bad_rate": 0.9305,
+      "top_decile_lift": 1.329,
+      "max_achievable_lift": 1.428,
+      "lift_capture": 0.9305,
+      "bottom_decile_bad_rate": 0.3907,
+      "rank_order": {
+        "breaks": [],
+        "n_breaks": 0,
+        "n_breaks_top5": 0,
+        "monotonic": true
+      },
+      "brier": 0.18038,
+      "mean_predicted": 0.6877,
+      "calibration_gap": -0.0126
+    },
+    "oot_challenger": {
+      "label": "oot_challenger",
+      "n": 24161,
+      "bad_rate": 0.7003435288274492,
+      "gini": 0.4689,
+      "auc": 0.7344,
+      "ks": 35.09,
+      "ks_cutoff": 0.6846,
+      "ks_decile": 5,
+      "top_decile_bad_rate": 0.9338,
+      "top_decile_lift": 1.333,
+      "max_achievable_lift": 1.428,
+      "lift_capture": 0.9338,
+      "bottom_decile_bad_rate": 0.3841,
+      "rank_order": {
+        "breaks": [],
+        "n_breaks": 0,
+        "n_breaks_top5": 0,
+        "monotonic": true
+      },
+      "brier": 0.1799,
+      "mean_predicted": 0.6866,
+      "calibration_gap": -0.0138
+    },
+    "oot_uncalibrated": {
+      "label": "oot_uncalibrated",
+      "n": 24161,
+      "bad_rate": 0.7003435288274492,
+      "gini": 0.468,
+      "auc": 0.734,
+      "ks": 34.75,
+      "ks_cutoff": 0.6787,
+      "ks_decile": 5,
+      "top_decile_bad_rate": 0.9297,
+      "top_decile_lift": 1.327,
+      "max_achievable_lift": 1.428,
+      "lift_capture": 0.9297,
+      "bottom_decile_bad_rate": 0.3895,
+      "rank_order": {
+        "breaks": [],
+        "n_breaks": 0,
+        "n_breaks_top5": 0,
+        "monotonic": true
+      },
+      "brier": 0.18027,
+      "mean_predicted": 0.6858,
+      "calibration_gap": -0.0146
+    }
+  },
+  "v2_summary": {
+    "version": "2.0.0",
+    "selected_features": [
+      "arrears_ratio",
+      "cibil_score",
+      "paid_ratio_3m",
+      "overdue_amount",
+      "call_answer_rate_6m",
+      "days_since_last_contact",
+      "payment_gap_cv_12m",
+      "adverse_visit_ratio_6m",
+      "contact_rate_6m"
+    ],
+    "n_selected_features": 9,
+    "n_candidate_features": 53,
+    "oot_gini": 0.4669,
+    "oot_ks": 34.6,
+    "oot_auc": 0.7334,
+    "oot_brier": 0.18038,
+    "oot_abs_calibration_gap": 0.0126,
+    "oot_rank_order_breaks": 0,
+    "oot_rank_order_breaks_top5": 0,
+    "oot_top_decile_lift": 1.329,
+    "train_gini": 0.4547,
+    "train_minus_oot_gini_gap": -0.0122,
+    "score_psi_train_vs_oot": 0.0059,
+    "max_selected_feature_psi": 0.0377,
+    "max_kept_vif": 4.016,
+    "max_candidate_iv": 0.4984,
+    "min_selected_iv": 0.0221,
+    "bootstrap_gini_oot": {
+      "point": 0.4669,
+      "mean": 0.4666,
+      "std": 0.0069,
+      "ci_lower_2.5": 0.4527,
+      "ci_upper_97.5": 0.4793,
+      "n_bootstrap": 300
+    },
+    "gate_summary": "PASS",
+    "oot_n": 24161,
+    "oot_bad_rate": 0.7003
+  },
+  "incumbent_artifact_summary": {
+    "version": "1.1.0",
+    "selected_features": [
+      "dpd",
+      "cibil_score",
+      "ptp_kept_ratio",
+      "overdue_amount"
+    ],
+    "n_selected_features": 4,
+    "n_candidate_features": 33,
+    "oot_gini": 0.5136,
+    "oot_ks": 39.72,
+    "oot_auc": 0.7568,
+    "oot_brier": 0.16985,
+    "oot_abs_calibration_gap": 0.0097,
+    "oot_rank_order_breaks": 0,
+    "oot_rank_order_breaks_top5": 0,
+    "oot_top_decile_lift": 1.333,
+    "train_gini": 0.4857,
+    "train_minus_oot_gini_gap": -0.0279,
+    "score_psi_train_vs_oot": 0.0075,
+    "max_selected_feature_psi": 0.0111,
+    "max_kept_vif": 2.441,
+    "max_candidate_iv": 0.7512,
+    "min_selected_iv": 0.126,
+    "bootstrap_gini_oot": {
+      "point": 0.5136,
+      "mean": 0.5135,
+      "std": 0.0061,
+      "ci_lower_2.5": 0.502,
+      "ci_upper_97.5": 0.525,
+      "n_bootstrap": 300
+    },
+    "gate_summary": "PASS",
+    "oot_n": 30000,
+    "oot_bad_rate": 0.7175
+  },
+  "reference_v1_spec_same_panel": {
+    "version": "2.0.0-ref-v1spec",
+    "selected_features": [
+      "arrears_ratio",
+      "cibil_score",
+      "paid_ratio_3m",
+      "overdue_amount",
+      "days_since_last_contact",
+      "contact_rate_6m",
+      "visits_3m"
+    ],
+    "n_selected_features": 7,
+    "n_candidate_features": 33,
+    "oot_gini": 0.4626,
+    "oot_ks": 35.18,
+    "oot_auc": 0.7313,
+    "oot_brier": 0.18086,
+    "oot_abs_calibration_gap": 0.0119,
+    "oot_rank_order_breaks": 0,
+    "oot_rank_order_breaks_top5": 0,
+    "oot_top_decile_lift": 1.325,
+    "train_gini": 0.4512,
+    "train_minus_oot_gini_gap": -0.0114,
+    "score_psi_train_vs_oot": 0.0061,
+    "max_selected_feature_psi": 0.0377,
+    "max_kept_vif": 3.31,
+    "max_candidate_iv": 0.4984,
+    "min_selected_iv": 0.0221,
+    "bootstrap_gini_oot": {
+      "point": 0.4626,
+      "mean": 0.4624,
+      "std": 0.0068,
+      "ci_lower_2.5": 0.448,
+      "ci_upper_97.5": 0.4752,
+      "n_bootstrap": 300
+    },
+    "gate_summary": "PASS",
+    "oot_n": 24161,
+    "oot_bad_rate": 0.7003
+  },
+  "checks_7_to_10": [
+    {
+      "check": "7   OOT Gini in band",
+      "value": 0.4669,
+      "band": "[0.35, 0.55]",
+      "status": "PASS"
+    },
+    {
+      "check": "8   Gini(dpd)/Gini(full)",
+      "value": 0.8466,
+      "band": "<= 0.75",
+      "status": "DIAGNOSTIC"
+    },
+    {
+      "check": "9   max feature IV",
+      "value": 0.4984,
+      "band": "< 0.8",
+      "status": "PASS"
+    },
+    {
+      "check": "10a oracle gap, absolute",
+      "value": 0.0875,
+      "band": ">= 0.05",
+      "status": "PASS"
+    },
+    {
+      "check": "10b fraction captured",
+      "value": 0.8483,
+      "band": "<= 0.9",
+      "status": "PASS"
+    }
+  ],
+  "oracle": {
+    "n_joined": 94149,
+    "oracle_columns": [
+      "willingness",
+      "capacity",
+      "reachability",
+      "shock_state",
+      "true_pay_logit",
+      "willingness_mean3",
+      "capacity_mean3",
+      "reachability_mean3",
+      "cibil_score",
+      "sanction_amount",
+      "emi_amount",
+      "tenure_months",
+      "interest_rate",
+      "months_on_book",
+      "is_secured",
+      "dpd",
+      "outstanding_principal",
+      "overdue_amount",
+      "penal_charges",
+      "total_outstanding",
+      "arrears_ratio",
+      "penal_ratio",
+      "outstanding_to_sanction",
+      "paid_ratio_3m",
+      "paid_ratio_6m",
+      "paid_ratio_12m",
+      "days_since_last_payment",
+      "visits_3m",
+      "visits_6m",
+      "contact_rate_6m",
+      "days_since_last_contact",
+      "distinct_agents_6m",
+      "ptp_set_6m",
+      "ptp_kept_6m",
+      "ptp_kept_ratio",
+      "age",
+      "rtp_visits_6m",
+      "dispute_visits_6m",
+      "adverse_visit_ratio_6m",
+      "calls_3m",
+      "call_answer_rate_6m",
+      "no_answer_streak",
+      "days_since_last_answered_call",
+      "intent_calls_3m",
+      "last_call_intent",
+      "hardship_visits_6m",
+      "ptp_broken_6m",
+      "ptp_rescheduled_6m",
+      "ptp_amount_to_emi",
+      "payments_6m",
+      "partial_payment_share_6m",
+      "payment_gap_cv_12m",
+      "last_payment_to_emi",
+      "paid_momentum",
+      "is_hostile",
+      "fraud_flag"
+    ],
+    "gini_oracle": 0.5764510149701194,
+    "gini_observable": 0.48899606915595095,
+    "gini_hidden_only": 0.5271269542798984,
+    "oracle_gap_absolute": 0.0875,
+    "fraction_of_oracle_captured": 0.8483,
+    "SUPERSEDED_gini_latents_at_as_of": 0.49801750154520485,
+    "SUPERSEDED_gap_vs_latents_only": 0.009,
+    "SUPERSEDED_note": "The original check compared the observable model against latents at as_of alone and required a gap >= 0.15. It failed at 0.0149. The failure was in the CHECK: latents-at-as_of is not an upper bound on what is knowable, because longitudinal observed history carries information an instantaneous latent snapshot does not. Retained for auditability; the simulator was NOT tuned in response."
+  },
+  "leakage": {
+    "gini_honest_reference": 0.48899606915595095,
+    "gini_on_shuffled_labels": -0.011189371734296016,
+    "gini_with_future_features": 0.9303580484065836,
+    "future_uplift": 0.4414,
+    "n_future_rows": 71218
+  },
+  "incumbent_comparison": {
+    "comparison_run_id": "cmp-dc6d74944f77",
+    "model_name": "recovery_risk",
+    "challenger_version": "2.0.0",
+    "incumbent_version": "1.1.0",
+    "challenger": {
+      "version": "2.0.0",
+      "gini": 0.466859,
+      "auc": 0.733429,
+      "ks": 34.603,
+      "brier": 0.180376,
+      "calibration_gap": -0.012608,
+      "rank_order_breaks": 0,
+      "rank_order_breaks_top5": 0,
+      "n": 24161
+    },
+    "incumbent": {
+      "version": "1.1.0",
+      "gini": 0.406593,
+      "auc": 0.703297,
+      "ks": 29.9296,
+      "brier": 0.189944,
+      "calibration_gap": 0.047546,
+      "rank_order_breaks": 0,
+      "rank_order_breaks_top5": 0,
+      "n": 24161
+    },
+    "gates": [
+      {
+        "gate": "gini_materially_better",
+        "observed": 0.060266,
+        "threshold": "> +0.0193",
+        "result": "PASS",
+        "reason": "the challenger must beat the incumbent by more than the sampling error of the difference; within tolerance the incumbent is kept, because replacing a proven model with an indistinguishable one is churn with a rollback attached"
+      },
+      {
+        "gate": "brier_not_worse",
+        "observed": 0.180376,
+        "threshold": "<= 0.199441",
+        "result": "PASS",
+        "reason": "the allocator multiplies by the probability itself, so a better-ordering but worse-calibrated model still loses money"
+      },
+      {
+        "gate": "ks_not_collapsed",
+        "observed": 34.603,
+        "threshold": ">= 26.9366",
+        "result": "PASS",
+        "reason": "separation must not fall away even where Gini holds"
+      },
+      {
+        "gate": "calibration_not_worse",
+        "observed": 0.012608,
+        "threshold": "<= 0.0975",
+        "result": "PASS",
+        "reason": "expected recovery is a rupee figure derived from this number"
+      },
+      {
+        "gate": "rank_order_top5_not_worse",
+        "observed": 0,
+        "threshold": "<= 0",
+        "result": "PASS",
+        "reason": "the top deciles are the end of the book the business acts on"
+      }
+    ],
+    "passed": true,
+    "verdict": "challenger_better",
+    "gini_uplift": 0.060266,
+    "uplift_tolerance": 0.019339,
+    "n_oot": 24161,
+    "reasons": [],
+    "segment": [
+      {
+        "segment": "BUCKET_1",
+        "n": 6415,
+        "challenger_gini": 0.3059,
+        "incumbent_gini": 0.2141,
+        "uplift": 0.0918
+      },
+      {
+        "segment": "BUCKET_2",
+        "n": 5113,
+        "challenger_gini": 0.2703,
+        "incumbent_gini": 0.1628,
+        "uplift": 0.1075
+      },
+      {
+        "segment": "BUCKET_3",
+        "n": 3951,
+        "challenger_gini": 0.266,
+        "incumbent_gini": 0.1085,
+        "uplift": 0.1575
+      },
+      {
+        "segment": "CURRENT",
+        "n": 1163,
+        "challenger_gini": 0.2695,
+        "incumbent_gini": 0.2023,
+        "uplift": 0.0672
+      },
+      {
+        "segment": "NPA",
+        "n": 7519,
+        "challenger_gini": 0.3102,
+        "incumbent_gini": 0.1857,
+        "uplift": 0.1245
+      }
+    ]
+  },
+  "no_degrade": [
+    {
+      "scope": "same_rows",
+      "metric": "oot_gini",
+      "incumbent": 0.406593,
+      "v2": 0.466859,
+      "direction": "higher_better",
+      "result": "IMPROVED",
+      "basis": "comparison gate gini_materially_better"
+    },
+    {
+      "scope": "same_rows",
+      "metric": "oot_ks",
+      "incumbent": 29.9296,
+      "v2": 34.603,
+      "direction": "higher_better",
+      "result": "IMPROVED",
+      "basis": "comparison gate ks_not_collapsed"
+    },
+    {
+      "scope": "same_rows",
+      "metric": "oot_brier",
+      "incumbent": 0.189944,
+      "v2": 0.180376,
+      "direction": "lower_better",
+      "result": "IMPROVED",
+      "basis": "comparison gate brier_not_worse"
+    },
+    {
+      "scope": "same_rows",
+      "metric": "oot_calibration_gap",
+      "incumbent": 0.047546,
+      "v2": 0.012608,
+      "direction": "abs_lower_better",
+      "result": "IMPROVED",
+      "basis": "comparison gate calibration_not_worse"
+    },
+    {
+      "scope": "same_rows",
+      "metric": "oot_rank_order_breaks_top5",
+      "incumbent": 0,
+      "v2": 0,
+      "direction": "lower_better",
+      "result": "HELD",
+      "basis": "comparison gate rank_order_top5_not_worse"
+    },
+    {
+      "scope": "same_rows",
+      "metric": "oot_rank_order_breaks",
+      "incumbent": 0,
+      "v2": 0,
+      "direction": "lower_better",
+      "result": "HELD",
+      "basis": "strict"
+    },
+    {
+      "scope": "model_property",
+      "metric": "max_kept_vif",
+      "incumbent": 2.441,
+      "v2": 4.016,
+      "direction": "lower_better",
+      "threshold": 5.0,
+      "result": "HELD",
+      "basis": "< vif_max"
+    },
+    {
+      "scope": "model_property",
+      "metric": "max_candidate_iv",
+      "incumbent": 0.7512,
+      "v2": 0.4984,
+      "direction": "lower_better",
+      "threshold": 0.8,
+      "result": "IMPROVED",
+      "basis": "< iv_max"
+    },
+    {
+      "scope": "model_property",
+      "metric": "min_selected_iv",
+      "incumbent": 0.126,
+      "v2": 0.0221,
+      "direction": "higher_better",
+      "threshold": 0.02,
+      "result": "HELD",
+      "basis": ">= iv_min"
+    },
+    {
+      "scope": "model_property",
+      "metric": "score_psi_train_vs_oot",
+      "incumbent": 0.0075,
+      "v2": 0.0059,
+      "direction": "lower_better",
+      "threshold": 0.1,
+      "result": "IMPROVED",
+      "basis": "< psi_warn"
+    },
+    {
+      "scope": "model_property",
+      "metric": "max_selected_feature_psi",
+      "incumbent": 0.0111,
+      "v2": 0.0377,
+      "direction": "lower_better",
+      "threshold": 0.1,
+      "result": "HELD",
+      "basis": "< psi_warn"
+    },
+    {
+      "scope": "model_property",
+      "metric": "train_minus_oot_gini_gap",
+      "incumbent": -0.0279,
+      "v2": -0.0122,
+      "direction": "lower_better",
+      "threshold": 0.1,
+      "result": "HELD",
+      "basis": "< max_train_test_gini_gap"
+    },
+    {
+      "scope": "model_property",
+      "metric": "n_selected_features",
+      "incumbent": 4,
+      "v2": 9,
+      "direction": "higher_better",
+      "threshold": null,
+      "result": "IMPROVED",
+      "basis": "informational"
+    }
+  ],
+  "no_degrade_passed": true,
+  "overall_passed": true,
+  "champion_after_run": "1.1.0",
+  "SYNTHETIC_WARNING": "Generated by app/ml/simulation/ledger/. These are SYNTHETIC borrowers. The realism checks say the book is internally plausible; they are NOT evidence about real borrowers, and almost every acceptance band is a PROJECT ASSUMPTION with no external source. See config.BANDS for the provenance of each.",
+  "NOTE": "2.0.0 is written with make_champion=False. Promotion is a separate, human act through registry.promote / the lifecycle API, and nothing in this script performs it."
+}

@@ -27,6 +27,50 @@
 #
 #   The gate still exists and still works: setting `ML_SCORING_ENABLED=False`
 #   returns the allocator to its pre-promotion behaviour in one act.
+#
+# 2026-09-15 — Two changes for recovery_risk 2.0.0.
+#
+#   SEVENTEEN NEW POINT-IN-TIME FEATURES in `_history_features`, all from
+#   tables the product already writes and none of which the model had ever
+#   seen: visit outcomes (RTP / DISPUTE), the call log, broken and rescheduled
+#   promises and their size, the shape and regularity of the payment ledger,
+#   and the two customer flags. Every definition is mirrored in
+#   `ml/simulation/ledger/panel.py` and the two are held equal, feature by
+#   feature, by tests/test_ledger_phase3_adapter_equality.py — the same harness
+#   that found the paid_ratio denominator skew. `Loan.last_payment_amount` was
+#   deliberately NOT used for the last-payment feature: nothing in the product
+#   updates it after the seed (verified: no writer outside scripts/seed_data.py),
+#   so it is a stale seed value dressed as a fact. The Payment ledger is read
+#   instead.
+#
+#   THE FULL CANDIDATE VECTOR IS LOGGED. `score_cases_and_log` used to store
+#   only the champion's SELECTED features — four keys — which meant the first
+#   production retrain could only ever re-select among those four
+#   (production_dataset.py said so in its own header). It now stores every
+#   candidate the widest spec names, so a future challenger can discover a
+#   feature the incumbent never used. The cost is a wider JSON column; the
+#   monitor still computes PSI on the champion's own inputs and ignores the
+#   rest. A served score is unchanged by this.
+#
+# 2026-09-16 — The four features recovery_risk 2.2.0 (the GAM) needs that the
+#   adapter did not produce, found by the production-readiness audit running
+#   this adapter against a rewound database: 11 of the model's 15 inputs were
+#   emitted and agreed with the panel exactly, four were absent.
+#
+#   `last_commit_status` and `recent_ptp_status` were derivable from columns
+#   the schema already had (`CallLog.verbal_payment_date` + the payment ledger;
+#   `PTP.status`) and nobody had written them. `latest_disposition` and
+#   `disposition_recency_class` had NO source column — migration c9a3d5e7f102
+#   adds `borrower_disposition` to `call_logs` and `visits`. Each definition
+#   is the panel's (`ledger/panel.py`, `_commitment_history`,
+#   `_disposition_history`, `_ptp_history`), restated in ORM terms, and
+#   tests/test_recovery_risk_gam_features.py holds the two equal on every
+#   (loan, as_of) pair of a rewound world plus the t-1 / t / t+1 boundary.
+#
+#   NOTHING IS DEFAULTED. "NONE" is the model's own level for "no reading /
+#   no commitment / no promise before as_of" — it is what the panel emits and
+#   what the GAM was fitted on, not a stand-in. A product row with no
+#   disposition captured reads NONE because that is true of the record.
 # ───────────────────────────────────────────────────────────────────────────
 """
 Live model scoring.
@@ -52,15 +96,18 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 
 from app.ml.eligibility import _SECURED as SECURED_LOAN_TYPES  # noqa: F401
+from app.ml.pipeline.config import (COMMITMENT_GRACE_DAYS, COMMITMENT_KEPT_RATIO,
+                                    DISPOSITION_FRESH_DAYS, LOGGED_FEATURES)
 from app.ml.pipeline.engine import DecisionEngine, ScoreResult
 from app.ml.pipeline.outcomes import MATERIAL_PAYMENT_RATIO
+from app.models.call_log import CallLog, CallOutcome
 from app.models.case import Case
 from app.models.customer import Customer
 from app.models.loan import Loan
 from app.models.payment import Payment, PaymentStatus
 from app.models.ptp import PTP, PTPStatus
 from app.models.model_prediction import ModelPrediction
-from app.models.visit import Visit
+from app.models.visit import DefaultReason, Visit, VisitOutcome
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +124,57 @@ logger = logging.getLogger(__name__)
 # the simulator's ptp_kept flag is likewise "a payment happened".
 PTP_KEPT = {PTPStatus.HONORED, PTPStatus.PARTIALLY_HONORED}
 
+# Visit outcomes that count as ADVERSE: the borrower was met and either refused
+# or contested. Named here so the panel (`simulator.ADVERSE_VISIT_OUTCOMES`)
+# and this adapter agree on the vocabulary; a test asserts the two sets match.
+ADVERSE_VISIT_OUTCOMES = {VisitOutcome.RTP, VisitOutcome.DISPUTE}
+
+# A partial payment is under this share of one instalment. The panel uses the
+# same constant; the realism band `partial_share` is defined the same way.
+PARTIAL_PAYMENT_RATIO = 0.9
+
+# Default reasons that describe a CAPACITY shock rather than a dispute or a
+# disposition. Same four names as `simulator.HARDSHIP_REASONS`; a test holds
+# the two together.
+HARDSHIP_REASONS = {DefaultReason.JOB_LOSS, DefaultReason.SALARY_CUT,
+                    DefaultReason.BUSINESS_FAILURE, DefaultReason.MEDICAL}
+
+
+
+# 2.2.0 — the product's six PTP statuses onto the model's four levels for
+# `recent_ptp_status`. The ledger world resolves a promise as HONORED, BROKEN
+# or RESCHEDULED and holds it OPEN until then; the product has two more:
+# PARTIALLY_HONORED counts as HONORED, consistent with PTP_KEPT above (money
+# arrived against the promise), and EXPIRED as BROKEN, consistent with
+# planner_service._FAILED_PTP_STATUSES (the date passed and nothing came).
+# Explicit so the mapping is readable, and pinned by a test, rather than
+# letting an unseen level fall into the model's missing routing unnoticed.
+_PTP_STATUS_LEVEL = {
+    PTPStatus.ACTIVE: "OPEN",
+    PTPStatus.HONORED: "HONORED",
+    PTPStatus.PARTIALLY_HONORED: "HONORED",
+    PTPStatus.BROKEN: "BROKEN",
+    PTPStatus.EXPIRED: "BROKEN",
+    PTPStatus.RESCHEDULED: "RESCHEDULED",
+}
+
+
+def _ptp_status_level(status) -> str:
+    return _PTP_STATUS_LEVEL[PTPStatus(status)]
+
+
+def _calendar_days(as_of_dt: datetime, when: datetime) -> float:
+    """as_of date minus the event's date, in whole calendar days.
+
+    2026-09-16. The panel's day gaps are `t - event_day`, integer calendar
+    days. Three of the adapter's read `(as_of_dt - event).days`, which FLOORS
+    the elapsed time: a contact at 18:00 the day before a midnight as_of is
+    six hours, so it read 0 where the panel says 1. Invisible to the equality
+    harness because the materialiser writes every event at midnight; visible
+    to the boundary test `test_a_disposition_on_a_call_at_the_boundary`, which
+    puts an event at 23:59:59.999999. One definition now, the panel's.
+    """
+    return float((as_of_dt.date() - when.date()).days)
 
 
 def _as_date(value) -> date | None:
@@ -188,8 +286,24 @@ class MLScoringService:
             dob = _as_date(cust.date_of_birth)
             if dob:
                 f["age"] = float((as_of_dt.date() - dob).days // 365)
+            # The two flags an agent or the bank raises on the CUSTOMER. Both
+            # are overwritten in place with no history, like `dpd`, so they
+            # are honest at as_of = today and only there.
+            f["is_hostile"] = 1 if cust.is_hostile else 0
+            f["fraud_flag"] = 1 if cust.fraud_flag else 0
 
         f.update(self._history_features(loan, as_of_dt))
+        # Momentum: a pure derivation of two ratios already on the vector.
+        if "paid_ratio_3m" in f and "paid_ratio_12m" in f:
+            f["paid_momentum"] = round(f["paid_ratio_3m"] - f["paid_ratio_12m"], 3)
+        # EVERY CANDIDATE KEY IS PRESENT, None where there is no evidence. The
+        # engine distinguishes a key that is absent (the adapter did not
+        # produce the feature — a break, counted against the coverage floor)
+        # from one that is present and null (an abstaining feature with
+        # nothing to say — the Missing bin). That distinction only works if
+        # the adapter always emits the key.
+        for k in LOGGED_FEATURES:
+            f.setdefault(k, None)
         return f
 
     def _history_features(self, loan: Loan, as_of_dt: datetime) -> dict:
@@ -205,7 +319,14 @@ class MLScoringService:
         case_ids = [cid for (cid,) in
                     self.db.query(Case.id).filter(Case.loan_id == loan.id).all()]
         if not case_ids:
-            return {}
+            # "NONE" is a fitted category ("never visited"), not a missing
+            # value; the panel says the same for a loan with no visit. Same
+            # for the three 2.2.0 statuses: no contact, no commitment, no
+            # promise.
+            return {"last_visit_outcome": "NONE", "paid_ratio_1m": 0.0,
+                    "latest_disposition": "NONE",
+                    "disposition_recency_class": "NONE",
+                    "last_commit_status": "NONE", "recent_ptp_status": "NONE"}
 
         w3 = as_of_dt - timedelta(days=90)
         w6 = as_of_dt - timedelta(days=180)
@@ -229,7 +350,69 @@ class MLScoringService:
         last_contact = max((_aware(v.check_in_time) for v in visits if v.customer_met),
                            default=None)
         if last_contact:
-            out["days_since_last_contact"] = float((as_of_dt - last_contact).days)
+            out["days_since_last_contact"] = _calendar_days(as_of_dt, last_contact)
+        # What happened when the door opened. Counts are observations even at
+        # zero; the ratio abstains (None) where nobody went.
+        rtp6 = sum(1 for v in v6 if v.outcome == VisitOutcome.RTP)
+        dsp6 = sum(1 for v in v6 if v.outcome == VisitOutcome.DISPUTE)
+        out["rtp_visits_6m"] = float(rtp6)
+        out["dispute_visits_6m"] = float(dsp6)
+        out["adverse_visit_ratio_6m"] = (round((rtp6 + dsp6) / len(v6), 3)
+                                         if v6 else None)
+        out["hardship_visits_6m"] = float(
+            sum(1 for v in v6 if v.default_reason in HARDSHIP_REASONS))
+        # 2.1.0 — what the LAST visit said, met or not, whatever its age.
+        # The enum's string value, so the binner sees the same vocabulary the
+        # ledger emits (RTP / DISPUTE / PTP / REVISIT / NOT_AVAILABLE /
+        # ADDRESS_ISSUE); a value the ledger never produces (PAID_FULL, ...)
+        # lands in the binner's neutral unknown bin — see config.
+        if visits:
+            newest = max(visits, key=lambda v: _aware(v.check_in_time))
+            out["last_visit_outcome"] = (newest.outcome.value
+                                         if newest.outcome is not None else "NONE")
+        else:
+            out["last_visit_outcome"] = "NONE"
+
+        # ── telephony ───────────────────────────────────────────────────────
+        calls = (self.db.query(CallLog)
+                 .filter(CallLog.case_id.in_(case_ids), CallLog.called_at < as_of_dt)
+                 .order_by(CallLog.called_at.asc())
+                 .all())
+        c3 = [c for c in calls if _aware(c.called_at) >= w3]
+        c6 = [c for c in calls if _aware(c.called_at) >= w6]
+        ans6 = [c for c in c6 if c.outcome == CallOutcome.ANSWERED]
+        out["calls_3m"] = float(len(c3))
+        out["call_answer_rate_6m"] = round(len(ans6) / len(c6), 3) if c6 else None
+        # 2.1.0 — the recent answer rate, the intent rate over answered calls,
+        # and days since the most recent ATTEMPT. Each abstains (None) where
+        # its denominator is empty; the panel's NaN is the same statement.
+        ans3 = [c for c in c3 if c.outcome == CallOutcome.ANSWERED]
+        out["call_answer_rate_3m"] = round(len(ans3) / len(c3), 3) if c3 else None
+        out["intent_rate_6m"] = (
+            round(sum(1 for c in ans6 if c.payment_intent_signalled) / len(ans6), 3)
+            if ans6 else None)
+        if calls:
+            out["days_since_last_call"] = _calendar_days(as_of_dt, _aware(calls[-1].called_at))
+        # Consecutive unanswered attempts counting back from the newest. Zero
+        # with no calls at all — a streak of nothing is nothing.
+        streak = 0
+        for c in reversed(calls):
+            if c.outcome == CallOutcome.ANSWERED:
+                break
+            streak += 1
+        out["no_answer_streak"] = float(streak)
+        answered = [c for c in calls if c.outcome == CallOutcome.ANSWERED]
+        if answered:
+            last_ans = _aware(answered[-1].called_at)
+            out["days_since_last_answered_call"] = _calendar_days(as_of_dt, last_ans)
+            # What the borrower said: intent over three months, and on the
+            # most recent answered call. `answered` is in called_at order.
+            out["intent_calls_3m"] = float(sum(
+                1 for c in answered
+                if c.payment_intent_signalled and _aware(c.called_at) >= w3))
+            out["last_call_intent"] = 1.0 if answered[-1].payment_intent_signalled else 0.0
+        else:
+            out["intent_calls_3m"] = 0.0
 
         ptps = (self.db.query(PTP)
                 .filter(PTP.case_id.in_(case_ids), PTP.created_at < as_of_dt)
@@ -239,6 +422,20 @@ class MLScoringService:
         out["ptp_set_6m"] = float(len(p6))
         out["ptp_kept_6m"] = float(len(kept6))
         out["ptp_kept_ratio"] = round(len(kept6) / len(p6), 3) if p6 else 0.5
+        # How promises END, and how big they were relative to the instalment.
+        out["ptp_broken_6m"] = float(sum(1 for p in p6 if p.status == PTPStatus.BROKEN))
+        out["ptp_rescheduled_6m"] = float(
+            sum(1 for p in p6 if p.status == PTPStatus.RESCHEDULED))
+        emi_for_ptp = max(float(loan.emi_amount or 0.0), 1.0)
+        out["ptp_amount_to_emi"] = (
+            round(sum(float(p.committed_amount or 0.0) for p in p6) / len(p6)
+                  / emi_for_ptp, 3) if p6 else None)
+        # 2.2.0 — the status of the NEWEST promise, however old, as the record
+        # holds it: the panel's `recent_ptp_status`. No window, because the
+        # question is "how did the last promise end", not "how many lately".
+        out["recent_ptp_status"] = (
+            _ptp_status_level(max(ptps, key=lambda p: _aware(p.created_at)).status)
+            if ptps else "NONE")
 
         pays = (self.db.query(Payment)
                 .filter(Payment.case_id.in_(case_ids),
@@ -273,7 +470,114 @@ class MLScoringService:
                        if _aware(p.payment_date) >= since)
             due = emi * months
             out[f"paid_ratio_{label}"] = round(min(paid / due, 1.5), 3) if due else 0.5
+
+        # ── the SHAPE of the ledger, 2026-09-15 ────────────────────────────
+        # Same window edges as the ratios above; same VERIFIED-only population.
+        pays6 = [p for p in pays if _aware(p.payment_date) >= w6]
+        out["payments_6m"] = float(len(pays6))
+        # 2.1.0 — one cycle back against ONE instalment (0 when nothing was
+        # paid: that is the observation), and the population CV of the
+        # six-month amounts, two payments minimum. The panel's `_amount_cv`.
+        w1 = as_of_dt - timedelta(days=30)
+        paid1 = sum(float(p.amount or 0) for p in pays if _aware(p.payment_date) >= w1)
+        out["paid_ratio_1m"] = round(min(paid1 / max(emi, 1.0), 1.5), 3)
+        if len(pays6) >= 2:
+            amts = [float(p.amount or 0) for p in pays6]
+            mean_amt = sum(amts) / len(amts)
+            if mean_amt > 0:
+                var = sum((a - mean_amt) ** 2 for a in amts) / len(amts)
+                out["pay_amount_cv_6m"] = round((var ** 0.5) / mean_amt, 3)
+        out["partial_payment_share_6m"] = (
+            round(sum(1 for p in pays6
+                      if float(p.amount or 0) < PARTIAL_PAYMENT_RATIO * emi)
+                  / len(pays6), 3) if pays6 else None)
+        # Regularity: population CV of the gaps between consecutive verified
+        # payments over the last year; three payments minimum. The panel's
+        # `_gap_cv` is the same arithmetic on day indices.
+        days12 = sorted(_aware(p.payment_date).date().toordinal()
+                        for p in pays if _aware(p.payment_date) >= w12)
+        if len(days12) >= 3:
+            gaps = [b - a for a, b in zip(days12, days12[1:])]
+            mean_gap = sum(gaps) / len(gaps)
+            if mean_gap > 0:
+                var = sum((g - mean_gap) ** 2 for g in gaps) / len(gaps)
+                out["payment_gap_cv_12m"] = round((var ** 0.5) / mean_gap, 3)
+        # Size of the most recent verified payment, relative to the
+        # instalment. From the LEDGER, never `Loan.last_payment_amount` — see
+        # the header for why that column cannot be trusted.
+        if pays:
+            last = max(pays, key=lambda p: _aware(p.payment_date))
+            out["last_payment_to_emi"] = round(
+                float(last.amount or 0.0) / max(emi, 1.0), 3)
+
+        out.update(self._commitment_features(calls, pays, emi, as_of_dt))
+        out.update(self._disposition_features(calls, visits, as_of_dt))
         return out
+
+    @staticmethod
+    def _commitment_features(calls, pays, emi: float, as_of_dt: datetime) -> dict:
+        """`last_commit_status` — the panel's `_commitment_history`, 2.2.0.
+
+        A commitment is a call BEFORE as_of on which the borrower named a
+        date (`CallLog.verbal_payment_date`). Its status as known at as_of is
+        DERIVED from the VERIFIED payment ledger, never stored:
+
+            KEPT    verified money with call_day <= payment_day <= named + grace
+                    (and before as_of) sums to >= COMMITMENT_KEPT_RATIO x EMI
+            BROKEN  not kept, and named + grace is already past at as_of
+            OPEN    otherwise — the grace has not run out yet
+
+        The newest commitment's status is the feature; "NONE" if the borrower
+        never named a date. `calls` and `pays` are already filtered to strictly
+        before as_of and `pays` to VERIFIED, by the caller's queries.
+        """
+        commits = [c for c in calls if c.verbal_payment_date is not None]
+        if not commits:
+            return {"last_commit_status": "NONE"}
+        newest = max(commits, key=lambda c: _aware(c.called_at))
+        call_day = _aware(newest.called_at).date()
+        named = _as_date(newest.verbal_payment_date)
+        deadline = named + timedelta(days=COMMITMENT_GRACE_DAYS)
+        paid = sum(float(p.amount or 0.0) for p in pays
+                   if call_day <= _aware(p.payment_date).date() <= deadline)
+        if paid >= COMMITMENT_KEPT_RATIO * emi:
+            status = "KEPT"
+        elif deadline < as_of_dt.date():
+            status = "BROKEN"
+        else:
+            status = "OPEN"
+        return {"last_commit_status": status}
+
+    @staticmethod
+    def _disposition_features(calls, visits, as_of_dt: datetime) -> dict:
+        """`latest_disposition`, `days_since_disposition`,
+        `disposition_recency_class` — the panel's `_disposition_history`.
+
+        Readings from answered calls and met visits strictly before as_of,
+        pooled; the newest wins, and on the same day a CALL is taken as the
+        later of the two (the panel's `src` ordering — arbitrary, but the same
+        arbitrary on both sides). The recency class is the reading suffixed
+        `_FRESH` when it is DISPOSITION_FRESH_DAYS old or younger, `_STALE`
+        otherwise, and "NONE" where there is no reading.
+        """
+        readings = []
+        for v in visits:
+            if v.borrower_disposition is not None:
+                readings.append((_aware(v.check_in_time), 0, v.borrower_disposition))
+        for c in calls:
+            if c.borrower_disposition is not None:
+                readings.append((_aware(c.called_at), 1, c.borrower_disposition))
+        if not readings:
+            return {"latest_disposition": "NONE", "days_since_disposition": None,
+                    "disposition_recency_class": "NONE"}
+        # Day first (a visit at 09:00 and a call at 17:00 on one day are the
+        # same day to the panel), then the channel tiebreak, then the clock.
+        when, _, reading = max(readings, key=lambda r: (r[0].date(), r[1], r[0]))
+        level = reading.value if hasattr(reading, "value") else str(reading)
+        days = _calendar_days(as_of_dt, when)
+        suffix = "_FRESH" if days <= DISPOSITION_FRESH_DAYS else "_STALE"
+        return {"latest_disposition": level, "days_since_disposition": days,
+                "disposition_recency_class": level + suffix}
 
     # ── scoring ─────────────────────────────────────────────────────────────
     def score_loan(self, loan_id: str, *, model: str = "recovery_risk") -> ScoreResult:
@@ -397,7 +701,7 @@ class MLScoringService:
                             case_id=case.id, as_of_date=stamp,
                             probability=None, is_modelled=False,
                             fallback_reason=res.fallback_reason,
-                            features={k: v for k, v in f.items() if k in selected},
+                            features=_logged_vector(f, selected),
                             feature_coverage=coverage,
                         ))
                 continue
@@ -423,11 +727,17 @@ class MLScoringService:
                     points=res.points,
                     band=res.band,
                     reason_codes=res.reason_codes or [],
+                    scoring_versions=res.versions or None,
+                    contributions=res.contributions or None,
                     is_modelled=True,
-                    # Only the features the model reads. Storing all 33
-                    # candidates would triple the row for no monitoring value;
-                    # PSI is computed on the model's own inputs.
-                    features={k: v for k, v in f.items() if k in selected},
+                    # THE FULL CANDIDATE VECTOR, not only the selected four.
+                    # 2026-09-15. This used to read "storing all 33 candidates
+                    # would triple the row for no monitoring value" — true for
+                    # monitoring, and exactly wrong for retraining: a
+                    # challenger built from this log could only ever re-select
+                    # among the incumbent's own inputs. The monitor still reads
+                    # the champion's features and nothing else.
+                    features=_logged_vector(f, selected),
                     feature_coverage=coverage,
                     # FROZEN FOR THE LABEL, not for the score. Both columns are
                     # overwritten in place on Loan, so reading them when the
@@ -485,15 +795,15 @@ class MLScoringService:
             band=result.band,
             is_modelled=result.is_modelled,
             fallback_reason=result.fallback_reason,
-            # Only the features the model actually reads. Storing all 33
-            # candidates would triple the row for no monitoring value — PSI is
-            # computed on the model's own inputs (see train.py, where gating PSI
-            # on unused candidates produced a spurious FAIL).
-            features={k: v for k, v in features.items()
-                      if k in (result.feature_points or {})
-                      or k in _selected_for(result.model)},
+            # The full candidate vector, plus anything the result explains
+            # with. See `_logged_vector`.
+            features=_logged_vector(
+                features,
+                set(result.feature_points or {}) | set(_selected_for(result.model))),
             feature_coverage=result.feature_coverage,
             reason_codes=result.reason_codes or [],
+            scoring_versions=result.versions or None,
+            contributions=result.contributions or None,
         )
         self.db.add(row)
         return row
@@ -514,3 +824,19 @@ class MLScoringService:
 def _selected_for(model: str) -> list[str]:
     engine = DecisionEngine.get(model)
     return engine.selected if engine else []
+
+
+def _logged_vector(features: dict, selected) -> dict:
+    """What goes into `ModelPrediction.features`: every candidate the widest
+    spec names, plus whatever the serving model selected (a superset in
+    practice, kept explicit so a model trained on a feature outside the
+    candidate list can never log a vector missing its own input).
+
+    A candidate the adapter did not produce is stored as None rather than
+    omitted, so the log distinguishes "absent from the vector" from "not yet a
+    feature when this row was written" — `production_dataset` reads NaN as the
+    Missing bin either way, and the monitor's missing-feature check keys on the
+    champion's inputs only.
+    """
+    keys = list(LOGGED_FEATURES) + [k for k in selected if k not in LOGGED_FEATURES]
+    return {k: features.get(k) for k in keys}

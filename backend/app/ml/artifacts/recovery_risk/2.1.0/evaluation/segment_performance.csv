@@ -1,0 +1,17 @@
+dimension,segment,n,bad_rate,gini,gated
+dpd_bucket,NPA,7519,0.8778,0.3219,True
+dpd_bucket,BUCKET_1,6415,0.5384,0.3004,True
+dpd_bucket,BUCKET_2,5113,0.6395,0.287,True
+dpd_bucket,BUCKET_3,3951,0.7558,0.275,True
+dpd_bucket,CURRENT,1163,0.5254,0.2596,True
+loan_type,PERSONAL,8151,0.7157,0.4791,True
+loan_type,AUTO,4353,0.6779,0.4516,True
+loan_type,BUSINESS,3781,0.7268,0.4735,True
+loan_type,HOME,2737,0.677,0.4952,True
+loan_type,GOLD,2688,0.6622,0.478,True
+loan_type,EDUCATION,2451,0.716,0.4115,True
+city,Gurugram,7142,0.6897,0.4856,True
+city,Delhi,5775,0.6996,0.4648,True
+city,Noida,4303,0.7102,0.4563,True
+city,Faridabad,3528,0.714,0.4653,True
+city,Ghaziabad,3413,0.6973,0.4655,True

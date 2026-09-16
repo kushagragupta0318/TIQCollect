@@ -1,0 +1,202 @@
+{
+ "exp": "f2",
+ "world": "wd10",
+ "n_rows": 92869,
+ "bad_rate": 0.6692,
+ "n_candidates": 115,
+ "selected": [
+  "arrears_ratio",
+  "latest_disposition",
+  "cibil_score",
+  "no_answer_streak",
+  "overdue_amount",
+  "intent_calls_3m",
+  "last_commit_status",
+  "recent_ptp_status",
+  "calls_3m",
+  "paid_ratio_3m"
+ ],
+ "n_selected": 10,
+ "train": {
+  "gini": 0.4971,
+  "auc": 0.7486,
+  "ks": 36.97
+ },
+ "valid": {
+  "gini": 0.5241,
+  "auc": 0.7621,
+  "ks": 39.01
+ },
+ "oot": {
+  "gini": 0.5007,
+  "auc": 0.7504,
+  "ks": 38.01,
+  "brier": 0.18202,
+  "calibration_gap": -0.0201,
+  "top_decile_lift": 1.39,
+  "bad_rate": 0.6788057190916736,
+  "n": 23780
+ },
+ "oot_rank_order_breaks": 0,
+ "oot_challenger_gbm_gini": 0.5077,
+ "champion_kind": "scorecard",
+ "bootstrap_ci": {
+  "point": 0.5007,
+  "mean": 0.5008,
+  "std": 0.0071,
+  "ci_lower_2.5": 0.4871,
+  "ci_upper_97.5": 0.5152,
+  "n_bootstrap": 300
+ },
+ "iv_selected": {
+  "arrears_ratio": 0.5195,
+  "latest_disposition": 0.3122,
+  "cibil_score": 0.1853,
+  "no_answer_streak": 0.0911,
+  "overdue_amount": 0.3466,
+  "intent_calls_3m": 0.0234,
+  "last_commit_status": 0.0897,
+  "recent_ptp_status": 0.0755,
+  "calls_3m": 0.2041,
+  "paid_ratio_3m": 0.2039
+ },
+ "iv_min_selected": 0.0234,
+ "iv_max_selected": 0.5195,
+ "max_vif": 4.302,
+ "score_psi": 0.0143,
+ "max_csi_selected": 0.0694,
+ "min_segment_gini": 0.3347,
+ "monotone_selected": true,
+ "gates_passed": true,
+ "sfs_path": [
+  {
+   "step": 1,
+   "candidate": "arrears_ratio",
+   "gini": 0.4137,
+   "gain": 0.4137,
+   "action": "added"
+  },
+  {
+   "step": 2,
+   "candidate": "latest_disposition",
+   "gini": 0.4912,
+   "gain": 0.07753,
+   "action": "added"
+  },
+  {
+   "step": 3,
+   "candidate": "cibil_score",
+   "gini": 0.5009,
+   "gain": 0.00972,
+   "action": "added"
+  },
+  {
+   "step": 4,
+   "candidate": "no_answer_streak",
+   "gini": 0.5078,
+   "gain": 0.00684,
+   "action": "added"
+  },
+  {
+   "step": 5,
+   "candidate": "overdue_amount",
+   "gini": 0.5139,
+   "gain": 0.00609,
+   "action": "added"
+  },
+  {
+   "step": 6,
+   "candidate": "intent_calls_3m",
+   "gini": 0.5172,
+   "gain": 0.00333,
+   "action": "added"
+  },
+  {
+   "step": 7,
+   "candidate": "last_commit_status",
+   "gini": 0.519,
+   "gain": 0.00174,
+   "action": "added"
+  },
+  {
+   "step": 8,
+   "candidate": "recent_ptp_status",
+   "gini": 0.5205,
+   "gain": 0.00158,
+   "action": "added"
+  },
+  {
+   "step": 9,
+   "candidate": "calls_3m",
+   "gini": 0.5218,
+   "gain": 0.00128,
+   "action": "added"
+  },
+  {
+   "step": 10,
+   "candidate": "paid_ratio_3m",
+   "gini": 0.5228,
+   "gain": 0.001,
+   "action": "added"
+  },
+  {
+   "step": 11,
+   "candidate": "ptp_kept_ratio",
+   "gini": 0.5237,
+   "gain": 0.00092,
+   "action": "added"
+  },
+  {
+   "step": 12,
+   "candidate": "contact_rate_6m",
+   "gini": 0.5245,
+   "gain": 0.00074,
+   "action": "stopped"
+  }
+ ],
+ "sign_dropped": [
+  {
+   "feature": "ptp_kept_ratio",
+   "coefficient": 0.52402,
+   "reason": "positive coefficient on a WOE feature means more evidence of good behaviour raises modelled risk \u2014 inadmissible"
+  }
+ ],
+ "realism_passed": true,
+ "realism": {
+  "forward_flow_rate": 0.4971,
+  "cure_rate": 0.0639,
+  "npa_share": 0.2996,
+  "performing_share": 0.3305,
+  "current_share": 0.0501,
+  "vintage_monotone_frac": 1.0,
+  "exact_emi_share": 0.4855,
+  "round_number_share": 0.1359,
+  "partial_share": 0.3454,
+  "ptp_kept_rate": 0.519,
+  "rpc_rate": 0.4823,
+  "call_answer_rate": 0.3767,
+  "rtp_share_of_met_visits": 0.1614,
+  "intent_share_of_answered_calls": 0.4147,
+  "hardship_share_of_met_visits": 0.0658,
+  "hostile_share": 0.2617,
+  "declined_share_of_reached": 0.1483,
+  "commitment_share_of_answered": 0.3478,
+  "commitment_kept_rate": 0.2682,
+  "median_call_duration_s": 69.0,
+  "disposition_positive_share": 0.4915,
+  "disposition_refuse_share": 0.265,
+  "material_payment_rate": 0.3308
+ },
+ "observable_ceiling": [
+  0.526,
+  39.71
+ ],
+ "joint_oracle": [
+  0.5761,
+  42.91
+ ],
+ "observables_plus_true_willingness": [
+  0.5509,
+  41.23
+ ]
+}

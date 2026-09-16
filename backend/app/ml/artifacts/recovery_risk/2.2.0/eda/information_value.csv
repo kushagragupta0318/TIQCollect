@@ -1,0 +1,16 @@
+feature,iv,strength,n_bins,monotonic,leakage_suspect
+arrears_ratio,0.5195,suspicious,6,True,True
+overdue_amount,0.3466,strong,6,True,False
+disposition_recency_class,0.3391,strong,6,True,False
+latest_disposition,0.3122,strong,6,True,False
+calls_3m,0.2041,medium,6,True,False
+paid_ratio_3m,0.2039,medium,6,True,False
+cibil_score,0.1853,medium,6,True,False
+no_answer_streak,0.0911,weak,4,True,False
+last_commit_status,0.0897,weak,4,True,False
+recent_ptp_status,0.0755,weak,4,True,False
+intent_calls_3m,0.0234,weak,5,True,False
+days_since_last_contact,0.0191,unpredictive,3,True,False
+employment_type,0.0102,unpredictive,3,True,False
+interest_rate,0.0092,unpredictive,6,True,False
+ptp_amount_to_emi,0.0071,unpredictive,3,True,False

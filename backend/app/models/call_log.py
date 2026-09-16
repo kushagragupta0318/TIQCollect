@@ -6,6 +6,12 @@
 #   override. Migration applied by hand against local Postgres this session —
 #   no committed Alembic migration file yet (tracked gap). Full detail + why:
 #   /changelog.md
+# 2026-09-16 — Added BorrowerDisposition + CallLog.borrower_disposition (and the
+#   same column on Visit). The production-readiness audit of recovery_risk's
+#   15-feature GAM found two of its inputs, `latest_disposition` and
+#   `disposition_recency_class`, had NO source column in the product: the
+#   ledger world that developed them records a stance on every contact, the
+#   schema recorded none. Migration c9a3d5e7f102. Nullable, no default.
 # ───────────────────────────────────────────────────────────────────────────
 import enum
 from datetime import date, datetime
@@ -24,6 +30,37 @@ class CallOutcome(str, enum.Enum):
     DECLINED     = "DECLINED"       # picked up then cut / call rejected
     SWITCHED_OFF = "SWITCHED_OFF"
     WRONG_NUMBER = "WRONG_NUMBER"
+
+
+class BorrowerDisposition(str, enum.Enum):
+    """What the borrower SAID about paying, recorded on every contact that
+    reached them. 2026-09-16.
+
+    ONE VOCABULARY, TWO CHANNELS. The same six values sit on `CallLog` (an
+    answered call) and `Visit` (a met visit), because the model that reads
+    them — `recovery_risk` 2.2.0, `latest_disposition` — pools the two and
+    takes the newest. It is an ordinal stance, best to worst:
+
+        WILL_PAY       a date or an amount was named
+        MAY_PAY        wants to pay, will not commit
+        NO_COMMITMENT  reached, nothing said either way
+        HARDSHIP       cannot pay — a capacity statement, not a stance
+        DISPUTE        contests the debt
+        REFUSES        will not pay
+
+    The vocabulary is the ledger simulator's (`simulator.DISP_*`), which is
+    where the feature was developed; `tests/test_recovery_risk_gam_features.py`
+    holds the two together. Nullable, and NULL means "not recorded" — never
+    defaulted, because a default would be a reading nobody took. Until the
+    field process records it, every borrower reads as never-read, and
+    `app/ml/pipeline/missingness.py` watches that share.
+    """
+    WILL_PAY      = "WILL_PAY"
+    MAY_PAY       = "MAY_PAY"
+    NO_COMMITMENT = "NO_COMMITMENT"
+    HARDSHIP      = "HARDSHIP"
+    DISPUTE       = "DISPUTE"
+    REFUSES       = "REFUSES"
 
 
 class CallLog(Base, UUIDPrimaryKey, TimestampMixin):
@@ -74,6 +111,12 @@ class CallLog(Base, UUIDPrimaryKey, TimestampMixin):
 
     # Did customer signal willingness / urgency to pay?
     payment_intent_signalled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
+    # 2026-09-16 — the structured disposition, recorded only on an ANSWERED
+    # call and only when the agent captured it. See BorrowerDisposition.
+    borrower_disposition: Mapped[BorrowerDisposition | None] = mapped_column(
+        SAEnum(BorrowerDisposition, name="borrower_disposition_enum"), nullable=True
+    )
 
     # Date customer mentioned for payment (PTP over call — not a formal PTP record)
     verbal_payment_date: Mapped[date | None] = mapped_column(Date, nullable=True)

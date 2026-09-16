@@ -1,0 +1,6 @@
+step,kept,dropped,dropped_features,reason
+iv_filter,36,17,"['tenure_months', 'interest_rate', 'is_secured', 'outstanding_to_sanction', 'distinct_agents_6m', 'ptp_set_6m', 'age', 'dispute_visits_6m', 'intent_calls_3m', 'hardship_visits_6m', 'ptp_rescheduled_6m', 'ptp_amount_to_emi', 'fraud_flag', 'loan_type', 'city', 'employment_type', 'branch_code']","IV outside [0.02, 0.8]; 0 flagged for review above 0.5"
+correlation,22,14,"['penal_charges', 'dpd', 'penal_ratio', 'dpd_bucket', 'paid_momentum', 'payments_6m', 'paid_ratio_6m', 'paid_ratio_12m', 'visits_6m', 'rtp_visits_6m', 'emi_amount', 'sanction_amount', 'outstanding_principal', 'ptp_kept_6m']",|r| > 0.7; the lower-IV member of each pair goes
+vif,22,0,[],"VIF > 5.0, dropped one at a time worst-first"
+sfs,9,13,"['months_on_book', 'total_outstanding', 'days_since_last_payment', 'visits_3m', 'ptp_kept_ratio', 'calls_3m', 'no_answer_streak', 'days_since_last_answered_call', 'last_call_intent', 'ptp_broken_6m', 'partial_payment_share_6m', 'last_payment_to_emi', 'is_hostile']","forward stepwise, stop when validation Gini gain < 0.0008"
+sign_check,9,0,[],every WOE coefficient must be negative (high WOE = low risk)

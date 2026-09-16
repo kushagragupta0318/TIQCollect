@@ -143,8 +143,29 @@ def psi(expected, actual, n_bins: int = 10) -> float:
     from the combined data would let the new population move the ruler it is
     being measured against, which is how a drifting book reports itself stable.
     """
-    e = pd.to_numeric(pd.Series(expected), errors="coerce").dropna().to_numpy()
-    a = pd.to_numeric(pd.Series(actual), errors="coerce").dropna().to_numpy()
+    es, as_ = pd.Series(expected), pd.Series(actual)
+    # 2026-09-15 — CATEGORICAL features get the same index over category
+    # shares, with the development categories as the ruler and everything
+    # unseen pooled into one bin. Before this a categorical came back NaN,
+    # which `psi_frame` labelled "shifted" — a feature that was never measured
+    # reported as one that had moved. First seen on `last_visit_outcome`, the
+    # first categorical a recovery_risk model selected.
+    if not (pd.api.types.is_numeric_dtype(es) and pd.api.types.is_numeric_dtype(as_)):
+        e_cat = es.dropna().astype(str)
+        a_cat = as_.dropna().astype(str)
+        if len(e_cat) == 0 or len(a_cat) == 0:
+            return float("nan")
+        cats = list(e_cat.value_counts().index)
+        e_pct = e_cat.value_counts(normalize=True).reindex(cats).fillna(0).to_numpy()
+        a_counts = a_cat.value_counts()
+        a_pct = a_counts.reindex(cats).fillna(0).to_numpy() / len(a_cat)
+        unseen = 1.0 - a_pct.sum()
+        e_pct, a_pct = np.append(e_pct, 0.0), np.append(a_pct, max(unseen, 0.0))
+        eps = 1e-6
+        e_pct, a_pct = np.clip(e_pct, eps, None), np.clip(a_pct, eps, None)
+        return float(np.sum((a_pct - e_pct) * np.log(a_pct / e_pct)))
+    e = pd.to_numeric(es, errors="coerce").dropna().to_numpy()
+    a = pd.to_numeric(as_, errors="coerce").dropna().to_numpy()
     if len(e) == 0 or len(a) == 0:
         return float("nan")
     qs = np.linspace(0, 100, n_bins + 1)

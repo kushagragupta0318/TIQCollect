@@ -24,7 +24,12 @@ from app.models.base import Base
 from app.models.model_prediction import ModelPrediction
 
 MODEL = "recovery_risk"
-SERVING = "1.1.0"
+# 2026-09-16 — read from the pointer, not pinned. These fixtures describe "the
+# model that is serving", and the 19:15 task resolves that through champion.txt;
+# a literal "1.1.0" broke the day 2.2.0 was promoted, for no defect.
+from tests._served_champion import champion_selected as _champion_selected, served_vector as _served_vector  # noqa: E402
+
+SERVING = mon.serving_version(MODEL) or "1.1.0"
 OTHER_VERSION = "1.0.0"
 OTHER_RULE = "some-other-outcome-2.0.0"
 
@@ -72,9 +77,7 @@ def _preds(db, n, *, outcome=1, version=SERVING, rule=OUTCOME_DEFINITION_VERSION
             as_of_date=today - timedelta(days=day_span - (i % day_span)),
             probability=(i % 100) / 100.0,
             is_modelled=True,
-            features={"dpd": float(i % 180), "cibil_score": 300.0 + (i % 500),
-                      "ptp_kept_ratio": (i % 10) / 10.0,
-                      "overdue_amount": 1000.0 * (1 + i % 20)},
+            features=_served_vector(i),
             actual_outcome=y,
             outcome_definition_version=(None if y is None else rule),
             outcome_status=(None if y is None
@@ -182,8 +185,7 @@ def test_the_report_carries_every_field_the_review_needs(db):
 
     st = rep.stability
     assert "score_psi" in st
-    assert set(st["champion_features"]) >= {"dpd", "cibil_score",
-                                            "ptp_kept_ratio", "overdue_amount"}
+    assert set(st["champion_features"]) == set(_champion_selected())
     assert st["features_missing_from_predictions"] == []
     assert {r["feature"] for r in st["per_feature"]} == set(st["champion_features"])
 
@@ -207,14 +209,17 @@ def test_a_missing_champion_feature_is_a_finding_not_a_shorter_table(db):
     """`ptp_kept_ratio` once vanished from every served vector while coverage
     stayed above its floor. A PSI table that is simply shorter looks healthy."""
     rows = _preds(db, 600, outcome=_alternating)
+    # ptp_kept_ratio on the 1.1.0 champion; on 2.2.0 the analogous input is
+    # the first selected feature — the finding is about ANY champion input.
+    gone = "ptp_kept_ratio" if "ptp_kept_ratio" in _champion_selected() else _champion_selected()[0]
     for r in rows:
         f = dict(r.features)
-        f.pop("ptp_kept_ratio")
+        f.pop(gone)
         r.features = f
     db.commit()
 
     rep = mon.monitor_model(db, MODEL, version=SERVING)
-    assert rep.stability["features_missing_from_predictions"] == ["ptp_kept_ratio"]
+    assert rep.stability["features_missing_from_predictions"] == [gone]
     assert rep.retrain_recommended is True
     assert any("absent from the served vectors" in r for r in rep.reasons)
 
@@ -339,3 +344,49 @@ def test_a_broken_monitor_leaves_committed_labels_intact(db, monkeypatch):
             assert row.outcome_definition_version == OUTCOME_DEFINITION_VERSION
     finally:
         fresh.close()
+
+
+# ---------------------------------------------------------------------------
+# A BLIND SPOT, pinned rather than fixed — 2026-09-16
+# ---------------------------------------------------------------------------
+
+def test_psi_cannot_see_missingness_drift_so_the_monitor_needs_its_own_check():
+    """`evaluate.psi` drops NaN on BOTH sides before binning, so a feature
+    whose MISSINGNESS moves while its observed values do not reports a PSI of
+    ~0 and a "stable" verdict.
+
+    Found by the 2026-09-16 production-readiness audit: on the audited model
+    `days_since_last_contact` moves from 49.2% missing in train to 37.2% in
+    out-of-time — twelve points, because a maturing book has fewer
+    never-contacted accounts — and its CSI reads 0.0216, comfortably inside
+    the 0.10 gate.
+
+    NOT fixed here: changing `psi` would silently move every PSI figure in
+    every committed artifact and every monitoring row, which is a behaviour
+    change and not a defect fix. The correct response is the separate
+    missingness monitor specified in the audit report. This test exists so the
+    blind spot is a recorded property rather than an accident, and so anyone
+    who does change `psi` sees a failure here and has to decide deliberately.
+    """
+    import numpy as np
+    import pandas as pd
+
+    from app.ml.pipeline.evaluate import psi, psi_frame
+
+    rng = np.random.default_rng(0)
+    values = rng.normal(size=10_000)
+    dev = pd.Series(values)
+    # identical observed distribution, half of it now missing
+    oot = pd.Series(np.where(rng.random(10_000) < 0.5, np.nan, values))
+
+    assert dev.isna().mean() == 0.0
+    assert 0.45 < oot.isna().mean() < 0.55
+    blind = psi(dev, oot)
+    assert blind < 0.01, f"psi saw the missingness after all ({blind:.4f}) — re-read the audit"
+
+    frame = psi_frame(pd.DataFrame({"f": dev}), pd.DataFrame({"f": oot}), ["f"])
+    assert frame.iloc[0]["verdict"] == "stable"
+
+    # what the missingness monitor must measure instead
+    drift = float(oot.isna().mean() - dev.isna().mean())
+    assert drift > 0.40

@@ -1,0 +1,743 @@
+[
+ {
+  "model": "EXP0 WOE-LR baseline (f1 artifact)",
+  "k": 10,
+  "interactions": [],
+  "iterations": null,
+  "train": {
+   "gini": 0.4977,
+   "auc": 0.7489,
+   "ks": 36.96
+  },
+  "valid": {
+   "gini": 0.5228,
+   "auc": 0.7614,
+   "ks": 39.04
+  },
+  "oot": {
+   "gini": 0.5014,
+   "auc": 0.7507,
+   "ks": 37.81,
+   "brier": 0.18174,
+   "cal_gap": -0.0166,
+   "breaks": 0,
+   "lift": 1.391,
+   "min_seg_gini": 0.3328
+  },
+  "score_psi": 0.0137,
+  "iv_range": "0.023-0.519",
+  "max_vif": 4.303,
+  "max_csi": 0.0694,
+  "features": [
+   "arrears_ratio",
+   "latest_disposition",
+   "cibil_score",
+   "no_answer_streak",
+   "overdue_amount",
+   "intent_calls_3m",
+   "last_commit_status",
+   "recent_ptp_status",
+   "calls_3m",
+   "paid_ratio_3m"
+  ]
+ },
+ {
+  "model": "EXP1 GAM, 10 features, additive",
+  "k": 10,
+  "interactions": [],
+  "iterations": 571,
+  "train": {
+   "gini": 0.505,
+   "auc": 0.7525,
+   "ks": 37.49
+  },
+  "valid": {
+   "gini": 0.5301,
+   "auc": 0.7651,
+   "ks": 39.51
+  },
+  "oot": {
+   "gini": 0.5088,
+   "auc": 0.7544,
+   "ks": 38.4,
+   "brier": 0.1803,
+   "cal_gap": -0.0152,
+   "breaks": 0,
+   "lift": 1.401,
+   "min_seg_gini": 0.3435
+  },
+  "score_psi": 0.0107,
+  "iv_range": "0.023-0.519",
+  "max_vif": 4.303,
+  "max_csi": 0.0694,
+  "features": [
+   "arrears_ratio",
+   "latest_disposition",
+   "cibil_score",
+   "no_answer_streak",
+   "overdue_amount",
+   "intent_calls_3m",
+   "last_commit_status",
+   "recent_ptp_status",
+   "calls_3m",
+   "paid_ratio_3m"
+  ]
+ },
+ {
+  "model": "EXP2 GAM + latest_disposition x arrears_ratio",
+  "k": 10,
+  "interactions": [
+   "latest_disposition x arrears_ratio"
+  ],
+  "iterations": 384,
+  "train": {
+   "gini": 0.5057,
+   "auc": 0.7528,
+   "ks": 37.57
+  },
+  "valid": {
+   "gini": 0.5306,
+   "auc": 0.7653,
+   "ks": 39.72
+  },
+  "oot": {
+   "gini": 0.5095,
+   "auc": 0.7547,
+   "ks": 38.46,
+   "brier": 0.18025,
+   "cal_gap": -0.0152,
+   "breaks": 0,
+   "lift": 1.401,
+   "min_seg_gini": 0.345
+  },
+  "score_psi": 0.0108,
+  "iv_range": "0.023-0.519",
+  "max_vif": 4.303,
+  "max_csi": 0.0694,
+  "features": [
+   "arrears_ratio",
+   "latest_disposition",
+   "cibil_score",
+   "no_answer_streak",
+   "overdue_amount",
+   "intent_calls_3m",
+   "last_commit_status",
+   "recent_ptp_status",
+   "calls_3m",
+   "paid_ratio_3m"
+  ],
+  "interaction_trials": {
+   "latest_disposition x arrears_ratio": {
+    "gini": 0.5306,
+    "auc": 0.7653,
+    "ks": 39.72
+   },
+   "latest_disposition x dpd": {
+    "gini": 0.5318,
+    "auc": 0.7659,
+    "ks": 39.68
+   },
+   "latest_disposition x days_since_disposition": {
+    "gini": 0.5311,
+    "auc": 0.7656,
+    "ks": 39.45
+   }
+  },
+  "validation_gain_vs_exp1": {
+   "ks": 0.21,
+   "gini": 0.0005
+  }
+ },
+ {
+  "model": "EXP3 GAM + 1 interaction(s)",
+  "k": 10,
+  "interactions": [
+   "latest_disposition x arrears_ratio"
+  ],
+  "iterations": 384,
+  "train": {
+   "gini": 0.5057,
+   "auc": 0.7528,
+   "ks": 37.57
+  },
+  "valid": {
+   "gini": 0.5306,
+   "auc": 0.7653,
+   "ks": 39.72
+  },
+  "oot": {
+   "gini": 0.5095,
+   "auc": 0.7547,
+   "ks": 38.46,
+   "brier": 0.18025,
+   "cal_gap": -0.0152,
+   "breaks": 0,
+   "lift": 1.401,
+   "min_seg_gini": 0.345
+  },
+  "score_psi": 0.0108,
+  "iv_range": "0.023-0.519",
+  "max_vif": 4.303,
+  "max_csi": 0.0694,
+  "features": [
+   "arrears_ratio",
+   "latest_disposition",
+   "cibil_score",
+   "no_answer_streak",
+   "overdue_amount",
+   "intent_calls_3m",
+   "last_commit_status",
+   "recent_ptp_status",
+   "calls_3m",
+   "paid_ratio_3m"
+  ]
+ },
+ {
+  "model": "EXP4 GAM, VIF pool, additive",
+  "k": 43,
+  "interactions": [],
+  "iterations": 288,
+  "train": {
+   "gini": 0.5062,
+   "auc": 0.7531,
+   "ks": 37.41
+  },
+  "valid": {
+   "gini": 0.5289,
+   "auc": 0.7645,
+   "ks": 39.78
+  },
+  "oot": {
+   "gini": 0.5094,
+   "auc": 0.7547,
+   "ks": 38.64,
+   "brier": 0.1803,
+   "cal_gap": -0.0144,
+   "breaks": 0,
+   "lift": 1.398,
+   "min_seg_gini": 0.3484
+  },
+  "score_psi": 0.0105,
+  "iv_range": "0.023-0.519",
+  "max_vif": 4.303,
+  "max_csi": 0.4566,
+  "features": [
+   "cibil_score",
+   "months_on_book",
+   "overdue_amount",
+   "total_outstanding",
+   "arrears_ratio",
+   "paid_ratio_3m",
+   "days_since_last_payment",
+   "visits_3m",
+   "contact_rate_6m",
+   "ptp_kept_ratio",
+   "adverse_visit_ratio_6m",
+   "calls_3m",
+   "call_answer_rate_6m",
+   "no_answer_streak",
+   "intent_calls_3m",
+   "ptp_broken_6m",
+   "partial_payment_share_6m",
+   "last_payment_to_emi",
+   "is_hostile",
+   "pay_amount_cv_6m",
+   "intent_rate_6m",
+   "declined_rate_6m",
+   "mean_call_duration_6m",
+   "commit_kept_ratio_6m",
+   "commit_live_at_asof",
+   "intent_rate_30d",
+   "declined_rate_30d",
+   "calls_30d",
+   "days_since_positive_intent",
+   "days_since_negative_intent",
+   "days_since_commit_kept",
+   "mean_call_duration_30d",
+   "payment_count_30d",
+   "payment_gap_mean_12m",
+   "calls_3d",
+   "answered_3d",
+   "negative_disposition_rate_30d",
+   "fresh_positive_disposition",
+   "disposition_trend_90d",
+   "last_commit_status",
+   "recent_visit_outcome_30d",
+   "recent_ptp_status",
+   "disposition_recency_class"
+  ]
+ },
+ {
+  "model": "EXP4b GAM, VIF pool + 1 interaction(s)",
+  "k": 44,
+  "interactions": [
+   "latest_disposition x arrears_ratio"
+  ],
+  "iterations": 206,
+  "train": {
+   "gini": 0.508,
+   "auc": 0.754,
+   "ks": 37.69
+  },
+  "valid": {
+   "gini": 0.5297,
+   "auc": 0.7648,
+   "ks": 40.01
+  },
+  "oot": {
+   "gini": 0.5104,
+   "auc": 0.7552,
+   "ks": 38.8,
+   "brier": 0.18012,
+   "cal_gap": -0.0145,
+   "breaks": 0,
+   "lift": 1.399,
+   "min_seg_gini": 0.3464
+  },
+  "score_psi": 0.0111,
+  "iv_range": "0.023-0.519",
+  "max_vif": 4.303,
+  "max_csi": 0.4566,
+  "features": [
+   "cibil_score",
+   "months_on_book",
+   "overdue_amount",
+   "total_outstanding",
+   "arrears_ratio",
+   "paid_ratio_3m",
+   "days_since_last_payment",
+   "visits_3m",
+   "contact_rate_6m",
+   "ptp_kept_ratio",
+   "adverse_visit_ratio_6m",
+   "calls_3m",
+   "call_answer_rate_6m",
+   "no_answer_streak",
+   "intent_calls_3m",
+   "ptp_broken_6m",
+   "partial_payment_share_6m",
+   "last_payment_to_emi",
+   "is_hostile",
+   "pay_amount_cv_6m",
+   "intent_rate_6m",
+   "declined_rate_6m",
+   "mean_call_duration_6m",
+   "commit_kept_ratio_6m",
+   "commit_live_at_asof",
+   "intent_rate_30d",
+   "declined_rate_30d",
+   "calls_30d",
+   "days_since_positive_intent",
+   "days_since_negative_intent",
+   "days_since_commit_kept",
+   "mean_call_duration_30d",
+   "payment_count_30d",
+   "payment_gap_mean_12m",
+   "calls_3d",
+   "answered_3d",
+   "negative_disposition_rate_30d",
+   "fresh_positive_disposition",
+   "disposition_trend_90d",
+   "last_commit_status",
+   "recent_visit_outcome_30d",
+   "recent_ptp_status",
+   "disposition_recency_class",
+   "latest_disposition"
+  ]
+ },
+ {
+  "model": "EXP5 GAM, validation-selected (15 features)",
+  "k": 15,
+  "interactions": [
+   "latest_disposition x arrears_ratio"
+  ],
+  "iterations": 438,
+  "train": {
+   "gini": 0.5115,
+   "auc": 0.7558,
+   "ks": 37.92
+  },
+  "valid": {
+   "gini": 0.5348,
+   "auc": 0.7674,
+   "ks": 40.66
+  },
+  "oot": {
+   "gini": 0.5118,
+   "auc": 0.7559,
+   "ks": 38.84,
+   "brier": 0.17984,
+   "cal_gap": -0.0144,
+   "breaks": 0,
+   "lift": 1.404,
+   "min_seg_gini": 0.3513
+  },
+  "score_psi": 0.0106,
+  "iv_range": "0.007-0.519",
+  "max_vif": 4.303,
+  "max_csi": 0.0694,
+  "features": [
+   "arrears_ratio",
+   "latest_disposition",
+   "cibil_score",
+   "no_answer_streak",
+   "overdue_amount",
+   "intent_calls_3m",
+   "last_commit_status",
+   "recent_ptp_status",
+   "calls_3m",
+   "paid_ratio_3m",
+   "ptp_amount_to_emi",
+   "employment_type",
+   "days_since_last_contact",
+   "disposition_recency_class",
+   "interest_rate"
+  ],
+  "single_add_gains": [
+   [
+    "ptp_amount_to_emi",
+    0.47
+   ],
+   [
+    "days_since_last_payment",
+    0.24
+   ],
+   [
+    "employment_type",
+    0.19
+   ],
+   [
+    "days_since_last_contact",
+    0.17
+   ],
+   [
+    "days_since_commit_kept",
+    0.15
+   ],
+   [
+    "disposition_recency_class",
+    0.15
+   ],
+   [
+    "disposition_7d",
+    0.15
+   ],
+   [
+    "disposition_count_30d",
+    0.14
+   ],
+   [
+    "interest_rate",
+    0.13
+   ],
+   [
+    "contact_rate_6m",
+    0.11
+   ],
+   [
+    "days_since_hardship",
+    0.09
+   ],
+   [
+    "intent_rate_30d",
+    0.08
+   ],
+   [
+    "positive_disposition_rate_30d",
+    0.07
+   ],
+   [
+    "dpd_bucket",
+    0.07
+   ],
+   [
+    "last_payment_to_emi",
+    0.07
+   ],
+   [
+    "disposition_3d",
+    0.07
+   ],
+   [
+    "payment_count_30d",
+    0.07
+   ],
+   [
+    "hardship_visits_6m",
+    0.06
+   ],
+   [
+    "paid_ratio_1m",
+    0.06
+   ],
+   [
+    "commitments_90d",
+    0.05
+   ]
+  ]
+ },
+ {
+  "model": "GBM benchmark, 10 features",
+  "k": 10,
+  "interactions": [],
+  "iterations": 114,
+  "train": {
+   "gini": 0.522,
+   "auc": 0.761,
+   "ks": 38.55
+  },
+  "valid": {
+   "gini": 0.5338,
+   "auc": 0.7669,
+   "ks": 39.93
+  },
+  "oot": {
+   "gini": 0.5125,
+   "auc": 0.7563,
+   "ks": 38.39,
+   "brier": 0.17931,
+   "cal_gap": -0.0144,
+   "breaks": 0,
+   "lift": 1.402,
+   "min_seg_gini": 0.346
+  },
+  "score_psi": 0.0086,
+  "iv_range": "0.023-0.519",
+  "max_vif": 4.303,
+  "max_csi": 0.0694,
+  "features": [
+   "arrears_ratio",
+   "latest_disposition",
+   "cibil_score",
+   "no_answer_streak",
+   "overdue_amount",
+   "intent_calls_3m",
+   "last_commit_status",
+   "recent_ptp_status",
+   "calls_3m",
+   "paid_ratio_3m"
+  ]
+ },
+ {
+  "model": "GBM benchmark, VIF pool",
+  "k": 43,
+  "interactions": [],
+  "iterations": 174,
+  "train": {
+   "gini": 0.545,
+   "auc": 0.7725,
+   "ks": 40.23
+  },
+  "valid": {
+   "gini": 0.5366,
+   "auc": 0.7683,
+   "ks": 40.18
+  },
+  "oot": {
+   "gini": 0.518,
+   "auc": 0.759,
+   "ks": 39.01,
+   "brier": 0.17861,
+   "cal_gap": -0.0147,
+   "breaks": 0,
+   "lift": 1.403,
+   "min_seg_gini": 0.3608
+  },
+  "score_psi": 0.0079,
+  "iv_range": "0.023-0.519",
+  "max_vif": 4.303,
+  "max_csi": 0.4566,
+  "features": [
+   "cibil_score",
+   "months_on_book",
+   "overdue_amount",
+   "total_outstanding",
+   "arrears_ratio",
+   "paid_ratio_3m",
+   "days_since_last_payment",
+   "visits_3m",
+   "contact_rate_6m",
+   "ptp_kept_ratio",
+   "adverse_visit_ratio_6m",
+   "calls_3m",
+   "call_answer_rate_6m",
+   "no_answer_streak",
+   "intent_calls_3m",
+   "ptp_broken_6m",
+   "partial_payment_share_6m",
+   "last_payment_to_emi",
+   "is_hostile",
+   "pay_amount_cv_6m",
+   "intent_rate_6m",
+   "declined_rate_6m",
+   "mean_call_duration_6m",
+   "commit_kept_ratio_6m",
+   "commit_live_at_asof",
+   "intent_rate_30d",
+   "declined_rate_30d",
+   "calls_30d",
+   "days_since_positive_intent",
+   "days_since_negative_intent",
+   "days_since_commit_kept",
+   "mean_call_duration_30d",
+   "payment_count_30d",
+   "payment_gap_mean_12m",
+   "calls_3d",
+   "answered_3d",
+   "negative_disposition_rate_30d",
+   "fresh_positive_disposition",
+   "disposition_trend_90d",
+   "last_commit_status",
+   "recent_visit_outcome_30d",
+   "recent_ptp_status",
+   "disposition_recency_class"
+  ]
+ },
+ {
+  "model": "GBM benchmark, all candidates",
+  "k": 115,
+  "interactions": [],
+  "iterations": 154,
+  "train": {
+   "gini": 0.5568,
+   "auc": 0.7784,
+   "ks": 41.24
+  },
+  "valid": {
+   "gini": 0.5405,
+   "auc": 0.7703,
+   "ks": 40.85
+  },
+  "oot": {
+   "gini": 0.5246,
+   "auc": 0.7623,
+   "ks": 39.28,
+   "brier": 0.17753,
+   "cal_gap": -0.0176,
+   "breaks": 0,
+   "lift": 1.403,
+   "min_seg_gini": 0.3752
+  },
+  "score_psi": 0.0066,
+  "iv_range": "0.000-0.519",
+  "max_vif": 4.303,
+  "max_csi": 0.4566,
+  "features": [
+   "cibil_score",
+   "loan_type",
+   "sanction_amount",
+   "emi_amount",
+   "tenure_months",
+   "interest_rate",
+   "months_on_book",
+   "branch_code",
+   "dpd",
+   "dpd_bucket",
+   "outstanding_principal",
+   "overdue_amount",
+   "penal_charges",
+   "total_outstanding",
+   "arrears_ratio",
+   "penal_ratio",
+   "outstanding_to_sanction",
+   "paid_ratio_3m",
+   "paid_ratio_6m",
+   "paid_ratio_12m",
+   "days_since_last_payment",
+   "payments_6m",
+   "partial_payment_share_6m",
+   "payment_gap_cv_12m",
+   "last_payment_to_emi",
+   "paid_ratio_1m",
+   "pay_amount_cv_6m",
+   "payment_count_30d",
+   "partial_rate_90d",
+   "payment_amount_trend",
+   "payment_gap_mean_12m",
+   "visits_3m",
+   "visits_6m",
+   "contact_rate_6m",
+   "distinct_agents_6m",
+   "days_since_last_contact",
+   "rtp_visits_6m",
+   "dispute_visits_6m",
+   "adverse_visit_ratio_6m",
+   "hardship_visits_6m",
+   "last_visit_outcome",
+   "visits_30d",
+   "met_visits_30d",
+   "recent_visit_outcome_30d",
+   "hardship_flag_90d",
+   "days_since_hardship",
+   "ptp_set_6m",
+   "ptp_kept_6m",
+   "ptp_kept_ratio",
+   "ptp_broken_6m",
+   "ptp_rescheduled_6m",
+   "ptp_amount_to_emi",
+   "recent_ptp_status",
+   "ptp_conversion_90d",
+   "calls_3m",
+   "call_answer_rate_6m",
+   "no_answer_streak",
+   "days_since_last_answered_call",
+   "intent_calls_3m",
+   "last_call_intent",
+   "call_answer_rate_3m",
+   "intent_rate_6m",
+   "days_since_last_call",
+   "declined_rate_6m",
+   "declined_rate_90d",
+   "declined_rate_30d",
+   "intent_rate_30d",
+   "intent_rate_90d",
+   "days_since_positive_intent",
+   "days_since_negative_intent",
+   "answered_rate_30d",
+   "calls_30d",
+   "answered_calls_30d",
+   "mean_call_duration_6m",
+   "mean_call_duration_30d",
+   "last_call_duration",
+   "calls_3d",
+   "answered_3d",
+   "declined_3d",
+   "intent_3d",
+   "duration_3d",
+   "reached_3d",
+   "commitments_6m",
+   "commit_broken_6m",
+   "commit_kept_ratio_6m",
+   "commitments_90d",
+   "commit_broken_90d",
+   "commit_kept_ratio_90d",
+   "commit_kept_90d",
+   "commit_live_at_asof",
+   "days_since_commit_kept",
+   "days_since_commit_broken",
+   "last_commit_status",
+   "latest_disposition",
+   "latest_disposition_score",
+   "days_since_disposition",
+   "disposition_3d",
+   "disposition_7d",
+   "disposition_30d",
+   "fresh_positive_disposition",
+   "fresh_negative_disposition",
+   "positive_disposition_rate_30d",
+   "negative_disposition_rate_30d",
+   "disposition_count_30d",
+   "disposition_trend_90d",
+   "disposition_recency_class",
+   "disposition_score_decayed",
+   "days_since_last_successful_contact",
+   "paid_momentum",
+   "payment_momentum_30_vs_90",
+   "is_hostile",
+   "fraud_flag",
+   "age",
+   "city",
+   "employment_type"
+  ]
+ }
+]

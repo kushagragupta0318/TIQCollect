@@ -1,0 +1,11 @@
+feature,declared_sign,range_logits,monotone_as_declared
+arrears_ratio,1,0.8098,True
+cibil_score,-1,0.8464,True
+no_answer_streak,1,0.1337,True
+overdue_amount,1,1.2326,True
+intent_calls_3m,-1,0.564,True
+calls_3m,0,0.9302,True
+paid_ratio_3m,-1,0.4566,True
+ptp_amount_to_emi,-1,0.6497,True
+days_since_last_contact,0,0.3448,True
+interest_rate,1,0.0988,True

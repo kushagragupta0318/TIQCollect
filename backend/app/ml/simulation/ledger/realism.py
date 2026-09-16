@@ -29,7 +29,7 @@ import numpy as np
 import pandas as pd
 
 from app.ml.simulation.ledger.config import BANDS, LedgerConfig
-from app.ml.simulation.ledger.simulator import Ledger
+from app.ml.simulation.ledger.simulator import HARDSHIP_REASONS, Ledger
 
 BUCKET_ORDER = {"CURRENT": 0, "BUCKET_1": 1, "BUCKET_2": 2, "BUCKET_3": 3, "NPA": 4}
 
@@ -112,13 +112,84 @@ def payment_shape(ledger: Ledger) -> dict:
 def promise_and_contact(ledger: Ledger) -> dict:
     ptps, visits = ledger.ptps, ledger.visits
     resolved = ptps[ptps.resolved_status.notna()] if len(ptps) else ptps
+    calls = getattr(ledger, "calls", pd.DataFrame())
+    flags = getattr(ledger, "flags", pd.DataFrame())
+    met = visits[visits.met] if len(visits) else visits
     return {
         "ptp_kept_rate": (float((resolved.resolved_status == "HONORED").mean())
                           if len(resolved) else None),
         "n_ptps_resolved": int(len(resolved)),
         "rpc_rate": float(visits.met.mean()) if len(visits) else None,
         "n_visits": int(len(visits)),
+        # 2026-09-15 — the v2 channels.
+        "call_answer_rate": float(calls.answered.mean()) if len(calls) else None,
+        "n_calls": int(len(calls)),
+        "rtp_share_of_met_visits": (
+            float((met.outcome == "RTP").mean())
+            if len(met) and "outcome" in met.columns else None),
+        "hostile_share": (float(flags.loan_id.nunique() / max(len(ledger.loans), 1))
+                          if len(flags) else 0.0),
+        "intent_share_of_answered_calls": (
+            float(calls[calls.answered].payment_intent.eq(True).mean())
+            if len(calls) and "payment_intent" in calls.columns
+            and calls.answered.any() else None),
+        "hardship_share_of_met_visits": (
+            float(met.default_reason.isin(HARDSHIP_REASONS).mean())
+            if len(met) and "default_reason" in met.columns else None),
+        # 2026-09-15 (later) — the willingness-observability channels. None
+        # where the channel is off, and `realism_report` skips a None.
+        **_willingness_channels(ledger, calls),
     }
+
+
+def _willingness_channels(ledger: Ledger, calls: pd.DataFrame) -> dict:
+    out = {"declined_share_of_reached": None, "commitment_share_of_answered": None,
+           "commitment_kept_rate": None, "median_call_duration_s": None,
+           "disposition_positive_share": None, "disposition_refuse_share": None}
+    cfg0 = ledger.config or {}
+    if cfg0.get("observe_disposition") and "disposition" in calls.columns:
+        d = calls.disposition.dropna()
+        if len(ledger.visits) and "disposition" in ledger.visits.columns:
+            d = pd.concat([d, ledger.visits.disposition.dropna()])
+        if len(d):
+            out["disposition_positive_share"] = float(d.isin(["WILL_PAY", "MAY_PAY"]).mean())
+            out["disposition_refuse_share"] = float(d.isin(["REFUSES", "DISPUTE"]).mean())
+    if not len(calls) or "outcome" not in calls.columns:
+        return out
+    cfg = ledger.config or {}
+    declined = calls.outcome == "DECLINED"
+    if cfg.get("observe_declines"):
+        reached = calls.answered | declined
+        out["declined_share_of_reached"] = (float(declined[reached].mean())
+                                            if reached.any() else None)
+    if cfg.get("observe_call_duration") and "duration_seconds" in calls.columns:
+        d = pd.to_numeric(calls.duration_seconds, errors="coerce").dropna()
+        out["median_call_duration_s"] = float(d.median()) if len(d) else None
+    if cfg.get("observe_verbal_commitments") and "verbal_due_day" in calls.columns:
+        ans = calls[calls.answered]
+        made = ans[ans.verbal_due_day >= 0]
+        out["commitment_share_of_answered"] = (float(len(made) / len(ans))
+                                               if len(ans) else None)
+        grace = int(cfg.get("commitment_grace_days", 2))
+        ratio = float(cfg.get("commitment_kept_ratio", 0.5))
+        pays = ledger.payments
+        emi = ledger.loans.set_index("loan_id").emi_amount
+        last_day = int(calls.day.max())
+        kept = n = 0
+        ok = pays[pays.final_status == "VERIFIED"] if len(pays) else pays
+        by_loan = {k: g for k, g in ok.groupby("loan_id")} if len(ok) else {}
+        for r in made.itertuples():
+            if r.verbal_due_day + grace >= last_day:
+                continue                      # unresolved at the end of the book
+            n += 1
+            g = by_loan.get(r.loan_id)
+            if g is None:
+                continue
+            paid = g[(g.payment_day >= r.day) &
+                     (g.payment_day <= r.verbal_due_day + grace)].amount.sum()
+            kept += paid >= ratio * float(emi.get(r.loan_id, 0.0))
+        out["commitment_kept_rate"] = (kept / n) if n else None
+    return out
 
 
 # ── the report ──────────────────────────────────────────────────────────────
@@ -146,6 +217,18 @@ def realism_report(ledger: Ledger, panel: pd.DataFrame,
         _result("partial_share", shape["partial_share"]),
         _result("ptp_kept_rate", pc["ptp_kept_rate"]),
         _result("rpc_rate", pc["rpc_rate"]),
+        _result("call_answer_rate", pc["call_answer_rate"]),
+        _result("rtp_share_of_met_visits", pc["rtp_share_of_met_visits"]),
+        _result("intent_share_of_answered_calls", pc["intent_share_of_answered_calls"]),
+        _result("hardship_share_of_met_visits", pc["hardship_share_of_met_visits"]),
+        _result("hostile_share", pc["hostile_share"], gated=False),
+        *[_result(k, pc[k]) for k in ("declined_share_of_reached",
+                                      "commitment_share_of_answered",
+                                      "commitment_kept_rate",
+                                      "median_call_duration_s",
+                                      "disposition_positive_share",
+                                      "disposition_refuse_share")
+          if pc.get(k) is not None],
         _result("material_payment_rate", material),
     ]
     gated = [c for c in checks if c["status"] != "REPORTED"]
@@ -165,6 +248,7 @@ def realism_report(ledger: Ledger, panel: pd.DataFrame,
             "bucket_mix": panel.dpd_bucket.value_counts(normalize=True).round(4).to_dict(),
             "n_payments": shape["n_payments"],
             "n_visits": pc["n_visits"],
+            "n_calls": pc["n_calls"],
             "n_ptps_resolved": pc["n_ptps_resolved"],
             "loans_written_off": int((ledger.lifecycle.event == "WRITTEN_OFF").sum()),
             "loans_settled": int((ledger.lifecycle.event == "SETTLED").sum()),

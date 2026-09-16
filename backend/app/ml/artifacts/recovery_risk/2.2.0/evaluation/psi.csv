@@ -1,0 +1,16 @@
+feature,psi,verdict,in_model
+disposition_recency_class,0.07,stable,True
+latest_disposition,0.0694,stable,True
+last_commit_status,0.066,stable,True
+recent_ptp_status,0.064,stable,True
+calls_3m,0.062,stable,True
+intent_calls_3m,0.0337,stable,True
+paid_ratio_3m,0.027,stable,True
+days_since_last_contact,0.0216,stable,True
+cibil_score,0.0108,stable,True
+ptp_amount_to_emi,0.0048,stable,True
+overdue_amount,0.0029,stable,True
+interest_rate,0.0025,stable,True
+arrears_ratio,0.0024,stable,True
+no_answer_streak,0.0008,stable,True
+employment_type,0.0001,stable,True

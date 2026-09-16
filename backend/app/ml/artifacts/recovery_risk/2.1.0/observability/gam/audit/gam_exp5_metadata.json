@@ -1,0 +1,222 @@
+{
+ "model": "recovery_risk",
+ "variant": "research-gam-exp5",
+ "NOT_PROMOTED": true,
+ "note": "Reference model for the 2026-09-16 production-readiness audit. NOT a registry version: it is not under a <version>/ directory, champion.txt is untouched, and the production DecisionEngine cannot load it (see section 3).",
+ "model_type": "generalised additive model \u2014 gradient-boosted shape functions (sklearn HistGradientBoostingClassifier with interaction_cst restricted to singletons plus the declared pairs, so logit = b0 + sum_j f_j(x_j) + sum_pairs h(x_a,x_b))",
+ "features": [
+  "arrears_ratio",
+  "latest_disposition",
+  "cibil_score",
+  "no_answer_streak",
+  "overdue_amount",
+  "intent_calls_3m",
+  "last_commit_status",
+  "recent_ptp_status",
+  "calls_3m",
+  "paid_ratio_3m",
+  "ptp_amount_to_emi",
+  "employment_type",
+  "days_since_last_contact",
+  "disposition_recency_class",
+  "interest_rate"
+ ],
+ "n_features": 15,
+ "categorical_features": [
+  "disposition_recency_class",
+  "employment_type",
+  "last_commit_status",
+  "latest_disposition",
+  "recent_ptp_status"
+ ],
+ "interactions_declared": [
+  "latest_disposition x arrears_ratio"
+ ],
+ "interactions": [
+  "latest_disposition x last_commit_status"
+ ],
+ "interaction_defect": "the fit passed interaction_cst in the caller's column order; sklearn applies it in its remapped order (categoricals first), so the pair actually allowed is the one in 'interactions', not 'interactions_declared'. Additivity is unaffected. See scripts/research/recovery_risk_obs/gam_common.py",
+ "monotonic_cst": {
+  "arrears_ratio": 1,
+  "latest_disposition": 0,
+  "cibil_score": -1,
+  "no_answer_streak": 1,
+  "overdue_amount": 1,
+  "intent_calls_3m": -1,
+  "last_commit_status": 0,
+  "recent_ptp_status": 0,
+  "calls_3m": 0,
+  "paid_ratio_3m": -1,
+  "ptp_amount_to_emi": -1,
+  "employment_type": 0,
+  "days_since_last_contact": 0,
+  "disposition_recency_class": 0,
+  "interest_rate": 1
+ },
+ "expected_sign_source": "ModelSpec.RECOVERY_RISK_V21.expected_sign",
+ "hyperparameters": {
+  "learning_rate": 0.05,
+  "max_leaf_nodes": 4,
+  "max_depth": 2,
+  "min_samples_leaf": 300,
+  "l2_regularization": 1.0,
+  "max_bins": 32,
+  "random_state": 0,
+  "early_stopping": false,
+  "max_iter": 438
+ },
+ "interaction_cst": [
+  [
+   0
+  ],
+  [
+   1
+  ],
+  [
+   2
+  ],
+  [
+   3
+  ],
+  [
+   4
+  ],
+  [
+   5
+  ],
+  [
+   6
+  ],
+  [
+   7
+  ],
+  [
+   8
+  ],
+  [
+   9
+  ],
+  [
+   10
+  ],
+  [
+   11
+  ],
+  [
+   12
+  ],
+  [
+   13
+  ],
+  [
+   14
+  ],
+  [
+   0,
+   1
+  ]
+ ],
+ "random_seed": 0,
+ "iterations_chosen_on": "validation KS (months 14-17)",
+ "categorical_levels": {
+  "latest_disposition": [
+   "DISPUTE",
+   "HARDSHIP",
+   "MAY_PAY",
+   "NONE",
+   "NO_COMMITMENT",
+   "REFUSES",
+   "WILL_PAY"
+  ],
+  "last_commit_status": [
+   "BROKEN",
+   "KEPT",
+   "NONE",
+   "OPEN"
+  ],
+  "recent_ptp_status": [
+   "BROKEN",
+   "HONORED",
+   "NONE",
+   "OPEN",
+   "RESCHEDULED"
+  ],
+  "employment_type": [
+   "BUSINESS_OWNER",
+   "SALARIED",
+   "SELF_EMPLOYED"
+  ],
+  "disposition_recency_class": [
+   "DISPUTE_FRESH",
+   "DISPUTE_STALE",
+   "HARDSHIP_FRESH",
+   "HARDSHIP_STALE",
+   "MAY_PAY_FRESH",
+   "MAY_PAY_STALE",
+   "NONE",
+   "NO_COMMITMENT_FRESH",
+   "NO_COMMITMENT_STALE",
+   "REFUSES_FRESH",
+   "REFUSES_STALE",
+   "WILL_PAY_FRESH",
+   "WILL_PAY_STALE"
+  ]
+ },
+ "unknown_category_behaviour": "pd.Categorical(...).codes yields -1; the model treats -1 as its own bin (it was never seen in training, so it follows the left-most split path deterministically) \u2014 see check 2.5",
+ "missing_value_handling": "native: each shape function learns a side for NaN at fit time; no imputation anywhere in the pipeline",
+ "preprocessing": "none beyond the categorical code map above \u2014 no scaling, no WOE, no binning outside the model's own 32 histogram knots",
+ "target": {
+  "definition": "y = 1 if VERIFIED payments in (as_of, as_of+30d] < 0.8 * min(overdue_amount, emi_amount)",
+  "source": "app/ml/pipeline/outcomes.py / ledger panel.py, MATERIAL_RATIO=0.8, HORIZON_DAYS=30",
+  "outcome_definition_version": "recovery-outcome-1.0.0"
+ },
+ "periods": {
+  "world": "wd10",
+  "split_col": "month_index",
+  "train": [
+   0,
+   13
+  ],
+  "valid": [
+   14,
+   17
+  ],
+  "oot": [
+   18,
+   23
+  ],
+  "n_train": 54144,
+  "n_valid": 14945,
+  "n_oot": 23780,
+  "oot_bad_rate": 0.6788
+ },
+ "dataset": {
+  "path": "data/ledger/obs_wd10",
+  "intercept": -4.23438,
+  "realism_passed": true,
+  "config_fingerprint_fields": {
+   "n_borrowers": 5000,
+   "months": 24,
+   "seed": 42,
+   "signal_scale": 1.0,
+   "observation_noise": 1.0,
+   "latent_rho": 0.985,
+   "disposition_read_noise": 0.1,
+   "pre_scoring_call_days": 3,
+   "pre_scoring_call_attempts": 3
+  }
+ },
+ "metrics_oot": {
+  "gini": 0.5118,
+  "auc": 0.7559,
+  "ks": 38.84,
+  "brier": 0.17984
+ },
+ "library_versions": {
+  "sklearn": "1.6.0",
+  "numpy": "2.2.0",
+  "pandas": "2.2.3"
+ },
+ "artifact_sha256": "f139ae6d50e6323259563128af8a69f4e9db4b428d4c5e70375bbfee43c6a5bf",
+ "training_data_hash": "3baab19d5844ee9e"
+}

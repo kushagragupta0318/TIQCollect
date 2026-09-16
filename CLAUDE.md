@@ -708,7 +708,359 @@ only a 20.5% relative Gini drop, against a 20% trigger.** The monitor fires, but
 this scenario sits close to its detection boundary — real decay milder than this
 would pass unremarked until it compounded.
 
-17 tests in `tests/test_ledger_phase4_lifecycle.py`. **Phase 5 not started.**
+17 tests in `tests/test_ledger_phase4_lifecycle.py`. *(This ended "**Phase 5 not started.**" until 2026-09-15; the next section is Phase 5.)*
+
+### Phase 5 — the observable world, and the fresh 2.1.0 development (2026-09-15)
+
+**Nothing is promoted. `champion.txt` still reads 1.1.0.** Two candidate specs
+now sit beside it in `config.CANDIDATE_SPECS`, both trained with
+`make_champion=False`, both compared against the deployed model on identical
+out-of-time rows through the production scoring path.
+
+**The world gained the channels the product already stores.** The ledger
+simulator now emits visit outcomes (RTP / DISPUTE / PTP / REVISIT / not-met
+reasons), one row per call attempt with answered / not and
+`payment_intent_signalled`, promise endings (BROKEN / RESCHEDULED) with a size
+that follows capacity, a hostility-flag *event*, and a payment ledger whose
+shape (full / partial / token, timing regularity) follows the latents. Every
+one of these is a column the live schema has had since before the ML work
+(`Visit.outcome`, `Visit.default_reason`, `CallLog`, `PTP.committed_amount`,
+`Customer.is_hostile`); the adapter reads them point-in-time and the Phase 3
+harness holds it to the panel on all of them (78 tests, 59 candidates).
+`signal_scale`, `observation_noise`, the target, the split and every gate are
+unchanged. Realism now runs 17 checks; the six new bands are ASSUMPTION.
+
+```
+python -m scripts.build_ledger_dataset --tier full
+python -m scripts.train_recovery_risk_v2 --tier full                       # 2.0.0
+python -m scripts.train_recovery_risk_v2 --tier full --version 2.1.0 --also-compare 2.0.0
+```
+
+**2.0.0** widened the candidate set to 53 and let the pipeline choose: 9
+features, OOT Gini 0.4669 / KS 34.60. **2.1.0** is the fresh development the
+business asked for against a stated target of **Gini 0.50–0.55, KS 39–42, ≥7
+features**: a discovery pass over ~100 point-in-time candidates derived
+straight from the event tables (`scripts/research/recovery_risk_v21/`, outputs
+under the artifact's `discovery/`), per-family ablation, four model families,
+and the six candidates the forward selection reached carried into `panel.py`
+and `ml_scoring_service.py`. Identical 24,161 OOT rows:
+
+```
+                    1.1.0 (deployed)   2.0.0      2.1.0
+features                   4              9          9
+Gini                    0.4066         0.4669     0.4698  [CI 0.456-0.481]
+KS                       29.93          34.60      35.22
+Brier                   0.1899         0.1804     0.1800
+calibration gap        +0.0475        -0.0126    -0.0123
+vs 2.1.0            challenger_better  equivalent_keep_incumbent
+```
+
+2.1.0 selects `arrears_ratio, cibil_score, paid_ratio_3m, overdue_amount,
+last_visit_outcome, intent_rate_6m, call_answer_rate_3m, pay_amount_cv_6m,
+visits_3m`; VIF ≤ 4.1, every feature CSI ≤ 0.04, score PSI 0.009, zero
+rank-order breaks, better than 1.1.0 in every DPD bucket and every OOT month,
+scorecard kept over the GBM challenger (+0.003, under the 0.05 margin). All
+13 spec gates PASS, checks 7–10 PASS, no-degrade PASS.
+
+**The business target is NOT reached, and the reason is measured rather than
+argued.** `app/ml/artifacts/recovery_risk/2.1.0/FRESH_DEVELOPMENT_REPORT.md`
+is the full 22-point report with the checklist. The short form:
+
+```
+2.1.0 scorecard (9)                         0.4698 / 35.2
+GBM over all ~100 observable candidates     0.4920 / 36.3   <- observable ceiling
+observables + true WILLINGNESS              0.5506 / 42.1   <- the target, on its own
+observables + true capacity                 0.5031 / 37.3
+observables + true reachability             0.4992 / 37.0
+observables + true shock state              0.4933 / 36.6
+joint oracle                                0.5777 / 43.6
+```
+
+The 0.03 Gini / 3.8 KS between the best legitimate model and the target floor
+is not a model-family gap (no family clears the ceiling) and not a feature
+gap (every willingness-bearing column the product has is already an event
+channel and a candidate). It is one unobserved quantity: the borrower's
+*current* disposition to pay, which the record sees only through sparse,
+noisy readings — a refusal at the door, a stated intent on an answered call, a
+promise kept or broken. The columns still unsimulated (`business_running`,
+`not_met_reason`, `person_met`, call duration, `verbal_payment_date`,
+`PTP.actual_paid_amount`) read the two latents worth < 0.02 together, or
+would be another willingness reading whose strength would be an assumption
+chosen after seeing the table. That is the DGP change the brief forbids, and
+it was not made. `test_v21_records_where_it_stands_against_the_business_target`
+pins the miss executably so a future run that closes it flips one test
+instead of rewriting prose.
+
+**Three things found on the way, each fixed in the pipeline rather than the
+model:**
+
+- **`expected_sign` was declared and enforced nowhere.** The binner now forces
+  the WOE trend from the spec's sign (`WOEBinner.trends_from_signs`), so a
+  feature whose data direction contradicts its business direction comes out
+  with no information rather than entering backwards. Found when
+  `payment_gap_cv_12m` entered 2.0.0 with the wrong sign.
+- **Abstaining features were counted against the coverage floor.** A ratio
+  that is honestly NaN (no calls, no promises) declined 3,202 OOT rows on the
+  first 2.0.0 run. `ModelSpec.abstaining_features` names them; the engine
+  treats present-but-null on one as the Missing bin, and the adapter now emits
+  every `LOGGED_FEATURES` key so absent and null stay distinguishable.
+- **PSI returned NaN on a categorical and `psi_frame` called that
+  "shifted".** `last_visit_outcome` is the first categorical a recovery model
+  selected; `evaluate.psi` now computes it over category shares, with unseen
+  categories pooled as drift (measured 0.041 on the artifact).
+
+And two features whose direction the business would not guess are declared
+with **sign 0** and documented in `config.RECOVERY_RISK_V21`: `visits_3m` and
+`days_since_last_call` read "contacted recently → *more* risk", because
+attempts follow delinquency — collections policy in the record, real, and the
+kind of feature that flips if the policy does. `days_since_last_contact` of
+that same shape entered the SFS at step 10 and was **removed by the sign
+check** (coefficient +0.77). Recorded in `evaluation/sign_dropped.csv`.
+
+Tests: 23 in `tests/test_recovery_risk_v21_pit.py` (each new feature at
+t−1 / t / t+1, window edges, reversal timing, outcome-window immunity,
+determinism), 17 in `tests/test_recovery_risk_v21.py` (spec, artifact bands,
+the three-way comparison, stability, not-promoted), 19 in
+`tests/test_recovery_risk_v2.py`, and the Phase 3 harness widened to 78.
+Full suite **1,213 passed** on 2026-09-15.
+
+### The observability ladder — can the WORLD be made to show more? (2026-09-15, later)
+
+Asked next: keep the evaluation contract frozen (target, split, seed,
+`signal_scale`, `observation_noise`, latent persistence, metrics) and make the
+ledger produce better *legitimate* observable evidence so an interpretable
+model reaches Gini >= 0.50 / KS >= 39. Full report with every number:
+`app/ml/artifacts/recovery_risk/2.1.0/observability/OBSERVABILITY_REPORT.md`;
+scripts in `scripts/research/recovery_risk_obs/`.
+
+**Built, config-gated, off by default, flags-off bit-identical** (pinned by
+`tests/test_ledger_observability.py`): three `CallLog` channels the ledger never
+emitted — `DECLINED` drawn from low willingness, `duration_seconds`, and
+`verbal_payment_date` whose kept/broken is DERIVED from the payment ledger
+(never stored; a live commitment gets +0.60 on the hazard, half the doorstep
+PTP's +1.20 — the one outcome-process addition, argued from the mechanism the
+hazard already has and set once); a pre-scoring tele-calling sweep
+(`pre_scoring_call_days`/`_attempts`); four realism bands, one corrected
+visibly after measuring (`commitment_kept_rate`, copied from the PTP band
+and wrong for a 2-10 day phone promise). Panel features for channel
+aggregates, 30d/90d recency, payment shape and a 3-day reading — in no
+production spec and NOT in the adapter, because no experiment earned it.
+
+```
+                                    Gini     KS    ceiling(GBM)  +true w   oracle
+EXP0  2.1.0, current world         0.4698  35.22   0.492/36.3    0.551    0.578
+EXP1  + willingness channels       0.4652  34.82   0.481/35.9    0.544    0.571
+EXP2  + call coverage x1.45        0.4462  33.08   0.474/35.2    0.527    0.554
+EXP3/4  + recency, + payment       0.4446  32.99   (same world)
+EXP5  + pre-scoring sweep, 1 try   0.4783  35.38   0.496/36.6    0.550    0.575
+EXP6  sweep, 3 tries  (best)       0.4860  36.41   0.509/38.0    0.551    0.579
+what-ifs (forbidden, measured): channel noise x0.6 0.461 | rho 0.992 0.454 | obs noise 0.85 0.466
+```
+
+**Neither target reached; four things learned, each measured:** (1) the new
+channels carry information (duration IV 0.12) and add no discrimination —
+they read the same willingness at the same staleness; (2) **more contact makes
+the world LESS predictable** — the joint oracle itself fell 0.571 -> 0.554,
+because an answered call prompts payment for a week and calls inside the
+outcome window are random with respect to as_of; (3) recency and payment-shape
+features add nothing; (4) **freshness is the lever**: one willingness reading
+taken AT as_of, at read sd 0.30 (reliability 0.4), lifts the ceiling to
+0.500; at sd 0.10 to 0.531 / KS 39.5 — the observables already recover
+willingness to residual sd 0.18 from *stale* events. The sweep is the one
+process change that helped (+0.02), by delivering such readings to 39-76% of
+the pool, at double the call volume and a material-payment rate of 0.34.
+
+**Smallest legitimate change that could close it:** a structured borrower
+disposition recorded on every pre-scoring contact (a field the schema does
+not have), reaching >= 75% of the pool at reliability ~0.85. Not the noise,
+not the persistence, not the weights — those what-ifs, at moderate size, do
+not get there either. `champion.txt` still reads 1.1.0.
+
+**Then built and measured (the disposition ladder, same day).**
+`observe_disposition` + `disposition_read_noise` in `LedgerConfig`: on every
+answered call and met visit the contact records WILL_PAY / MAY_PAY /
+NO_COMMITMENT / REFUSES / HARDSHIP / DISPUTE — an ordinal read of current
+willingness through noise, with the existing hardship and dispute rates as
+overrides; the sweep now retries until reached (`pre_scoring_until_reached`,
+75% reached, 66% read within 3 days, 82% within 30). Off by default, off
+draws nothing, 9 more tests. Report:
+`app/ml/artifacts/recovery_risk/2.1.0/observability/DISPOSITION_REPORT.md`.
+
+```
+read noise   class agreement   FP/FN      scorecard Gini [CI]        KS     ceiling
+   none (sweep only)                       0.4771 [0.464-0.490]     35.9   0.502/37.8
+   0.30          46%          .29/.26      0.4862 [0.473-0.500]     36.4   0.512/38.2
+   0.20          53%          .23/.20      0.4920 [0.478-0.506]     37.0   0.517/38.7
+   0.10          68%          .14/.12      0.5007 [0.487-0.515]     38.0   0.525/39.3
+```
+
+The reading is the strongest behavioural feature the book has produced (IV
+0.31, +0.078 validation Gini on entry, second into every selection) and it
+adds NOTHING beyond the latent it reads (0.0000-0.0002 Gini given true
+willingness — the leakage check that matters). **Gini >= 0.50 only at read
+noise 0.10, marginally; KS >= 39 at no level** — the ceiling itself touches
+39 only at 0.10. What remains is coverage (a third of the pool unreachable
+in the window), the categorical form (a WOE card cannot weight a reading by
+its age; the GBM that can sits +0.008 above it), and the 0.025 / 1.3 KS gap
+from card to ceiling. The schema has no such column: adopting it is a
+product decision (enum on `CallLog` / `Visit`, migration, adapter, equality
+harness) with an honest expectation of ~0.50 / ~38 at a reliability a real
+floor would have to earn.
+
+**And the last mile, measured (`FRESHNESS_REPORT.md`).** On the frozen
+wd10 world: 3d/7d/30d disposition windows, fresh positive/negative flags,
+30-day rates, a class x age form and a decayed score change NOTHING — every
+one is correlation-pruned against `latest_disposition` (median reading age
+3 days, so "latest" and "recent" coincide) or, when forced in, costs 0.4 KS.
+A 5-day sweep (reading within 7 d 0.70 -> 0.76) buys +0.004 Gini and -0.4
+KS. Regularised LR on the same WOE columns is bit-identical to the card.
+The functional-form gap is real and small: a GBM on the card's own 10
+inputs +0.012 Gini / +0.5 KS; on the 43-feature pool 0.519 / **39.03** —
+the only configuration to cross KS 39, and a ceiling, not a production
+form. With a points card and a six-class reading, this world's honest
+number is **Gini ~0.50, KS ~38**; KS 39 needs a model form that can
+express reading x age x DPD while staying explainable, or a finer
+reading — both product decisions, neither a DGP dial.
+
+**And the model form, measured (`GAM_REPORT.md`, `scripts/research/
+recovery_risk_obs/gam_ladder.py`).** Data frozen; an exactly-additive GAM
+(boosted single-feature shape functions, monotone where the sign is
+declared, 32 knots, min-leaf 300, trees chosen on validation KS) on the
+card's own 10 inputs: OOT KS 37.81 -> **38.40**, the same as an
+unrestricted GBM on those inputs (38.39) — the curvature the six-bin card
+flattens on `arrears_ratio` / `overdue_amount` / `cibil_score` was the
+functional-form gap, all of it. One admitted interaction
+(`latest_disposition x arrears_ratio`, +0.21 KS on validation) is worth
++0.06 OOT — the stance shifts risk by the same logit at every arrears
+level. Validation-selected 15-feature GAM: **0.5118 / 38.84**, every gate
+but KS. The rows above 39 are GBMs over pools carrying `months_on_book`
+(CSI 0.52) — they fail stability before they are read. Gini >= 0.50 yes,
+KS >= 39 no, and the residual 0.2-0.4 KS is not available to a stable,
+explainable model on this data. `champion.txt` still reads 1.1.0.
+
+**The stop (`FINAL_SEARCH_REPORT.md`, `gam_search.py`).** One last controlled
+search under the frozen data: admissibility by train -> VALIDATION PSI
+(109 of 115; the six excluded are the seasoning features — `months_on_book`
+0.46, `outstanding_to_sanction` 0.30 — that every GBM above 39 leaned on),
+every accept on validation KS, a fixed interpretable pair list, backward
+pruning, a 3-point smoothing grid, OOT once per frozen stage. No unused
+candidate is worth more than +0.09 validation KS; the four accepted changes
+(+0.09, +0.05, +0.06, +0.10 on validation) net **-0.07 on OOT** — noise.
+Final validation-selected model, 15 features, 3 pairs: **OOT KS 38.77 /
+Gini 0.5138**, every hard gate but KS (CSI max 0.070, VIF max 2.03, PSI
+0.010, 0 breaks, calibration -0.015, monotone). **The demonstrated ceiling
+of the frozen world for a stable, interpretable model is KS ~38.8 /
+Gini ~0.51.** The half-point to 39 sits in features that read the
+calendar, not the borrower. Stop condition met; nothing promoted.
+
+### The production-readiness audit — 2026-09-16
+
+Audited the reference model (the 15-feature GAM, OOT Gini 0.5118 / KS 38.84)
+and the scoring machinery. Report:
+`app/ml/artifacts/recovery_risk/2.1.0/observability/PRODUCTION_READINESS_AUDIT.md`;
+evidence under `observability/gam/audit/`. **Verdict: (C) NOT PRODUCTION
+READY — on implementation grounds, not model performance.** `champion.txt`
+still reads 1.1.0.
+
+**What passes.** The artifact re-fits from its recorded recipe bit-for-bit
+(max |dp| 0.0 over 23,780 OOT rows) and loads in a clean process; the score
+decomposition is EXACT (intercept + contributions - logit = 4e-15) once the
+interaction is attributed; monotonicity holds 8/8; score PSI 0.011, max CSI
+0.070, calibration gap -0.014; 25 new point-in-time tests show no event at or
+after as_of can move any feature, on every channel, with the adapter boundary
+verified TO THE MICROSECOND (the cut is midnight of the as_of date, because
+`build_features` floors it).
+
+**Why it cannot ship.** Four of the fifteen features are not produced by the
+adapter — `latest_disposition` and `disposition_recency_class` have no product
+column at all, `last_commit_status` and `recent_ptp_status` are derivable from
+columns that exist but nobody wrote the code — and `DecisionEngine` cannot
+load a model of this type (it expects a WOE pipeline and passes raw string
+categoricals to `predict_proba`). No calibrator, no band table, no reason
+codes. The other eleven features agree with the panel EXACTLY (max |diff| 0.0
+over 237 rewound rows).
+
+**Two defects found by measuring, one fixed and one deliberately not.**
+
+- **`interaction_cst` landed on the wrong pair.** sklearn reorders columns
+  (categoricals first) when `categorical_features` is used, remaps
+  `monotonic_cst` into that order and passes `interaction_cst` through
+  UNREMAPPED. Declared `latest_disposition x arrears_ratio`, fitted
+  `latest_disposition x last_commit_status`. Found because the exact
+  decomposition would not sum and a scan of all 105 pairs showed the one
+  non-additive pair was not the declared one. The model stayed an exact GAM
+  (singleton sets are permutation-invariant) and every metric stands; with the
+  pair where it was declared, OOT KS 38.65 against 38.84. Fixed in
+  `scripts/research/recovery_risk_obs/gam_common.py`, four tests in
+  `tests/test_gam_interaction_constraint.py`.
+- **`evaluate.psi` cannot see missingness drift** — it drops NaN on both sides,
+  so `days_since_last_contact` moving from 49.2% to 37.2% missing reads CSI
+  0.0216 and "stable". NOT fixed: changing `psi` would silently move every PSI
+  figure in every committed artifact and every monitoring row. Pinned by
+  `test_psi_cannot_see_missingness_drift_so_the_monitor_needs_its_own_check`
+  and specified as its own monitor in the report's 10-monitor spec (three of
+  which — missingness, segment performance, data quality — do not exist today).
+
+**The KS shortfall is a model-performance limitation, not an implementation
+defect**, and the audit says so explicitly: best admissible KS 38.84 against a
+target of 39, with the only configurations above 39 being GBMs over pools
+carrying `months_on_book` (PSI 0.52), which fail the stability gate before
+their KS is read. Full suite **1,266 passed**.
+
+### The closure — recovery_risk 2.2.0, 2026-09-16 (later)
+
+Every implementation blocker the audit raised is closed, and the verdict moved
+to **(B) PRODUCTION READY WITH DOCUMENTED LIMITATION**. **Not promoted:
+`champion.txt` still reads 1.1.0**; nothing committed. Report with every
+number and the CHECK / RESULT / EVIDENCE table:
+`app/ml/artifacts/recovery_risk/2.2.0/PRODUCTION_READINESS_CLOSURE.md`.
+
+```
+python -m scripts.train_recovery_risk_gam        # the frozen protocol, no search, ~30 s
+```
+
+- **A new artifact, not a patched one.** `config.RECOVERY_RISK_GAM` fixes the
+  ladder's 15 features and ONE declared pair; `app/ml/pipeline/gam.py` holds
+  the one definition of the interaction constraint in sklearn's remapped index
+  space, and `GamModel.tree_groups()` reads the fitted trees back and refuses
+  a model whose trees use an undeclared pair. Corrected OOT: **Gini 0.5126 /
+  KS 38.66 / AUC 0.7563 / Brier 0.17978** raw, 0.5122 / 38.66 / 0.18021 served
+  (calibrated). 12/12 spec gates, score PSI 0.010, max CSI 0.070, max VIF
+  2.14, 0 breaks, monotone 10/10. **KS >= 39 still not reached** — the
+  model-performance limitation the search established, unchanged.
+- **15/15 features, and a schema change.** `last_commit_status` and
+  `recent_ptp_status` derived from columns that existed; `latest_disposition`
+  and `disposition_recency_class` needed `BorrowerDisposition` on `CallLog`
+  and `Visit` (migration `c9a3d5e7f102`, nullable, no default, no backfill).
+  NONE is the panel's own level, not a stand-in. Held equal to the panel on
+  every (loan, as_of) pair of a rewound wd10-recipe world across five days,
+  with µs boundary tests on every new channel. One defect found on the way:
+  three day-gap features floored elapsed time instead of counting calendar
+  days (18:00 the day before read 0, the panel says 1) — fixed for all of
+  them, none of 1.1.0's inputs affected.
+- **The engine serves a GAM.** `model_type` on the artifact; bands on the
+  calibrated probability (`recovery-bands-2.2.0`, A safest .. E riskiest,
+  15/20/25/25/15 of validation); reason codes from the exact per-tree
+  decomposition (`intercept + contributions == logit` to 9e-15 over 23,780
+  rows), with a pair tree's main effects credited to the features and only
+  the residual called an interaction. Served == reference on every OOT row:
+  |dp| 0.0 raw, 0 disagreements at 6 dp, 0 breaks. The 1.1.0 path is
+  untouched and pinned.
+- **Calibrator fitted on validation only** (Platt by held-out Brier). It does
+  not improve the OOT level — the world's shock sits at month 17, the last
+  validation month — and that is recorded as a limitation, not tuned away.
+- **Missingness has its own monitor** (`ml/pipeline/missingness.py`, in
+  `monitor_model` beside PSI; `evaluate.psi` unchanged): null and absent
+  (null-or-NONE) rates, deltas, thresholds, an action. The audited
+  49.2% -> 37.2% case fires it while PSI reads 0.02.
+- **Every served score names its versions** — artifact + sha, feature
+  definition, calibration, bands, reason codes, background, training data —
+  in `ScoreResult.versions`, stored with the exact `contributions` on
+  `model_predictions` (migration `d0b4e6f8a213`).
+
+Tests: 46 in `tests/test_recovery_risk_gam_features.py`, 38 in
+`tests/test_gam_serving.py`, 13 in `tests/test_missingness_monitor.py`; the
+prior 1,266 re-run green after the changes. Full suite **1,363 passed**.
 
 ## The allocator's expected-recovery term — PROMOTED 2026-09-08
 
@@ -1883,9 +2235,11 @@ depend on judgement layers that do not exist yet.
    appear. Correct as a default; a real gap nonetheless. The API declares it
    (`excludes_system_rows: true`) and the page says so. Scoping them through
    `PTP → agent → manager` is the obvious extension and is not done.
-5. **Two competing schema authorities.** Fifteen Alembic migrations exist —
-   that read "Eight" until 2026-09-10, when the chain was re-verified with
-   `alembic history`: single head `b6c14e83af27`, base `d7a84c5a710f`, no forks
+5. **Two competing schema authorities.** Seventeen Alembic migrations exist —
+   that read "Eight" until 2026-09-10 and "Fifteen … single head `b6c14e83af27`"
+   until 2026-09-16, when `c9a3d5e7f102` (borrower disposition) and
+   `d0b4e6f8a213` (prediction versions + contributions) landed; re-verified by
+   walking the files: single head `d0b4e6f8a213`, base `d7a84c5a710f`, no forks
    and no dangling revisions — but
    `seed_data.py` does `drop_all` + `create_all` and — verified — **never touches
    `alembic_version` at all**. `docker-entrypoint.sh` arbitrates by checking for

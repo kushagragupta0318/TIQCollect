@@ -272,9 +272,12 @@ def test_champion_gini_is_in_a_believable_band():
 
 @champion_required
 def test_engine_scores_and_reports_is_modelled():
+    """On the WOE scorecard artifact (1.1.0) by explicit version: this test
+    describes the four-input card, which stopped being the champion on
+    2026-09-16. The GAM champion has its own suite (test_gam_serving.py)."""
     from app.ml.pipeline.engine import DecisionEngine
 
-    e = DecisionEngine.get("recovery_risk")
+    e = DecisionEngine.get("recovery_risk", "1.1.0")
     assert e is not None
     feats = {f: v for f, v in
              [("dpd", 15), ("cibil_score", 780), ("ptp_kept_ratio", 0.9),
@@ -300,7 +303,7 @@ def test_engine_declines_rather_than_guessing_on_sparse_input():
 def test_riskier_inputs_score_worse():
     from app.ml.pipeline.engine import DecisionEngine
 
-    e = DecisionEngine.get("recovery_risk")
+    e = DecisionEngine.get("recovery_risk", "1.1.0")       # the four-input card
     safe = e.score({"dpd": 0, "cibil_score": 800, "ptp_kept_ratio": 1.0,
                     "overdue_amount": 1000})
     risky = e.score({"dpd": 240, "cibil_score": 480, "ptp_kept_ratio": 0.0,
@@ -337,7 +340,7 @@ def test_pipeline_carries_its_own_preprocessing_and_feature_set():
     estimator."""
     from app.ml.pipeline import registry
 
-    pipe, _ = registry.load("recovery_risk")
+    pipe, _ = registry.load("recovery_risk", "1.1.0")     # the scorecard bundle; a GAM is a GamModel
     names = [s[0] for s in pipe.steps]
     assert names == ["preprocess", "woe", "select", "model"]
     assert isinstance(pipe.named_steps["select"], ColumnSubset)

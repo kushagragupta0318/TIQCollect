@@ -20,6 +20,12 @@
 #
 #   IT MUST NOT BECOME A SECOND FEATURE IMPLEMENTATION. Nothing in this file
 #   computes a model feature. It writes rows; the adapter reads them.
+#
+# 2026-09-15 — Loads the v2 channels: `Visit.outcome` from the ledger's visit
+#   outcome, one `CallLog` row per call event, `Customer.fraud_flag` at load
+#   (static, bank-reported), and `Customer.is_hostile` on REWIND — it is a
+#   flag event with a day, overwritten in place in the live schema like `dpd`,
+#   so "was it raised before as_of" is a rewind question.
 # ───────────────────────────────────────────────────────────────────────────
 """Load a `Ledger` into the production schema and rewind it to a past date.
 
@@ -45,13 +51,15 @@ from app.ml.simulation.ledger import billing
 from app.ml.simulation.ledger.config import LedgerConfig
 from app.ml.simulation.ledger.simulator import Ledger
 from app.models.agent import Agent, AgentSpecialization, AgentStatus, AgentTier
+from app.models.call_log import CallLog, CallOutcome
 from app.models.case import Case, CasePriority, CaseStatus
 from app.models.customer import Customer
 from app.models.loan import DPDBucket, Loan, LoanStatus, LoanType, dpd_bucket_for
 from app.models.payment import Payment, PaymentMode, PaymentStatus
+from app.models.call_log import BorrowerDisposition
 from app.models.ptp import PTP, PTPStatus
 from app.models.user import User, UserRole
-from app.models.visit import Visit, VisitOutcome
+from app.models.visit import DefaultReason, Visit, VisitOutcome
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +156,8 @@ class Materialiser:
                     latitude=28.4, longitude=77.0, language_preference="HINDI",
                     customer_segment=b.employment_type,
                     cibil_score=None,          # set by rewind_to
+                    # Static from origination; `is_hostile` is set by rewind_to.
+                    fraud_flag=bool(getattr(b, "fraud_flag", 0)),
                 ))
                 seen_cust.add(r.borrower_id)
 
@@ -192,17 +202,65 @@ class Materialiser:
                 receipt_number=p.receipt_number,
                 payment_date=_dt(self.start, p.payment_day),
             ))
+        has_outcome = "outcome" in led.visits.columns
+        # 2026-09-16 — the structured disposition, where the ledger recorded
+        # one (observe_disposition on). The ledger's vocabulary IS the
+        # product's enum; a value the enum does not know raises here.
+        has_disp_v = "disposition" in led.visits.columns
         for v in led.visits.itertuples():
             if v.loan_id not in keep:
                 continue
+            vdisp = getattr(v, "disposition", None) if has_disp_v else None
+            vdisp = (BorrowerDisposition(vdisp)
+                     if isinstance(vdisp, str) and vdisp else None)
+            # The ledger's outcome vocabulary IS the product's enum; a value
+            # the enum does not know raises here rather than defaulting.
+            outcome = (VisitOutcome(v.outcome) if has_outcome else
+                       (VisitOutcome.PTP if v.met else VisitOutcome.NOT_AVAILABLE))
+            reason = getattr(v, "default_reason", None)
             db.add(Visit(
                 id=v.visit_id, case_id=f"C-{v.loan_id}", agent_id=v.agent_id,
                 check_in_latitude=28.4, check_in_longitude=77.0,
                 check_in_time=_dt(self.start, v.day),
                 distance_from_customer_metres=50.0,
                 customer_met=bool(v.met),
-                outcome=VisitOutcome.PTP if v.met else VisitOutcome.NOT_AVAILABLE,
+                outcome=outcome,
+                default_reason=(DefaultReason(reason)
+                                if isinstance(reason, str) else None),
+                borrower_disposition=vdisp,
             ))
+        calls = getattr(led, "calls", None)
+        if calls is not None and len(calls):
+            loan_borrower = dict(zip(loans.loan_id, loans.borrower_id))
+            has_disp_c = "disposition" in calls.columns
+            for k in calls.itertuples():
+                if k.loan_id not in keep:
+                    continue
+                intent = getattr(k, "payment_intent", None)
+                cdisp = getattr(k, "disposition", None) if has_disp_c else None
+                cdisp = (BorrowerDisposition(cdisp)
+                         if isinstance(cdisp, str) and cdisp else None)
+                db.add(CallLog(
+                    id=k.call_id, case_id=f"C-{k.loan_id}", agent_id=k.agent_id,
+                    customer_id=loan_borrower[k.loan_id],
+                    called_at=_dt(self.start, k.day),
+                    outcome=CallOutcome(k.outcome),
+                    # 2026-09-15 (later): the ledger's own duration where the
+                    # channel is on; the old placeholder 90 where it is not.
+                    duration_seconds=(
+                        (int(k.duration_seconds)
+                         if getattr(k, "duration_seconds", None) is not None
+                         and not pd.isna(k.duration_seconds) else 90)
+                        if k.answered else None),
+                    # None where the call was not answered — nobody said
+                    # anything — exactly as the column is nullable for.
+                    payment_intent_signalled=(bool(intent) if k.answered else None),
+                    verbal_payment_date=(
+                        self.start + timedelta(days=int(k.verbal_due_day))
+                        if getattr(k, "verbal_due_day", -1) is not None
+                        and int(getattr(k, "verbal_due_day", -1)) >= 0 else None),
+                    borrower_disposition=cdisp,
+                ))
         for t in led.ptps.itertuples():
             if t.loan_id not in keep:
                 continue
@@ -331,6 +389,21 @@ class Materialiser:
                     db.query(Customer).filter(
                         Customer.id == loan.customer_id).update(
                         {"tags": ["DECEASED"]}, synchronize_session=False)
+
+        # ── hostility flag as at `day` ──────────────────────────────────────
+        # Raised by an event, never lowered — so its value at `day` is "was an
+        # event raised strictly before day". Written explicitly both ways, so a
+        # rewind BACKWARDS clears a flag that had not yet been raised.
+        flags = getattr(led, "flags", None)
+        raised: set[str] = set()
+        if flags is not None and len(flags):
+            fl = flags[flags.loan_id.isin(keep) & (flags.flag == "HOSTILE")
+                       & (flags.day < day)]
+            raised = set(fl.loan_id)
+        for lid in loans.index:
+            db.query(Customer).filter(
+                Customer.id == loans.loc[lid, "borrower_id"]).update(
+                {"is_hostile": lid in raised}, synchronize_session=False)
 
         # ── bureau score as at `day` ────────────────────────────────────────
         pulls = led.bureau_pulls

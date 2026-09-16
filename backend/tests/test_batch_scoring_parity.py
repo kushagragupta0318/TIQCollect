@@ -101,7 +101,11 @@ def test_the_coverage_floor_now_applies_to_the_batch_path(engine):
 def test_one_sparse_row_does_not_poison_the_rows_beside_it(engine):
     """A batch is many borrowers. Declining one must not decline the others,
     and must not shift which result belongs to whom."""
-    rows = [_full(engine, dpd=10), {"dpd": 90.0}, _full(engine, dpd=300)]
+    # Both champions' risk drivers moved together, so the ordering holds on
+    # the four-input card (dpd) and on the GAM (arrears_ratio, overdue_amount).
+    rows = [_full(engine, dpd=10, arrears_ratio=0.3, overdue_amount=2_000.0),
+            {"dpd": 90.0},
+            _full(engine, dpd=300, arrears_ratio=8.0, overdue_amount=90_000.0)]
     out = engine.score_batch_detailed(rows)
     assert [r.is_modelled for r in out] == [True, False, True]
     assert out[0].probability < out[2].probability, "results were misaligned"
@@ -147,9 +151,14 @@ def test_a_served_prediction_records_what_the_score_was_made_of(db, book):
     assert row.points is not None and isinstance(row.points, int)
     assert row.band and len(row.band) <= 4
     assert row.reason_codes, "no reason codes on a served score"
-    assert {"feature", "points"} <= set(row.reason_codes[0])
-    assert all(r["feature"] in row.features for r in row.reason_codes), \
-        "a reason code names a feature the row does not carry"
+    # Two shapes, one per model form: the scorecard's points-lost codes and the
+    # GAM's contribution codes (2026-09-16). Either way the code names a feature.
+    keys = set(row.reason_codes[0])
+    assert {"feature", "points"} <= keys or {"feature", "contribution", "direction"} <= keys
+    for r in row.reason_codes:
+        parts = r["feature"].split(" x ") if r.get("kind") == "interaction" else [r["feature"]]
+        assert all(p in row.features for p in parts), \
+            "a reason code names a feature the row does not carry"
 
 
 def test_the_band_and_the_probability_describe_the_same_borrower(db, book, engine):
@@ -214,10 +223,19 @@ def test_the_floor_cannot_currently_BITE_through_this_adapter(db, book):
     db.commit()
 
     feats = MLScoringService(db).build_features(book["loan"])
-    engine = DecisionEngine.get("recovery_risk")
+    # The finding is about the four-input card's adapter defaults; read on
+    # that artifact explicitly, since it stopped being champion on 2026-09-16.
+    engine = DecisionEngine.get("recovery_risk", "1.1.0")
     if engine is None:
-        pytest.skip("no champion artifact")
+        pytest.skip("no 1.1.0 artifact")
     coverage, missing = engine._coverage(feats)
+    # And on the served champion the same thin borrower is not thin at all:
+    # its bureau score is a DECLARED abstaining input, every other input is
+    # produced from the record, so coverage is 1.0 and nothing is missing.
+    served = DecisionEngine.get("recovery_risk")
+    if served is not None and served.version != "1.1.0":
+        cov_s, miss_s = served._coverage(feats)
+        assert (cov_s, miss_s) == (1.0, []), (cov_s, miss_s)
 
     assert missing == ["cibil_score"], (
         f"another feature became genuinely optional: {missing}. If so this "

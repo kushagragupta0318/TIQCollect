@@ -1,0 +1,8 @@
+feature,gini_real,gini_time_shuffled,retention,note
+arrears_ratio,0.3757,0.0064,0.017,
+overdue_amount,0.326,0.0068,0.021,
+cibil_score,0.2351,0.0063,0.027,
+paid_ratio_3m,0.2209,0.0055,0.025,
+visits_3m,0.1816,0.0131,0.072,
+contact_rate_6m,0.0914,0.0045,0.05,
+days_since_last_contact,0.0052,0.0015,0.3,

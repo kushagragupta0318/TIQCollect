@@ -89,6 +89,15 @@ class ModelPrediction(Base, UUIDPrimaryKey):
     features: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     feature_coverage: Mapped[float | None] = mapped_column(Float, nullable=True)
     reason_codes: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    # 2026-09-16 — traceability and reconciliation (migration d0b4e6f8a213).
+    # `scoring_versions`: every version the score was produced with — artifact,
+    # feature definition, calibration, band table, reason-code mapping,
+    # background — so a row can be re-derived exactly. `contributions`: for a
+    # GAM, the intercept, every per-feature / per-pair contribution and the
+    # logit, which sum exactly; NULL for a scorecard, whose points table is
+    # the equivalent and lives on the artifact. Nullable, never backfilled.
+    scoring_versions: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    contributions: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     # ── the frozen basis for the LABEL, not for the score ───────────────────
     # `overdue_amount` and `emi_amount` as they stood when the prediction was
