@@ -19,6 +19,9 @@ import { Users, Briefcase, IndianRupee, MapPin, Clock, AlertTriangle, Sparkles, 
 import { getDashboard, getAgents, getBriefing, getUnallocatedCases } from "@/api/manager";
 import { BeatPlanSummaryStrip } from "./TomorrowAllocationCard";
 import { TodayDpdCard } from "./TodayDpdCard";
+import { FieldActivityCard } from "./FieldActivityCard";
+import { PromisesCard } from "./PromisesCard";
+import { Reveal } from "@/components/ui/Reveal";
 import type { BriefingData, UnallocatedReport } from "@/api/manager";
 import { StatCard } from "@/components/ui/Card";
 import { TierBadge } from "@/components/ui/Badge";
@@ -374,7 +377,17 @@ export default function ManagerOverviewPage() {
         </div>
       </div>
 
+      {/* Field Activity + Promises. 2026-09-17. Directly under the money
+          (Today's Collections) and before who collected it (the leaderboard):
+          what the team actually did in the field for the selected window,
+          and how the promises they took are holding. */}
+      <Reveal className="grid grid-cols-1 lg:grid-cols-5 gap-3 sm:gap-4" style={{ animation: `enter 420ms ${EASE} 270ms both` }}>
+        <div className="lg:col-span-3 flex"><FieldActivityCard style={{ flex: 1 }} /></div>
+        <div className="lg:col-span-2 flex"><PromisesCard health={s.ptp_health} style={{ flex: 1 }} /></div>
+      </Reveal>
+
       {/* Agent Leaderboard */}
+      <Reveal>
       <div
         className="card p-4 sm:p-6"
         style={{ animation: `enter 420ms ${EASE} 300ms both` }}
@@ -398,14 +411,15 @@ export default function ManagerOverviewPage() {
           </div>
         )}
       </div>
+      </Reveal>
 
       {/* Tomorrow's plan — status only. The full workflow (objective,
           generate, beats, audit trail, export, rollback) moved to
           /manager/beat-plan on 2026-09-16; see TomorrowAllocationCard.tsx. */}
-      <BeatPlanSummaryStrip />
+      <Reveal><BeatPlanSummaryStrip /></Reveal>
 
       {/* AI Briefing + DPD Portfolio */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4" style={{ animation: `enter 420ms ${EASE} 360ms both` }}>
+      <Reveal className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4" style={{ animation: `enter 420ms ${EASE} 360ms both` }}>
         {/* AI Ops Briefing card */}
         {briefingLoading ? (
           <div className="card animate-pulse" style={{ height: 220, background: "#EFF0F4", border: "none", boxShadow: "none" }} />
@@ -434,7 +448,7 @@ export default function ManagerOverviewPage() {
           effectiveDate={summary?.effective_date}
           onOpen={(bucket) => navigate(`/manager/cases?bucket=${bucket}`)}
         />
-      </div>
+      </Reveal>
     </div>
   );
 }

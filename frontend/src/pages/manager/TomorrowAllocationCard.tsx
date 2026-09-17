@@ -26,7 +26,7 @@
 // app keeps it. The model, the API fields and the route paths are unchanged
 // (`/manager/beat-plan`, `plan.beats`, `beat_date` …) — this is labels only.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router";
 import { AlertTriangle, ArrowRight, Compass, Download, IndianRupee, RefreshCw, RotateCcw, Route, Scale, Zap, ChevronDown, ChevronUp } from "lucide-react";
@@ -110,6 +110,17 @@ export function TomorrowAllocationCard({ defaultExpanded = false }: { defaultExp
     objectiveChoice ?? (settingsQ.data?.objective as Objective | undefined) ?? "BALANCED";
   const setObjective = setObjectiveChoice;
   const [showDecisions, setShowDecisions] = useState(false);
+  // "View Explainable Decisions" opens a ~900-row drawer BELOW the fold, and
+  // until 2026-09-17 nothing moved the viewport, so a manager clicked and saw
+  // no change. The drawer scrolls into view once it has rendered; a scroll in
+  // the click handler would run before the element exists. Only on OPEN —
+  // closing leaves the viewport alone. Honours prefers-reduced-motion.
+  const decisionsRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!showDecisions || !decisionsRef.current) return;
+    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+    decisionsRef.current.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
+  }, [showDecisions]);
   const [selectedDecision, setSelectedDecision] = useState<AllocationDecisionItem | null>(null);
   const [decisionFilter, setDecisionFilter] = useState<"ALL" | "ALLOCATED" | "DEFERRED" | "BLOCKED">("ALL");
 
@@ -616,10 +627,21 @@ export function TomorrowAllocationCard({ defaultExpanded = false }: { defaultExp
           {/* Explainable Decision Drawer */}
           {showDecisions && plan.decisions && (
             <div
-              className="mt-3 p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2"
-              style={{ maxHeight: 360, overflowY: "auto" }}
+              ref={decisionsRef}
+              // NO PADDING ON THE SCROLL CONTAINER. 2026-09-17. This element
+              // scrolls and its heading is `sticky top-0`; with `p-3` here the
+              // heading pinned 12px BELOW the scrollport edge (sticky offsets
+              // from the padding box), and rows scrolled up through that
+              // uncovered strip and appeared above the heading. The padding
+              // now lives on the heading and on the rows wrapper, so the
+              // heading sits flush at the top and covers everything that
+              // scrolls under it.
+              className="mt-3 bg-slate-50 rounded-xl border border-slate-200"
+              // scroll-margin keeps the drawer's heading clear of the sticky
+              // page header when scrollIntoView lands it at the top.
+              style={{ maxHeight: 360, overflowY: "auto", scrollMarginTop: 96 }}
             >
-              <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-slate-800 sticky top-0 bg-slate-50 py-1.5 border-b border-slate-200 z-10">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-slate-800 sticky top-0 bg-slate-50 px-3 pt-3 pb-1.5 border-b border-slate-200 z-10">
                 <div className="flex items-center gap-2">
                   <span>Case Assignment Audit Trail & Matching Factors</span>
                   <span className="text-slate-400 font-normal">({plan.decisions.length} recorded)</span>
@@ -660,16 +682,20 @@ export function TomorrowAllocationCard({ defaultExpanded = false }: { defaultExp
                   </button>
                 </div>
               </div>
-              <div className="space-y-1.5">
+              <div className="space-y-1.5 px-3 pt-2 pb-3">
                 {sortedDecisions.map((d: AllocationDecisionItem) => (
                   <div
                     key={d.decision_id}
                     onClick={() => setSelectedDecision(d === selectedDecision ? null : d)}
                     className="p-2 bg-white rounded-lg border border-slate-200/80 hover:border-brand-300 cursor-pointer text-xs space-y-1 transition-colors"
                   >
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-slate-800">{d.case_number}</span>
-                      <div className="flex items-center gap-1.5">
+                    {/* Wraps on narrow screens: the case number keeps its
+                        own line and the badges flow beneath it, each on one
+                        line (`whitespace-nowrap`) — on a phone they used to
+                        squeeze into one row and overprint each other. */}
+                    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                      <span className="font-bold text-slate-800 whitespace-nowrap">{d.case_number}</span>
+                      <div className="flex flex-wrap items-center justify-end gap-1.5 min-w-0">
                         {/* Says the model was involved, without saying how. A
                             manager needs to know the recovery estimate came
                             from a model — the version and input coverage sit in
@@ -681,7 +707,7 @@ export function TomorrowAllocationCard({ defaultExpanded = false }: { defaultExp
                           return badge ? (
                             <span
                               title={badge.title}
-                              className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-violet-100 text-violet-800"
+                              className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-violet-100 text-violet-800 whitespace-nowrap"
                             >
                               {badge.label}
                             </span>
@@ -698,14 +724,14 @@ export function TomorrowAllocationCard({ defaultExpanded = false }: { defaultExp
                           return tag ? (
                             <span
                               title={tag.title}
-                              className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200"
+                              className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200 whitespace-nowrap"
                             >
                               {tag.label}
                             </span>
                           ) : null;
                         })()}
                         {d.outcome === "ALLOCATED" && (
-                          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 whitespace-nowrap">
                             → {d.allocated_agent_name}
                           </span>
                         )}

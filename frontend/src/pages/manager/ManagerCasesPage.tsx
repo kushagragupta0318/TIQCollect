@@ -1041,6 +1041,11 @@ function CaseRow({ c, onOpen }: { c: Case; onOpen: () => void }) {
 
 // ── Main cases page ──────────────────────────────────────────────────────────
 
+// The funnel stages the Cases list accepts from the URL — the server's
+// field_activity_service.STAGES, restated because a TS module cannot import a
+// Python tuple; the server 422s anything else, so a drift here fails loudly.
+const ACTIVITY_STAGES = ["planned", "visited", "met", "paid_or_promised", "not_met", "met_no_money"];
+
 export default function ManagerCasesPage() {
   const [searchParams] = useSearchParams();
   const [search, setSearch] = useState("");
@@ -1087,6 +1092,25 @@ export default function ManagerCasesPage() {
   // that chip restores the full span rather than a hardcoded window.
   const [defaultRange, setDefaultRange] = useState<{ min: string; max: string } | null>(null);
   const [agentId, setAgentId] = useState<string | null>(() => searchParams.get("agent_id"));
+  // ── Field activity (2026-09-17) ──────────────────────────────────────────
+  // The overview funnel links here with ?activity=<stage>&activity_window=
+  // today|7d|30d (&visit_outcome=…). Resolved SERVER-SIDE through the same
+  // service that counted the funnel, so the rows are the number — and
+  // window-scoped by construction: with activity_window=today a case visited
+  // yesterday is not "visited". Held as one object so the three travel and
+  // clear together; an unknown stage is dropped rather than sent.
+  const [activity, setActivity] = useState<{ stage: string; window: string; outcome: string | null } | null>(() => {
+    const stage = searchParams.get("activity");
+    if (!stage || !ACTIVITY_STAGES.includes(stage)) return null;
+    const w = searchParams.get("activity_window") || "today";
+    return { stage, window: ["today", "7d", "30d"].includes(w) ? w : "today", outcome: searchParams.get("visit_outcome") };
+  });
+  // ── Promises due (2026-09-17) ────────────────────────────────────────────
+  // The Promises card's "Due this week" links here with ?ptp_due_from&ptp_due_to.
+  const [ptpDue, setPtpDue] = useState<{ from: string; to: string } | null>(() => {
+    const from = searchParams.get("ptp_due_from"), to = searchParams.get("ptp_due_to");
+    return from && to ? { from, to } : null;
+  });
   const [agentName] = useState<string | null>(() => searchParams.get("agent_name"));
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -1106,7 +1130,8 @@ export default function ManagerCasesPage() {
   // this file on the first attempt — valid TypeScript, but it made the source
   // read as binary to grep and diff.
   const filterSig = JSON.stringify([statusFilter, recoveryFilter, prioritySort,
-                                    priorityBand, dateFrom, dateTo, agentId ?? ""]);
+                                    priorityBand, dateFrom, dateTo, agentId ?? "",
+                                    activity, ptpDue]);
   const [pageState, setPageState] = useState({ sig: filterSig, page: 0 });
   const page = pageState.sig === filterSig ? pageState.page : 0;
   const setPage = useCallback(
@@ -1119,6 +1144,8 @@ export default function ManagerCasesPage() {
       status: statusFilter, recovery: recoveryFilter, sort: prioritySort,
       band: priorityBand, from: dateFrom, to: dateTo,
       agent: agentId ?? null, page,
+      activity: activity ? `${activity.stage}|${activity.window}|${activity.outcome ?? ""}` : null,
+      ptpDue: ptpDue ? `${ptpDue.from}|${ptpDue.to}` : null,
     }],
     queryFn: async () => {
       try {
@@ -1130,6 +1157,11 @@ export default function ManagerCasesPage() {
           date_from: dateFrom || undefined,
           date_to: dateTo || undefined,
           agent_id: agentId || undefined,
+          activity: activity?.stage,
+          activity_window: activity?.window,
+          visit_outcome: activity?.outcome ?? undefined,
+          ptp_due_from: ptpDue?.from,
+          ptp_due_to: ptpDue?.to,
           offset: page * PAGE_SIZE,
           limit: PAGE_SIZE,
         });
@@ -1243,6 +1275,25 @@ export default function ManagerCasesPage() {
     if (bucketFilter !== "ALL") {
       const labels: Record<string, string> = { BUCKET_2: "31–60 DPD", BUCKET_3: "61–90 DPD", NPA: "NPA 90+" };
       out.push({ key: "bucket", label: labels[bucketFilter] ?? bucketFilter, clear: () => setBucketFilter("ALL") });
+    }
+    if (activity) {
+      // Says the WINDOW, because that is what makes the set what it is.
+      const stageWords: Record<string, string> = {
+        planned: "Planned", visited: "Visited", met: "Met", paid_or_promised: "Paid or promised",
+        not_met: "Not met", met_no_money: "Met, no payment or promise",
+      };
+      const windowWords: Record<string, string> = { today: "today", "7d": "last 7 days", "30d": "last 30 days" };
+      const outcome = activity.outcome
+        ? ` · ${activity.outcome.split(",").map((o) => OUTCOME_LABEL[o] ?? o.replace(/_/g, " ").toLowerCase()).join(", ")}`
+        : "";
+      out.push({
+        key: "activity",
+        label: `Field activity: ${stageWords[activity.stage] ?? activity.stage}${outcome} · ${windowWords[activity.window] ?? activity.window}`,
+        clear: () => setActivity(null),
+      });
+    }
+    if (ptpDue) {
+      out.push({ key: "ptpDue", label: `Promise due ${fmtDate(ptpDue.from)} → ${fmtDate(ptpDue.to)}`, clear: () => setPtpDue(null) });
     }
     // A chip only when the user has actually narrowed the range. The baseline
     // is the data's own span once we know it; arriving from the leaderboard

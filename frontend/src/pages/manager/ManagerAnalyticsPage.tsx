@@ -21,6 +21,8 @@ import {
   getManagerAgentCalendar, getAgentDPDBreakdown, getTeamDPDBreakdown, getTeamAttendance, getMonthlyReport,
 } from "@/api/manager";
 import { CasePipelineCard } from "./CasePipelineCard";
+import { CashTrendCard, PaymentMixCard } from "./PaymentModesCard";
+import { Reveal } from "@/components/ui/Reveal";
 import { AiBadge } from "@/components/ui/AiBadge";
 import type {
   AnalyticsData, AgentsPerformanceData, AgentPerfEntry, AgentMonthlyPerf,
@@ -641,7 +643,7 @@ export default function ManagerAnalyticsPage() {
       </div>
 
       {/* Collection trend chart */}
-      <div className="card p-4 sm:p-6" style={{ animation: `enter 420ms ${EASE} 240ms both` }}>
+      <Reveal className="card p-4 sm:p-6" style={{ animation: `enter 420ms ${EASE} 240ms both` }}>
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
           <div className="min-w-0">
             <h2 className="text-[15px] sm:text-base font-bold" style={{ color: "#1C1C1F" }}>Collection Trend — Last 6 Months</h2>
@@ -804,7 +806,7 @@ export default function ManagerAnalyticsPage() {
             )}
           </>
         )}
-      </div>
+      </Reveal>
 
       {/* Recovery + DPD, then the duty pair — context-aware.
           Every card below is a DIRECT grid child, deliberately. Wrapping two of
@@ -813,15 +815,18 @@ export default function ManagerAnalyticsPage() {
           heights stopped matching. Flat children give two clean rows of two, and
           grid's default stretch keeps each row's cards the same height. */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-stretch" style={{ animation: `enter 420ms ${EASE} 300ms both` }}>
-        <RecoveryBreakdownCard
-          rows={recovery_breakdown ?? []}
-          summary={recovery_summary}
-          loading={loading}
-          barReady={barReady}
-        />
+        <Reveal className="flex flex-col [&>*]:flex-1">
+          <RecoveryBreakdownCard
+            rows={recovery_breakdown ?? []}
+            summary={recovery_summary}
+            loading={loading}
+            barReady={barReady}
+          />
+        </Reveal>
         {/* Right column: the same 883 cases two ways — by DPD, then by
             state. Stacked in one cell so the pipeline sits under the bucket
             card and the pair matches the Recovery outlook's height. */}
+        <Reveal className="flex flex-col [&>*]:flex-1">
         <div className="flex flex-col gap-5">
           <DPDBreakdownCard
             rows={selectedAgent ? (agentDpdRows ?? dpd_breakdown) : (teamDpdRows ?? dpd_breakdown)}
@@ -836,32 +841,58 @@ export default function ManagerAnalyticsPage() {
             style={{ flex: 1 }}
           />
         </div>
+        </Reveal>
         {selectedAgent && agentCalendar ? (
           // One card for the third slot, so it spans the row rather than
           // leaving the cell beside it empty.
-          <div className="lg:col-span-2">
+          <Reveal className="lg:col-span-2 flex flex-col [&>*]:flex-1">
             <DutyCalendarCard
               cal={agentCalendar}
               loading={agentDataLoading}
               jumpToMonth={selAgentMonth ? months.find((m) => monthLabel(m) === selAgentMonth) : undefined}
             />
-          </div>
+          </Reveal>
         ) : (
           // Two cards, so they fill the second row: duty on the left, leave
           // summary on the right.
           <>
-            <AgencyDutyOverview months={months} />
-            <TeamLeaveSummaryCard
-              months={months}
-              selTeamMonth={selTeamMonth}
-              todayOnDuty={analytics.leave_summary.by_type["ON_DUTY"] ?? 0}
-              totalAgents={(analytics.leave_summary.by_type["ON_DUTY"] ?? 0) + (analytics.leave_summary.by_type["OFF_DUTY"] ?? 0)}
-            />
+            <Reveal className="flex flex-col [&>*]:flex-1"><AgencyDutyOverview months={months} /></Reveal>
+            <Reveal className="flex flex-col [&>*]:flex-1">
+              <TeamLeaveSummaryCard
+                months={months}
+                selTeamMonth={selTeamMonth}
+                todayOnDuty={analytics.leave_summary.by_type["ON_DUTY"] ?? 0}
+                totalAgents={(analytics.leave_summary.by_type["ON_DUTY"] ?? 0) + (analytics.leave_summary.by_type["OFF_DUTY"] ?? 0)}
+              />
+            </Reveal>
+          </>
+        )}
+        {/* Third row: how the money came in — the mix on the left, the
+            six-month cash trend on the right. Same month filter as the DPD
+            card (apiTeamMonth); a column click on the trend selects the
+            month exactly as the trend chart's rail does. Team-wide only — an
+            agent selection hides both rather than showing a team figure
+            under an agent's name. */}
+        {!selectedAgent && (
+          <>
+            <Reveal className="flex flex-col [&>*]:flex-1">
+              <PaymentMixCard apiMonth={apiTeamMonth} selMonth={selTeamMonth} />
+            </Reveal>
+            <Reveal className="flex flex-col [&>*]:flex-1">
+              <CashTrendCard
+                apiMonth={apiTeamMonth}
+                onMonthClick={(ym) => {
+                  const lbl = monthLabel(ym);
+                  setSelTeamMonth((prev) => (prev === lbl ? null : lbl));
+                }}
+              />
+            </Reveal>
           </>
         )}
       </div>
 
       {/* AI Monthly Report */}
+      <Reveal>
       <MonthlyReportSection
         months={months}
         selectedAgent={selectedAgent}
@@ -871,6 +902,7 @@ export default function ManagerAnalyticsPage() {
             : (selTeamMonth  ? months.find((m) => monthLabel(m) === selTeamMonth)  : undefined)
         }
       />
+      </Reveal>
     </div>
   );
 }

@@ -12,6 +12,13 @@ class PaymentMode(str, enum.Enum):
     RTGS = "RTGS"
     CHEQUE = "CHEQUE"
     DD = "DD"
+    # 2026-09-17 — NOT SELECTABLE IN THE PRODUCT. A prototype catch-all that
+    # no agent-facing screen offers (RecordVisitPage: Cash / UPI / Cheque /
+    # NEFT-IMPS / RTGS) and no service writes. Every row that ever carried it
+    # came from demo tooling; those 124 were re-split across UPI/NEFT/RTGS on
+    # 2026-09-17 and the writers corrected. Kept only because removing a
+    # member of a Postgres enum type needs a migration; nothing may write it —
+    # tests/test_payment_modes.py pins that for the demo scripts.
     ONLINE = "ONLINE"
     # 2026-09-09 — the borrower paid the BANK directly; no agent collected it.
     # Arrives through scripts/ingest_daily.py, never through the agent app.

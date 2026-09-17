@@ -28,6 +28,7 @@ from sqlalchemy.exc import IntegrityError
 # case, so importing the SQL CASE construct under its own name would read as
 # the model with a typo.
 from sqlalchemy import case as sa_case
+from sqlalchemy import false as sa_false
 from sqlalchemy.orm import joinedload
 
 from app.core.dependencies import DbSession, ManagerOnly
@@ -47,7 +48,7 @@ from app.models.repayment_snapshot import RepaymentSnapshot
 from app.ml.recovery_scorecard import (
     expected_recoverable_amount as _recovery_expected_amount,
 )
-from app.models.payment import Payment, PaymentStatus
+from app.models.payment import Payment, PaymentMode, PaymentStatus
 from app.models.ptp import PTP, PTPStatus
 from app.models.user import User
 from app.models.visit import Visit, VisitOutcome
@@ -444,6 +445,41 @@ def dashboard(current_user: ManagerOnly, db: DbSession):
         round(amount_collected_today / amount_target_today * 100, 1) if amount_target_today > 0 else 0.0
     )
 
+    # 2026-09-17 — the overview's Promises card. Promise status is a STOCK,
+    # not a flow, so kept / broken are all-time over this manager's agents'
+    # promises; "due" is forward-looking from the effective date. kept_rate is
+    # honoured / (honoured + broken) — the two terminal outcomes — never
+    # diluted by promises still open. One GROUP BY plus one COUNT.
+    ptp_status_counts = {st.value: 0 for st in PTPStatus}
+    for st, n in (
+        db.query(PTP.status, func.count(PTP.id))
+        .filter(PTP.agent_id.in_(my_agent_ids))
+        .group_by(PTP.status)
+        .all()
+    ):
+        ptp_status_counts[st.value if hasattr(st, "value") else str(st)] = int(n or 0)
+    _kept = ptp_status_counts.get("HONORED", 0)
+    _broken = ptp_status_counts.get("BROKEN", 0)
+    ptp_due_next_7 = (
+        db.query(func.count(PTP.id))
+        .filter(PTP.agent_id.in_(my_agent_ids),
+                PTP.status == PTPStatus.ACTIVE,
+                PTP.committed_date >= today_date,
+                PTP.committed_date <= today_date + timedelta(days=7))
+        .scalar() or 0
+    )
+    ptp_health = {
+        "status_counts": ptp_status_counts,
+        "honored": _kept,
+        "broken": _broken,
+        "active": ptp_status_counts.get("ACTIVE", 0),
+        "rescheduled": ptp_status_counts.get("RESCHEDULED", 0),
+        "kept_rate_pct": round(_kept / (_kept + _broken) * 100, 1) if (_kept + _broken) > 0 else None,
+        "due_next_7_days": int(ptp_due_next_7),
+        "due_from": today_date.isoformat(),
+        "due_to": (today_date + timedelta(days=7)).isoformat(),
+    }
+
     return {
         "total_agents": total_agents,
         "agents_on_duty": agents_on_duty,
@@ -451,6 +487,7 @@ def dashboard(current_user: ManagerOnly, db: DbSession):
         "cases_assigned": cases_assigned,
         "case_status_counts": case_status_counts,
         "today_dpd_breakdown": today_dpd_breakdown,
+        "ptp_health": ptp_health,
         "cases_today": cases_today,
         "cases_resolved_today": cases_resolved_today,
         "visits_today": visits_today,
@@ -465,6 +502,38 @@ def dashboard(current_user: ManagerOnly, db: DbSession):
         # counted, instead of date.today() and landing on an empty result.
         "effective_date": today_date.isoformat(),
     }
+
+
+# ---------------------------------------------------------------------------
+# GET /manager/dashboard/field-activity
+# ---------------------------------------------------------------------------
+#
+# 2026-09-17. The overview's Field Activity funnel: what happened to the cases
+# PLANNED for field work inside one window — today (default), 7d or 30d. All
+# definitions live in services/field_activity_service.py, shared with the
+# Cases list's `activity` filter so the link under a number lands on exactly
+# the cases the number counted.
+#
+# TODAY MEANS TODAY'S VISITS ONLY. The window is anchored on the same
+# effective date and UTC day boundaries as every other "today" figure on the
+# dashboard (`_effective_today`), and the service is handed only visits
+# inside it — a visit yesterday cannot make a case visited, met or paid today.
+
+@router.get("/dashboard/field-activity")
+def dashboard_field_activity(
+    current_user: ManagerOnly,
+    db: DbSession,
+    window: str = "today",
+):
+    from app.services import field_activity_service as fa
+
+    my_agent_ids = [
+        a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()
+    ]
+    _, end_of_day, eff_date = _effective_today(my_agent_ids, db)
+    bounds = fa.window_bounds(window, eff_date, end_of_day)
+    result = fa.load_field_activity(db, my_agent_ids, bounds)
+    return fa.payload(result, bounds)
 
 
 # ---------------------------------------------------------------------------
@@ -1050,6 +1119,22 @@ def list_cases(
     # which bands how much of the LOAN comes back; this bands how much the case
     # is worth working NEXT.
     priority_band: Optional[str] = None,
+    # ── Field activity (2026-09-17) ──────────────────────────────────────────
+    # The overview's funnel links here. `activity` is a funnel stage —
+    # planned | visited | met | paid_or_promised | not_met | met_no_money —
+    # and `activity_window` is today | 7d | 30d, anchored exactly as the
+    # funnel is. `visit_outcome` (comma list) narrows a reason stage to the
+    # cases whose classifying in-window outcome is one of them. Resolved
+    # through the SAME service the funnel uses, so the rows are the count.
+    # Window-scoped by construction: with activity_window=today, a case whose
+    # only visit was yesterday is not "visited".
+    activity: Optional[str] = None,
+    activity_window: Optional[str] = None,
+    visit_outcome: Optional[str] = None,
+    # ── Promises (2026-09-17) ────────────────────────────────────────────────
+    # Cases with an ACTIVE promise committed inside [ptp_due_from, ptp_due_to].
+    ptp_due_from: Optional[str] = None,
+    ptp_due_to: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
 ):
@@ -1059,6 +1144,24 @@ def list_cases(
     q = (db.query(Case)
          .filter(Case.agent_id.in_(my_agent_ids))
          .options(joinedload(Case.customer), joinedload(Case.loan)))
+
+    if activity:
+        from app.services import field_activity_service as fa
+        if activity not in fa.STAGES:
+            raise HTTPException(status_code=422, detail=f"activity must be one of {list(fa.STAGES)}")
+        _, end_of_day, eff_date = _effective_today(my_agent_ids, db)
+        bounds = fa.window_bounds(activity_window or "today", eff_date, end_of_day)
+        outcomes = [o.strip().upper() for o in visit_outcome.split(",") if o.strip()] if visit_outcome else None
+        ids = fa.case_ids_for(db, my_agent_ids, bounds, activity, outcomes)
+        # An empty set must yield NO rows, not all rows: `in_([])` is false.
+        q = q.filter(Case.id.in_(list(ids)) if ids else sa_false())
+    if ptp_due_from or ptp_due_to:
+        due_q = db.query(PTP.case_id).filter(PTP.agent_id.in_(my_agent_ids), PTP.status == PTPStatus.ACTIVE)
+        if ptp_due_from:
+            due_q = due_q.filter(PTP.committed_date >= date.fromisoformat(ptp_due_from))
+        if ptp_due_to:
+            due_q = due_q.filter(PTP.committed_date <= date.fromisoformat(ptp_due_to))
+        q = q.filter(Case.id.in_(due_q.scalar_subquery()))
 
     if status:
         q = q.filter(Case.status == status)
@@ -2716,6 +2819,128 @@ def get_team_attendance(
 # ---------------------------------------------------------------------------
 # Team-level DPD breakdown with optional month filter
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# GET /manager/analytics/payment-modes
+# ---------------------------------------------------------------------------
+#
+# 2026-09-17. The Analytics page's "Collection by Payment Mode" card. One
+# GROUP BY over VERIFIED payments collected by this manager's agents — the
+# same status rule the Collection Trend uses (_live_monthly_metrics), so the
+# card's total ties to the header's Total Collected — optionally narrowed to
+# one calendar month with the same `month=YYYY-MM` convention as the DPD
+# bucket card beside it, so one month-click filters both. Every PaymentMode
+# is returned, zero-filled: a mode nobody uses is a fact worth seeing, not a
+# missing row.
+#
+# The reason the card exists is on the payload: `cash_share_pct` and
+# `digital_share_pct` (UPI + NEFT + RTGS + ONLINE). Cash handled by agents in
+# the field is the compliance-relevant number, and until now nothing on any
+# manager screen could show it.
+
+DIGITAL_MODES = frozenset({"UPI", "NEFT", "RTGS"})
+
+
+@router.get("/analytics/payment-modes")
+def get_payment_modes(
+    current_user: ManagerOnly,
+    db: DbSession,
+    month: Optional[str] = None,  # YYYY-MM — if provided, only payments dated in that month
+):
+    my_agent_ids = [a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()]
+
+    q = (
+        db.query(Payment.mode, func.count(Payment.id), func.coalesce(func.sum(Payment.amount), 0.0))
+        .filter(Payment.agent_id.in_(my_agent_ids), Payment.status == PaymentStatus.VERIFIED)
+    )
+    if month:
+        yr, mo = month.split("-")
+        month_start = datetime(int(yr), int(mo), 1)
+        month_end = datetime(int(yr) + 1, 1, 1) if int(mo) == 12 else datetime(int(yr), int(mo) + 1, 1)
+        q = q.filter(Payment.payment_date >= month_start, Payment.payment_date < month_end)
+
+    # Two members are excluded on purpose. BANK_DIRECT: a bank-side payment
+    # carries agent_id NULL (see the 2026-09-09 direct-payment note) so it can
+    # never match the agent filter above. ONLINE: a prototype leftover no
+    # agent-facing screen offers (see PaymentMode.ONLINE); its 124 demo rows
+    # were re-split across UPI/NEFT/RTGS on 2026-09-17. Either would be a
+    # permanent zero row reading as "a mode nobody uses" when it is "not a
+    # mode an agent can record at all".
+    by_mode = {m.value: {"count": 0, "amount": 0.0} for m in PaymentMode if m.value not in ("BANK_DIRECT", "ONLINE")}
+    for mode, n, amt in q.group_by(Payment.mode).all():
+        key = mode.value if hasattr(mode, "value") else str(mode)
+        by_mode.setdefault(key, {"count": 0, "amount": 0.0})
+        by_mode[key] = {"count": int(n or 0), "amount": round(float(amt or 0.0), 2)}
+
+    total_amount = round(sum(v["amount"] for v in by_mode.values()), 2)
+    total_count = sum(v["count"] for v in by_mode.values())
+    cash = by_mode.get("CASH", {}).get("amount", 0.0)
+    digital = sum(v["amount"] for k, v in by_mode.items() if k in DIGITAL_MODES)
+    share = (lambda x: round(x / total_amount * 100, 1) if total_amount > 0 else 0.0)
+
+    rows = [
+        {
+            "mode": k,
+            "count": v["count"],
+            "amount": v["amount"],
+            "share_pct": share(v["amount"]),
+            "avg_ticket": round(v["amount"] / v["count"], 2) if v["count"] else 0.0,
+            "is_cash": k == "CASH",
+            "is_digital": k in DIGITAL_MODES,
+        }
+        for k, v in by_mode.items()
+    ]
+    rows.sort(key=lambda r: (-r["amount"], r["mode"]))
+
+    # The 6-month split beside the composition bar: cash / digital / paper
+    # (cheque + DD) per calendar month, over the SAME six months the trend
+    # chart shows, so a click there and a column here name the same month.
+    # Unfiltered by `month` on purpose — the trend is the context the
+    # selected month sits in.
+    _, _, _eff = _effective_today(my_agent_ids, db)
+    months6 = _recent_months(_eff, 6)
+    first = datetime(int(months6[0][:4]), int(months6[0][5:7]), 1)
+    # Same "YYYY-MM" form _live_monthly_metrics uses (its _month_of is local
+    # to that function; the SQLite test shim registers to_char for it).
+    pay_month = func.to_char(Payment.payment_date, "YYYY-MM")
+    by_month: dict[str, dict[str, float]] = {m: {"cash": 0.0, "digital": 0.0, "paper": 0.0, "count": 0} for m in months6}
+    for mo, mode, n, amt in (
+        db.query(pay_month, Payment.mode, func.count(Payment.id), func.coalesce(func.sum(Payment.amount), 0.0))
+        .filter(Payment.agent_id.in_(my_agent_ids), Payment.status == PaymentStatus.VERIFIED,
+                Payment.payment_date >= first)
+        .group_by(pay_month, Payment.mode)
+        .all()
+    ):
+        key = str(mo)[:7]
+        if key not in by_month:
+            continue
+        mk = mode.value if hasattr(mode, "value") else str(mode)
+        group = "cash" if mk == "CASH" else "digital" if mk in DIGITAL_MODES else "paper"
+        by_month[key][group] = round(by_month[key][group] + float(amt or 0.0), 2)
+        by_month[key]["count"] += int(n or 0)
+    monthly = []
+    for m in months6:
+        v = by_month[m]
+        tot = v["cash"] + v["digital"] + v["paper"]
+        monthly.append({
+            "month": m,
+            "cash": v["cash"], "digital": v["digital"], "paper": v["paper"],
+            "total": round(tot, 2), "count": v["count"],
+            "cash_share_pct": round(v["cash"] / tot * 100, 1) if tot > 0 else 0.0,
+        })
+
+    return {
+        "month": month,
+        "monthly": monthly,
+        "total_amount": total_amount,
+        "total_count": total_count,
+        "cash_amount": round(cash, 2),
+        "cash_share_pct": share(cash),
+        "digital_amount": round(digital, 2),
+        "digital_share_pct": share(digital),
+        "modes": rows,
+    }
+
 
 @router.get("/analytics/dpd-breakdown")
 def get_team_dpd_breakdown(

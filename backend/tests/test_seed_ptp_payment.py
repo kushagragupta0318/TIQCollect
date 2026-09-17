@@ -127,8 +127,11 @@ def test_the_mode_is_remote_and_never_cash():
     """Cash without a visit is incoherent. Pinned against the module constant so
     widening it cannot happen quietly, and CASH is asserted out separately
     because that is the one that would be wrong rather than merely different."""
+    # 2026-09-17: ONLINE -> RTGS. ONLINE is a prototype leftover no agent can
+    # select (models/payment.py); the seed now draws from the three modes the
+    # app actually offers, and test_payment_modes.py trips if ONLINE returns.
     assert set(_PTP_PAYMENT_MODES) == {PaymentMode.UPI, PaymentMode.NEFT,
-                                       PaymentMode.ONLINE}
+                                       PaymentMode.RTGS}
     assert PaymentMode.CASH not in _PTP_PAYMENT_MODES
     _, added = _book(_case(), committed=5_000.0, due=TODAY)
     assert added[0].mode in _PTP_PAYMENT_MODES

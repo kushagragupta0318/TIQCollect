@@ -12,7 +12,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { AlertTriangle, BatteryLow, Crosshair, Navigation, RefreshCw, Route } from "lucide-react";
+import { AlertTriangle, BatteryLow, Check, Crosshair, Move, Navigation, RefreshCw, Route } from "lucide-react";
 import { getAgentsLive, getAgentTrail, type AgentTrail, type LiveAgentPosition } from "@/api/manager";
 import { STALE_AFTER_S } from "./liveMapConstants";
 import { navigateAction } from "./liveMapNavigate";
@@ -34,6 +34,9 @@ const POLL_MS = 15_000;
 // map still reads as a map rather than an ocean. Deliberately not used as a
 // position for any agent.
 const DEFAULT_CENTRE: [number, number] = [28.6139, 77.209];
+
+/** A touch-first device (phone, tablet): one-finger drags must scroll the page. */
+const isCoarsePointer = () => window.matchMedia?.("(pointer: coarse)").matches ?? false;
 
 const AGENT_COLORS = [
   "#2563EB", // Royal Blue
@@ -150,6 +153,18 @@ export default function ManagerLiveMapPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastSync, setLastSync] = useState<Date | null>(null);
+  // Touch devices only: whether one-finger drags scroll the page (locked) or
+  // pan the map. `null` until the map exists, so the button does not render
+  // on mouse devices.
+  // Decided at first render (not in an effect — no setState-in-effect), so
+  // the map is created with the matching `dragging` option.
+  const [touchLocked, setTouchLocked] = useState<boolean | null>(() => (isCoarsePointer() ? true : null));
+  const toggleTouchLock = () => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (map.dragging.enabled()) { map.dragging.disable(); setTouchLocked(true); }
+    else { map.dragging.enable(); setTouchLocked(false); }
+  };
 
   // ── map bootstrap ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -158,7 +173,16 @@ export default function ManagerLiveMapPage() {
     // positions arrive (see the fit below). Zoom 9 is the whole NCR at a
     // glance, so the fly-in has somewhere to come from; 11 used to be both the
     // opening view and roughly where the fit landed, so the page just appeared.
-    const map = L.map(mapEl.current, { zoomControl: true, attributionControl: true })
+    // ON A PHONE THE MAP MUST NOT SWALLOW THE PAGE SCROLL. 2026-09-17.
+    // Leaflet takes every one-finger drag as a pan, so a manager scrolling the
+    // Live Map page on a phone dragged the map instead and could not reach
+    // the roster below it. On coarse-pointer devices the map starts with
+    // dragging OFF (Leaflet then leaves `touch-action` to the browser, so a
+    // vertical swipe scrolls the page); the "Move map" button in the corner
+    // switches it on, and "Done" switches it back. Pinch-zoom stays on — a
+    // two-finger gesture is unambiguous. Mouse users are unaffected: the
+    // wheel scrolls the page unless the pointer is over the map, as before.
+    const map = L.map(mapEl.current, { zoomControl: true, attributionControl: true, dragging: !isCoarsePointer() })
       .setView(DEFAULT_CENTRE, 9);
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       maxZoom: 19,
@@ -396,9 +420,28 @@ export default function ManagerLiveMapPage() {
       <div className="grid gap-4" style={{ gridTemplateColumns: "minmax(0,1fr)" }}>
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
           {/* Map */}
-          <div className="rounded-card overflow-hidden"
-               style={{ border: "1px solid rgba(0,0,0,0.07)", animation: `enter 420ms ${EASE} 60ms both` }}>
+          <div className="rounded-card overflow-hidden relative"
+               style={{ border: "2px solid #C7CBD4", boxShadow: "0 0 0 1px rgba(0,0,0,0.04)", animation: `enter 420ms ${EASE} 60ms both` }}>
             <div ref={mapEl} style={{ height: "clamp(380px, 62vh, 720px)", width: "100%", background: "#E8EAEE" }} />
+            {touchLocked !== null && (
+              <button
+                type="button"
+                onClick={toggleTouchLock}
+                aria-pressed={!touchLocked}
+                className="tap-target absolute top-3 right-3 z-[1000] inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold shadow-md"
+                style={{ background: touchLocked ? "#fff" : "#2563EB", color: touchLocked ? "#1C1C1F" : "#fff", border: "1px solid rgba(0,0,0,0.12)" }}
+                title={touchLocked ? "One finger scrolls the page. Tap to move the map instead." : "One finger moves the map. Tap when done to scroll the page again."}
+              >
+                {touchLocked ? <Move className="w-3.5 h-3.5" aria-hidden="true" /> : <Check className="w-3.5 h-3.5" aria-hidden="true" />}
+                {touchLocked ? "Move map" : "Done"}
+              </button>
+            )}
+            {touchLocked === true && (
+              <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-[1000] rounded-full px-3 py-1 text-[11px] font-medium pointer-events-none"
+                   style={{ background: "rgba(17,24,39,0.78)", color: "#F9FAFB" }}>
+                Swipe to scroll the page · pinch to zoom
+              </div>
+            )}
           </div>
 
           {/* Roster */}

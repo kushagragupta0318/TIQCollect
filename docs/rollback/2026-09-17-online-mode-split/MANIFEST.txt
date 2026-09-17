@@ -1,0 +1,14 @@
+2026-09-17 — payments.mode ONLINE -> UPI / NEFT / RTGS, split by a hash of
+the payment id (deterministic, roughly a third each), 124 rows.
+
+Why: ONLINE was a prototype catch-all no agent can select (RecordVisitPage
+offers Cash / UPI / Cheque / NEFT-IMPS / RTGS); every ONLINE row was written
+by demo tooling. The mode chart showed a 14% category the product cannot
+produce.
+
+payments_before.csv  the 124 ids with mode ONLINE, before
+payments_after.csv   the same ids with the mode each received
+
+Undo:
+  docker compose exec -T postgres psql -U fieldops -d fieldops -c \
+    "update payments set mode='ONLINE' where id in (<ids from payments_before.csv>)"

@@ -200,9 +200,18 @@ export default function ManagerLayout() {
         style={{ flex: 1, paddingLeft: "var(--rail-w)", display: "flex", flexDirection: "column", minHeight: "100svh" }}
       >
 
-        {/* Top bar */}
+        {/* Top bar.
+            The header is a floating card, so it used to be the sticky element
+            itself, with `top-4` and margins — and page content scrolled
+            through the 16px gap above it and the gutters beside it, visibly
+            (2026-09-17). The STICKY element is now this full-width wrapper,
+            at top-0, painted in the page background: it owns the gap and the
+            gutters, and the card sits inside it exactly where it was. Same
+            look at rest; nothing shows above or beside the card while
+            scrolling. `pb-1` keeps the card's 1px shadow inside the wrapper. */}
+        <div className="sticky top-0 z-30 px-2 pt-2 pb-1 lg:px-4 lg:pt-4" style={{ background: "hsl(var(--background))" }}>
         <header
-          className="sticky top-2 z-30 mx-2 mt-2 flex items-center justify-between gap-3 rounded-card border px-4 py-3 lg:top-4 lg:mx-4 lg:mt-4 lg:px-5"
+          className="flex items-center justify-between gap-3 rounded-card border px-4 py-3 lg:px-5"
           style={{
             background: "#FFFFFF",
             borderColor: "#ECEDF1",
@@ -227,6 +236,7 @@ export default function ManagerLayout() {
             <AccountMenu name={user?.full_name ?? ""} role={user?.role ?? ""} onLogout={handleLogout} />
           </div>
         </header>
+        </div>
 
         {/* Page content — extra bottom padding on mobile so the last card
             clears the fixed tab bar. */}

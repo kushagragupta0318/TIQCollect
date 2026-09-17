@@ -634,7 +634,9 @@ def _loan_account_no() -> str:
     return f"LN{next(_loan_acct_seq):09d}"
 
 
-_PTP_PAYMENT_MODES = (PaymentMode.UPI, PaymentMode.NEFT, PaymentMode.ONLINE)
+# 2026-09-17: was (UPI, NEFT, ONLINE). ONLINE is not a mode an agent can
+# record, so seeded honoured promises now use the three real transfer modes.
+_PTP_PAYMENT_MODES = (PaymentMode.UPI, PaymentMode.NEFT, PaymentMode.RTGS)
 
 
 def _collected_so_far(db, case) -> float:

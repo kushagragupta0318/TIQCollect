@@ -283,6 +283,22 @@ export interface PTP {
   customer_reason: string | null;
 }
 
+/** Promise-to-pay health for the overview's Promises card. kept / broken are
+ *  all-time over the manager's agents' promises; `due_*` bound the next seven
+ *  days from the dashboard's effective date. Added 2026-09-17. */
+export interface PtpHealth {
+  status_counts: Record<string, number>;
+  honored: number;
+  broken: number;
+  active: number;
+  rescheduled: number;
+  /** honoured / (honoured + broken), or null when no promise has been decided. */
+  kept_rate_pct: number | null;
+  due_next_7_days: number;
+  due_from: string;
+  due_to: string;
+}
+
 export interface DashboardSummary {
   total_agents: number;
   agents_on_duty: number;
@@ -301,6 +317,8 @@ export interface DashboardSummary {
     target_amount: number;
     collectable_amount: number;
   }>;
+  /** Added 2026-09-17. Optional: an offline snapshot from before the field existed. */
+  ptp_health?: PtpHealth;
   cases_today: number;
   cases_resolved_today: number;
   visits_today: number;

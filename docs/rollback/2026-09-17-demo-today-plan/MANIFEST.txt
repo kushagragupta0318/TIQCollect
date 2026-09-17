@@ -1,0 +1,13 @@
+2026-09-17 — demo field activity for manager1's routes, written by
+backend/scripts/demo_record_today_plan.py --apply (seed 20260917).
+
+171 visits, 126 VERIFIED payments (Rs 15,18,204), 55 ACTIVE promises dated
+2026-09-24 .. 2026-10-27, against the 214 cases on the 2026-09-17 beats:
+  32 PAID_FULL (case -> PAID, resolved)   54 PART_PAID   15 PTP
+  40 PART_PAID_PTP                        30 NOT_AVAILABLE   43 not visited
+
+Undo (removes exactly these rows, restores case status/collected/visit_count/
+resolved_at and agent visit/collection/ptps_set counters). The api container
+does not see the repo's docs/, so copy the manifest in first:
+  docker compose cp docs/rollback/2026-09-17-demo-today-plan/manifest.json api:/tmp/manifest.json
+  docker compose exec api python -m scripts.demo_record_today_plan --undo /tmp/manifest.json

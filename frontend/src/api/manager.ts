@@ -10,9 +10,18 @@
 // ─────────────────────────────────────────────────────────────────────────
 import api, { LONG_RUNNING_MS } from "./axios";
 import type { DashboardSummary, Agent, CaseReassignment } from "@/types";
+import type { ActivityWindow, FieldActivity } from "@/pages/manager/fieldActivity";
+import type { PaymentModes } from "@/pages/manager/paymentModes";
 
 export async function getDashboard(): Promise<DashboardSummary> {
   const { data } = await api.get<DashboardSummary>("/manager/dashboard");
+  return data;
+}
+
+/** The overview's Field Activity funnel for one window, anchored on the
+ *  dashboard's effective date. Today means today's visits only. */
+export async function getFieldActivity(window: ActivityWindow = "today"): Promise<FieldActivity> {
+  const { data } = await api.get<FieldActivity>("/manager/dashboard/field-activity", { params: { window } });
   return data;
 }
 
@@ -27,6 +36,17 @@ export async function getCases(params?: {
   agent_id?: string;
   date_from?: string;
   date_to?: string;
+  /** Field-activity funnel stage — planned | visited | met | paid_or_promised |
+   *  not_met | met_no_money — resolved server-side through the same service
+   *  the overview funnel uses, for `activity_window` (today | 7d | 30d).
+   *  Window-scoped by construction: a case visited yesterday is not "visited"
+   *  today. `visit_outcome` (comma list) narrows a reason stage. */
+  activity?: string;
+  activity_window?: string;
+  visit_outcome?: string;
+  /** Cases with an ACTIVE promise committed inside [from, to] (yyyy-mm-dd). */
+  ptp_due_from?: string;
+  ptp_due_to?: string;
   /** HIGH | MEDIUM | LOW — filters on the loan's latest computed recovery label.
    *  Server-side, so it narrows the whole book rather than the current page. */
   recovery?: string;
@@ -489,6 +509,16 @@ export async function getManagerAgentCalendar(agentId: string): Promise<AgentAva
 
 export async function getAgentDPDBreakdown(agentId: string, month?: string): Promise<AgentDPDRow[]> {
   const { data } = await api.get<AgentDPDRow[]>(`/manager/agents/${agentId}/dpd-breakdown`, {
+    params: month ? { month } : undefined,
+  });
+  return data;
+}
+
+/** Verified collections by payment mode for the manager's agents — all
+ *  time, or one calendar month with the same `month=YYYY-MM` convention as
+ *  the DPD bucket card, so one month-click filters both. */
+export async function getPaymentModes(month?: string): Promise<PaymentModes> {
+  const { data } = await api.get<PaymentModes>("/manager/analytics/payment-modes", {
     params: month ? { month } : undefined,
   });
   return data;
