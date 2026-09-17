@@ -32,7 +32,6 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone, timedelta
 
-from sqlalchemy import func
 
 from app.core.config import settings
 from app.core.errors import AppException, ErrorCode
@@ -48,6 +47,7 @@ from app.models.customer import Customer
 from app.models.loan import Loan
 from app.models.payment import Payment, PaymentStatus
 from app.models.ptp import PTP, PTPStatus
+from app.services.ptp_lifecycle_service import verified_paid_against
 from app.services.notification_service import NotificationService
 
 
@@ -200,17 +200,11 @@ class PaymentService:
             .all()
         )
         for ptp in active_ptps:
-            total_paid = (
-                self.db.query(func.coalesce(func.sum(Payment.amount), 0.0))
-                .filter(
-                    Payment.case_id == case_id,
-                    Payment.agent_id == agent_id,
-                    Payment.status == PaymentStatus.VERIFIED,
-                    func.date(Payment.payment_date) <= ptp.committed_date,
-                )
-                .scalar()
-                or 0.0
-            )
+            # 2026-09-17 — the sum moved to ptp_lifecycle_service so the
+            # nightly expiry job and this path read ONE definition of "money
+            # against this promise". Same query, same cut-off (the committed
+            # date); the lifecycle job passes the grace day instead.
+            total_paid = verified_paid_against(self.db, ptp, through=ptp.committed_date)
             if float(total_paid) >= float(ptp.committed_amount):
                 previous = str(ptp.status)
                 ptp.status = PTPStatus.HONORED

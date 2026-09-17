@@ -17,6 +17,7 @@ celery_app = Celery(
         "app.workers.tasks.ptp_reminders",
         "app.workers.tasks.beat_generation",
         "app.workers.tasks.performance_snapshot",
+        "app.workers.tasks.ptp_lifecycle",
         "app.workers.tasks.transcription",
         "app.workers.tasks.demo_daily_feed",
         "app.workers.tasks.location_retention",
@@ -95,6 +96,16 @@ celery_app.conf.update(
         "beat-reconciliation": {
             "task": "app.workers.tasks.beat_reconciliation.reconcile_beats",
             "schedule": crontab(hour=2, minute=0),
+        },
+        # Resolve promises whose date has passed, at 00:05 — after the day has
+        # turned (so "two calendar days ago" is judged against the new date),
+        # before the 02:00 reconciliation, 03:00 sweep and 06:00 beat push, and
+        # well before the 09:00 reminders, which must not chase a promise the
+        # calendar has already resolved. One grace day; see
+        # services/ptp_lifecycle_service.py for the rule.
+        "ptp-lifecycle-housekeeping": {
+            "task": "app.workers.tasks.ptp_lifecycle.resolve_expired_promises",
+            "schedule": crontab(hour=0, minute=5),
         },
         # Monthly performance snapshot at midnight on 1st of each month
         "monthly-performance-snapshot": {
