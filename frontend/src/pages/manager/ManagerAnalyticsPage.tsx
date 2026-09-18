@@ -22,6 +22,7 @@ import {
 } from "@/api/manager";
 import { CasePipelineCard } from "./CasePipelineCard";
 import { CashTrendCard, PaymentMixCard } from "./PaymentModesCard";
+import { PtpOutcomesCard } from "./PtpOutcomesCard";
 import { Reveal } from "@/components/ui/Reveal";
 import { AiBadge } from "@/components/ui/AiBadge";
 import type {
@@ -30,6 +31,7 @@ import type {
   RecoveryBreakdown,
 } from "@/api/manager";
 import { TierBadge } from "@/components/ui/Badge";
+import { LIVE, useLiveRefresh } from "@/lib/liveQuery";
 
 const EASE = "cubic-bezier(0.16,1,0.3,1)";
 
@@ -367,8 +369,11 @@ function AgentSpotlight({ entry, months, color, animate, onClose, selMonth, onMo
 const AS_BEFORE = {
   retry: false,
   staleTime: 0,
-  refetchOnWindowFocus: false,
-  refetchOnReconnect: false,
+  // 2026-09-18: every query on this page is live — a minute's poll while the
+  // tab is visible, plus a refetch on focus/reconnect (lib/liveQuery.ts).
+  // The sentence above about "no focus listener" described the old code; the
+  // charts had been frozen from load until the next navigation.
+  ...LIVE,
 } as const;
 
 // ── Main page ─────────────────────────────────────────────────────────────────
@@ -406,6 +411,15 @@ export default function ManagerAnalyticsPage() {
       .catch(() => toast.error("Failed to load analytics"))
       .finally(() => setLoading(false));
   }, []);
+  // 2026-09-18 — the trend, DPD, recovery and leaderboard payload above is
+  // effect-loaded, not a query, so it gets the same cadence by hand: a quiet
+  // re-read every minute while visible and on focus. Silent on failure — a
+  // stale chart beats a toast every minute on a flaky link.
+  useLiveRefresh(() => {
+    Promise.all([getAnalytics(), getAgentsPerformance(6)])
+      .then(([a, p]) => { setAnalytics(a); setAgentPerf(p); })
+      .catch(() => {});
+  });
 
   useEffect(() => {
     if (!loading && analytics) {
@@ -808,6 +822,12 @@ export default function ManagerAnalyticsPage() {
         )}
       </Reveal>
 
+      {/* Promise outcomes — the second six-month series, full width like the
+          trend above it. Per agent when one is selected. 2026-09-18. */}
+      <Reveal style={{ animation: `enter 420ms ${EASE} 270ms both` }}>
+        <PtpOutcomesCard agentId={selectedAgent?.agent_id ?? null} agentName={selectedAgent?.agent_name ?? null} />
+      </Reveal>
+
       {/* Recovery + DPD, then the duty pair — context-aware.
           Every card below is a DIRECT grid child, deliberately. Wrapping two of
           them in a stacked <div> made the grid hold three items instead of four:
@@ -842,6 +862,31 @@ export default function ManagerAnalyticsPage() {
           />
         </div>
         </Reveal>
+        {/* Second row: how the money came in — the mix on the left, the
+            six-month cash trend on the right. Same month filter as the DPD
+            card (apiTeamMonth); a column click on the trend selects the
+            month exactly as the trend chart's rail does. Team-wide only — an
+            agent selection hides both rather than showing a team figure
+            under an agent's name. */}
+        {!selectedAgent && (
+          <>
+            <Reveal className="flex flex-col [&>*]:flex-1">
+              <PaymentMixCard apiMonth={apiTeamMonth} selMonth={selTeamMonth} />
+            </Reveal>
+            <Reveal className="flex flex-col [&>*]:flex-1">
+              <CashTrendCard
+                apiMonth={apiTeamMonth}
+                onMonthClick={(ym) => {
+                  const lbl = monthLabel(ym);
+                  setSelTeamMonth((prev) => (prev === lbl ? null : lbl));
+                }}
+              />
+            </Reveal>
+          </>
+        )}
+        {/* Duty / leave — the roster, LAST in the grid (2026-09-18: moved from
+            the second row to sit below the money rows and just above the AI
+            report, so the page reads money first, people second). */}
         {selectedAgent && agentCalendar ? (
           // One card for the third slot, so it spans the row rather than
           // leaving the cell beside it empty.
@@ -863,28 +908,6 @@ export default function ManagerAnalyticsPage() {
                 selTeamMonth={selTeamMonth}
                 todayOnDuty={analytics.leave_summary.by_type["ON_DUTY"] ?? 0}
                 totalAgents={(analytics.leave_summary.by_type["ON_DUTY"] ?? 0) + (analytics.leave_summary.by_type["OFF_DUTY"] ?? 0)}
-              />
-            </Reveal>
-          </>
-        )}
-        {/* Third row: how the money came in — the mix on the left, the
-            six-month cash trend on the right. Same month filter as the DPD
-            card (apiTeamMonth); a column click on the trend selects the
-            month exactly as the trend chart's rail does. Team-wide only — an
-            agent selection hides both rather than showing a team figure
-            under an agent's name. */}
-        {!selectedAgent && (
-          <>
-            <Reveal className="flex flex-col [&>*]:flex-1">
-              <PaymentMixCard apiMonth={apiTeamMonth} selMonth={selTeamMonth} />
-            </Reveal>
-            <Reveal className="flex flex-col [&>*]:flex-1">
-              <CashTrendCard
-                apiMonth={apiTeamMonth}
-                onMonthClick={(ym) => {
-                  const lbl = monthLabel(ym);
-                  setSelTeamMonth((prev) => (prev === lbl ? null : lbl));
-                }}
               />
             </Reveal>
           </>

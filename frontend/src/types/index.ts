@@ -225,6 +225,9 @@ export interface Case {
    *  backend/app/ml/visit_priority.py. Null when the loan carried no balance to
    *  score — such a case sorts last, never first. */
   visit_priority?: VisitPriority | null;
+  /** The earliest ACTIVE promise the agent took on this case, or null.
+   *  2026-09-18 — distinct from the bank's `bank_ptp_*` fields. */
+  next_ptp?: { committed_date: string | null; committed_amount: number } | null;
 }
 
 /** One of the three named terms behind a visit-priority score. Always all three,

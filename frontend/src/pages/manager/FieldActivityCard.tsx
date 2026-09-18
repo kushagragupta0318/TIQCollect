@@ -26,6 +26,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router";
 import { Footprints } from "lucide-react";
 import { getFieldActivity } from "@/api/manager";
+import { LIVE } from "@/lib/liveQuery";
 import {
   DEFAULT_WINDOW, STAGE_DEFS, WINDOWS, WINDOW_LABEL, WINDOW_WORDS,
   casesLink, dropOffLabel, emptyVisitsMessage, reasonRows, shareOfPlanned,
@@ -49,8 +50,8 @@ export function FieldActivityCard({ style }: { style?: React.CSSProperties }) {
     queryKey: ["manager", "dashboard", "field-activity", window],
     queryFn: () => getFieldActivity(window),
     retry: false,
-    staleTime: 30_000,
-    refetchOnWindowFocus: false,
+    staleTime: 0,
+    ...LIVE,   // 2026-09-18: a visit recorded in the field shows here within a minute
   });
   const d = q.data ?? null;
   const empty = d ? emptyVisitsMessage(d) : null;

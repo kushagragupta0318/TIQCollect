@@ -1080,6 +1080,23 @@ def _cases_payload(db, cases: list, my_agent_ids: list[str], total: int,
 
     reassignment_map = _latest_reassignments(db, list(page_case_ids)) if page_case_ids else {}
 
+    # 2026-09-18 — the promise the agent took, per case. The Promises card's
+    # "Due this week" opens this list filtered by promise date, and every row
+    # then showed only allocation_date (<= today), so a manager saw a list
+    # called "due this week" with no date in it later than today. The earliest
+    # ACTIVE promise per case is what "due" means; `bank_ptp_*` on the row is
+    # the BANK's field and a different thing. One query for the page.
+    next_ptp_map: dict[str, dict] = {}
+    if page_case_ids:
+        for cid, due, amt in (
+            db.query(PTP.case_id, PTP.committed_date, PTP.committed_amount)
+            .filter(PTP.case_id.in_(page_case_ids), PTP.status == PTPStatus.ACTIVE)
+            .order_by(PTP.case_id, PTP.committed_date.asc())
+            .all()
+        ):
+            next_ptp_map.setdefault(cid, {"committed_date": due.isoformat() if due else None,
+                                          "committed_amount": float(amt or 0.0)})
+
     return {
         "total": total,
         "cases": [
@@ -1087,7 +1104,8 @@ def _cases_payload(db, cases: list, my_agent_ids: list[str], total: int,
                             reassignment_map),
              # The SAME score object the case-detail panel renders. Attached per
              # page rather than per book: 50 rows cost three bounded queries.
-             "visit_priority": (scored or {}).get(c.id)}
+             "visit_priority": (scored or {}).get(c.id),
+             "next_ptp": next_ptp_map.get(c.id)}
             for c in cases
         ],
     }
@@ -4322,6 +4340,109 @@ def get_monthly_report(
         "ai_model": _report_llm.model or None,
         "ai_provider": _report_llm.provider or None,
     }
+
+
+# ---------------------------------------------------------------------------
+# Promise outcomes by month — how promises ENDED, by the month they fell due.
+# ---------------------------------------------------------------------------
+
+# Bucket -> the PTP statuses it holds. One place, so the card, the Promises
+# card's kept rate and this endpoint cannot drift on what "kept" means:
+# kept_rate = honored / (honored + broken), the two terminal answers, exactly
+# as /dashboard's ptp_health computes it.
+_PTP_OUTCOME_BUCKETS: dict[str, tuple[PTPStatus, ...]] = {
+    "honored": (PTPStatus.HONORED,),
+    "partly": (PTPStatus.PARTIALLY_HONORED,),
+    "broken": (PTPStatus.BROKEN, PTPStatus.EXPIRED),
+    "rescheduled": (PTPStatus.RESCHEDULED,),
+    "open": (PTPStatus.ACTIVE,),
+}
+
+
+@router.get("/analytics/ptp-outcomes")
+def get_ptp_outcomes(
+    current_user: ManagerOnly,
+    db: DbSession,
+    months: int = 6,
+    agent_id: Optional[str] = None,
+):
+    """Promises grouped by the MONTH THEY FELL DUE (committed_date), split by
+    how they ended: honored / partly / broken / rescheduled, plus those still
+    open, with the kept rate per month.
+
+    2026-09-18. Until the lifecycle job existed (2026-09-17) a promise never
+    ended unless a payment honoured it, so this chart would have shown one
+    green sliver over a sea of "open". Now that promises resolve a day after
+    their grace day, the month-by-month mix is the first place the manager can
+    see whether promise QUALITY is moving, which the lifetime kept rate on the
+    overview cannot show.
+
+    Keyed on committed_date, not created_at — the same choice the monthly
+    PTP-conversion metric made on 2026-08-27 and for the same reason: the
+    month a promise was DUE is the month its outcome belongs to, and
+    created_at is a row-insert timestamp. The current month is always
+    incomplete (its open promises have not fallen due), so `open` is returned
+    as its own bucket for the chart to draw as pending, never folded into the
+    rate. `months` is clamped to 1..24; `agent_id` must be one of this
+    manager's agents (404 otherwise, like every per-agent route here).
+    """
+    months = max(1, min(int(months), 24))
+    my_agent_ids = [a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()]
+    if agent_id:
+        _require_own_agent(db, current_user, agent_id)
+        scope_ids = [agent_id]
+    else:
+        scope_ids = my_agent_ids
+    _, _, eff_date = _effective_today(my_agent_ids, db)
+    # The window ends at the effective month and reaches `months` back, but
+    # promises DUE after the effective month (next month's) are reported too
+    # in a trailing bucket, because they are exactly what "open" means for a
+    # manager looking forward.
+    window = _recent_months(eff_date, months)
+    if not window:
+        return {"months": [], "window": [], "agent_id": agent_id}
+    first_month = window[0]
+    first = date(int(first_month[:4]), int(first_month[5:7]), 1)
+
+    status_of = {st: b for b, sts in _PTP_OUTCOME_BUCKETS.items() for st in sts}
+    month_of = func.to_char(PTP.committed_date, "YYYY-MM")
+    rows = (
+        db.query(month_of, PTP.status, func.count(PTP.id),
+                 func.coalesce(func.sum(PTP.committed_amount), 0.0),
+                 func.coalesce(func.sum(PTP.actual_paid_amount), 0.0))
+        .filter(PTP.agent_id.in_(scope_ids) if scope_ids else sa_false(),
+                PTP.committed_date >= first)
+        .group_by(month_of, PTP.status)
+        .all()
+    )
+    by_month: dict[str, dict] = {}
+
+    def _blank(m: str) -> dict:
+        return {"month": m, "total": 0, "promised_amount": 0.0, "paid_amount": 0.0,
+                **{b: 0 for b in _PTP_OUTCOME_BUCKETS}, "kept_rate_pct": None, "is_current": m == eff_date.strftime("%Y-%m"),
+                "is_future": m > eff_date.strftime("%Y-%m")}
+
+    for m, st, n, promised, paid in rows:
+        key = str(m)[:7]
+        bucket = status_of.get(st if isinstance(st, PTPStatus) else PTPStatus(str(st)))
+        if bucket is None:
+            continue
+        row = by_month.setdefault(key, _blank(key))
+        row[bucket] += int(n or 0)
+        row["total"] += int(n or 0)
+        row["promised_amount"] = round(row["promised_amount"] + float(promised or 0.0), 2)
+        row["paid_amount"] = round(row["paid_amount"] + float(paid or 0.0), 2)
+    for m in window:
+        by_month.setdefault(m, _blank(m))
+    out = []
+    for m in sorted(by_month):
+        r = by_month[m]
+        decided = r["honored"] + r["broken"]
+        r["kept_rate_pct"] = round(r["honored"] / decided * 100, 1) if decided else None
+        out.append(r)
+    return {"months": out, "window": window, "agent_id": agent_id,
+            "effective_month": eff_date.strftime("%Y-%m"),
+            "definition": "kept_rate_pct = honored / (honored + broken); open promises are never in the rate"}
 
 
 # ─── Smart Nightly Case Allocation Endpoints ─────────────────────────────────

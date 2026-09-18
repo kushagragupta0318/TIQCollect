@@ -170,6 +170,8 @@ frontend/src/
                       polyline (encoded-polyline decoder) · constants
   api · components · contexts · hooks · lib · store · types
 docs/                 PLAN.md · MERGING-INTO-PLATFORM.md · case-allocation.{html,pdf}
+                      feature-list.{docx,pdf} (2 pages: every table's columns + the model
+                      inputs and scorecard weights, read from the models on 2026-09-18)
                       recovery-calibration.html · rollback/ · validation/
 ML-PLATFORM-PLAN.md   root, 570 lines, dated 2026-09-07. Planning only — its own
                       header says no code changed. Not a description of what

@@ -62,6 +62,7 @@ const TABLE_COLS = [
 
 import { useModalA11y } from "@/hooks/useModalA11y";
 import type { Case } from "@/types";
+import { LIVE } from "@/lib/liveQuery";
 
 const EASE = "cubic-bezier(0.16,1,0.3,1)";
 const PAGE_SIZE = 50;
@@ -97,6 +98,11 @@ const PTP_STATUS_COLOR: Record<string, string> = {
 function fmt(d: string | null | undefined) {
   if (!d) return "—";
   return new Date(d).toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: true });
+}
+
+/** "25 Sept" — for a cell too narrow for the year; the year lives in the title. */
+function fmtDayMonth(d: string) {
+  return new Date(`${d}T00:00:00`).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
 }
 
 function fmtDate(d: string | null | undefined) {
@@ -973,7 +979,18 @@ function CaseRow({ c, onOpen }: { c: Case; onOpen: () => void }) {
         <div className="min-w-0">
           <RecoveryBadge potential={c.recovery?.recovery_potential} compact />
         </div>
-        <div className="min-w-0"><CaseStatusBadge status={c.status} /></div>
+        <div className="min-w-0">
+          <CaseStatusBadge status={c.status} />
+          {/* 2026-09-18 — the promise the agent took. Without it, the
+              "Due this week" list from the Promises card showed only
+              allocation dates, none of them later than today. */}
+          {c.next_ptp?.committed_date && (
+            <p className="mt-1 text-[11px] whitespace-nowrap tabular-nums truncate" style={{ color: "#B45309" }}
+               title={`Promise to pay ₹${Math.round(c.next_ptp.committed_amount).toLocaleString("en-IN")} by ${fmtDate(c.next_ptp.committed_date)}`}>
+              Due {fmtDayMonth(c.next_ptp.committed_date)}
+            </p>
+          )}
+        </div>
         <div className="min-w-0">
           <p className="font-semibold truncate" style={{ color: "#1C1C1F" }}>₹{c.target_amount.toLocaleString("en-IN")}</p>
           {c.collected_amount > 0 && (
@@ -1027,6 +1044,9 @@ function CaseRow({ c, onOpen }: { c: Case; onOpen: () => void }) {
             <span className="font-semibold text-sm" style={{ color: "#1C1C1F" }}>₹{c.target_amount.toLocaleString("en-IN")}</span>
             {c.collected_amount > 0 && (
               <span className="text-xs text-success-600 ml-1.5">₹{c.collected_amount.toLocaleString("en-IN")} paid</span>
+            )}
+            {c.next_ptp?.committed_date && (
+              <span className="text-xs ml-1.5 whitespace-nowrap" style={{ color: "#B45309" }}>· promise due {fmtDayMonth(c.next_ptp.committed_date)}</span>
             )}
           </div>
           <div className="text-xs text-right min-w-0" style={{ color: "#6B6D76" }}>
@@ -1181,8 +1201,10 @@ export default function ManagerCasesPage() {
     placeholderData: keepPreviousData,
     retry: false,
     staleTime: 0,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
+    // 2026-09-18: the list re-reads every minute while visible and on focus,
+    // so a "Visited today" chip or a promise line appears without a reload.
+    // keepPreviousData above means a poll never blanks the table.
+    ...LIVE,
   });
   const cases = (casesQ.data?.cases as Case[] | undefined) ?? [];
   const total = casesQ.data?.total ?? 0;

@@ -16,6 +16,21 @@
 #   follows the same rule ingest_daily.py does: create the FACTS (dpd, cibil,
 #   amounts, flags) and let services/repayment_service.py derive the score from
 #   them at the end of the run. Customer.risk_score has one authoritative source.
+#
+# 2026-09-18 — The feed had been crashing every morning since 2026-09-09.
+#
+#   The 2026-09-07 refactor that made `dpd_bucket_for` the one bucket rule
+#   added it to the lazy import inside `_core()` and used it in `_seed_day()`
+#   — a different function, which unpacks `_core()`'s tuple and never received
+#   it. Every 05:30 run since raised `NameError: name 'dpd_bucket_for' is not
+#   defined` at the first loan, rolled back, and Celery moved on. Nothing
+#   noticed because the failure is a worker log line and the book still had a
+#   303-case pool to allocate from. Measured on 2026-09-18: last batch
+#   DAILY20260907; the manager's lifetime target sat at Rs 191-192L for eleven
+#   days while collections were ingested against it daily, which is what made
+#   the Analytics KPI look wrong and led here. `_core()` now returns the
+#   function it imports, and `test_demo_daily_feed.py` seeds one day into an
+#   in-memory database so a missing name fails a test instead of a morning.
 # ───────────────────────────────────────────────────────────────────────────
 """
 Demo daily feed — DEMO_MODE only.
@@ -98,12 +113,12 @@ def _core():
     from app.models.loan import Loan, LoanType, DPDBucket, LoanStatus, dpd_bucket_for
     from app.models.case import Case, CaseStatus, CasePriority
     return (SessionLocal, Customer, Loan, LoanType, DPDBucket,
-            LoanStatus, Case, CaseStatus, CasePriority)
+            LoanStatus, Case, CaseStatus, CasePriority, dpd_bucket_for)
 
 
 def _seed_day(db, day: date) -> int:
     (_, Customer, Loan, LoanType, DPDBucket, LoanStatus,
-     Case, CaseStatus, CasePriority) = _core()
+     Case, CaseStatus, CasePriority, dpd_bucket_for) = _core()
 
     tag = day.strftime("%Y%m%d")
     ref_prefix = f"DAILY{tag}"

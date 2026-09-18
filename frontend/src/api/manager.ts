@@ -524,6 +524,15 @@ export async function getPaymentModes(month?: string): Promise<PaymentModes> {
   return data;
 }
 
+/** How promises ended, by the month they fell due — team-wide, or one of
+ *  this manager's agents. 2026-09-18; see pages/manager/ptpOutcomes.ts. */
+export async function getPtpOutcomes(months = 6, agentId?: string): Promise<import("@/pages/manager/ptpOutcomes").PtpOutcomes> {
+  const { data } = await api.get("/manager/analytics/ptp-outcomes", {
+    params: { months, ...(agentId ? { agent_id: agentId } : {}) },
+  });
+  return data;
+}
+
 export async function getTeamDPDBreakdown(month?: string): Promise<AgentDPDRow[]> {
   const { data } = await api.get<AgentDPDRow[]>("/manager/analytics/dpd-breakdown", {
     params: month ? { month } : undefined,

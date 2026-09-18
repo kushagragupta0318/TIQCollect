@@ -18,6 +18,16 @@
 //   backend/app/services/ptp_lifecycle_service.py now resolves a promise the
 //   day after its grace day. Without that line, "Active 200" beside a kept
 //   rate would read as 200 live promises when many were simply past their date.
+//
+//   2026-09-18 — the meter gained a third tone. The lifecycle backfill put
+//   PARTIALLY_HONORED on the live book for the first time (45 promises,
+//   Rs 5.0L paid against Rs 7.7L promised for manager1) and this card showed
+//   them nowhere: not in the bar, not in the counts — the footer listed Active
+//   and Rescheduled and skipped the one status where money actually came in.
+//   Now amber between kept and broken. The kept RATE is unchanged — still
+//   honoured ÷ (honoured + broken), the two terminal answers — so the number
+//   the manager has been reading does not move; the bar just stops hiding the
+//   partial payers inside the grey.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { Link } from "react-router";
@@ -25,14 +35,19 @@ import { Handshake } from "lucide-react";
 import type { PtpHealth } from "@/types";
 
 const KEPT = "#059669";
+const PARTLY = "#D97706";
 const BROKEN = "#DC2626";
 
 export function PromisesCard({ health, style }: { health: PtpHealth | undefined | null; style?: React.CSSProperties }) {
   const kept = health?.honored ?? 0;
+  const partly = health?.status_counts?.PARTIALLY_HONORED ?? 0;
   const broken = health?.broken ?? 0;
-  const decided = kept + broken;
+  // The bar shows all three resolved outcomes; the RATE stays honoured over
+  // honoured + broken, so partly-kept promises widen the bar without moving
+  // the headline number.
+  const resolved = kept + partly + broken;
   const rate = health?.kept_rate_pct ?? null;
-  const keptShare = decided > 0 ? kept / decided : 0;
+  const pct = (n: number) => (resolved > 0 ? (n / resolved) * 100 : 0);
   const dueHref = health
     ? `/manager/cases?ptp_due_from=${health.due_from}&ptp_due_to=${health.due_to}`
     : "/manager/cases";
@@ -65,12 +80,15 @@ export function PromisesCard({ health, style }: { health: PtpHealth | undefined 
               className="mt-2 flex h-2.5 w-full gap-0.5 rounded-full overflow-hidden"
               style={{ background: "#EFF0F4" }}
               role="img"
-              aria-label={`${kept} promises kept, ${broken} broken`}
-              title={`${kept} kept · ${broken} broken`}
+              aria-label={`${kept} promises kept, ${partly} partly kept, ${broken} broken`}
+              title={`${kept} kept · ${partly} partly kept · ${broken} broken`}
             >
-              {decided > 0 && (
+              {resolved > 0 && (
                 <>
-                  <div className="h-full rounded-l-full" style={{ width: `${keptShare * 100}%`, background: KEPT, transition: "width 700ms cubic-bezier(0.16,1,0.3,1)" }} />
+                  <div className="h-full rounded-l-full" style={{ width: `${pct(kept)}%`, background: KEPT, transition: "width 700ms cubic-bezier(0.16,1,0.3,1)" }} />
+                  {partly > 0 && (
+                    <div className="h-full" style={{ width: `${pct(partly)}%`, background: PARTLY, transition: "width 700ms cubic-bezier(0.16,1,0.3,1)" }} />
+                  )}
                   <div className="h-full rounded-r-full flex-1" style={{ background: BROKEN }} />
                 </>
               )}
@@ -78,8 +96,10 @@ export function PromisesCard({ health, style }: { health: PtpHealth | undefined 
             <p className="mt-1.5 text-[11px] tabular-nums" style={{ color: "#6B6D76" }}>
               <span className="inline-flex items-center gap-1"><i aria-hidden="true" style={{ width: 8, height: 8, borderRadius: 2, background: KEPT, display: "inline-block" }} /><strong style={{ color: "#1C1C1F" }}>{kept}</strong> kept</span>
               <span className="mx-2">·</span>
+              <span className="inline-flex items-center gap-1" title="Some verified money arrived against the promise, but less than the amount committed"><i aria-hidden="true" style={{ width: 8, height: 8, borderRadius: 2, background: PARTLY, display: "inline-block" }} /><strong style={{ color: "#1C1C1F" }}>{partly}</strong> partly kept</span>
+              <span className="mx-2">·</span>
               <span className="inline-flex items-center gap-1"><i aria-hidden="true" style={{ width: 8, height: 8, borderRadius: 2, background: BROKEN, display: "inline-block" }} /><strong style={{ color: "#1C1C1F" }}>{broken}</strong> broken</span>
-              {decided === 0 && <span className="ml-2">no promise has fallen due yet</span>}
+              {resolved === 0 && <span className="ml-2">no promise has fallen due yet</span>}
             </p>
           </div>
 

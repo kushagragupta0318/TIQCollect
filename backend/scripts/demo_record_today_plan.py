@@ -26,6 +26,23 @@ sampled. The 2026-09-17 plan, for 214 planned cases:
 Promise dates are 7-40 days out: a few next week, the rest scattered across
 the next month — never inside the first week.
 
+The 2026-09-18 plan (PLANS["2026-09-18"]), again for 214 planned cases:
+
+    25  PAID_FULL        HIGH balances only (top third); case -> PAID, resolved
+    40  PART_PAID        10-45% of the balance
+    50  PART_PAID_PTP    part payment + promise
+    26  PTP              promise only; half due next week (7-13 d), half in October
+    10  met, no money    4 RTP (refused to pay -> case ESCALATED, CUSTOMER_HOSTILE,
+                         exactly as VisitService does) + 6 REVISIT with a money-
+                         issue default_reason and "revisit required" in the notes
+    23  NOT_AVAILABLE    doors that did not open
+    40  (not visited)
+   ---
+   214
+
+Plans are keyed by date; the script refuses to run on a day it has no plan
+for, so a re-run on the wrong day cannot silently replay yesterday's shape.
+
 "Not met" is written as NOT_AVAILABLE for all 30, with the note recording
 whether the borrower was out or the house was locked. It is deliberately NOT
 the REVISIT outcome: in this product REVISIT means the agent reached someone
@@ -73,13 +90,37 @@ ROLLBACK_DIR = pathlib.Path(__file__).resolve().parents[1] / "docs" / "rollback"
 # (see the note on PaymentMode.ONLINE).
 MODES = [PaymentMode.CASH, PaymentMode.UPI, PaymentMode.NEFT, PaymentMode.RTGS, PaymentMode.CHEQUE]
 
-# The plan. Order matters: PAID_FULL is drawn first from the low-balance end.
-PLAN: list[tuple[str, int]] = [
-    ("PAID_FULL", 32),
-    ("PART_PAID", 54),
-    ("PTP", 15),
-    ("PART_PAID_PTP", 40),
-    ("NOT_AVAILABLE", 30),
+# One plan per day. `outcomes` is filled in order after PAID_FULL, which is
+# drawn first by `paid_full` — ("low_mostly", n_low, n_high) takes n_low from
+# the lowest third of balances and n_high from the top third; ("high", n)
+# takes all n from the top third. `ptp_dates` names the promise-date policy.
+PLANS: dict[str, dict] = {
+    "2026-09-17": {
+        "paid_full": ("low_mostly", 26, 6),
+        "outcomes": [("PAID_FULL", 32), ("PART_PAID", 54), ("PTP", 15),
+                     ("PART_PAID_PTP", 40), ("NOT_AVAILABLE", 30)],
+        "ptp_dates": "7_to_40",
+    },
+    "2026-09-18": {
+        "paid_full": ("high", 25),
+        "outcomes": [("PAID_FULL", 25), ("PART_PAID", 40), ("PART_PAID_PTP", 50), ("PTP", 26),
+                     ("RTP", 4), ("REVISIT", 6), ("NOT_AVAILABLE", 23)],
+        "ptp_dates": "next_week_or_october",
+    },
+}
+# Met, no money: what the borrower said. RTP escalates the case (VisitService);
+# REVISIT records a capacity reason and asks for another visit.
+RTP_NOTES = [
+    "Borrower met; refuses to pay, says the bank should take it up legally.",
+    "Borrower met; flatly refused to pay and asked the agent to leave.",
+    "Borrower met; refuses to pay until the bank waives the penal charges.",
+]
+REVISIT_MONEY_ISSUES = [
+    ("SALARY_CUT", "Borrower met; salary cut this quarter, cannot pay this week. Revisit required after salary date."),
+    ("JOB_LOSS", "Borrower met; lost job last month, looking for work. Revisit required in two weeks."),
+    ("OVER_LEVERAGED", "Borrower met; servicing three other loans, no money this month. Revisit required."),
+    ("MEDICAL", "Borrower met; hospital expenses this month, will pay next month. Revisit required."),
+    ("BUSINESS_FAILURE", "Borrower met; shop closed, no income right now. Revisit required."),
 ]
 NOT_MET_NOTES = [
     "Borrower not at home. Neighbour says back in the evening. Revisit required.",
@@ -97,7 +138,7 @@ def _uid() -> str:
 def main() -> None:
     ap = argparse.ArgumentParser(description="Record a planned day of demo field visits.")
     ap.add_argument("--apply", action="store_true", help="Commit (default is a dry run)")
-    ap.add_argument("--seed", type=int, default=20260917)
+    ap.add_argument("--seed", type=int, default=None, help="default: YYYYMMDD of today")
     ap.add_argument("--manager-email", default="manager1@tiqcollect.in")
     ap.add_argument("--undo", type=str, help="Manifest from a previous run (also restores ptps_set)")
     args = ap.parse_args()
@@ -106,13 +147,21 @@ def main() -> None:
         _undo(pathlib.Path(args.undo))
         return
 
+    today = date.today()
+    plan_cfg = PLANS.get(today.isoformat())
+    if plan_cfg is None:
+        raise SystemExit(f"no plan defined for {today}; add one to PLANS before running")
+    PLAN: list[tuple[str, int]] = plan_cfg["outcomes"]
+    if args.seed is None:
+        args.seed = int(today.strftime("%Y%m%d"))
     rng = random.Random(args.seed)
     db = SessionLocal()
     try:
         from app.models.user import User
+        from app.models.case import EscalationReason
+        from app.models.visit import DefaultReason
         mgr = db.query(User).filter(User.email == args.manager_email).one()
         agent_ids = [a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == mgr.id)]
-        today = date.today()
         day_start = datetime.combine(today, time(0, 0), tzinfo=IST)
 
         beats = db.query(Beat).filter(Beat.agent_id.in_(agent_ids), Beat.beat_date == today).all()
@@ -148,12 +197,18 @@ def main() -> None:
         if len(collectable) < n_plan:
             raise SystemExit(f"REFUSED: only {len(collectable)} cases have a balance to collect")
 
-        # PAID_FULL: mostly low balances, a few large. Sort by remaining, take
-        # 26 from the lowest third and 6 from the top third.
+        # PAID_FULL first, by the day's rule, over balances sorted ascending.
         by_bal = sorted(collectable, key=lambda p: remaining(p[0]))
         third = len(by_bal) // 3
         low, high = by_bal[:third], by_bal[-third:]
-        paid_full = rng.sample(low, 26) + rng.sample(high, 6)
+        pf = plan_cfg["paid_full"]
+        if pf[0] == "low_mostly":
+            paid_full = rng.sample(low, pf[1]) + rng.sample(high, pf[2])
+            paid_full_note = f"paid-in-full: {pf[1]} drawn from the lowest third of balances, {pf[2]} from the highest third"
+        else:
+            paid_full = rng.sample(high, pf[1])
+            paid_full_note = f"paid-in-full: all {pf[1]} drawn from the highest third of balances (Rs {remaining(high[0][0]):,.0f}+)"
+        assert len(paid_full) == PLAN[0][1] and PLAN[0][0] == "PAID_FULL"
         taken = {p[0].id for p in paid_full}
         rest = [p for p in collectable if p[0].id not in taken]
         rng.shuffle(rest)
@@ -179,6 +234,14 @@ def main() -> None:
                     existing_receipts.add(cand)
                     return cand
 
+        def _ptp_date() -> date:
+            if plan_cfg["ptp_dates"] == "next_week_or_october":
+                if rng.random() < 0.5:
+                    return today + timedelta(days=rng.randint(7, 13))           # next week
+                nxt = (today.replace(day=1) + timedelta(days=32)).replace(day=1)  # 1st of next month
+                return nxt + timedelta(days=rng.randint(0, 30))                 # anywhere in it
+            return today + timedelta(days=rng.randint(PTP_MIN_DAYS, PTP_MAX_DAYS))
+
         cases_before: dict[str, dict] = {}
         agents_before: dict[str, dict] = {}
         visit_ids: list[str] = []
@@ -203,6 +266,10 @@ def main() -> None:
                 "visit_count": case.visit_count or 0,
                 "status": case.status.value if hasattr(case.status, "value") else str(case.status),
                 "resolved_at": case.resolved_at.isoformat() if case.resolved_at else None,
+                # RTP escalates; restored on --undo
+                "is_escalated": bool(case.is_escalated),
+                "escalation_reason": case.escalation_reason.value if case.escalation_reason else None,
+                "escalated_at": case.escalated_at.isoformat() if case.escalated_at else None,
             })
             agents_before.setdefault(agent.id, {
                 "current_month_visits": agent.current_month_visits or 0,
@@ -213,7 +280,13 @@ def main() -> None:
             money += amount
 
             if promises:
-                ptp_dates.append(today + timedelta(days=rng.randint(PTP_MIN_DAYS, PTP_MAX_DAYS)))
+                ptp_dates.append(_ptp_date())
+            met_no_money = outcome in (VisitOutcome.RTP, VisitOutcome.REVISIT)
+            reason, note = None, None
+            if outcome == VisitOutcome.RTP:
+                note = rng.choice(RTP_NOTES)
+            elif outcome == VisitOutcome.REVISIT:
+                reason, note = rng.choice(REVISIT_MONEY_ISSUES)
 
             if not args.apply:
                 continue
@@ -232,8 +305,9 @@ def main() -> None:
                 customer_met=not not_met,
                 person_met=None if not_met else PersonMet.BORROWER,
                 outcome=outcome,
+                default_reason=DefaultReason(reason) if reason else None,
                 visit_number=(case.visit_count or 0) + 1,
-                notes=rng.choice(NOT_MET_NOTES) if not_met else None,
+                notes=rng.choice(NOT_MET_NOTES) if not_met else (note if met_no_money else None),
             )
             db.add(visit)
             db.flush()
@@ -275,7 +349,12 @@ def main() -> None:
                 case.status = CaseStatus.PARTIALLY_PAID
             elif outcome in (VisitOutcome.PTP, VisitOutcome.PART_PAID_PTP):
                 case.status = CaseStatus.PTP_SET
-            elif case.status == CaseStatus.ASSIGNED:
+            elif outcome == VisitOutcome.RTP:
+                case.status = CaseStatus.ESCALATED
+                case.is_escalated = True
+                case.escalation_reason = EscalationReason.CUSTOMER_HOSTILE
+                case.escalated_at = when
+            elif case.status == CaseStatus.ASSIGNED:      # REVISIT / NOT_AVAILABLE
                 case.status = CaseStatus.IN_PROGRESS
 
         # ── the plan, printed ────────────────────────────────────────────────
@@ -289,7 +368,7 @@ def main() -> None:
             nxt = sum(1 for d in ptp_dates if d <= today + timedelta(days=14))
             print(f"  promises {len(ptp_dates)}: dates {min(ptp_dates)} .. {max(ptp_dates)}; "
                   f"{nxt} within two weeks, {len(ptp_dates) - nxt} later")
-        print("  paid-in-full: 26 drawn from the lowest third of balances, 6 from the highest third")
+        print(f"  {paid_full_note}")
 
         if not args.apply:
             print("\n(dry run -- nothing written; pass --apply to commit)")
@@ -342,6 +421,11 @@ def _undo(path: pathlib.Path) -> None:
                 c.resolved_at = datetime.fromisoformat(before["resolved_at"]) if before["resolved_at"] else None
                 if before["status"] != "PAID":
                     c.resolution_notes = None
+                if "is_escalated" in before:
+                    from app.models.case import EscalationReason
+                    c.is_escalated = before["is_escalated"]
+                    c.escalation_reason = EscalationReason(before["escalation_reason"]) if before["escalation_reason"] else None
+                    c.escalated_at = datetime.fromisoformat(before["escalated_at"]) if before["escalated_at"] else None
         for aid, before in data["agents_before"].items():
             a = db.get(Agent, aid)
             if a:

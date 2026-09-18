@@ -31,6 +31,7 @@ import { Bar, BarChart, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 
 import { getPaymentModes } from "@/api/manager";
 import { shortAmount, shortMoney } from "@/lib/money";
 import { cashCallout, modeWords, orderedModes, type PaymentModeMonth } from "./paymentModes";
+import { LIVE } from "@/lib/liveQuery";
 
 const EASE = "cubic-bezier(0.16,1,0.3,1)";
 const CASH = "#D97706";
@@ -58,8 +59,7 @@ function usePaymentModes(apiMonth: string | null) {
     queryFn: () => getPaymentModes(apiMonth ?? undefined),
     retry: false,
     staleTime: 0,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
+    ...LIVE,
   });
 }
 

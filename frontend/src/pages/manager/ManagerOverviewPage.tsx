@@ -51,8 +51,12 @@ const EASE = "cubic-bezier(0.16,1,0.3,1)";
 const AS_BEFORE = {
   retry: false,
   staleTime: 0,
-  refetchOnWindowFocus: false,
-  refetchOnReconnect: false,
+  // 2026-09-18: focus/reconnect refetch is ON now — see lib/liveQuery.ts. The
+  // 2026-09-10 note below about "no focus listener before" recorded what the
+  // old code did, not what a manager wants; a tab that is looked at should
+  // show what happened while it was not.
+  refetchOnWindowFocus: true,
+  refetchOnReconnect: true,
 } as const;
 
 // Hoisted so the `select` below is referentially stable; an inline arrow would
