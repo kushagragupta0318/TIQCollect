@@ -43,6 +43,19 @@ The 2026-09-18 plan (PLANS["2026-09-18"]), again for 214 planned cases:
 Plans are keyed by date; the script refuses to run on a day it has no plan
 for, so a re-run on the wrong day cannot silently replay yesterday's shape.
 
+The 2026-09-21 plan, for 225 planned cases (15 agents x 15):
+
+    40  PAID_FULL        promises due today first (none were), then the top third
+    50  PART_PAID        OLD cases first — most-visited (only 24 had 2+ visits)
+    29  PTP              due next month or the month after, random dates
+    24  REVISIT          met, no money: hardship reason, LOW balances
+    50  NOT_AVAILABLE    not met
+    32  (not visited)
+
+Per-outcome `pick` rules (see PLANS): "high" / "low" take from the top / bottom
+third of collectable balance, "old_first" sorts by visit_count descending,
+"ptp_due_first" puts cases with a promise due today ahead of the rest.
+
 "Not met" is written as NOT_AVAILABLE for all 30, with the note recording
 whether the borrower was out or the house was locked. It is deliberately NOT
 the REVISIT outcome: in this product REVISIT means the agent reached someone
@@ -106,6 +119,15 @@ PLANS: dict[str, dict] = {
         "outcomes": [("PAID_FULL", 25), ("PART_PAID", 40), ("PART_PAID_PTP", 50), ("PTP", 26),
                      ("RTP", 4), ("REVISIT", 6), ("NOT_AVAILABLE", 23)],
         "ptp_dates": "next_week_or_october",
+    },
+    "2026-09-21": {
+        "paid_full": ("high", 40),
+        "outcomes": [("PAID_FULL", 40), ("PART_PAID", 50), ("PTP", 29),
+                     ("REVISIT", 24), ("NOT_AVAILABLE", 50)],
+        # how the non-PAID_FULL outcomes choose their cases from what is left
+        "pick": {"PART_PAID": "old_first", "REVISIT": "low"},
+        "paid_full_ptp_due_first": True,
+        "ptp_dates": "next_month_or_two",
     },
 }
 # Met, no money: what the borrower said. RTP escalates the case (VisitService);
@@ -206,18 +228,40 @@ def main() -> None:
             paid_full = rng.sample(low, pf[1]) + rng.sample(high, pf[2])
             paid_full_note = f"paid-in-full: {pf[1]} drawn from the lowest third of balances, {pf[2]} from the highest third"
         else:
-            paid_full = rng.sample(high, pf[1])
-            paid_full_note = f"paid-in-full: all {pf[1]} drawn from the highest third of balances (Rs {remaining(high[0][0]):,.0f}+)"
+            due_today: list = []
+            if plan_cfg.get("paid_full_ptp_due_first"):
+                due_ids = {r[0] for r in db.query(PTP.case_id).filter(PTP.status == PTPStatus.ACTIVE, PTP.committed_date <= today).all()}
+                due_today = [p for p in collectable if p[0].id in due_ids][:pf[1]]
+            high_pool = [p for p in high if p[0].id not in {q[0].id for q in due_today}]
+            paid_full = due_today + rng.sample(high_pool, pf[1] - len(due_today))
+            paid_full_note = (f"paid-in-full: {len(due_today)} with a promise due today, "
+                              f"{pf[1] - len(due_today)} from the highest third of balances (Rs {remaining(high[0][0]):,.0f}+)")
         assert len(paid_full) == PLAN[0][1] and PLAN[0][0] == "PAID_FULL"
         taken = {p[0].id for p in paid_full}
         rest = [p for p in collectable if p[0].id not in taken]
         rng.shuffle(rest)
 
         assignment: list[tuple[Case, Agent, str]] = [(c, a, "PAID_FULL") for c, a in paid_full]
-        cursor = 0
+        pick_rules = plan_cfg.get("pick", {})
+        pool = list(rest)                      # already shuffled
+        pick_notes = []
         for outcome, n in PLAN[1:]:
-            chunk = rest[cursor:cursor + n]
-            cursor += n
+            rule = pick_rules.get(outcome)
+            if rule == "old_first":
+                ordered = sorted(pool, key=lambda p: -(p[0].visit_count or 0))
+                chunk = ordered[:n]
+                pick_notes.append(f"{outcome}: {sum(1 for c, _ in chunk if (c.visit_count or 0) >= 2)} of {n} had 2+ earlier visits")
+            elif rule == "low":
+                ordered = sorted(pool, key=lambda p: remaining(p[0]))
+                chunk = ordered[:n]
+                pick_notes.append(f"{outcome}: balances Rs {remaining(chunk[0][0]):,.0f}-{remaining(chunk[-1][0]):,.0f}")
+            elif rule == "high":
+                ordered = sorted(pool, key=lambda p: -remaining(p[0]))
+                chunk = ordered[:n]
+            else:
+                chunk = pool[:n]
+            taken_ids = {c.id for c, _ in chunk}
+            pool = [p for p in pool if p[0].id not in taken_ids]
             assignment += [(c, a, outcome) for c, a in chunk]
         not_visited = [p for p in planned if p[0].id not in {c.id for c, _, _ in assignment}]
 
@@ -235,6 +279,11 @@ def main() -> None:
                     return cand
 
         def _ptp_date() -> date:
+            if plan_cfg["ptp_dates"] == "next_month_or_two":
+                nxt = (today.replace(day=1) + timedelta(days=32)).replace(day=1)   # 1st of next month
+                after = (nxt + timedelta(days=32)).replace(day=1)                   # 1st of the month after
+                start = nxt if rng.random() < 0.5 else after
+                return start + timedelta(days=rng.randint(0, 27))
             if plan_cfg["ptp_dates"] == "next_week_or_october":
                 if rng.random() < 0.5:
                     return today + timedelta(days=rng.randint(7, 13))           # next week
@@ -369,6 +418,8 @@ def main() -> None:
             print(f"  promises {len(ptp_dates)}: dates {min(ptp_dates)} .. {max(ptp_dates)}; "
                   f"{nxt} within two weeks, {len(ptp_dates) - nxt} later")
         print(f"  {paid_full_note}")
+        for note in pick_notes:
+            print(f"  {note}")
 
         if not args.apply:
             print("\n(dry run -- nothing written; pass --apply to commit)")

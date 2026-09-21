@@ -31,6 +31,28 @@
 #   the Analytics KPI look wrong and led here. `_core()` now returns the
 #   function it imports, and `test_demo_daily_feed.py` seeds one day into an
 #   in-memory database so a missing name fails a test instead of a morning.
+#
+# 2026-09-21 — New cases now land across every agent's territory, not only
+#   Gurugram.
+#
+#   The feed drew every new borrower inside one Gurugram bounding box
+#   (`_GGN_LAT/_GGN_LON`). Measured on the 2026-09-22 plan: the open pool was
+#   608 cases / Rs 63.2L, ALL in Gurugram, all within 16 km of the Gurugram
+#   agents and none within 16 km of Noida, Greater Noida or east Delhi. The
+#   territory gate did exactly what it should — and so the five agents based
+#   there received ZERO fresh cases and were sent back to their own partly-paid
+#   leftovers: Mohan Lal Nair, 11 stops, 107 km, Rs 48K collectable, six stops
+#   under Rs 3,000 each already visited 3+ times; Anil Kumar Mishra, 13 fresh
+#   stops in a 3 km cluster, Rs 5.8L. The manager read that as the allocator
+#   being unfair. It was the feed being one-sided.
+#
+#   Each new borrower is now placed near a randomly chosen ACTIVE agent's base
+#   (uniform over agents, so the spread follows the roster: 7 Gurugram, 5
+#   Delhi, 5 Noida/Greater Noida today), 0.5-7 km away in a random direction,
+#   with city/state/pincode taken from that base. Inside 7 km keeps every case
+#   well within its nearest agent's 16 km territory and gives the allocator a
+#   real proximity choice between neighbouring agents instead of a foregone one.
+#   Agents with no base fall back to the old Gurugram box.
 # ───────────────────────────────────────────────────────────────────────────
 """
 Demo daily feed — DEMO_MODE only.
@@ -96,6 +118,49 @@ NEW_CASES_MAX = 210
 _GGN_LAT = (28.40, 28.52)
 _GGN_LON = (77.03, 77.10)
 
+# How far from an agent's base a new borrower may sit (km). The territory gate
+# is 16 km; 7 km leaves room for the agent's own tour and a neighbour's claim.
+_NEAR_BASE_KM = (0.5, 7.0)
+
+# city/state/pincode by the territory text on the agent row. The seed's own
+# labels, so Analytics' city split stays on three values.
+_CITY_BY_TERRITORY = (
+    ("Greater Noida", ("Noida", "Uttar Pradesh", "201310")),
+    ("Noida", ("Noida", "Uttar Pradesh", "201301")),
+    ("Gurugram", ("Gurugram", "Haryana", "122001")),
+    ("Delhi", ("Delhi", "Delhi", "110001")),
+)
+
+
+def _city_for(territory: str | None) -> tuple[str, str, str]:
+    t = territory or ""
+    for key, val in _CITY_BY_TERRITORY:
+        if key in t:
+            return val
+    return ("Gurugram", "Haryana", "122001")
+
+
+def _point_near(lat: float, lon: float) -> tuple[float, float]:
+    """A point 0.5-7 km from (lat, lon) in a uniformly random direction."""
+    import math
+    km = random.uniform(*_NEAR_BASE_KM)
+    bearing = random.uniform(0.0, 2 * math.pi)
+    dlat = (km * math.cos(bearing)) / 111.0
+    dlon = (km * math.sin(bearing)) / (111.0 * max(math.cos(math.radians(lat)), 0.2))
+    return round(lat + dlat, 6), round(lon + dlon, 6)
+
+
+def _territory_anchors(db) -> list[tuple[float, float, str]]:
+    """(base_lat, base_lon, territory) for every active agent with a base."""
+    from app.models.agent import Agent, AgentStatus
+    rows = (
+        db.query(Agent.base_latitude, Agent.base_longitude, Agent.territory)
+        .filter(Agent.base_latitude.isnot(None), Agent.base_longitude.isnot(None),
+                Agent.status != AgentStatus.SUSPENDED)
+        .all()
+    )
+    return [(float(la), float(lo), t) for la, lo, t in rows]
+
 _FIRST = ["Amit", "Pooja", "Sanjay", "Neha", "Rahul", "Divya", "Manish", "Kiran",
           "Vijay", "Anjali", "Deepak", "Sneha", "Rohan", "Preeti", "Nikhil"]
 _LAST = ["Sharma", "Verma", "Gupta", "Singh", "Yadav", "Mehta", "Nair", "Reddy",
@@ -111,14 +176,14 @@ def _core():
     from app.core.database import SessionLocal
     from app.models.customer import Customer
     from app.models.loan import Loan, LoanType, DPDBucket, LoanStatus, dpd_bucket_for
-    from app.models.case import Case, CaseStatus, CasePriority
+    from app.models.case import Case, CaseStatus, CasePriority, priority_for
     return (SessionLocal, Customer, Loan, LoanType, DPDBucket,
-            LoanStatus, Case, CaseStatus, CasePriority, dpd_bucket_for)
+            LoanStatus, Case, CaseStatus, CasePriority, dpd_bucket_for, priority_for)
 
 
 def _seed_day(db, day: date) -> int:
     (_, Customer, Loan, LoanType, DPDBucket, LoanStatus,
-     Case, CaseStatus, CasePriority, dpd_bucket_for) = _core()
+     Case, CaseStatus, CasePriority, dpd_bucket_for, priority_for) = _core()
 
     tag = day.strftime("%Y%m%d")
     ref_prefix = f"DAILY{tag}"
@@ -128,6 +193,7 @@ def _seed_day(db, day: date) -> int:
         return 0
 
     n = random.randint(NEW_CASES_MIN, NEW_CASES_MAX)
+    anchors = _territory_anchors(db)
     created = 0
     new_loan_ids: list[str] = []
     for i in range(n):
@@ -153,10 +219,15 @@ def _seed_day(db, day: date) -> int:
         emi = round(emi, -1)
         months_left = random.randint(14, 60)
         outstanding = round(emi * months_left, 2)
-        priority = (CasePriority.CRITICAL if dpd > 90 else
-                    CasePriority.HIGH if dpd > 60 else
-                    CasePriority.MEDIUM if dpd > 30 else CasePriority.LOW)
+        priority = priority_for(dpd)   # 2026-09-21: the one rule (models/case.py)
 
+        if anchors:
+            base_lat, base_lon, territory = random.choice(anchors)
+            lat, lon = _point_near(base_lat, base_lon)
+            city, state, pincode = _city_for(territory)
+        else:
+            lat, lon = round(random.uniform(*_GGN_LAT), 6), round(random.uniform(*_GGN_LON), 6)
+            city, state, pincode = "Gurugram", "Haryana", "122001"
         cust = Customer(
             id=_uid(), customer_ref=f"{ref_prefix}{i:02d}",
             full_name=f"{random.choice(_FIRST)} {random.choice(_LAST)}",
@@ -164,9 +235,9 @@ def _seed_day(db, day: date) -> int:
             pan_masked="XXXXX1234X", aadhaar_masked="XXXXXXXX5678",
             phone_primary=f"9{random.randint(100000000, 999999999):09d}",
             address_line1=f"{random.randint(1, 200)}, Sector {random.randint(1, 70)}",
-            city="Gurugram", state="Haryana", pincode="122001",
-            latitude=round(random.uniform(*_GGN_LAT), 6),
-            longitude=round(random.uniform(*_GGN_LON), 6),
+            city=city, state=state, pincode=pincode,
+            latitude=lat,
+            longitude=lon,
             # risk_category / risk_score are NOT set here. They are derived, and
             # services/repayment_service.py owns them — see the changelog above.
             # The column defaults (MEDIUM, 50.0) mean "not yet scored" until the

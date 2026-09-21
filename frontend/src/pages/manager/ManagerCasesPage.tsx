@@ -100,6 +100,18 @@ function fmt(d: string | null | undefined) {
   return new Date(d).toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: true });
 }
 
+/** A filter control with a small caption above it, so the toolbar reads as a
+ *  form rather than a row of unlabelled dropdowns. 2026-09-21. */
+function FilterField({ label, children, className = "" }: { label: string; children: React.ReactNode; className?: string }) {
+  return (
+    <label className={`flex flex-col gap-1 min-w-0 ${className}`}>
+      <span className="text-[10.5px] font-semibold uppercase tracking-wide" style={{ color: "#8A8F9C" }}>{label}</span>
+      {children}
+    </label>
+  );
+}
+const CONTROL = "input w-full text-[13px] py-2 px-2.5 tap-target-h";
+
 /** "25 Sept" — for a cell too narrow for the year; the year lives in the title. */
 function fmtDayMonth(d: string) {
   return new Date(`${d}T00:00:00`).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
@@ -1134,6 +1146,10 @@ export default function ManagerCasesPage() {
   const [agentName] = useState<string | null>(() => searchParams.get("agent_name"));
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
+  // The roster, for the Agent picker. Same key as the reassign modal's query,
+  // so the two share one fetch.
+  const rosterQ = useQuery({ queryKey: ["manager", "agents"], queryFn: getAgents, staleTime: 60_000 });
+  const roster = rosterQ.data ?? [];
 
   // ─── React Query, 2026-09-10 ────────────────────────────────────────────
   //
@@ -1287,6 +1303,10 @@ export default function ManagerCasesPage() {
         clear: () => setPrioritySort("OFF"),
       });
     }
+    if (agentId) {
+      const a = roster.find((r) => r.id === agentId);
+      out.push({ key: "agent", label: `Agent: ${a?.full_name ?? agentName ?? "selected"}`, clear: () => setAgentId(null) });
+    }
     if (priorityBand !== "ALL") {
       out.push({
         key: "priorityBand",
@@ -1333,7 +1353,8 @@ export default function ManagerCasesPage() {
     }
     return out;
   }, [statusFilter, bucketFilter, recoveryFilter, prioritySort, priorityBand,
-      dateFrom, dateTo, defaultRange]);
+      dateFrom, dateTo, defaultRange, agentId, roster, agentName]);
+  const clearAllFilters = () => activeFilters.forEach((f) => f.clear());
 
   return (
     <>
@@ -1351,38 +1372,32 @@ export default function ManagerCasesPage() {
           </div>
         </div>
 
-        {/* Agent filter chip */}
-        {agentId && (
-          <div className="flex items-center gap-2" style={{ animation: `enter 300ms ${EASE} 0ms both` }}>
-            <div
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium"
-              style={{ background: "#EEF3FD", color: "#0C66E4", border: "1px solid #C7D9FA" }}
-            >
-              <span>Showing cases for: <strong>{agentName || `Agent ${agentId}`}</strong></span>
-              <button
-                onClick={() => setAgentId(null)}
-                style={{ marginLeft: 4, lineHeight: 1, color: "#0C66E4", background: "none", border: "none", cursor: "pointer", padding: 0, fontSize: 14 }}
-                aria-label="Clear agent filter"
-              >
-                ×
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Filters — search is always visible; the rest collapse below lg so
-            the list starts near the top of a phone screen. Applied filters
-            stay on screen as chips, so collapsing hides controls, not state. */}
-        <div className="space-y-3" style={{ animation: `enter 420ms ${EASE} 60ms both` }}>
-          <div className="flex gap-2 items-start">
-            <div className="flex-1 min-w-0">
+        {/* Filter toolbar — 2026-09-21. One card, three rows: search + agent +
+            result count; labelled controls in a grid; applied chips with
+            "Clear all". Before this the six selects sat unlabelled in a wrap
+            row with the date range breaking onto its own line, and the chips
+            only showed on phones. Search stays visible on every size; the
+            control grid collapses below lg behind the Filters button, and the
+            chips keep the applied state on screen while it is collapsed. */}
+        <div className="card p-3 sm:p-4 space-y-3" style={{ animation: `enter 420ms ${EASE} 60ms both` }}>
+          <div className="flex flex-wrap gap-2 items-center">
+            <div className="flex-1 min-w-[220px]">
               <Input
-                placeholder="Search customer, case no, agent..."
+                placeholder="Search customer, case no, agent…"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 leftIcon={<Search className="w-4 h-4" />}
               />
             </div>
+            <select
+              className="input text-[13px] py-2 px-2.5 tap-target-h flex-1 min-w-0 sm:flex-none sm:w-52"
+              value={agentId ?? ""}
+              onChange={(e) => setAgentId(e.target.value || null)}
+              aria-label="Filter by agent"
+            >
+              <option value="">All agents{roster.length ? ` (${roster.length})` : ""}</option>
+              {roster.map((a) => <option key={a.id} value={a.id}>{a.full_name}</option>)}
+            </select>
             <button
               type="button"
               onClick={() => setFiltersOpen((v) => !v)}
@@ -1405,79 +1420,91 @@ export default function ManagerCasesPage() {
                 </span>
               )}
             </button>
+            <span className="hidden lg:inline text-xs tabular-nums whitespace-nowrap" style={{ color: "#6B6D76" }}>
+              {casesQ.isFetching && !casesQ.data ? "Loading…" : total === 0 ? "No cases" : `${(page * PAGE_SIZE + 1).toLocaleString()}–${Math.min((page + 1) * PAGE_SIZE, total).toLocaleString()} of ${total.toLocaleString()}`}
+            </span>
           </div>
 
-          {/* Active-filter chips — visible whether or not the panel is open */}
+          <div className={`${filtersOpen ? "grid" : "hidden"} lg:grid grid-cols-2 lg:grid-cols-[1fr_1fr_1fr_1fr_1.7fr_1.3fr] gap-2 lg:gap-3 pt-3`}
+               style={{ borderTop: "1px solid #EEF0F4" }}>
+            <FilterField label="Status">
+              <select className={CONTROL} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} aria-label="Filter by status">
+                <option value="ALL">All</option>
+                {([["ASSIGNED", "Assigned"], ["IN_PROGRESS", "In progress"], ["PTP_SET", "PTP set"], ["PARTIALLY_PAID", "Partially paid"],
+                   ["PAID", "Paid"], ["ESCALATED", "Escalated"], ["CLOSED", "Closed"]] as const).map(([st, word]) => (
+                  <option key={st} value={st}>{word}</option>
+                ))}
+              </select>
+            </FilterField>
+            <FilterField label="Recovery outlook">
+              <select className={CONTROL} value={recoveryFilter} onChange={(e) => setRecoveryFilter(e.target.value)} aria-label="Filter by recovery potential">
+                <option value="ALL">All</option>
+                <option value="HIGH">High</option>
+                <option value="MEDIUM">Medium</option>
+                <option value="LOW">Low</option>
+              </select>
+            </FilterField>
+            <FilterField label="Visit priority">
+              <select className={CONTROL} value={priorityBand} onChange={(e) => setPriorityBand(e.target.value)} aria-label="Filter by visit priority band">
+                <option value="ALL">All</option>
+                <option value="HIGH">High</option>
+                <option value="MEDIUM">Medium</option>
+                <option value="LOW">Low</option>
+              </select>
+            </FilterField>
+            <FilterField label="DPD bucket">
+              <select className={CONTROL} value={bucketFilter} onChange={(e) => setBucketFilter(e.target.value)} aria-label="Filter by DPD bucket">
+                <option value="ALL">All</option>
+                <option value="BUCKET_2">31–60 DPD</option>
+                <option value="BUCKET_3">61–90 DPD</option>
+                <option value="NPA">NPA 90+</option>
+              </select>
+            </FilterField>
+            <FilterField label="Assigned between" className="col-span-2 lg:col-span-1">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <input type="date" className={`${CONTROL} min-w-0`} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} aria-label="Assigned from" />
+                <span className="flex-shrink-0 text-xs" style={{ color: "#8A8F9C" }}>–</span>
+                <input type="date" className={`${CONTROL} min-w-0`} value={dateTo} onChange={(e) => setDateTo(e.target.value)} aria-label="Assigned to" />
+              </div>
+            </FilterField>
+            {/* Visit priority sort and band are two controls on purpose: a
+                manager sorting the whole book and one narrowing to HIGH are
+                different questions. Both are server-side — the list paginates
+                there, so a client sort would only reorder the 50 rows on screen. */}
+            <FilterField label="Sort">
+              <select className={CONTROL} value={prioritySort} onChange={(e) => setPrioritySort(e.target.value)} aria-label="Sort by visit priority">
+                <option value="OFF">Latest first</option>
+                <option value="priority_desc">Visit priority high → low</option>
+                <option value="priority_asc">Visit priority low → high</option>
+              </select>
+            </FilterField>
+          </div>
+
           {activeFilters.length > 0 && (
-            <div className="flex flex-wrap gap-2 lg:hidden">
+            <div className="flex flex-wrap items-center gap-2 pt-3" style={{ borderTop: "1px solid #EEF0F4" }}>
+              <span className="text-[11px] font-semibold uppercase tracking-wide mr-1" style={{ color: "#8A8F9C" }}>Applied</span>
               {activeFilters.map((f) => (
                 <span
                   key={f.key}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium"
+                  className="inline-flex items-center gap-1 pl-2.5 pr-1.5 py-1 rounded-full text-xs font-medium"
                   style={{ background: "#EEF3FD", color: "#0C66E4", border: "1px solid #C7D9FA" }}
                 >
                   {f.label}
                   <button
                     onClick={f.clear}
                     aria-label={`Remove ${f.label} filter`}
-                    className="flex items-center justify-center"
-                    style={{ width: 16, height: 16, background: "none", border: "none", color: "#0C66E4", cursor: "pointer", padding: 0 }}
+                    className="flex items-center justify-center rounded-full hover:bg-white/70"
+                    style={{ width: 18, height: 18, background: "none", border: "none", color: "#0C66E4", cursor: "pointer", padding: 0 }}
                   >
                     <X className="w-3 h-3" />
                   </button>
                 </span>
               ))}
+              <button type="button" onClick={clearAllFilters} className="text-xs font-semibold ml-auto px-2 py-1 rounded-lg hover:bg-slate-100" style={{ color: "#6B6D76" }}>
+                Clear all
+              </button>
             </div>
           )}
-
-          <div className={`${filtersOpen ? "grid" : "hidden"} lg:flex grid-cols-2 gap-2 lg:gap-3 lg:flex-wrap lg:items-center`}>
-            <select className="input w-full lg:w-auto tap-target-h" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} aria-label="Filter by status">
-              <option value="ALL">All Status</option>
-              {["ASSIGNED", "IN_PROGRESS", "PTP_SET", "PARTIALLY_PAID", "PAID", "ESCALATED", "CLOSED"].map((s) => (
-                <option key={s} value={s}>{s.replace(/_/g, " ")}</option>
-              ))}
-            </select>
-            <select className="input w-full lg:w-auto tap-target-h" value={recoveryFilter} onChange={(e) => setRecoveryFilter(e.target.value)} aria-label="Filter by recovery potential">
-              <option value="ALL">All Recovery</option>
-              <option value="HIGH">High recovery</option>
-              <option value="MEDIUM">Medium recovery</option>
-              <option value="LOW">Low recovery</option>
-            </select>
-            {/* Visit priority. Two controls rather than one combined dropdown:
-                a manager sorting the whole book and a manager narrowing to the
-                HIGH band are different questions, and either is useful without
-                the other. Both are server-side — the list paginates there, so a
-                client-side sort would only reorder the 50 rows on screen. */}
-            <select className="input w-full lg:w-auto tap-target-h" value={prioritySort}
-                    onChange={(e) => setPrioritySort(e.target.value)}
-                    aria-label="Sort by visit priority">
-              <option value="OFF">Sort: Latest first</option>
-              <option value="priority_desc">Sort: Visit priority high → low</option>
-              <option value="priority_asc">Sort: Visit priority low → high</option>
-            </select>
-            <select className="input w-full lg:w-auto tap-target-h" value={priorityBand}
-                    onChange={(e) => setPriorityBand(e.target.value)}
-                    aria-label="Filter by visit priority band">
-              <option value="ALL">All visit priorities</option>
-              <option value="HIGH">Visit priority HIGH</option>
-              <option value="MEDIUM">Visit priority MEDIUM</option>
-              <option value="LOW">Visit priority LOW</option>
-            </select>
-            <select className="input w-full lg:w-auto tap-target-h" value={bucketFilter} onChange={(e) => setBucketFilter(e.target.value)} aria-label="Filter by DPD bucket">
-              <option value="ALL">All Buckets</option>
-              <option value="BUCKET_2">31–60 DPD</option>
-              <option value="BUCKET_3">61–90 DPD</option>
-              <option value="NPA">NPA 90+</option>
-            </select>
-            <label className="flex items-center gap-2 text-xs min-w-0" style={{ color: "#6B6D76" }}>
-              <span className="flex-shrink-0">Visit day from</span>
-              <input type="date" className="input text-xs py-1.5 px-2 w-full lg:w-36 tap-target-h" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-            </label>
-            <label className="flex items-center gap-2 text-xs min-w-0" style={{ color: "#6B6D76" }}>
-              <span className="flex-shrink-0">to</span>
-              <input type="date" className="input text-xs py-1.5 px-2 w-full lg:w-36 tap-target-h" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
-            </label>
-          </div>
         </div>
 
         {/* Cases — 12-col table on desktop, cards below lg. Same eight fields
@@ -1511,8 +1538,18 @@ export default function ManagerCasesPage() {
                 attempted was to clamp the range to today — which hid every one
                 of them, i.e. exactly the rows a manager looks for after a day in
                 the field. Reverted. The column was never showing the wrong data,
-                it was answering a different question than its label implied. */}
-            <span>Next Visit Day</span>
+                it was answering a different question than its label implied.
+
+                2026-09-21 — "Assigned on". The paragraph above was true on
+                2026-09-10 and stopped being true when planner_service stopped
+                stamping tomorrow's date: `allocation_date` is now the day the
+                ALLOCATOR RAN and assigned the case (the schedule lives on the
+                Beat). A run at 10:23 this morning planning 22 Sep wrote today's
+                date on 282 cases, and "Next Visit Day: 21 Sep" on a day with no
+                beat read as a bug again. The label now says what the column
+                holds; the "Visit day" filter below is the same column and is
+                renamed with it. */}
+            <span>Assigned on</span>
           </div>
 
           {view === "loading" ? (

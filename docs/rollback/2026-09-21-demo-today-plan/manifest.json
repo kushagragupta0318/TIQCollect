@@ -1,0 +1,2161 @@
+{
+  "written_at": "2026-09-21T06:09:27.310501+00:00",
+  "beat_date": "2026-09-21",
+  "seed": 20260921,
+  "plan": [
+    [
+      "PAID_FULL",
+      40
+    ],
+    [
+      "PART_PAID",
+      50
+    ],
+    [
+      "PTP",
+      29
+    ],
+    [
+      "REVISIT",
+      24
+    ],
+    [
+      "NOT_AVAILABLE",
+      50
+    ]
+  ],
+  "visit_ids": [
+    "f10f2461-e6a9-4e43-bf70-788fc0285715",
+    "7c6cdd9e-ca5c-4388-a146-1b23f38fe367",
+    "a782caca-5112-4d3e-b157-4ce112245e40",
+    "35ced298-eee2-4e72-80da-d40c9e9983b5",
+    "efa63341-a495-4861-aefc-b4b202397b51",
+    "ac11bd06-31cf-4672-82d6-60c85c5e2caf",
+    "d5b95191-8c6c-4619-8dac-cae5c9ac30c9",
+    "6003092f-3e82-4daf-9304-53c08f7ebfa6",
+    "22f4f891-454f-4313-82a4-eee1bbbc5d7d",
+    "ca13a4e6-8327-4583-806d-1c98879bb924",
+    "040ce2a3-348d-4e79-8b81-088077917bdd",
+    "83aac391-7d7a-4593-99a4-46ad87f14fd5",
+    "cce47824-066a-4382-8d55-cd15acc4ba25",
+    "20b91a09-7c11-471b-99a9-d1db7e4c5458",
+    "06a02096-4206-41dd-88ca-7dc30211a14d",
+    "ae238002-e403-4bb0-8b7c-c11878eac58c",
+    "56cf33ae-c5b4-41a2-b87d-6b03a50fcd9c",
+    "1136235c-8d87-49d4-a216-35997b316a20",
+    "716c48c1-3f8d-4b48-8ab4-575660869929",
+    "39c91321-099f-4918-8018-75d9c884ac9c",
+    "8dbdb908-4dff-4a13-b6a9-9274b960bf01",
+    "31352bf7-56a5-43c7-b3d5-7a120e24593f",
+    "50428299-fa84-45ba-8702-e0d9828b7de4",
+    "23ae32ad-7d4e-4581-bf36-961ebf94b057",
+    "c3c329a0-d848-4159-9f17-fe04efc923ee",
+    "0b8d9c77-22e3-46a5-94e6-2816d29eb49c",
+    "98a4e793-028d-46a5-8206-307c446b655f",
+    "eb0ea22f-f6c1-407a-887e-a9701b9eea05",
+    "3949f012-3d2e-4a24-a412-38794c4220ea",
+    "ce676f41-6518-4264-8d3f-8a383c8d4165",
+    "dedf3edc-6e6c-4582-ac52-e39fda8f8073",
+    "b8ab3b51-0cc3-4153-99bf-f321948b546f",
+    "a96c6abc-fdaa-448e-8291-326bccb1aba7",
+    "ece5ae7a-fa7b-46d5-8b4e-0b9ec3d12584",
+    "2f7c4cc5-5a61-4d34-b177-c62482cafb58",
+    "53d1696d-d93d-4d76-9887-afe7c94868a1",
+    "101d8dc4-376e-43ba-9b8f-0912a01073a0",
+    "97509b94-5540-459d-87c4-d71cbb712f2c",
+    "d0293ffb-f472-4e5a-be8f-6de584509d04",
+    "af336d24-15ff-4ca7-93b4-2bda8a52eed5",
+    "4f940451-e735-4134-b027-f5a338e8e577",
+    "4e80b01d-a768-4abd-87ef-227007fdfa25",
+    "46c30349-f25d-40a5-90ee-2dab9d91817e",
+    "145841a7-b91b-401a-8c7b-26f8e0413282",
+    "e64c36be-f4a7-4675-9604-03a6c7e3c013",
+    "499f4314-c496-4417-a39f-9c4669412b85",
+    "d3a4e2a2-1a2a-4f5b-bd36-940bb712a7fa",
+    "10a2abfa-500a-4b23-a6cb-5b60e12eb483",
+    "16e597da-aedc-4382-b6b9-aca8ced9ca75",
+    "b33f85a2-903c-4e9d-b612-9ad99bdbae29",
+    "f93ffd83-9a38-4cc6-975e-1450bda539cb",
+    "d151d3af-2000-49b8-a3a8-337ca0c57952",
+    "d8369969-0495-4ef1-9b75-e811592237c7",
+    "66f99bb0-7b26-4133-870e-4dff56b9bfc9",
+    "494582e2-4f2a-48e6-b5c3-eea40adab305",
+    "403aaf14-c157-4893-bf99-3baed5e6ed09",
+    "b7eb6919-0e5a-4868-8b70-fb4089265840",
+    "448d983b-5f6e-420f-b24f-069d5a8737ae",
+    "1f79221e-3901-470d-87b6-831f86c6ae59",
+    "3fd22215-7f39-4fe3-86a3-69e3a336e170",
+    "a8911734-3304-4a45-9542-5345fd9dadd6",
+    "da73f9cd-9c9b-43dc-b726-068a60caef20",
+    "5608ce6f-45a4-4cbd-8b9d-b3265ca0971a",
+    "782e2c19-7d64-4780-aa26-c43486571d84",
+    "cec9b8fc-4eb5-4674-9c65-1b0200d5fd32",
+    "aaa67877-fbdc-4245-ae39-14ea1caeecd1",
+    "742c240b-ee1c-4c7b-85f7-dc39edd88be2",
+    "4510a753-4c20-4efb-a049-df13726517b4",
+    "09fe1151-0aa1-4ba8-8acc-7a5c59edcbf8",
+    "38fd0610-f939-42b3-99e2-3d969329edfd",
+    "19966401-7c82-4119-9632-f2b522a14094",
+    "741321b6-4694-4f69-b241-906be7f6f242",
+    "a60dbab6-c8f0-4cf2-9a0a-c14c9a1762c9",
+    "53c30c03-b820-4adb-b32a-1f64c9201bda",
+    "3ff8910f-ec07-4a14-ae63-905eb295fb14",
+    "de5d0108-23dd-4d70-96b4-0a27b4fd91df",
+    "d4919c94-3879-4617-9711-7d2115448abd",
+    "6849f96a-8fc9-4a89-8431-46c26dad642b",
+    "b296299e-8eaa-4609-9f92-120ac096b2bc",
+    "75563437-51e9-419f-b2a9-e7c8c22e4248",
+    "ec6520ee-44a0-4a26-9e13-66e0b23a6f0e",
+    "a0a488c8-9a15-455b-9150-ea26c618fbe6",
+    "a9dcc7c5-b479-4900-a2a9-9a6473c02281",
+    "8902b3d7-e767-45c5-b083-a6be53dc9018",
+    "dad643a6-99b6-4888-b710-a571183924d2",
+    "5494eb34-9d0c-467e-b7af-0b574a3d1b34",
+    "bc74a35d-ec4e-4861-b781-5aa8ca313d2e",
+    "74a7a141-ffda-4dd9-bfad-09017ca1b4ca",
+    "544a38a7-9293-4389-afac-cd579305f30c",
+    "f004f4a7-d6a7-4d61-8ad3-e2341d743d35",
+    "c7aeab8f-2b0c-4535-9d3d-8feeddc12cdb",
+    "3b56bf1b-58a2-4e89-8f02-b7f20973f184",
+    "ad23ee2f-0ee2-434b-b91f-8e694cf9728e",
+    "78a32d0a-208b-48f7-943f-2d79e6f3b285",
+    "420831a5-89a1-46dd-a7f5-1950ed5c4d12",
+    "d25788de-4e49-4f3f-aaf0-786f34c77ef2",
+    "04d98f87-e2b5-4cf5-afbc-5656bb592e82",
+    "6b24700a-3ee2-4e2b-99d1-66158e44c061",
+    "c88c06ba-091f-44b0-9306-b20db0e1be65",
+    "052d598d-bae6-486d-b10a-739b4a755245",
+    "cd901c8f-5a46-4605-aac8-da157c64949c",
+    "dcc60ef8-fe0b-4e03-b0e6-a3bc335f8d85",
+    "35f046b0-b227-462b-b232-00ec03ac0389",
+    "16ff9c0c-2112-4aa9-8b46-349384dd9f2f",
+    "227719e5-3fe3-4050-9ecb-9697165c36f0",
+    "cd6d0437-d73d-4231-9596-a364322d970f",
+    "1623294b-6234-4e3b-bbde-6b974f97cb7a",
+    "55b7d01a-b96b-4ab8-9fdc-2edbbe1df76c",
+    "b6502876-f2fe-4b25-9311-6b056d86eae6",
+    "aadd5b06-6a73-4c55-85dc-b5f9b0d226dd",
+    "9e7d1d97-cba9-4f2c-afb2-f4adcb6f5636",
+    "78927b67-1059-4318-9d9f-b68271fdfb91",
+    "c9604d43-405e-4077-9ac5-dd59e36a4be5",
+    "d356ff93-41d2-404c-a778-f4cad983d763",
+    "489aa43e-bc1f-471e-8d92-5f4f42449ca2",
+    "4c24de51-c740-440b-8e04-bd586d222f03",
+    "1ea2d433-830f-4156-9746-fea0391e6e58",
+    "8e796229-5cb5-4214-81fd-2f9b5918427b",
+    "80827f5e-b06a-41f6-9531-dc158e84163d",
+    "102c47c2-d3bb-4142-ac4c-d387d2a0d6be",
+    "a46d2862-bc38-4800-ab54-02c6e71c090e",
+    "92b7094e-1e47-447a-b167-7827315941ab",
+    "afcdddc0-e29b-4150-a71e-61a5f45fce8e",
+    "20bd146f-729c-4c35-aca4-67922fae9fc8",
+    "cfa3ce4d-9e7e-4793-908d-7d6f14025f22",
+    "830fb629-97e1-4788-a3ec-a123b1e32bcb",
+    "f12b1e7d-9680-4765-9d68-5853f805f738",
+    "b8490f6f-3105-48fd-849a-f40112bc5afa",
+    "2ee29869-ae9b-4073-942d-960ffff06f97",
+    "ebca8c68-734b-439e-ad40-8fee310d118b",
+    "5e2ce6b8-842d-4e30-b009-3edee6cfc696",
+    "41d6af9c-25e4-4d5c-b1ab-f05efc244e60",
+    "8fc5b578-6edb-43ce-bc9b-d2037f4760ca",
+    "709cef5f-b4b8-4095-b621-49026eabc449",
+    "36026c52-b4c1-41ea-9530-5b8aa1208255",
+    "31a9c37e-7bba-469f-aa68-ade85cbcb873",
+    "f0f5f078-d2af-4ced-9eee-475de8456e93",
+    "b5916f33-43ea-40e4-9656-3df520eb37aa",
+    "44b61e1d-f513-42e1-bb65-1b48de2d6df6",
+    "f4ab1ecb-b1d5-4fd9-8c65-ed158d0f9c60",
+    "22e8346b-1f8a-426e-8a5a-e331eea1ce52",
+    "6c57fc2b-1de8-40ca-a027-f0839c38bd1e",
+    "df998c1d-5392-4bb1-af26-fe673e0cb74b",
+    "03b69cb5-2d14-4e36-ad85-087caed262ab",
+    "a929b9d8-7b22-4a34-8388-50edfd0fec7d",
+    "2d27839c-a961-49d0-a089-04d26f9353c3",
+    "01fc8e2c-91bc-453d-abda-c5c2a27fdb9c",
+    "d3e6a631-0c61-41c7-9241-e3e2efd5c6b2",
+    "7dd14140-3688-408f-890e-a02c6da60d3b",
+    "4583fa81-84e7-4fa8-adcd-03cdd6a94988",
+    "7733cc15-d915-4994-9e59-434afeda4446",
+    "5aafb152-78da-4361-9395-52bb45754e71",
+    "7df5ac73-795a-461c-896d-67f8ccbdd287",
+    "092357f5-26eb-419b-820a-dd3aa87da2be",
+    "4c7eeea6-fc32-4b36-9f70-d0cbc76fe4b9",
+    "dc38f246-3da8-446a-9a01-d668a72f5f42",
+    "6fd535e8-e86a-4ca7-bbdb-a146fe6857fc",
+    "1ff49ed9-e319-4b53-b5cc-af408674204c",
+    "339dd2c5-3982-4622-b109-01fa2d023cf5",
+    "c0238f56-cae4-4e58-a328-4137b6470a77",
+    "7104c8c9-de96-4b54-8c39-53443a7b42aa",
+    "3e34b0ac-2012-44e6-ae5d-ef14db35a591",
+    "b468c88f-5d76-46c7-b8ba-ed1cffbe497e",
+    "b100c096-9c92-4e1a-857c-0ef5f1987110",
+    "a467955d-ebf6-4efc-a3f0-d16355cb8668",
+    "a2b66bd1-17b3-4e23-a12f-2e5c6f3ef142",
+    "3aa5e923-8ed4-4cb0-baa4-33949abfb039",
+    "f9973f16-a162-4f39-bf6f-2a91d20d87dd",
+    "8f710e32-0972-464e-a3bd-a71516a44c14",
+    "06eec9f5-1085-404b-9622-bc366995ce63",
+    "222f23fc-65f1-4871-9dd4-6093fefbe303",
+    "70d4ae87-846a-41f0-956f-acce94af453b",
+    "1fda0594-af6c-4a3d-81fe-90b39ca70201",
+    "5d77b2ae-86a9-42bd-a8aa-ac3469f827f7",
+    "1b66af55-016e-4d60-89da-9381c2fac426",
+    "09d4501a-6150-4020-8a96-96d0355f06c0",
+    "77dace38-460f-4bad-ad5b-1f3f3bfd7885",
+    "64adec57-027b-4638-9847-f9acffb6d910",
+    "bba2dc4c-88fa-468a-bf6d-d24e359ece57",
+    "d8919967-d7d4-4f66-a212-20a0f52db379",
+    "a45caeaf-fc59-40b2-be45-f7c74f3f15a0",
+    "e8170a09-c4f6-404d-9d04-c6940b20e91e",
+    "df76ab24-1504-42ac-8b78-34c49901afd3",
+    "3fb42240-f996-497f-aaae-e0fe0da5fba3",
+    "1cb4d213-5854-453a-9311-c6df0297b09b",
+    "454cd4ba-ca94-440d-9eba-d2864fab4c3b",
+    "4819fc0e-8895-437a-9492-def0705b408c",
+    "62b10e02-24d8-4c44-ad75-122adac2a16d",
+    "9923405b-87d2-4e22-8fde-26d9cf023ed1",
+    "a629e472-e6e6-4cdd-ab5e-82c6c7950444",
+    "532123ae-50cb-44b2-9bf1-d3cd297ba466",
+    "8cc6fa43-760a-456f-8a54-7d8e30d33543",
+    "d3e81c12-6ce7-4abf-959a-2ba2f729794a"
+  ],
+  "payment_ids": [
+    "202a8d35-951a-412f-9031-25c87d0aa819",
+    "24ab55aa-ea24-4da8-a6d6-a44f27b6261f",
+    "843e0090-5c1f-41aa-b850-304ef4aa458b",
+    "ac620ba7-ffff-49a5-a1ab-3307291fbfdb",
+    "02d82d53-7215-4d7d-9289-284c7c2d9b5b",
+    "c7661725-a13b-4b2b-bcae-7f171d871c4c",
+    "b0c0dfa0-378a-4541-85ca-c5cc070e6991",
+    "8c6486c4-7c06-4763-945c-67c189213e76",
+    "beca5d1a-0be2-4486-9788-8d7ff20312b0",
+    "c8d43d09-582b-454c-b9e9-3be4d47a3db5",
+    "e196f429-98a0-404b-a2f6-aaa693ced851",
+    "e48ee624-314b-4476-9df0-99a1e8626d20",
+    "73f33843-9ecf-47a2-ae78-14e39c37c188",
+    "ac99e146-b120-49d5-a285-28b0a75dfac3",
+    "cb273eb2-4d3d-4032-bc92-8cfca675724e",
+    "5c7922f9-1f8e-4e81-91fa-3826a72b7dbe",
+    "19b95947-9ba8-4194-b73e-8d5f33c09bcb",
+    "cf05415e-1b72-4352-a759-f9aa61ded82b",
+    "04409473-eac6-4687-8740-46ba7261c458",
+    "9c98449b-e94b-4125-a767-0fd9c240c88c",
+    "25f3e2c6-9606-4737-9710-268a76657f29",
+    "44499260-8a75-4e1f-820c-3524e0e7db35",
+    "b1730ea1-23e1-459b-9ee5-51cb1d102aee",
+    "ff0be5d4-bba5-40dd-84dd-c8662397f028",
+    "685cbaef-73e6-4ff9-a5f5-43fc1007a556",
+    "c61330d5-ab09-492c-a80c-fd49b9c548e4",
+    "31f060d0-1121-4a0a-a2cf-d960c03528ba",
+    "5fe12532-881b-4deb-9f6e-001f1d3a13f9",
+    "779a9fdc-3dff-4584-bc42-9f0cd76c83e0",
+    "3e580dfb-cd1d-46b3-a129-75be1ac6dcbe",
+    "58c36f93-b37d-4b7f-96fb-28d650ad249e",
+    "674ac955-01e0-497d-bce3-8d440eab97a7",
+    "5900d9fe-f790-42d6-bc3e-d17bfaa97312",
+    "4ec3e8b5-c57c-4f59-a1dc-660e0cdad84e",
+    "b7e77080-897d-47be-b284-9a3c5ece6b8a",
+    "89f9fe83-a127-4fcf-92e4-a59e71122d9c",
+    "1b4e66ff-18df-4010-9301-ee3cef094713",
+    "9f9adf68-5f5c-463c-9091-2bb41f5b3aef",
+    "653821d8-1e29-4b2e-860e-b74554881f6e",
+    "10a00aa7-47e8-4e57-afa9-ec759a519e5a",
+    "13be7737-be17-458a-b915-b1e74c71467a",
+    "191cfd6f-5dce-4887-8ef0-ec3cbbb8baa8",
+    "73bd2242-5834-4582-9186-95252c95603d",
+    "d9fc532e-83be-495d-a475-9d920818b0f9",
+    "6eefe30d-d8ba-4f2b-b016-dfd9f82b2416",
+    "dcc4f4f6-3c95-4acf-a1ad-6e4486b2369f",
+    "6e621475-1c52-4a1e-be66-7121f0f62b4b",
+    "8137d10e-83fd-44e8-a670-c4b4e2e898e0",
+    "6b6338c6-f2b2-43c7-97f6-341843a2e3b1",
+    "878917c9-e571-48be-8724-37580264203f",
+    "1554ae69-7cfc-4a9f-8ba5-d5ecd44e0883",
+    "9e04387b-608c-4096-8b93-5c688f27e3f7",
+    "f0f2c4cc-f661-4920-a753-9f7965d73102",
+    "82b9f1b8-6628-4e70-850a-0b9f067c12d9",
+    "323218f7-fd3e-4650-9103-1912e0ce0428",
+    "b07309c6-f938-4551-b71c-b9f72e13ad88",
+    "9ae21490-82f6-4c6c-b231-1e613c9477c0",
+    "e741e145-0742-4f1f-856c-fd6a7d1f4f36",
+    "9ec3882b-5e45-40ca-b388-fd00a2551a9b",
+    "89eb5383-a8e7-4060-98f5-9ba9965dbabc",
+    "61c17e38-6933-4d7a-8257-a6b994c82b44",
+    "790ee114-6ebd-4da3-8a4b-c2b70829c99e",
+    "52157650-b14a-4bdb-874e-7d7009b30350",
+    "e4391c53-45b1-4025-ab17-5963f39c2bde",
+    "d3049f99-56a2-4ccd-b691-c97d07e1cdd0",
+    "b15fe798-608e-4046-9f71-303cdbf53176",
+    "c096eca9-a3be-48c5-bb5c-2ca97d3699da",
+    "1628d9cd-01ab-47f3-b205-162a51dd7d1b",
+    "d18ccc2f-8bc7-4f59-af6f-ae2b6a31f28a",
+    "f2812456-55a6-438a-8db1-ea83e518b0f2",
+    "2658783d-0572-40cf-b9f5-5f051c63b7cd",
+    "b5066883-cfc7-4e70-aa12-0e11ac49ada8",
+    "6cb35bd5-30f6-4754-aaf4-6b2d1f6780a9",
+    "ab0339cf-c63d-4c52-8db9-acecae9e25ad",
+    "cfef840c-6f41-48e9-b78a-9b43c61be636",
+    "c17ab347-b97f-4d1d-a699-70e9c1b29acc",
+    "7def0224-ab9f-4345-9268-ed52b4255b3e",
+    "75644214-4dcc-42ba-8dc3-e5ef890f4224",
+    "acea8466-6b64-4863-bd32-a3aa58b11b9c",
+    "dbb8c644-a5dc-413e-9937-0d05183d2fb0",
+    "bd60c249-a02d-4f4f-a887-3d48a46c065a",
+    "fa2937bb-416e-499d-b905-8f01d9988935",
+    "71aac070-0879-4ad6-abaf-e9d832ad89f8",
+    "624fe9b8-a30b-480c-8d75-d7a90483db68",
+    "88152242-6f6f-4843-8e61-dcc33750ae6f",
+    "8941a605-4e26-4b11-b974-b747993af633",
+    "ef9147df-c579-4cb9-b5e4-d9af50ea14d7",
+    "c30dcb06-64e1-4d6d-8a59-284da6b24de7",
+    "10c41b2b-d34d-4a2b-a112-ee69b5d2d9bc",
+    "aef561ce-d9b9-42b9-bda3-1ddcc67742e9"
+  ],
+  "ptp_ids": [
+    "c9a4f20e-2982-4e86-98af-9c02579a2dea",
+    "858c515a-5a4d-4bf8-9241-62ae19d024a2",
+    "ce3d3e20-8bc6-40a9-8027-2be7f352fbc5",
+    "92f74059-ad83-4631-ba70-bc9902f3795f",
+    "c100c99c-c97b-4821-95d5-24b28b9734bb",
+    "82b8b79a-7de5-43a4-8d14-88ea8efe9c29",
+    "1b83f20f-9dc0-4729-afae-31ab9caafcab",
+    "924f742a-d40b-4b5e-9a4b-c40c9857d3cc",
+    "836238cc-463f-4781-a64e-6c65340b0698",
+    "28dec7fe-d3a3-456f-b042-05c6238d2f32",
+    "e16e59c3-5863-493c-858b-0a3a9188288d",
+    "72252745-f7fd-458b-b533-17732141c38b",
+    "1cf49521-823e-4e3c-881d-727518e03bd2",
+    "f2e0a87b-a867-4583-aed7-b4b6edaba0e0",
+    "6a874fa7-eba1-443d-bb16-d7125228f657",
+    "db350a1d-dfdf-4128-babc-e93c3f4ad116",
+    "8b94b88c-0cb9-4cba-bc51-c7db3074e993",
+    "2f03e695-84b8-425c-86d1-2d3a12e7e435",
+    "4b62be18-d0b7-4a7c-85a5-c444501a3ea0",
+    "58dc56a4-bdc9-4805-8959-029337e15829",
+    "f4f323ab-822e-4316-b2df-d988e2bca49e",
+    "ffae4a76-2874-4802-8999-97dce631d945",
+    "0c072385-2762-4c74-a778-c0b64bdef9f3",
+    "b77f0fc5-813d-43ff-bba3-590d4a8ddb31",
+    "ebd7dfc0-ba6a-4280-be68-a20a52fdcb97",
+    "0aa8fb32-20b2-4055-9378-5e5a7cd37a0e",
+    "b3900484-ff74-460c-9452-3c6ffc435d16",
+    "cac60e3e-8105-487e-8f09-dfd90765a04c",
+    "5d56dc19-5623-4ae6-af3d-3a12091dbeac"
+  ],
+  "cases_before": {
+    "a516b196-ece7-4bcf-92b8-bb368b1e3317": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "8751c324-1e29-4524-acf5-18dfae6caa54": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "7f04975c-6b12-42ab-b616-9887acfd3418": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "09cb4b42-6ae3-406e-a4f0-91cc989a879a": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "7791e0a4-9d1c-49f5-8128-ae3bef34c860": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "94bfaf09-c7ce-4edd-9ef1-6164eda5ad6f": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "31c8ddcb-f60f-4720-abab-3b1559821ff7": {
+      "collected_amount": 11757.73,
+      "visit_count": 1,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "7710fef3-54cd-402c-8a40-cfa46e2dd2d7": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "63dad86b-6f48-4620-b53e-c38d3d6aedd0": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "b655d388-a294-4399-92b1-dc79de400a3e": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "e8865019-332f-4eec-ab41-e66e011af248": {
+      "collected_amount": 6271.72,
+      "visit_count": 4,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null,
+      "is_escalated": true,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "51700661-a842-4f65-8814-b4ec6ac3b2a7": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "3e9059c1-1f44-4766-8f94-6ee0cd763d3d": {
+      "collected_amount": 0.0,
+      "visit_count": 2,
+      "status": "IN_PROGRESS",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "6d8f30b3-e77e-4660-89e3-cd80645cface": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "902e327b-321f-4845-bcdc-90730579eb88": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "0d00cfef-981e-4175-a757-5eb74c4bf90c": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "3a9a2c94-7320-442d-b606-fb3739e815f3": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "f9306a19-d4e9-4022-8506-e7fc243016a0": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "cccefdf0-b4f4-4bd7-a054-e0eb63e0686a": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "4d7d4851-2464-44eb-a0b9-fb71a584108c": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "281f75bd-a956-467e-857e-7d91157d9c03": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "bc7bb043-9276-4e43-9e51-6c70ae80c57c": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "dce5b03e-5da6-4871-82ca-6c798c4e7bb8": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "21522a7f-2561-4ff7-9aed-730be968b801": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "1476da6b-1d90-4c4f-924a-d10101c5ce96": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "ec80eb44-fa44-4118-828b-c9150b5328e8": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "ce7acbd1-955d-4f1e-98a5-4f03ef8b64a8": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "b65c242c-7f7c-4374-a2c0-abba634f337a": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "b1b1d46f-3727-4796-a4c5-375c7e8db188": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "b03e7c23-2d12-4752-9b3c-1530b26910f5": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "b7923353-c297-4ccf-a19e-30bcb1bf3de3": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "7b1212df-d523-48b3-8394-e43dd312bc9d": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "dbe64da2-e230-4c4a-a933-a8695d2066e3": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "2d118c91-9a72-472f-ae95-ead74690cb06": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "04ad148d-bd13-4c31-8bec-51e307ceed3f": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "8c3faef2-4c23-4681-bfb6-0ab9431494b1": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "1ad395fb-93cd-414d-ab3f-7221f6d8c2c0": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "d0a5c54e-7091-49c3-8003-f144d332b54a": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "a83eee23-11f3-43ba-b2ad-20208abb9199": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "ebeff264-775d-4321-b5be-214f9fddc10e": {
+      "collected_amount": 19372.23,
+      "visit_count": 2,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "dd59d29b-4bd9-476f-9fae-75e5a5d1b921": {
+      "collected_amount": 25285.27,
+      "visit_count": 5,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "e19c5466-f318-4cd8-a5dc-7d0f24ec305a": {
+      "collected_amount": 17719.47,
+      "visit_count": 4,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "7c0bce40-35dd-43b5-a38b-4e513d67651c": {
+      "collected_amount": 24937.02,
+      "visit_count": 4,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "09efe1d7-f0c8-49fc-8af9-a7a73a1ce323": {
+      "collected_amount": 4140.33,
+      "visit_count": 4,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "4061ee12-be08-483b-a04e-c7654f4d23f7": {
+      "collected_amount": 4217.32,
+      "visit_count": 3,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null,
+      "is_escalated": true,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "665d80b4-5571-4293-8947-e8ac5a92d539": {
+      "collected_amount": 15867.71,
+      "visit_count": 3,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "734df75f-a710-4580-9f6b-860a6956e8e2": {
+      "collected_amount": 0.0,
+      "visit_count": 3,
+      "status": "ESCALATED",
+      "resolved_at": null,
+      "is_escalated": true,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "f2d8a4c4-2b3a-4783-b176-ec1e22e9d595": {
+      "collected_amount": 0.0,
+      "visit_count": 3,
+      "status": "PTP_SET",
+      "resolved_at": null,
+      "is_escalated": true,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "58d84a6d-0aaf-47a2-bd89-8902658beaa9": {
+      "collected_amount": 4664.33,
+      "visit_count": 3,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "1ffc2df9-89c4-4401-b47f-37f2e76d5cf1": {
+      "collected_amount": 14573.31,
+      "visit_count": 2,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "883a9464-ebb3-4f6d-8aff-4de09ce61aab": {
+      "collected_amount": 15979.87,
+      "visit_count": 2,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "dc95f817-c541-486d-9b01-4c88eb5b5e79": {
+      "collected_amount": 14417.76,
+      "visit_count": 2,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "23ddf276-72a3-4dae-a1a6-1cfeba76786e": {
+      "collected_amount": 0.0,
+      "visit_count": 2,
+      "status": "IN_PROGRESS",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "4e6ad45b-83bb-4791-af37-428f2793c8fe": {
+      "collected_amount": 5652.28,
+      "visit_count": 2,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null,
+      "is_escalated": true,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "cc00d26b-c20b-4b2a-b910-32483a7ea449": {
+      "collected_amount": 7117.96,
+      "visit_count": 2,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "9f0d9fb4-3cfa-4edd-a0d7-c1d6339850f9": {
+      "collected_amount": 14474.02,
+      "visit_count": 2,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "f4f8dd22-78f4-40f3-8b26-4f8567da2da4": {
+      "collected_amount": 4061.47,
+      "visit_count": 2,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "52d8fbf1-832b-44f0-b85b-ad0599fea9ae": {
+      "collected_amount": 12123.1,
+      "visit_count": 2,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "2be44aa4-b49b-4b64-a9da-c40aadb57ee7": {
+      "collected_amount": 13061.97,
+      "visit_count": 2,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "8abb3c89-e63d-4bb6-9cfd-a72942f4fcd2": {
+      "collected_amount": 7671.15,
+      "visit_count": 2,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "740e8351-618f-4398-ba96-0384cffbf434": {
+      "collected_amount": 0.0,
+      "visit_count": 2,
+      "status": "ESCALATED",
+      "resolved_at": null,
+      "is_escalated": true,
+      "escalation_reason": "CUSTOMER_HOSTILE",
+      "escalated_at": "2026-09-18T06:45:00+00:00"
+    },
+    "832180a5-65b9-4d90-bb8b-b32cce32c52d": {
+      "collected_amount": 8858.44,
+      "visit_count": 1,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "564838a5-5e72-4e81-bdcd-e96d18fd7365": {
+      "collected_amount": 9912.42,
+      "visit_count": 1,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "2003a60b-193c-4dcd-aba3-04312852bf50": {
+      "collected_amount": 0.0,
+      "visit_count": 1,
+      "status": "IN_PROGRESS",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "0f96fe04-53ed-4442-a955-c8cdac83f198": {
+      "collected_amount": 9074.9,
+      "visit_count": 1,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "f4bd27fa-a4ba-413c-8804-7a48fa8d45ea": {
+      "collected_amount": 3586.6,
+      "visit_count": 1,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "6f8ba136-7d73-4439-b168-8b2d39db688e": {
+      "collected_amount": 5959.3,
+      "visit_count": 1,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "94f0cda2-110e-4b23-8669-2d48049891f1": {
+      "collected_amount": 10428.86,
+      "visit_count": 1,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "8deb6166-ee8e-4563-9187-2b6daf0fa86e": {
+      "collected_amount": 0.0,
+      "visit_count": 1,
+      "status": "IN_PROGRESS",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "a715b455-5a95-44c5-b3fa-9dc7b93fd398": {
+      "collected_amount": 0.0,
+      "visit_count": 1,
+      "status": "IN_PROGRESS",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "474eba0e-ab92-4550-8d3b-1169451bb869": {
+      "collected_amount": 4849.71,
+      "visit_count": 1,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "8df9db04-83d7-4f2e-9735-947ff442f33a": {
+      "collected_amount": 0.0,
+      "visit_count": 1,
+      "status": "ESCALATED",
+      "resolved_at": null,
+      "is_escalated": true,
+      "escalation_reason": "CUSTOMER_HOSTILE",
+      "escalated_at": "2026-09-18T04:30:00+00:00"
+    },
+    "da73b133-4ffb-473d-a1cf-faca95f0a318": {
+      "collected_amount": 6280.44,
+      "visit_count": 1,
+      "status": "PARTIALLY_PAID",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "e37a8752-2948-4534-8143-9347f373071a": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "20024755-472d-4910-adef-e04e594fd3fc": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "ebc24973-ad89-45b7-8582-cdc02a3e346e": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "af4f5de6-8e03-44a0-a5e0-f76537706eeb": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "40e408fc-2d14-4ea8-a1fc-f9a9a4a8cc61": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "70ceef92-4e87-4a0a-8067-e81896fca058": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "7ce27b52-1187-431c-944e-4423472c22a1": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "6f826e0f-c891-4fbf-8bd5-6c2615700998": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "92ca96b5-8ac4-4adc-b917-2bb64c20e7a7": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "1f1d9473-39ee-419d-8ee8-1a1a456dcc51": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "e0d8b9d7-68fd-41a9-886b-88918fef181f": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "c3eb0d7d-a9d2-4ada-be39-9382a9878f4f": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "d4cae12e-8e54-4e96-aa9b-ecb7754eeb1d": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "28ceb26e-6b2a-434a-a6e7-3dae41cd0e84": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "f0b789bb-330a-4ada-8295-c6475645f982": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "8bceb26c-a503-477d-8c41-66acfb64965d": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "769bdf28-f901-40ef-9448-711f51e38e6d": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "3e14b46d-327a-46b1-9ac5-240d9689141b": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "2d9cef4f-2ea0-441c-ab3d-204062e3483f": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "6ae2c7b4-2bad-47f3-b5d0-33d93534225b": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "111bfd02-3992-449d-ab64-af86dcee9846": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "a6bade33-5ff9-4464-946f-f7acf7a17634": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "d1b7151c-368c-4df8-a5b4-6ca1cbd15509": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "cb914b42-d532-428e-b665-3c202b539953": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "d343cb5a-368a-4d55-bd34-7fb50bdf9359": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "34f4c207-c659-4d3c-9aa2-b6a8a5d49366": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "f1c59501-78fc-4f99-be8e-4bf46ff125ea": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "e0da9132-2c00-46ce-9775-465e1d30f80e": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "b1e57f9d-8daa-43d0-aa93-1acf18ad5228": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "403e84be-e2a1-4509-bd61-609f810b38f5": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "45935f47-e6ac-447a-8104-f98f93adfa89": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "77db958e-7175-43c6-a56e-7af077155620": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "98e5e069-0a04-4daf-b97c-49c1245a05e2": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "97bcc30a-53bc-4599-bd12-dc581869b030": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "b7ccab43-19bd-46b8-a1aa-cb23b9b27a32": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "c39f40af-0085-4570-b1a8-c53160966306": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "7940ad75-227d-48d4-8b20-ce7c7938ff06": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "2d0927a7-8603-47b0-a748-fa7f6f34f4d8": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "bf1c5867-e558-4e6d-8b1d-ba3436f26a9d": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "ac4bedbe-6024-4df5-9e8f-78a511927e5f": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "5e694470-a2b3-4cb2-b8d5-64271d6a5c40": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "cc332b5e-d7e3-47c8-9af6-2870cfb23135": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "9477c142-2cef-4111-bd55-7b803b54093b": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "1f41e6e5-9586-4a49-b95d-1870225cc14c": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "21e04eb6-4829-40da-8c00-5a85e1d29038": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "44b3ae2d-5f61-4846-8f46-5131bcad6b5e": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "02923d2a-364c-4f82-bf81-b407cce5acd0": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "1a3cd357-704b-4af7-8436-ba203a5a9ce6": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "972722ff-28aa-4f6d-9006-0eb04de5ea57": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "cb57e21b-b24a-4558-bcc0-43df7d5461c2": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "68be9b39-ea38-459a-a2ea-e1606c241198": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "53d2756d-5ec0-49a6-ba87-3958f9efc655": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "6eddafbb-5ab1-4b04-8c66-5736ee80d99d": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "f155db19-4f52-40b7-88be-e28c00a733ab": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "52ecec6e-77d8-41d8-99c2-66556fb8a809": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "bf093d43-1a06-42ba-8cca-4c66f1680317": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "a7adcd33-f115-4179-8c29-e320d9a788f6": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "20d3f456-07b3-4a00-be38-f5c652d11073": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "2843e6f6-832d-4d65-8755-7df061427b00": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "3b29264a-aaa8-409c-b8a3-547273790224": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "440f39a5-06f1-40e1-b2ca-63bdc8b12787": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "14fac11d-c351-4c20-8441-083cd1bd5c5a": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "392db854-7e87-480e-b11b-7fb56faa12b2": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "759f5283-bbce-4c98-b978-66e05544aa9e": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "8b4da11c-d2a9-4cd1-8726-ae78f98eee20": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "a270c9b4-df77-41ca-b8d3-a0f8012a926c": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "10b0f618-7bea-4a22-ba3b-0baacaec6e35": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "bb72954c-6783-4dd0-92f8-3b528d705bd2": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "a1e5fd67-6158-4774-8c32-273b57e2ce4d": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "f018a328-d10a-4267-8457-710f0904702c": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "8bae5bae-2830-475b-ba17-4407c06a75dc": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "76b0e8e6-f0f8-4800-a340-db81db0ba0ad": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "9ea522a2-e161-441a-9b1f-cb7cf3d54b22": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "62428c36-6e85-476e-a808-0af0f57ebd01": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "27aa60cd-2124-4d1d-81e0-3d5fdc790d19": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "96d4965a-ef33-4dc3-ad7f-e6bcba21af15": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "cfbddccf-13d2-496e-9062-c2a454cfd61d": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "da367d05-7e6f-4ca0-a723-73befef53338": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "dc9d9315-8335-441d-93d9-9eb59d5489ab": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "0d6130d7-08bd-4fd3-a808-484c65694ae9": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "493c1ff0-be08-494b-ae05-9594c89bff5b": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "a6266a10-c75a-4a36-864c-94c94cd1901e": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "65995b71-85c3-4628-b928-ae76a62da082": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "8beaeade-a584-43bf-9c3b-bde81303cfe6": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "f5a371ba-5502-4ff8-bce0-0bc1ee8e6768": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "bbfd56dd-6f86-41c5-a298-cbf68a319944": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "296b8ee3-4069-4f0f-b7de-af0832a03b98": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "7ab22ca7-91cc-40ad-be95-4ee439b90d47": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "e6f4f0f6-909d-479a-907b-ec7eef9e95b4": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "6b111020-ba54-4faa-a0e7-fddee45f792b": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "d47b800d-4d00-4cc2-a30a-529d3b66bf7c": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "f4b9bd17-a6f6-488b-adb8-813169223440": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "54838a8c-8109-414c-9f80-05252f8f79a7": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "627b42c6-a2cf-4432-bf25-92549e43c69f": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "7d8df3bd-4b98-4d7a-9757-35ab0a3b680a": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "a62b605d-f864-4c06-b6cf-644deadc09ce": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "6ad00f30-62af-44ed-901e-63f7809dfade": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "4cf75900-1be6-4fd2-8d4c-bce739bebb57": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "6d17f330-ed46-400b-8684-6cb6cd2b7bec": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "ae455cfa-386f-4bcc-8d41-d876d6b31aff": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "710f25ee-4cda-4421-ab71-083c9eb581a0": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "4f245347-df3c-4543-a8c2-5fcfc40efc67": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "23cdf28b-85db-4b47-a6c4-be92a0c5d875": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "c1cb40fc-634f-4fbc-adce-b90347a5b393": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "01174945-bd5e-463f-910d-1352aa3e82a6": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "47e13216-0fbf-4fbb-bf76-f3b2abc20e65": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "6d3ee2f9-5167-47b2-8b5a-e0ece38d52ab": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "06b1e461-5bc1-4d5d-8601-cc3acdad405b": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "51be07ae-b495-46d2-a942-f16b03a410ac": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "76d129ac-d414-480b-92b5-7fe25f372c9d": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "1ceb7ee1-4afe-4b8b-97f5-a626e40999c9": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "0e260fbf-3578-4c46-a6a6-2fe5e13d0113": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "165f4f8b-69b8-4e8b-8e75-c1eca8aba680": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "81c1d6e5-5f55-45dc-80af-a05616c04ef6": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "c7ddf4a7-8472-4698-90d5-69005a6dcf1b": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "e40626e8-aefb-4225-8b54-ec25b799e479": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "ba098d5e-76ab-41be-a09a-63215bd348ab": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "be598797-25ea-4117-9b66-14c724ee5d87": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "49cb3695-20b1-4c83-a27b-8da434b496e8": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    },
+    "c535ff4f-872b-48b4-b3da-4ca6f30b1711": {
+      "collected_amount": 0.0,
+      "visit_count": 0,
+      "status": "ASSIGNED",
+      "resolved_at": null,
+      "is_escalated": false,
+      "escalation_reason": null,
+      "escalated_at": null
+    }
+  },
+  "agents_before": {
+    "2dfc73e0-dba9-4aa5-babf-d5141ded5497": {
+      "current_month_visits": 43,
+      "current_month_collections": 235438.31,
+      "current_month_ptps_set": 14
+    },
+    "c37b6a5c-9d1c-46d4-8ece-dfce290dc74b": {
+      "current_month_visits": 31,
+      "current_month_collections": 167787.25,
+      "current_month_ptps_set": 12
+    },
+    "e9dced65-f61b-4c24-bae7-d4170299ed46": {
+      "current_month_visits": 35,
+      "current_month_collections": 143182.94,
+      "current_month_ptps_set": 14
+    },
+    "c33350cc-f581-492e-807f-14262d56ebcb": {
+      "current_month_visits": 45,
+      "current_month_collections": 402877.04,
+      "current_month_ptps_set": 10
+    },
+    "c6ca60b7-2143-412b-887e-c30ae9cda031": {
+      "current_month_visits": 46,
+      "current_month_collections": 345103.37,
+      "current_month_ptps_set": 14
+    },
+    "3aa13103-bd03-4578-9292-44d88d58da00": {
+      "current_month_visits": 52,
+      "current_month_collections": 452021.39,
+      "current_month_ptps_set": 20
+    },
+    "3e9c4168-1de9-43e8-b9f2-fbf3f931949d": {
+      "current_month_visits": 50,
+      "current_month_collections": 503776.51,
+      "current_month_ptps_set": 10
+    },
+    "5fbae4d6-59d1-4e6c-8a80-fe57244a45bb": {
+      "current_month_visits": 40,
+      "current_month_collections": 234183.87,
+      "current_month_ptps_set": 10
+    },
+    "2b6de8aa-0976-4be0-8a40-043ff86ffa54": {
+      "current_month_visits": 49,
+      "current_month_collections": 387433.75,
+      "current_month_ptps_set": 27
+    },
+    "8e59153e-dc8e-4efa-af65-1db304a6f3f1": {
+      "current_month_visits": 39,
+      "current_month_collections": 480107.7,
+      "current_month_ptps_set": 10
+    },
+    "c2f2e0ce-5aeb-4ece-8325-2167edfe139e": {
+      "current_month_visits": 36,
+      "current_month_collections": 175028.69,
+      "current_month_ptps_set": 9
+    },
+    "4a182f53-a1a1-4f15-945a-6a56f4e04b64": {
+      "current_month_visits": 50,
+      "current_month_collections": 230391.44,
+      "current_month_ptps_set": 20
+    },
+    "357e2e09-b637-468e-818b-57a5dce18e9c": {
+      "current_month_visits": 33,
+      "current_month_collections": 197324.34,
+      "current_month_ptps_set": 15
+    },
+    "cd9e6eca-028e-4c61-8e82-048327bc4476": {
+      "current_month_visits": 29,
+      "current_month_collections": 208835.77,
+      "current_month_ptps_set": 11
+    },
+    "a2e2555c-f597-43af-a77a-fe708f967218": {
+      "current_month_visits": 46,
+      "current_month_collections": 175373.49,
+      "current_month_ptps_set": 15
+    }
+  }
+}

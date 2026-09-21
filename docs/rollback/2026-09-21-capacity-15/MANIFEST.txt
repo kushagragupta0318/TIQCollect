@@ -1,0 +1,12 @@
+2026-09-21 — agents.max_cases_per_day set to 15 for all 18 agents (was seeded 10-18,
+which is why the Field Plan showed 18 stops for some agents and 11 for others:
+the allocator fills every agent exactly to their own cap).
+
+Before-values: max_cases_per_day_before.csv (employee_code, max_cases_per_day).
+
+Undo:
+  docker compose cp docs/rollback/2026-09-21-capacity-15/max_cases_per_day_before.csv postgres:/tmp/cap.csv
+  docker compose exec postgres psql -U fieldops -d fieldops -c "create temp table cap(employee_code text, max_cases_per_day int); copy cap from '/tmp/cap.csv' csv header; update agents a set max_cases_per_day = cap.max_cases_per_day from cap where cap.employee_code = a.employee_code;"
+
+Takes effect at the next allocation run (20:00 tonight for the 22 Sep plan, or a
+manual Re-Plan on the Field Plan page).

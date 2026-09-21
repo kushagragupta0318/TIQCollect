@@ -59,7 +59,7 @@ from app.models.agent import (
 )
 from app.models.customer import Customer
 from app.models.loan import Loan, LoanType, DPDBucket, LoanStatus, dpd_bucket_for
-from app.models.case import Case, CaseStatus, CasePriority, EscalationReason
+from app.models.case import Case, CaseStatus, CasePriority, EscalationReason, priority_for
 from app.models.repayment_snapshot import TRIGGER_SEED
 from app.services.repayment_service import RepaymentService
 from app.models.visit import Visit, VisitOutcome, PersonMet, DefaultReason, NotMetReason
@@ -496,11 +496,10 @@ def _dpd_to_bucket(dpd: int) -> DPDBucket:
 # Scoring now happens once, at [11c], through services/repayment_service.py —
 # after visits, PTPs and payments exist, because those are what the scorecard's
 # behavioural factors read.
-def _priority_from_score(score: float) -> CasePriority:
-    if score >= 85: return CasePriority.CRITICAL
-    if score >= 60: return CasePriority.HIGH
-    if score >= 35: return CasePriority.MEDIUM
-    return CasePriority.LOW
+# 2026-09-21 — `_priority_from_score` REMOVED (score >= 85 CRITICAL / 60 HIGH /
+# 35 MEDIUM over `collection_priority_score`). It was the FOURTH copy of the
+# case-priority rule, and the second inside this file. `models/case.priority_for`
+# is the one definition now; see its docstring for the drift it ended.
 # _recovery_potential() lived here until 2026-08-24. It ended in
 # random.choices(list(RecoveryPotential), weights=w) and its docstring claimed to
 # be deriving "realistic signal for ML training" — it was DPD-shaped noise, and a
@@ -1706,7 +1705,7 @@ def seed():
                 loan_id=loan.id,
                 agent_id=agent.id,
                 status=CaseStatus.ASSIGNED,   # will be updated below
-                priority=_priority_from_score(score),
+                priority=priority_for(loan.dpd),   # 2026-09-21: the one rule; `score` above is still used for allocation_score
                 target_amount=_cycle_target(loan.overdue_amount, loan.emi_amount),
                 collected_amount=0.0,          # updated from payments
                 allocation_date=alloc_date.strftime("%Y-%m-%d"),
@@ -2807,7 +2806,7 @@ def seed():
             customer_id=cust.id, loan_id=bank_loan.id,
             agent_id=assigned_agent.id,
             status=CaseStatus.ASSIGNED,
-            priority=CasePriority.HIGH if d["dpd"] > 90 else CasePriority.MEDIUM,
+            priority=priority_for(d["dpd"]),   # 2026-09-21: was HIGH>90 else MEDIUM — a second, disagreeing copy
             target_amount=round(min(d["outstanding"] * 0.35, CYCLE_TARGET_CAP), 2),
             collected_amount=0.0,
             allocation_date=today.strftime("%Y-%m-%d"),
