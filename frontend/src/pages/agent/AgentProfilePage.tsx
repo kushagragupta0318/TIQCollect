@@ -8,6 +8,7 @@ import { useAuthStore } from "@/store/authStore";
 import { TierBadge } from "@/components/ui/Badge";
 import { checkOut as apiCheckOut } from "@/api/agent";
 import AgentIDCard from "@/components/ui/AgentIDCard";
+import { LeaveRequestsSection } from "./LeaveRequestsSection";
 import type { Agent } from "@/types";
 import { useAnimatedValue } from "@/hooks/useAnimatedValue";
 
@@ -165,6 +166,9 @@ export default function AgentProfilePage() {
       <div className="space-y-4">
       {/* ── Duty calendar (unique, kept) ── */}
       {calendar && <AvailabilitySection calendar={calendar} />}
+
+      {/* ── Leave: request + own history (2026-09-21) ── */}
+      <LeaveRequestsSection />
 
       {/* ── Digital ID card: the single source for the ID number ── */}
       {agent && (
@@ -334,9 +338,10 @@ function AvailabilitySection({ calendar }: { calendar: AvailabilityCalendar }) {
           const isToday = dateStr === todayStr;
           let cls = "text-slate-300";                       // no record (Sunday / future)
           if (rec?.status === "ON_DUTY") cls = "bg-success-100 text-success-700 font-semibold";
+          else if (rec?.status === "ON_LEAVE") cls = "bg-amber-100 text-amber-700 font-medium";   // 2026-09-21: approved leave
           else if (rec?.status === "OFF_DUTY") cls = "bg-danger-100 text-danger-600 font-medium";
           const title = rec
-            ? `${dateStr} — ${rec.status === "ON_DUTY" ? `Present (${rec.cases} cases)` : "Absent"}`
+            ? `${dateStr} — ${rec.status === "ON_DUTY" ? `Present (${rec.cases} cases)` : rec.status === "ON_LEAVE" ? `On leave (${(rec.leave_type ?? "").replace(/_/g, " ").toLowerCase()})` : "Absent"}`
             : dateStr;
           return (
             <div

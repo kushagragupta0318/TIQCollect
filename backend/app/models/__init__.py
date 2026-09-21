@@ -18,6 +18,7 @@ from app.models.allocation_decision import AllocationDecision, AllocationOutcome
 from app.models.allocation_setting import AllocationSetting, AllocationObjective
 from app.models.model_candidate import CandidateState, ModelCandidate
 from app.models.model_prediction import ModelPrediction
+from app.models.leave_request import LeaveRequest, LeaveStatus, LeaveType
 
 __all__ = [
     "User", "UserRole",
@@ -41,4 +42,5 @@ __all__ = [
     "ModelCandidate",
     "CandidateState",
     "ModelPrediction",
+    "LeaveRequest", "LeaveStatus", "LeaveType",
 ]

@@ -3905,7 +3905,7 @@ def manager_get_agent_availability_calendar(
     six_months_ago = today - timedelta(days=180)
 
     beats = (
-        db.query(Beat.beat_date, Beat.status, Beat.total_cases)
+        db.query(Beat.beat_date, Beat.status, Beat.total_cases, Beat.is_leave_day, Beat.leave_type)
         .filter(Beat.agent_id == agent_id, Beat.beat_date >= six_months_ago)
         .all()
     )
@@ -3913,6 +3913,7 @@ def manager_get_agent_availability_calendar(
         b.beat_date: {
             "beat_status": b.status.value if hasattr(b.status, "value") else str(b.status),
             "cases": b.total_cases or 0,
+            "leave": bool(b.is_leave_day), "leave_type": b.leave_type,
         }
         for b in beats
     }
@@ -3925,7 +3926,8 @@ def manager_get_agent_availability_calendar(
             calendar_days.append({
                 "date": d.isoformat(),
                 "day_of_week": d.strftime("%a"),
-                "status": "ON_DUTY" if info else "OFF_DUTY",
+                "status": "ON_LEAVE" if (info and info.get("leave")) else "ON_DUTY" if info else "OFF_DUTY",
+                "leave_type": info.get("leave_type") if info and info.get("leave") else None,
                 "beat_status": info["beat_status"] if info else None,
                 "cases": info["cases"] if info else 0,
             })
@@ -4443,6 +4445,83 @@ def get_ptp_outcomes(
     return {"months": out, "window": window, "agent_id": agent_id,
             "effective_month": eff_date.strftime("%Y-%m"),
             "definition": "kept_rate_pct = honored / (honored + broken); open promises are never in the rate"}
+
+
+# ---------------------------------------------------------------------------
+# Leave requests — the manager's side (2026-09-21).
+# ---------------------------------------------------------------------------
+# List, approve, reject, revoke, and record leave directly ("mark"). Every row
+# is scoped on LeaveRequest.manager_user_id, which the service copies from
+# Agent.manager_user_id at write time; `mark` goes through _require_own_agent.
+
+class _LeaveDecisionBody(_BM):
+    note: Optional[str] = None
+
+
+class _MarkLeaveBody(_BM):
+    from_date: date
+    to_date: date
+    leave_type: str      # SICK_LEAVE | CASUAL_LEAVE | EARNED_LEAVE | ABSENT
+    reason: Optional[str] = None
+
+
+def _leave_names(db, requests) -> dict[str, str]:
+    ids = {r.agent_id for r in requests}
+    if not ids:
+        return {}
+    rows = db.query(Agent.id, User.full_name).join(User, Agent.user_id == User.id).filter(Agent.id.in_(ids)).all()
+    return {a: n for a, n in rows}
+
+
+@router.get("/leave-requests")
+def list_leave_requests(current_user: ManagerOnly, db: DbSession, status: Optional[str] = None):
+    """This manager's agents' leave requests, pending first. `status` narrows
+    to one of REQUESTED / APPROVED / REJECTED / CANCELLED."""
+    from app.services.leave_service import LeaveService, serialize
+    my_agent_ids = [a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()]
+    rows = LeaveService(db).list_for_manager(current_user.id, status)
+    rows = [r for r in rows if r.agent_id in set(my_agent_ids)]
+    names = _leave_names(db, rows)
+    pending = sum(1 for r in rows if r.status.value == "REQUESTED")
+    return {"requests": [serialize(r, names.get(r.agent_id)) for r in rows], "pending": pending}
+
+
+@router.post("/leave-requests/{request_id}/approve")
+def approve_leave_request(request_id: str, body: _LeaveDecisionBody, current_user: ManagerOnly, db: DbSession):
+    from app.services.leave_service import LeaveService, serialize
+    out = LeaveService(db).approve(current_user.id, request_id, body.note)
+    r = out["request"]
+    return {**serialize(r, _leave_names(db, [r]).get(r.agent_id)), "cases_released_to_pool": out["cases_released"]}
+
+
+@router.post("/leave-requests/{request_id}/reject")
+def reject_leave_request(request_id: str, body: _LeaveDecisionBody, current_user: ManagerOnly, db: DbSession):
+    from app.services.leave_service import LeaveService, serialize
+    r = LeaveService(db).reject(current_user.id, request_id, body.note)
+    return serialize(r, _leave_names(db, [r]).get(r.agent_id))
+
+
+@router.post("/leave-requests/{request_id}/revoke")
+def revoke_leave_request(request_id: str, body: _LeaveDecisionBody, current_user: ManagerOnly, db: DbSession):
+    from app.services.leave_service import LeaveService, serialize
+    r = LeaveService(db).revoke(current_user.id, request_id, body.note)
+    return serialize(r, _leave_names(db, [r]).get(r.agent_id))
+
+
+@router.post("/agents/{agent_id}/leave", status_code=201)
+def mark_agent_leave(agent_id: str, body: _MarkLeaveBody, current_user: ManagerOnly, db: DbSession):
+    """Record leave for one of this manager's agents, approved in one step.
+    ABSENT is the manager's word for a no-show and may be back-dated."""
+    from app.models.leave_request import LeaveType
+    from app.services.leave_service import LeaveService, serialize
+    agent = _require_own_agent(db, current_user, agent_id)
+    try:
+        lt = LeaveType(body.leave_type)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="leave_type must be SICK_LEAVE, CASUAL_LEAVE, EARNED_LEAVE or ABSENT")
+    out = LeaveService(db).mark(current_user.id, agent, from_date=body.from_date, to_date=body.to_date, leave_type=lt, reason=body.reason)
+    r = out["request"]
+    return {**serialize(r, agent.user.full_name if agent.user else None), "cases_released_to_pool": out["cases_released"]}
 
 
 # ─── Smart Nightly Case Allocation Endpoints ─────────────────────────────────

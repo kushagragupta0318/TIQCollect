@@ -12,6 +12,7 @@ import api, { LONG_RUNNING_MS } from "./axios";
 import type { DashboardSummary, Agent, CaseReassignment } from "@/types";
 import type { ActivityWindow, FieldActivity } from "@/pages/manager/fieldActivity";
 import type { PaymentModes } from "@/pages/manager/paymentModes";
+import type { LeaveRequest, LeaveType } from "@/api/agent";
 
 export async function getDashboard(): Promise<DashboardSummary> {
   const { data } = await api.get<DashboardSummary>("/manager/dashboard");
@@ -972,4 +973,17 @@ export async function exportAuditLog(): Promise<Blob> {
   return response.data;
 }
 
-
+// ─── Leave requests (2026-09-21) ─────────────────────────────────────────────
+export type { LeaveRequest, LeaveType } from "@/api/agent";
+export async function getLeaveRequests(status?: string): Promise<{ requests: LeaveRequest[]; pending: number }> {
+  const { data } = await api.get("/manager/leave-requests", { params: status ? { status } : undefined });
+  return data;
+}
+export async function decideLeave(id: string, decision: "approve" | "reject" | "revoke", note?: string): Promise<LeaveRequest & { cases_released_to_pool?: number }> {
+  const { data } = await api.post(`/manager/leave-requests/${id}/${decision}`, { note: note || undefined });
+  return data;
+}
+export async function markAgentLeave(agentId: string, body: { from_date: string; to_date: string; leave_type: LeaveType; reason?: string }): Promise<LeaveRequest & { cases_released_to_pool?: number }> {
+  const { data } = await api.post(`/manager/agents/${agentId}/leave`, body);
+  return data;
+}

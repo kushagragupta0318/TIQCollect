@@ -17,7 +17,8 @@
 //   any more since its build script was deleted upstream.
 // ─────────────────────────────────────────────────────────────────────────
 import { NavLink, Outlet, useNavigate, useLocation } from "react-router";
-import { AlertTriangle, BarChart2, Bell, Briefcase, Compass, LayoutDashboard, MapPin, Shield, Users } from "lucide-react";
+import { AlertTriangle, BarChart2, Bell, Briefcase, CalendarOff, Compass, LayoutDashboard, MapPin, Shield, Users } from "lucide-react";
+import type { LeaveRequest } from "@/api/agent";
 import { BrandLogo } from "@/components/ui/BrandLogo";
 import { useState, useEffect, useCallback, useRef } from "react";
 import api from "@/api/axios";
@@ -84,6 +85,9 @@ export default function ManagerLayout() {
 
   const [sosCount,  setSosCount]  = useState(0);
   const [sosAgents, setSosAgents] = useState<Agent[]>([]);
+  // 2026-09-21 — pending leave requests ride the same 30 s poll, so a request
+  // filed from a phone reaches the bell on whatever page the manager is on.
+  const [leavePending, setLeavePending] = useState<LeaveRequest[]>([]);
 
   useEffect(() => {
     function fetchSOS() {
@@ -92,6 +96,9 @@ export default function ManagerLayout() {
         .catch(() => {});
       api.get("/manager/agents")
         .then((r) => setSosAgents((r.data as Agent[]).filter((a: Agent) => a.sos_active)))
+        .catch(() => {});
+      api.get("/manager/leave-requests", { params: { status: "REQUESTED" } })
+        .then((r) => setLeavePending((r.data?.requests as LeaveRequest[]) ?? []))
         .catch(() => {});
     }
     fetchSOS();
@@ -232,7 +239,7 @@ export default function ManagerLayout() {
           </div>
           <div className="flex items-center gap-2 sm:gap-2.5 flex-shrink-0">
             <SOSAlertBadge sosCount={sosCount} />
-            <NotificationBell sosCount={sosCount} sosAgents={sosAgents} />
+            <NotificationBell sosCount={sosCount} sosAgents={sosAgents} leavePending={leavePending} />
             <AccountMenu name={user?.full_name ?? ""} role={user?.role ?? ""} onLogout={handleLogout} />
           </div>
         </header>
@@ -292,9 +299,12 @@ export default function ManagerLayout() {
   );
 }
 
-function NotificationBell({ sosCount, sosAgents }: { sosCount: number; sosAgents: Agent[] }) {
+function NotificationBell({ sosCount, sosAgents, leavePending }: { sosCount: number; sosAgents: Agent[]; leavePending: LeaveRequest[] }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const navigate = useNavigate();
+  const total = sosCount + leavePending.length;
+  const fmt = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
 
   useEffect(() => {
     if (!open) return;
@@ -309,14 +319,14 @@ function NotificationBell({ sosCount, sosAgents }: { sosCount: number; sosAgents
     <div ref={ref} style={{ position: "relative" }}>
       <button
         onClick={() => setOpen((v) => !v)}
-        aria-label={sosCount > 0 ? `Notifications, ${sosCount} active` : "Notifications"}
+        aria-label={total > 0 ? `Notifications, ${total} active` : "Notifications"}
         aria-expanded={open}
         className="tap-target relative flex flex-shrink-0 items-center justify-center transition-colors duration-150 hover:bg-muted"
         style={{ width: 40, height: 40, borderRadius: 10, background: "#fff", border: "1px solid #E1E3E9", color: "#667085" }}
       >
         <Bell className="w-4 h-4" />
-        {sosCount > 0 && (
-          <span className="absolute" style={{ top: 7, right: 7, width: 6, height: 6, borderRadius: "50%", background: "#DC2626", border: "1.5px solid #fff" }} />
+        {total > 0 && (
+          <span className="absolute" style={{ top: 7, right: 7, width: 6, height: 6, borderRadius: "50%", background: sosCount > 0 ? "#DC2626" : "#D97706", border: "1.5px solid #fff" }} />
         )}
       </button>
 
@@ -328,7 +338,7 @@ function NotificationBell({ sosCount, sosAgents }: { sosCount: number; sosAgents
           <div className="px-4 py-3 border-b" style={{ borderColor: "hsl(var(--border) / 0.5)" }}>
             <p className="text-sm font-bold" style={{ color: "#1C1C1F" }}>Notifications</p>
           </div>
-          {sosAgents.length === 0 ? (
+          {sosAgents.length === 0 && leavePending.length === 0 ? (
             <div className="px-4 py-6 text-center">
               <Bell className="w-6 h-6 mx-auto mb-2 opacity-25" />
               <p className="text-xs" style={{ color: "#6B6D76" }}>No active alerts</p>
@@ -343,6 +353,22 @@ function NotificationBell({ sosCount, sosAgents }: { sosCount: number; sosAgents
                     <p className="text-xs mt-0.5" style={{ color: "#6B6D76" }}>{a.employee_code} · Requires immediate attention</p>
                   </div>
                 </div>
+              ))}
+              {leavePending.map((r) => (
+                <button
+                  key={r.id}
+                  type="button"
+                  onClick={() => { setOpen(false); navigate("/manager/agents?leave=1"); }}
+                  className="w-full text-left flex items-start gap-3 px-4 py-3 hover:bg-amber-50 transition-colors"
+                >
+                  <CalendarOff className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: "#D97706" }} />
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold truncate" style={{ color: "#92400E" }}>Leave request — {r.agent_name}</p>
+                    <p className="text-xs mt-0.5" style={{ color: "#6B6D76" }}>
+                      {r.leave_type.replace("_", " ").toLowerCase()} · {fmt(r.from_date)}{r.to_date !== r.from_date ? ` – ${fmt(r.to_date)}` : ""} · tap to review
+                    </p>
+                  </div>
+                </button>
               ))}
             </div>
           )}

@@ -68,6 +68,13 @@ def run_nightly_repayment_scoring(self, dry_run: bool = False):
             result["labelling"] = service.attach_outcomes(as_of=today)
             result["pruning"] = service.prune_snapshots(as_of=today)
             db.commit()
+            # 2026-09-21 — re-derive the stored case priority from tonight's DPD.
+            # Runs after the 19:30 ingest has moved `loan.dpd`; one UPDATE for the
+            # open book. See services/case_priority_service.py.
+            from app.services.case_priority_service import restamp
+            stamped = restamp(db)
+            result["priority_restamped"] = stamped["changed"]
+            logger.info("case_priority.restamped", open_cases=stamped["open_cases"], changed=stamped["changed"])
         logger.info("repayment_scoring.complete", **{
             k: v for k, v in result.items() if k != "distribution"})
         return result

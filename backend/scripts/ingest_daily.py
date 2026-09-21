@@ -37,7 +37,7 @@ import app.models  # noqa: register all SQLAlchemy models
 from app.models.base import Base
 from app.models.customer import Customer, RiskCategory
 from app.models.loan import Loan, LoanType, DPDBucket, LoanStatus, dpd_bucket_for
-from app.models.case import Case, CaseStatus, CasePriority, EscalationReason
+from app.models.case import Case, CaseStatus, CasePriority, EscalationReason, priority_for
 from app.models.repayment_snapshot import (
     OUTCOME_DECEASED, OUTCOME_RECALLED, OUTCOME_REPAID, OUTCOME_SETTLED,
     OUTCOME_SOURCE_BANK_ACTION, OUTCOME_WRITTEN_OFF, RepaymentSnapshot,
@@ -106,14 +106,12 @@ def _dpd_to_bucket(dpd: int) -> DPDBucket:
 # FACTS: dpd, cibil_score, amounts, flags and bank_action consequences.
 
 
-def _priority_from_score(score: float) -> CasePriority:
-    if score >= 85:
-        return CasePriority.CRITICAL
-    elif score >= 60:
-        return CasePriority.HIGH
-    elif score >= 35:
-        return CasePriority.MEDIUM
-    return CasePriority.LOW
+# 2026-09-21 — `_priority_from_score` REMOVED. It ranked a case by
+# `dpd/90*40 + total_outstanding/500000*30`, so a large loan 40 days late read
+# CRITICAL while the seed and the demo feed called the same DPD MEDIUM: three
+# writers, three rules. The stored priority is now the case's AGEING label
+# only — `models/case.priority_for(dpd)`, the same bands as the DPD buckets —
+# and is re-stamped nightly; balance belongs to the visit-priority scorecard.
 
 
 def _parse_bool(val: str) -> bool:
@@ -548,7 +546,6 @@ def process_row(row: dict, db, dry_run: bool, today: date) -> dict:
             # the loan has not been scored yet, so it could only have used the
             # stale value. Priority here is PROVISIONAL — the rescore pass at the
             # end of run_ingestion() is what settles it.
-            score = min(100.0, dpd / 90 * 40 + total_outstanding / 500000 * 30)
             new_case = Case(
                 id=_uid(),
                 case_number=case_number,
@@ -556,7 +553,7 @@ def process_row(row: dict, db, dry_run: bool, today: date) -> dict:
                 loan_id=loan.id,
                 agent_id=None,
                 status=CaseStatus.UNASSIGNED,
-                priority=_priority_from_score(score),
+                priority=priority_for(dpd),
                 target_amount=overdue_amount if overdue_amount > 0 else total_outstanding,
                 collected_amount=0.0,
                 allocation_date=None,

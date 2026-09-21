@@ -1085,3 +1085,43 @@ def voice_outbound(PhoneTo: str = Form(default="")):
     else:
         resp.say("No destination number provided.")
     return FastAPIResponse(content=str(resp), media_type="application/xml")
+
+
+# ─── Leave requests (2026-09-21) ─────────────────────────────────────────────
+# The agent's door onto the leave calendar. Bodies stay on the router like the
+# other small ones here; the rules live in services/leave_service.py.
+
+class _LeaveRequestBody(BaseModel):
+    from_date: date
+    to_date: date
+    leave_type: str      # SICK_LEAVE | CASUAL_LEAVE | EARNED_LEAVE
+    reason: Optional[str] = None
+
+
+@router.get("/leave-requests")
+def list_my_leave_requests(current_user: AgentOnly, db: DbSession):
+    from app.services.leave_service import LeaveService, serialize
+    agent = _get_agent_or_404(current_user, db)
+    name = agent.user.full_name if agent.user else None
+    return {"requests": [serialize(r, name) for r in LeaveService(db).list_for_agent(agent)],
+            "current_status": agent.status.value if hasattr(agent.status, "value") else str(agent.status)}
+
+
+@router.post("/leave-requests", status_code=201)
+def create_leave_request(body: _LeaveRequestBody, current_user: AgentOnly, db: DbSession):
+    from app.models.leave_request import LeaveType
+    from app.services.leave_service import LeaveService, serialize
+    agent = _get_agent_or_404(current_user, db)
+    try:
+        lt = LeaveType(body.leave_type)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="leave_type must be SICK_LEAVE, CASUAL_LEAVE or EARNED_LEAVE")
+    r = LeaveService(db).request(agent, from_date=body.from_date, to_date=body.to_date, leave_type=lt, reason=body.reason)
+    return serialize(r, agent.user.full_name if agent.user else None)
+
+
+@router.delete("/leave-requests/{request_id}")
+def withdraw_leave_request(request_id: str, current_user: AgentOnly, db: DbSession):
+    from app.services.leave_service import LeaveService, serialize
+    agent = _get_agent_or_404(current_user, db)
+    return serialize(LeaveService(db).withdraw(agent, request_id), agent.user.full_name if agent.user else None)

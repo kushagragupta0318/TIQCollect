@@ -622,9 +622,10 @@ class ProfileResponse(BaseModel):
 class AvailabilityDay(BaseModel):
     date: str
     day_of_week: str
-    status: str            # "ON_DUTY" | "OFF_DUTY" — literal string built in the service, not an enum
+    status: str            # "ON_DUTY" | "OFF_DUTY" | "ON_LEAVE" (2026-09-21) — literal string built in the service
     beat_status: Optional[str] = None
     cases: int
+    leave_type: Optional[str] = None   # set only when status is ON_LEAVE
 
 
 class AvailabilitySummary(BaseModel):

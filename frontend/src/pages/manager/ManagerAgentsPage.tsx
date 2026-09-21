@@ -41,6 +41,10 @@ import type { AgentInsight, ReallocationPlan } from "@/api/manager";
 import { Input } from "@/components/ui/Input";
 import { TierBadge } from "@/components/ui/Badge";
 import { useModalA11y } from "@/hooks/useModalA11y";
+import { LeaveWindow, MarkLeaveModal } from "./LeavePanel";
+import { useLeaveRequests } from "./leaveQueries";
+import { CalendarOff } from "lucide-react";
+import { useSearchParams } from "react-router";
 import type { Agent, AgentStatus } from "@/types";
 
 const EASE = "cubic-bezier(0.16,1,0.3,1)";
@@ -87,6 +91,11 @@ const SORT_LABELS: Record<Exclude<SortKey, "default">, string> = {
 
 export default function ManagerAgentsPage() {
   const [agents, setAgents]         = useState<Agent[]>([]);
+  // Leave window: open on demand, or on arrival from the bell (?leave=1).
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [leaveOpen, setLeaveOpen]   = useState(() => searchParams.get("leave") === "1");
+  const leaveQ = useLeaveRequests();
+  const leavePending = leaveQ.data?.pending ?? 0;
   const [loading, setLoading]       = useState(true);
   const [search, setSearch]         = useState("");
   const [statusFilter, setStatusFilter] = useState<"ALL" | "ON_DUTY" | "OFF_DUTY">("ALL");
@@ -181,6 +190,24 @@ export default function ManagerAgentsPage() {
             {teamTargetToday > 0 && <> of ₹{(teamTargetToday / 100000).toFixed(1)}L visited target</>}
           </p>
         </div>
+        {/* Leave — a button top right; the panel opens as a floating window.
+            2026-09-21. The header bell deep-links here with ?leave=1. */}
+        <button
+          type="button"
+          onClick={() => setLeaveOpen(true)}
+          className="tap-target flex items-center gap-2 px-3 sm:px-4 py-2 rounded-xl font-semibold text-xs sm:text-sm flex-shrink-0 transition hover:brightness-95"
+          style={{ background: leavePending > 0 ? "#FEF3C7" : "#fff", border: `1px solid ${leavePending > 0 ? "#FDE68A" : "#E1E3E9"}`, color: leavePending > 0 ? "#92400E" : "#1C1C1F" }}
+          aria-haspopup="dialog"
+        >
+          <CalendarOff className="w-4 h-4 flex-shrink-0" />
+          Leave
+          {leavePending > 0 && (
+            <span className="flex items-center justify-center rounded-full text-white font-bold" style={{ minWidth: 18, height: 18, fontSize: 11, background: "#D97706", padding: "0 5px" }}>
+              {leavePending}
+            </span>
+          )}
+        </button>
+        {leaveOpen && <LeaveWindow pending={leavePending} onClose={() => { setLeaveOpen(false); if (searchParams.get("leave")) { searchParams.delete("leave"); setSearchParams(searchParams, { replace: true }); } }} />}
         {sosAgents.length > 0 && (
           <div
             className="flex items-center gap-2 px-3 sm:px-4 py-2 rounded-xl font-semibold text-xs sm:text-sm animate-pulse flex-shrink-0"
@@ -392,6 +419,7 @@ function AgentRow({
   const collectionPct = Math.min(Math.round(agent.collection_rate_pct ?? 0), 100);
 
   const [insight, setInsight]               = useState<AgentInsight | null>(null);
+  const [markLeave, setMarkLeave]           = useState(false);
   const [insightLoading, setInsightLoading] = useState(false);
   const [plan, setPlan]                     = useState<ReallocationPlan | null>(null);
   const [planLoading, setPlanLoading]       = useState(false);
@@ -687,6 +715,15 @@ function AgentRow({
               }
               {agent.status === "ON_DUTY" ? "Mark Off Duty" : "Mark On Duty"}
             </button>
+            <button
+              onClick={() => setMarkLeave(true)}
+              className="tap-target text-xs px-3 py-1.5 rounded-xl font-semibold transition hover:brightness-95 flex items-center justify-center gap-1.5"
+              style={{ background: "#F5F6F9", color: "#1C1C1F", border: "1px solid #E3E5EA" }}
+              title="Record leave for this agent (approved at once)"
+            >
+              Mark leave
+            </button>
+            {markLeave && <MarkLeaveModal agentId={agent.id} agentName={agent.full_name} onClose={() => setMarkLeave(false)} />}
             {agent.sos_active && (
               <button
                 onClick={acknowledgeSos}

@@ -40,6 +40,34 @@ class CasePriority(str, enum.Enum):
     CRITICAL = "CRITICAL"
 
 
+def priority_for(dpd: int | float | None) -> CasePriority:
+    """The stored case priority a DPD implies — ONE definition. 2026-09-21.
+
+    Three copies existed and disagreed: scripts/seed_data.py (HIGH above 90,
+    MEDIUM otherwise — no CRITICAL, no LOW), workers/tasks/demo_daily_feed.py
+    (this ladder), and scripts/ingest_daily.py (a score mixing DPD with the
+    outstanding balance, so a large 40-DPD loan read CRITICAL). And nothing
+    ever re-derived the value after creation, so on 2026-09-21 248 of ~1,270
+    open cases carried a priority their current DPD contradicted (32 stored
+    MEDIUM past 90 days; 44 stored CRITICAL back under 60).
+
+    Same bands as the DPD buckets (`loan.dpd_bucket_for`), by design: this is
+    the AGEING label of the case, and nothing more. Balance and recoverability
+    are the visit-priority scorecard's job, never this column's — mixing them
+    in was how the ingest's version drifted from the other two. Re-stamped
+    nightly by services/case_priority_service.restamp; a test asserts nobody
+    restates the ladder.
+    """
+    d = float(dpd or 0)
+    if d > 90:
+        return CasePriority.CRITICAL
+    if d > 60:
+        return CasePriority.HIGH
+    if d > 30:
+        return CasePriority.MEDIUM
+    return CasePriority.LOW
+
+
 class EscalationReason(str, enum.Enum):
     CUSTOMER_HOSTILE = "CUSTOMER_HOSTILE"
     CUSTOMER_ABSCONDED = "CUSTOMER_ABSCONDED"

@@ -18,6 +18,7 @@ celery_app = Celery(
         "app.workers.tasks.beat_generation",
         "app.workers.tasks.performance_snapshot",
         "app.workers.tasks.ptp_lifecycle",
+        "app.workers.tasks.leave_housekeeping",
         "app.workers.tasks.transcription",
         "app.workers.tasks.demo_daily_feed",
         "app.workers.tasks.location_retention",
@@ -106,6 +107,12 @@ celery_app.conf.update(
         "ptp-lifecycle-housekeeping": {
             "task": "app.workers.tasks.ptp_lifecycle.resolve_expired_promises",
             "schedule": crontab(hour=0, minute=5),
+        },
+        # Agent.status follows approved leave: ON_LEAVE while it covers today,
+        # back to OFF_DUTY the day after. 00:10, after the PTP lifecycle.
+        "leave-housekeeping": {
+            "task": "app.workers.tasks.leave_housekeeping.sync_leave_statuses",
+            "schedule": crontab(hour=0, minute=10),
         },
         # Monthly performance snapshot at midnight on 1st of each month
         "monthly-performance-snapshot": {

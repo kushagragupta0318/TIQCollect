@@ -583,8 +583,11 @@ class AgentService:
         today = date.today()
         six_months_ago = today - timedelta(days=180)
 
+        # 2026-09-21: leave beats (is_leave_day) used to read as ON_DUTY here —
+        # "any beat = on duty" — so an approved leave would have shown as a
+        # working day on the agent's own calendar. They now read ON_LEAVE.
         beats = (
-            self.db.query(Beat.beat_date, Beat.status, Beat.total_cases)
+            self.db.query(Beat.beat_date, Beat.status, Beat.total_cases, Beat.is_leave_day, Beat.leave_type)
             .filter(Beat.agent_id == agent.id, Beat.beat_date >= six_months_ago)
             .all()
         )
@@ -592,6 +595,8 @@ class AgentService:
             b.beat_date: {
                 "beat_status": b.status.value if hasattr(b.status, "value") else str(b.status),
                 "cases": b.total_cases or 0,
+                "leave": bool(b.is_leave_day),
+                "leave_type": b.leave_type,
             }
             for b in beats
         }
@@ -605,9 +610,10 @@ class AgentService:
                     {
                         "date": d.isoformat(),
                         "day_of_week": d.strftime("%a"),
-                        "status": "ON_DUTY" if info else "OFF_DUTY",
+                        "status": "ON_LEAVE" if (info and info["leave"]) else "ON_DUTY" if info else "OFF_DUTY",
                         "beat_status": info["beat_status"] if info else None,
                         "cases": info["cases"] if info else 0,
+                        "leave_type": info["leave_type"] if info and info["leave"] else None,
                     }
                 )
             d += timedelta(days=1)

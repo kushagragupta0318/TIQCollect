@@ -386,8 +386,9 @@ export async function getVisitStrategy(caseId: string): Promise<VisitStrategyBri
 export interface CalendarDay {
   date: string;
   day_of_week: string;
-  status: "ON_DUTY" | "OFF_DUTY";
+  status: "ON_DUTY" | "OFF_DUTY" | "ON_LEAVE";   // ON_LEAVE since 2026-09-21: an approved leave day
   beat_status: string | null;
+  leave_type?: string | null;
   cases: number;
 }
 
@@ -414,5 +415,28 @@ export interface AvailabilityCalendar {
 
 export async function getAvailabilityCalendar(): Promise<AvailabilityCalendar> {
   const { data } = await api.get<AvailabilityCalendar>("/agent/availability/calendar");
+  return data;
+}
+
+// ─── Leave requests (2026-09-21) ─────────────────────────────────────────────
+export type LeaveType = "SICK_LEAVE" | "CASUAL_LEAVE" | "EARNED_LEAVE" | "ABSENT";
+export type LeaveStatus = "REQUESTED" | "APPROVED" | "REJECTED" | "CANCELLED";
+export interface LeaveRequest {
+  id: string; agent_id: string; agent_name: string | null;
+  from_date: string; to_date: string; days: number;
+  leave_type: LeaveType; reason: string | null; status: LeaveStatus;
+  requested_by_id: string | null; decided_by_id: string | null; decided_at: string | null; decision_note: string | null;
+  created_at: string | null;
+}
+export async function getMyLeaveRequests(): Promise<{ requests: LeaveRequest[]; current_status: string }> {
+  const { data } = await api.get("/agent/leave-requests");
+  return data;
+}
+export async function requestLeave(body: { from_date: string; to_date: string; leave_type: LeaveType; reason?: string }): Promise<LeaveRequest> {
+  const { data } = await api.post<LeaveRequest>("/agent/leave-requests", body);
+  return data;
+}
+export async function withdrawLeave(id: string): Promise<LeaveRequest> {
+  const { data } = await api.delete<LeaveRequest>(`/agent/leave-requests/${id}`);
   return data;
 }
