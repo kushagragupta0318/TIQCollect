@@ -453,7 +453,11 @@ def test_19b_promises_card_kept_rate_counts_the_resolved_promise(w):
     c = w.case()
     w.ptp(c, EFF - timedelta(days=20), status=PTPStatus.HONORED)
     broken_soon = w.ptp(c, D_ELIGIBLE)
-    upcoming = w.ptp(c, EFF + timedelta(days=3))
+    # Relative to TODAY, not EFF: this test runs the lifecycle at date.today()
+    # (the API judges "due" against the real calendar), so a promise pinned to
+    # EFF + 3 stopped being "upcoming" on 2026-09-21 and the test failed every
+    # day after. Found 2026-09-22.
+    upcoming = w.ptp(c, max(EFF, date.today()) + timedelta(days=3))
 
     def override():
         db = w.Session()
