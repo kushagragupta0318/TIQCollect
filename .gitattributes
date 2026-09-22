@@ -49,6 +49,7 @@ Caddyfile       text eol=lf
 *.gz     binary
 *.parquet binary
 *.pyc    binary
+*.dump   binary
 
 # Generated: keep them out of diffs and out of language statistics.
 package-lock.json  linguist-generated=true

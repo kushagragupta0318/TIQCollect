@@ -12,11 +12,16 @@ Written 2026-08-21, after doing it once. Read the traps before running anything.
 |---|---|
 | This repo | `github.com/sanyasirao-col/TIQCollect-product`, work on **`TIQCollect-v3-1`** *(read `TIQCollect-v1` until 2026-09-17; the `git diff` below must name the branch you are actually merging — `v3` is the same tree minus the ML 2.2.0 commit `7707139`)* |
 | Platform | `github.com/transorg-engineering/Collections`, branch `docker-integrated` |
-| Common ancestor | `field-ops-stub@bc8649c` in the Collections history |
+| Common ancestor | **`tiq/TIQCollect-v3-1@008433f`** — the tree merged on 2026-09-21 onto Collections branch `COLLECTIONS` *(read `field-ops-stub@bc8649c` until then; that base is only correct while no merge has landed, and one now has)* |
 
 A merge was completed once on 2026-08-21 and then **deliberately deleted**
-without being pushed, so as of writing nothing from this repo has ever landed
-in the platform. The base below is therefore still correct.
+without being pushed. **The first merge that actually landed was 2026-09-21**:
+`TIQCollect-v3-1@008433f` applied onto `docker-integrated@9e7e6a8` on the
+branch `COLLECTIONS` — 803 files, 2 conflicts (`docker-compose.yml` env
+comments; `LandingPage.tsx` copy, this repo's wording kept). Every
+platform-side typography change since `bc8649c` was verified present in the
+result line by line. **The next merge must diff from `008433f`'s tree, not
+from `bc8649c`** — the command below is written for that.
 
 ## Procedure
 
@@ -27,9 +32,11 @@ git checkout -b merge-tiq origin/docker-integrated
 git remote add tiq "../TIQCollect-product"     # or the GitHub URL
 git fetch tiq
 
-git diff bc8649c:field-ops-stub tiq/TIQCollect-v1^{tree} \
+git config core.longpaths true                 # Windows only — see trap 6
+
+git diff --binary 008433f^{tree} tiq/TIQCollect-v3-1^{tree} \
     -- . ':(exclude)CLAUDE.md' ':(exclude).gitignore' ':(exclude).github' \
-    > /tmp/tiq.patch
+    > /tmp/tiq.patch                                # --binary: see trap 5
 
 git apply -3 --directory=field-ops-stub /tmp/tiq.patch
 git diff --name-only --diff-filter=U          # conflicts to resolve by hand
@@ -64,7 +71,22 @@ inert at `field-ops-stub/.github/`. `field-ops-stub/.gitignore` deliberately
 defers to the monorepo's root file. `docs/` is fine to bring across.
 
 **4. Divergence costs.** At two weeks apart the merge was 61 files with only two
-conflicts, both one-liners. It will be worse the longer the gap.
+conflicts, both one-liners. It will be worse the longer the gap. *(At five weeks
+apart, 2026-09-21, it was 803 files and still only two conflicts — the
+platform had touched 10 files under `field-ops-stub/` in that time, all
+Docker or typography, and this repo had already absorbed the typography.)*
+
+**5. `git diff` needs `--binary`.** Since 2026-09-08 the repo commits ML
+artifacts — ~400 PNG / joblib / pickle files under `backend/app/ml/artifacts/`.
+Without `--binary`, `git diff` writes a `Binary files differ` stub for each and
+`git apply` fails on every one with *"cannot apply binary patch ... without
+full index line"*. Found on 2026-09-21; the first dry run failed on all of
+them. The patch is ~21 MB with the flag.
+
+**6. Windows path length.** `ml/artifacts/recovery_risk/2.2.0/evaluation/shape_functions/...`
+under `Collections/field-ops-stub/` exceeds 260 characters and `git apply`
+reports *"Filename too long"* and skips the file. `git config core.longpaths
+true` in the Collections checkout before applying.
 
 ## After merging
 

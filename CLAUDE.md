@@ -94,12 +94,30 @@ is overridable by env var; the defaults are:
 | Web | `5473` |
 | Postgres · Redis · MinIO | `15432` · `16379` · `19000` |
 
+**An empty database is filled from the committed fixture, not the seed**
+(since 2026-09-22). `backend/fixtures/fieldops-demo.dump` is a `pg_dump` of the
+demo book — 1,698 cases, 142 allocation plans, 3 weeks of nightly runs — and
+`docker-entrypoint.sh` restores it, then runs `alembic upgrade head` so later
+migrations apply on top. It exists because the first merge into Collections
+shipped the code and not the data: a fresh clone seeded a 743-case, 106-stop
+day-zero book against the 1,698-case, 225-stop one the demo shows. Provenance,
+counts and the refresh recipe are in `backend/fixtures/README.md`. It is a
+snapshot anchored on 2026-09-22; brought up weeks later it reads as paused
+until the nightly tasks move it. `SEED_FROM_FIXTURE=false`, or deleting the
+file, gives the old behaviour below.
+
 Seeding is **destructive** (`scripts/seed_data.py` drops every table and every
-public-schema enum with CASCADE). `docker-entrypoint.sh` gates it on whether
-`public.agents` exists, so it runs only on an empty database, and only in the API
-container (`RUN_SEED=true`). Straight after a successful seed the entrypoint also
-takes the demo baseline snapshot (`scripts/demo_reset --save`) — the only moment
-the showcase case is provably clean.
+public-schema enum with CASCADE). `docker-entrypoint.sh` gates both it and the
+restore on whether `public.agents` exists, so either runs only on an empty
+database, and only in the API container (`RUN_SEED=true`). Straight after a
+successful seed or restore the entrypoint also takes the demo baseline snapshot
+(`scripts/demo_reset --save`) — the only moment the showcase case is provably
+clean. One trap found on the first real restore: the API image ships Postgres
+**17** client tools against a **16** server, and `pg_restore -d` 17 opens with
+`SET transaction_timeout`, which 16 rejects — so the entrypoint pipes
+`pg_restore -f -` through `sed` into `psql -v ON_ERROR_STOP=1` instead. Eight
+tests in `tests/test_entrypoint_fixture.py` execute the script under bash with
+stubbed binaries.
 
 Verify a change with all four, because each catches what the others miss:
 

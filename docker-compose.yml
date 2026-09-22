@@ -278,11 +278,14 @@ services:
     command: celery -A app.workers.celery_app beat --loglevel=info -s /tmp/celerybeat-schedule
 
   # ─── One-shot: schema + demo data ─────────────────────────────────────────
-  # Separate from the API because scripts/seed_data.py is destructive — it drops
-  # every table and every enum in the public schema, then rebuilds. The
-  # entrypoint runs it only when the database is empty, so this is a no-op on
-  # every start after the first, and the API waits for it to exit 0 rather than
-  # briefly serving an empty database.
+  # Since 2026-09-22 the entrypoint fills an empty database from the committed
+  # backend/fixtures/fieldops-demo.dump (the real demo book) and only falls back
+  # to scripts/seed_data.py when the fixture is absent or SEED_FROM_FIXTURE=false.
+  # Separate from the API because the seed is destructive — it drops every table
+  # and every enum in the public schema, then rebuilds. The entrypoint runs
+  # either only when the database is empty, so this is a no-op on every start
+  # after the first, and the API waits for it to exit 0 rather than briefly
+  # serving an empty database.
   #
   # Note that re-running THIS service will not reseed a populated database —
   # the same emptiness gate applies, and it will just print "already seeded".
