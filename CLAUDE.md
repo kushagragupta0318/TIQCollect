@@ -9,16 +9,20 @@ detection and an LLM performance narrative over their own team.
 FastAPI + Postgres + Redis + MinIO + Celery on the backend; React 19 + Vite +
 TypeScript + Tailwind on the frontend. Python >= 3.12.
 
-**Measured 2026-09-11**, not estimated: 33,864 lines under `backend/app`,
-13,562 under `backend/scripts`, 19,700 under `frontend/src`, and **1,110 backend
-tests + 44 frontend tests, all passing** (full suite: 1110 passed in 314s on
-2026-09-11, after the compliance-hardening commit `4790741`).
+**Measured 2026-09-23**, not estimated: 39,104 lines under `backend/app`,
+17,968 under `backend/scripts`, 23,299 under `frontend/src`, and **1,503 backend
+tests + 97 frontend tests, all passing** (full suite: 1503 passed, 1 skipped in
+757s — 12m37s, not the 5 minutes the command below used to claim — on
+2026-09-23 at `4bff733`, run with `CONTACT_HOUR_START=8 CONTACT_HOUR_END=19`;
+see the note under that command for why the environment matters).
 
-*(These read 32,833 / 13,179 / 18,805 and "1,044 backend + 23 frontend", dated
-2026-09-10, and before that 28,187 / 12,061 / 17,863 and "945 + 15", dated
-2026-09-08. Every one had drifted within a day or two of being written.
-Corrected rather than deleted, because a number presented as "measured, not
-estimated" is exactly the kind a reader quotes without re-running it.)*
+*(These read 33,864 / 13,562 / 19,700 and "1,110 backend + 44 frontend", dated
+2026-09-11; before that 32,833 / 13,179 / 18,805 and "1,044 + 23", dated
+2026-09-10; and before that 28,187 / 12,061 / 17,863 and "945 + 15", dated
+2026-09-08. Every one had drifted within a day or two of being written — this
+one sat twelve days and was out by 5,240 lines and 393 tests. Corrected rather
+than deleted, because a number presented as "measured, not estimated" is
+exactly the kind a reader quotes without re-running it.)*
 
 > **Run `git status` before assuming the tree matches the last commit.**
 >
@@ -33,7 +37,8 @@ estimated" is exactly the kind a reader quotes without re-running it.)*
 This repo was extracted on **2026-08-17** from the `Collections` platform monorepo
 (`field-ops-stub/`) via `git subtree split`, so its 20 inherited commits are that
 subdirectory's history with paths rebased to root. Everything after `7c30095` was
-written here. 131 commits at `9100d6d` (2026-09-14; this read "86" from 2026-08-17 until then).
+written here. 145 commits at `4bff733` (2026-09-23; this read "131" at `9100d6d` from
+2026-09-14, and "86" from 2026-08-17 before that).
 
 **Three copies of this codebase exist.** This one is the only one that should be
 edited:
@@ -41,28 +46,64 @@ edited:
 | Location | Status |
 |---|---|
 | **this repo** | source of truth — work here |
-| `Desktop/Collections/field-ops-stub/` | frozen. Still built by the platform's `docker-compose.yml` and routed by Caddy at `fieldops.transorg.ai`. Do not edit. |
+| `Desktop/Collections/field-ops-stub/` | **no longer frozen — this repo was merged into it on 2026-09-21** (see below). Still built by the platform's `docker-compose.yml` and routed by Caddy at `fieldops.transorg.ai`. Still do not EDIT it: changes belong here and reach it through the merge procedure. |
 | `Desktop/TIQCollect/` | the original standalone repo (June, GitHub remotes at `transorg-engineering/TIQCollect`). Stale since 2026-08-03. Shares **zero commits** with this history — the monorepo copy was pasted, not subtree-added. |
 
 That third copy is stale but not worthless: `.github/workflows/ci.yml` and
 `backend/scripts/add_recovery_potential.py` came from it. Anything else needed from
 it must be copied by hand — the histories cannot be merged.
 
-**Remote: one, personal.** `origin` is
-`github.com/sanyasirao-col/TIQCollect-product` — the owner's own account. Do
-**not** push to `transorg-engineering`; that was ruled out on 2026-08-17 and
-still is. Pushing to the personal remote is fine on explicit instruction.
+**Remotes: three, and two of them are the org.** Verified 2026-09-23:
 
-*(This block used to read "Remotes: none, deliberately — this repo is
-local-only." That stopped being true some time before 2026-08-21 and misled
-anyone reading it; corrected rather than deleted so the change is visible.)*
+| remote | url | what goes there |
+|---|---|---|
+| `origin` | `sanyasirao-col/TIQCollect-product` | this repo's own branches — the working remote |
+| `transorg` | `transorg-engineering/TIQCollect` | **this repo, as a repo**, on the branch `TIQCollect-app` |
+| *(no remote)* | `transorg-engineering/Collections` | this tree 3-way patched into `field-ops-stub/`, on `COLLECTIONS` — pushed from the Collections checkout, not from here |
 
-**Branch state, verified 2026-09-14.** `origin/main` is still `8d27a14`
-(2026-08-17) — `main` has not moved in four weeks. Work lives on the
-`TIQCollect-v*` branches; the current branch is **`TIQCollect-v3`**, pushed
-through `4790741` with the docs commit `9100d6d` local at the time of writing.
-Fourteen remote branches exist. *(This read "`TIQCollect-v2-2` at `86eb6d0`
-... Nine remote branches", verified 2026-09-07; both had moved.)*
+*(This block has now been wrong three times, in both directions, and the
+corrections are kept because each one changed what a reader would DO. It read
+"Remotes: none, deliberately — this repo is local-only" until some time before
+2026-08-21. It then read "Do **not** push to `transorg-engineering`; that was
+ruled out on 2026-08-17 and still is" until 2026-09-23. Rewriting it that day
+I narrowed the ban to "do not push this repo, as a repo, to the org — the
+stale June copy at `transorg-engineering/TIQCollect` is not it either", and
+that was wrong within the hour: `transorg` was **already a configured remote
+here**, and `transorg-engineering/TIQCollect` already carried
+`refs/heads/TIQCollect-app` at this repo's exact HEAD. I had checked the
+Collections remote and reasoned about this one from the old note instead of
+running `git ls-remote`. **There is no standing ban left.** Pushing to any of
+the three is fine on explicit instruction and is not done without one.)*
+
+**`transorg-engineering/TIQCollect` holds two unrelated histories, and the
+branch matters.** `TIQCollect-app` and `TIQCollect-product` carry THIS repo's
+history (145 commits, base `d7a84c5a710f`-era). `main`, `TIQCollect_final` and
+`tiq-demo` are the original June standalone repo, which shares **zero commits**
+with this one — the monorepo copy was pasted, not subtree-added. Push to the
+first group; never try to merge across the boundary, because there is no
+common ancestor to merge on.
+
+**Three merges have landed, all on `COLLECTIONS`, none on `docker-integrated`**
+(which has not moved from `9e7e6a8`):
+
+| this repo | Collections | what |
+|---|---|---|
+| `TIQCollect-v3-1@008433f` | `49c8f7d` (2026-09-21) | the first one: 803 files, 2 conflicts, base `field-ops-stub@bc8649c` |
+| `008433f..42f80e7` | `41769ce` | the fixture bootstrap |
+| `42f80e7..4bff733` | `e4a1729` | leave, duty and today's route |
+
+So the platform copy is current through `4bff733` as of 2026-09-23. **The base
+for the next merge is no longer `bc8649c`** — it is whatever landed last. Procedure, the
+new base and six traps (`--binary`, `core.longpaths`, and the four older ones):
+[docs/MERGING-INTO-PLATFORM.md](docs/MERGING-INTO-PLATFORM.md).
+
+**Branch state, verified 2026-09-23.** `origin/main` is still `8d27a14`
+(2026-08-17) — `main` has not moved in five weeks. Work lives on the
+`TIQCollect-v*` branches; the current branch is **`TIQCollect-v3-1`**, pushed
+through `4bff733` with nothing local. Eighteen remote branches exist.
+*(This read "`TIQCollect-v3` ... pushed through `4790741` ... Fourteen remote
+branches", verified 2026-09-14, and "`TIQCollect-v2-2` at `86eb6d0` ... Nine
+remote branches" on 2026-09-07. All three had moved within days.)*
 
 Command Center (in the platform monorepo) consumes this service's
 `/api/v1/manager/*` endpoints through a per-agency service login. Its
@@ -122,12 +163,20 @@ stubbed binaries.
 Verify a change with all four, because each catches what the others miss:
 
 ```bash
-cd backend  && python -m pytest          # 1,115 tests, ~5 min, no DB or network
+cd backend  && python -m pytest          # 1,504 tests, ~13 min, no DB or network
 cd backend  && python -m compileall app
 cd frontend && npm run build             # tsc -b + vite — the real typecheck
-cd frontend && npm test                  # 44 vitest tests — in CI since 2026-09-14
+cd frontend && npm test                  # 97 vitest tests — in CI since 2026-09-14
 cd frontend && npm run lint              # 7 errors left (was 53) — see issue 1
 ```
+
+**`pytest` reads `backend/.env`, and four tests depend on what is in it.**
+`tests/test_contact_hour_audit.py` needs a real contact window: under a demo
+`.env` carrying `CONTACT_HOUR_START=0` / `CONTACT_HOUR_END=24` nothing is ever
+out of hours, and four tests fail on the same code that passes at `8`/`19`.
+Found 2026-09-21 running the suite in the Collections checkout, whose `.env`
+is the platform's. Config, not code — but a suite that fails on a machine
+because of a gitignored file is worth knowing about before you go hunting.
 
 **Use `npm run build`, never `npx tsc --noEmit`.** The root `tsconfig.json` is a
 solution file — project references and no files of its own — so `tsc --noEmit`
@@ -143,20 +192,22 @@ typecheck both pass. The workflow triggers on pushes to `main` and on PRs.
 
 ```
 backend/app/
-  api/v1/endpoints/   agent.py (33 routes, 1.1k lines) · manager.py (40, 4.7k)
+  api/v1/endpoints/   agent.py (36 routes, 1.1k lines) · manager.py (48, 5.2k)
                       verify.py (1, public: the ID-card check, 2026-09-11)
                       auth.py (5) · field_ops.py (4, Command Centre contract)
                       health.py (2)
   services/           case · visit · payment · otp · auth · agent · media · notification
                       ai_report · demo · fraud · location · repayment · visit_priority
-                      planner · global_allocator · ml_scoring   (18 files)
+                      planner · global_allocator · ml_scoring · leave (2026-09-21)
+                      case_priority · ptp_lifecycle · field_activity   (21 files)
   core/               config · security · database · dependencies · errors · geo
                       audit (write_audit) · ratelimit (the one Limiter, 2026-09-14)
                       routing (OSRM + OR-Tools VRPTW) · llm (provider seam)
                       transcription (Whisper seam) · storage (MinIO)
-  models/             21 files → 21 mapped tables (base.py is the only non-table;
-                      the two dead files went 2026-09-10, model_prediction and
-                      model_candidate arrived 2026-09-09)
+  models/             21 modules + base.py → 22 mapped tables (quick_login_token
+                      declares two; the two dead files went 2026-09-10,
+                      model_prediction and model_candidate arrived 2026-09-09,
+                      leave_request 2026-09-21)
   ml/                 repayment_scorecard · recovery_scorecard · visit_priority
                       empirical_bayes · eligibility · allocator · repayment (tier seam)
                       recovery_validation · shadow_evaluator · train_shadow_model
@@ -178,6 +229,9 @@ backend/app/
                       demo_daily_feed · beat_reconciliation (plan vs GPS actuals)
   scripts/            seed_data · ingest_daily · synthetic generation + validation
                       demo tooling · one-off repairs
+  fixtures/           fieldops-demo.dump — the COMMITTED demo book the entrypoint
+                      restores into an empty database (14.9 MB, provenance and
+                      refresh recipe in fixtures/README.md, 2026-09-22)
 frontend/src/
   pages/agent/        AgentHome · AgentCases · AgentCaseDetail (1.3k)
                       RecordVisit (2.3k) · BeatMap · AgentProfile
@@ -214,8 +268,11 @@ imported it. It offered two options, "delete them or wire them up". **Deleted
 footgun is still a footgun, and the warning only ever protected someone who read
 the warning first.)*
 
-`base.py` is the declarative base, not a table — that is why 22 files give 21
-mapped tables.
+`base.py` is the declarative base, not a table, and `quick_login_token.py`
+declares two (`QuickLoginToken` and `UsedQuickLoginToken`) — which is why 21
+model modules plus `base.py` give **22** mapped tables. *(This read "22 files
+give 21 mapped tables" until 2026-09-23; `leave_request.py` arrived and the
+second token table had never been counted.)*
 
 ## The scoring layers
 
@@ -238,8 +295,10 @@ Hungarian assignment.
 `ml/train_shadow_model.py`, which is shadow-only". That stopped being true on
 2026-09-08 — corrected rather than deleted so the change is visible.)* There is
 now a **sixth layer, and it IS trained**: `ml/artifacts/recovery_risk/` holds a
-fitted WOE + logistic scorecard with a committed pickle, and
-`services/ml_scoring_service.py` serves it. It does not replace any of the five
+committed pickle that `services/ml_scoring_service.py` serves — **a 15-feature
+GAM (2.2.0) since 2026-09-16**, a 4-feature WOE + logistic scorecard (1.1.0)
+before that. *(This read "a fitted WOE + logistic scorecard" until 2026-09-23,
+which stopped describing the champion at the 2.2.0 promotion.)* It does not replace any of the five
 — it feeds one term of the sixth, `prob_recovery` in the allocator — and
 **`ML_SCORING_ENABLED` is `True`**, so the nightly run makes real decisions with
 it. See **The trained models** and **The allocator's expected-recovery term**
@@ -341,7 +400,39 @@ the only route to a genuinely calibrated number before the 90-day labels land.
 
 Added **2026-09-08**. Everything above this line describes hand-weighted
 scorecards; this section describes the one part of the repo that is fitted from
-data, and it is deliberately **off by default**.
+data.
+
+> ### THE CHAMPION IS 2.2.0, AND HAS BEEN SINCE 2026-09-16
+>
+> **`app/ml/artifacts/recovery_risk/champion.txt` reads `2.2.0`.** Verified
+> 2026-09-23 by reading the file, the engine and the database:
+>
+> ```
+> champion.txt                                  2.2.0
+> DecisionEngine.serving_state(recovery_risk)   pointer 2.2.0, matches
+> model_predictions  1.1.0  24,747 rows  2026-09-08 .. 2026-09-16
+>                    2.2.0   9,494 rows  2026-09-17 .. 2026-09-21
+> allocation_decisions linked to a 2.2.0 prediction        9,494
+> ```
+>
+> It is a **15-feature GAM**, not the 4-feature WOE scorecard 1.1.0 was: OOT
+> Gini 0.5122 / KS 38.66 / AUC 0.7561 / Brier 0.18021 calibrated (0.5126 /
+> 38.66 raw), 12/12 spec gates, on 23,780 out-of-time rows. It was promoted and
+> committed in `7707139` on 2026-09-16.
+>
+> **Every "`champion.txt` still reads 1.1.0" below was true when it was
+> written and is now false.** Those lines are the running record of Phases
+> 1–5, the observability ladder and the readiness audit, each of which
+> deliberately trained without promoting; the promotion happened after them,
+> in the closure section, and nothing went back to update the sentences
+> upstream of it. They are left in place as dated statements — see the note on
+> each — because deleting them would erase the fact that six consecutive pieces
+> of work were carried out under a frozen pointer, which was the point of them.
+> **The `1.1.0` figures quoted throughout this file — Gini 0.5136, KS 39.72,
+> `dpd`/`cibil_score`/`ptp_kept_ratio`/`overdue_amount`, "the four champion
+> features" — therefore describe the PREVIOUS champion**, and the four-feature
+> arithmetic in *The allocator's expected-recovery term* and the coverage-floor
+> finding were measured under it.
 
 ```
 scripts/build_modelling_dataset.py --tier full   # 120k-row synthetic panel, ~2s
@@ -355,7 +446,14 @@ scripts/train_models.py                          # trains, gates, writes artifac
 | Out-of-time Gini | **0.5149** (95% CI 0.5035–0.5264) | 0.1904 |
 | KS | **39.62** | 14.25 |
 | Rank-order breaks | **0** | 0 |
-| Gates | **PASS** — champion | **FAIL** — not promoted |
+| Gates | **PASS** — champion **at the time** | **FAIL** — not promoted |
+
+*(This table is the **2026-09-08** development of `recovery_risk` 1.0.0/1.1.0
+and is kept because `contact_risk`'s failure is still the live finding. The
+figures in its first column are NOT the serving model's: 2.2.0 has been
+champion since 2026-09-16 at OOT Gini 0.5122 / KS 38.66 over 15 features —
+lower on both, on a harder and more honest world, which the sections from
+Phase 5 onward explain. `contact_risk` is unchanged and still unpromoted.)*
 
 `recovery_risk` selects 4 of
 33 candidates: `dpd`, `cibil_score`, `ptp_kept_ratio`, `overdue_amount`. Train Gini 0.4866 against
@@ -462,7 +560,8 @@ python -m scripts.build_ledger_dataset --tier full     # ledger + panel + realis
 ```
 
 **`book_simulator.py` is untouched and remains the baseline.** Nothing here is
-promoted; `recovery_risk` 1.1.0 (OOT Gini 0.5136) is still champion.
+promoted; `recovery_risk` 1.1.0 (OOT Gini 0.5136) was champion at the time.
+*(2.2.0 since 2026-09-16.)*
 
 **Why a second simulator.** `book_simulator` carries state in a dict and emits
 aggregated features directly — `dpd` and `overdue_amount` are state variables it
@@ -541,8 +640,8 @@ python -m scripts.phase2_ledger_validation --tier full
 
 `ModelSpec.RECOVERY_RISK` used **verbatim** — same features, target, split and
 gates; only the version string replaced via `dataclasses.replace`, which copies.
-`make_champion=False`, so **`champion.txt` still reads 1.1.0** and the live
-engine is unaffected.
+`make_champion=False`, so **`champion.txt` still read 1.1.0** and the live
+engine was unaffected. *(2.2.0 since 2026-09-16.)*
 
 ```
                      1.1.0 (book_simulator)      1.2.0-ledger
@@ -675,7 +774,8 @@ python -m scripts.phase4_ledger_lifecycle --stress   # concept drift on
 `predict at as_of -> advance 30 days -> label -> compare -> monitor`, eight
 cohorts, every stage running the PRODUCTION code. Scored with `1.2.0-ledger`
 through `settings.ML_MODEL_VERSION` — the rollout gate that only started working
-on 2026-09-09 — and `champion.txt` still reads 1.1.0.
+on 2026-09-09 — and `champion.txt` still read 1.1.0. *(2.2.0 since
+2026-09-16.)*
 
 ```
                             HEALTHY              STRESS (concept drift)
@@ -732,7 +832,9 @@ would pass unremarked until it compounded.
 
 ### Phase 5 — the observable world, and the fresh 2.1.0 development (2026-09-15)
 
-**Nothing is promoted. `champion.txt` still reads 1.1.0.** Two candidate specs
+**Nothing was promoted by this phase; `champion.txt` still read 1.1.0 at the
+time.** *(Superseded — 2.2.0 was promoted on 2026-09-16, two sections below.
+True as written on 2026-09-15.)* Two candidate specs
 now sit beside it in `config.CANDIDATE_SPECS`, both trained with
 `make_champion=False`, both compared against the deployed model on identical
 out-of-time rows through the production scoring path.
@@ -894,7 +996,8 @@ the pool, at double the call volume and a material-payment rate of 0.34.
 disposition recorded on every pre-scoring contact (a field the schema does
 not have), reaching >= 75% of the pool at reliability ~0.85. Not the noise,
 not the persistence, not the weights — those what-ifs, at moderate size, do
-not get there either. `champion.txt` still reads 1.1.0.
+not get there either. `champion.txt` still read 1.1.0. *(2.2.0 since
+2026-09-16.)*
 
 **Then built and measured (the disposition ladder, same day).**
 `observe_disposition` + `disposition_read_noise` in `LedgerConfig`: on every
@@ -956,7 +1059,8 @@ level. Validation-selected 15-feature GAM: **0.5118 / 38.84**, every gate
 but KS. The rows above 39 are GBMs over pools carrying `months_on_book`
 (CSI 0.52) — they fail stability before they are read. Gini >= 0.50 yes,
 KS >= 39 no, and the residual 0.2-0.4 KS is not available to a stable,
-explainable model on this data. `champion.txt` still reads 1.1.0.
+explainable model on this data. `champion.txt` still read 1.1.0. *(2.2.0
+since 2026-09-16.)*
 
 **The stop (`FINAL_SEARCH_REPORT.md`, `gam_search.py`).** One last controlled
 search under the frozen data: admissibility by train -> VALIDATION PSI
@@ -980,7 +1084,8 @@ and the scoring machinery. Report:
 `app/ml/artifacts/recovery_risk/2.1.0/observability/PRODUCTION_READINESS_AUDIT.md`;
 evidence under `observability/gam/audit/`. **Verdict: (C) NOT PRODUCTION
 READY — on implementation grounds, not model performance.** `champion.txt`
-still reads 1.1.0.
+still read 1.1.0 at this point; the blockers were closed and 2.2.0 promoted
+the same day — next section.
 
 **What passes.** The artifact re-fits from its recorded recipe bit-for-bit
 (max |dp| 0.0 over 23,780 OOT rows) and loads in a clean process; the score
@@ -1030,9 +1135,16 @@ their KS is read. Full suite **1,266 passed**.
 ### The closure — recovery_risk 2.2.0, 2026-09-16 (later)
 
 Every implementation blocker the audit raised is closed, and the verdict moved
-to **(B) PRODUCTION READY WITH DOCUMENTED LIMITATION**. **Not promoted:
-`champion.txt` still reads 1.1.0**; nothing committed. Report with every
-number and the CHECK / RESULT / EVIDENCE table:
+to **(B) PRODUCTION READY WITH DOCUMENTED LIMITATION**. **It was then
+PROMOTED and COMMITTED as `7707139` on 2026-09-16 — `champion.txt` reads
+`2.2.0` and this model has driven every allocation since 2026-09-17** (9,494
+predictions, 9,494 linked decisions, measured 2026-09-23). *(This paragraph
+read "**Not promoted: `champion.txt` still reads 1.1.0**; nothing committed"
+until 2026-09-23. It was true for the few hours between the closure work and
+the promotion, and then described the opposite of what had happened for a
+week — while the section it heads is the one a reader consults to find out
+what is serving. Corrected rather than deleted so the gap is visible.)*
+Report with every number and the CHECK / RESULT / EVIDENCE table:
 `app/ml/artifacts/recovery_risk/2.2.0/PRODUCTION_READINESS_CLOSURE.md`.
 
 ```
@@ -1205,6 +1317,16 @@ book is re-run `scripts/value_transform_study` there before trusting the +28%.
 Model out-of-time, from the artifact rather than recomputed: `recovery_risk`
 1.1.0, Gini 0.5136, KS 39.72, n 30,000, gates PASS. Full records in
 `app/ml/artifacts/recovery_risk/1.1.0/shadow/`.
+
+**That is the model this measurement was taken under, and it is no longer the
+one serving.** Since 2026-09-16 the allocator's `prob_recovery` carries
+**2.2.0**'s calibrated probability (OOT Gini 0.5122 / KS 38.66, 15 features,
+`app/ml/artifacts/recovery_risk/2.2.0/`). The +28% realised-recovery figure and
+the whole transform study above were measured with 1.1.0's probabilities, and
+**have not been re-run under 2.2.0**. The rescaling argument does not depend on
+which model supplies the number — it depends on the probability being
+calibrated and anti-correlated with balance, which 2.2.0 also is — but the
+percentage is not a 2.2.0 figure and should not be quoted as one.
 
 ## Epsilon-greedy exploration — live at 10% from 2026-09-08
 
@@ -1522,7 +1644,8 @@ would have been pooled silently.
 
 The report now carries what a review actually needs: **n, AUC, Gini, KS, Brier,
 calibration gap and table, bad/recovery rate, score PSI, per-feature PSI for the
-four champion features, and the development benchmarks beside each live figure**
+champion features — four of them under 1.1.0, fifteen under 2.2.0 — and the
+development benchmarks beside each live figure**
 (the retrain rule is a *relative* drop, so a live Gini with nothing to compare
 against cannot trigger anything). Score PSI moved out of the feature branch: a
 model whose features were all missing used to report no drift at all rather than
@@ -2043,8 +2166,18 @@ Schedule verified against `workers/celery_app.py`:
                                    solve → OSRM/OR-Tools route → PLANNED beats
 05:30  demo_daily_feed             DEMO_MODE only
 06:00  morning beat push  ·  09:00 PTP reminders  ·  03:00 location retention sweep
+02:00  beat_reconciliation         plan vs GPS actuals, before the 03:00 sweep
+00:05  ptp_lifecycle               resolve_expired_promises
+00:10  leave_housekeeping          sync_leave_statuses — ALSO run at API startup,
+                                   because Celery beat never replays a crontab it
+                                   slept through and one missed night made an
+                                   approved leave invisible (2026-09-22)
 00:00 on the 1st  monthly performance snapshot
 ```
+
+*(The 02:00, 00:05 and 00:10 entries were missing from this block until
+2026-09-23 — all three were live in `celery_app.py`, and the schedule above
+claimed to be "verified against" it.)*
 
 Fifteen minutes is the entire margin between ingest and allocation, which is why
 `RepaymentService._load` bulk-loads instead of querying per loan.
@@ -2093,6 +2226,23 @@ Full specification: [docs/PLAN.md](docs/PLAN.md).
   that neither scopes nor is allowlisted. **It is textual**, so it verifies the
   endpoint *mentions* scoping — it cannot see a service that drops it, which is
   exactly how the `export-decisions` leak survived it.
+- **All Twilio traffic goes through `services/notification_service.py`** — one
+  seam, two functions: `send_twilio` (SMS **and** WhatsApp; visit notification,
+  payment receipt, SOS raised, SOS acknowledged) and `send_sms` (SMS only; the
+  borrower payment-verification OTP). Both are best-effort by design — a failed
+  receipt must never roll back a verified payment — so neither raises; both log
+  at ERROR and return `bool`, which `collect_payment` surfaces as
+  `receipt_sent` and `OtpService` as `sms_sent`. There is a third, separate
+  Twilio surface: `GET /agent/voice-token` mints a Voice `AccessToken` against
+  a TwiML app so the agent's browser can dial out. **`TWILIO_WHATSAPP_FROM`
+  defaults to `whatsapp:+14155238886`, which is Twilio's SANDBOX number** —
+  WhatsApp reaches only handsets that have joined that sandbox, so SMS is the
+  channel that actually delivers to a borrower. Credentials come from the
+  gitignored root `.env` (verified live 2026-09-23: real SID, sending number
+  `+15342103189`), and `${VAR}` references in `backend/.env` resolve through
+  it — in the Collections monorepo they resolve through the monorepo's own root
+  `.env` instead, which is why that copy must keep the reference rather than a
+  pasted key.
 - All LLM calls go through `core/llm.py` — one seam, provider by settings
   (`groq` default, `openai`, `none`), classified failures, Redis-or-memory cache,
   per-purpose counters on `GET /manager/ai/health`. It never raises; callers read
@@ -2140,7 +2290,7 @@ document. Re-verified against the code on 2026-09-07: **6 built · 10 partial ·
 | 4 | AI Next-Best-Action Engine | ❌ | No endpoint. Nothing chooses visit vs call vs reminder vs settle vs escalate |
 | 5 | Recovery-Optimized Route Planning | 🟡 | The *assignment* weights expected recovery, and the planner now keeps the road matrix it fetches, applies RBI + preference time windows, and persists real per-leg figures. A prize-collecting multi-vehicle CVRPTW (`plan_fleet`) exists and is tested but is **not yet wired into the nightly run** — the sequence inside a beat is still travel-time TSP |
 | 6 | Borrower 360° Profile | ✅ | `AgentCaseDetailPage`, 6 tabs. Disputes are still a visit outcome, not an object with a lifecycle |
-| 7 | AI Recovery Probability & Expected Recovery | 🟡 | `ml/recovery_scorecard.py` computes rate 30/60/90 + `expected_recoverable_amount`, snapshotted and surfaced. Hand-weighted and **uncalibrated** — no real outcome matures before 2026-11-22. A *trained*, calibrated alternative now exists (`ml/artifacts/recovery_risk`, Gini 0.515 out-of-time) and — since the 2026-09-08 promotion — **drives the nightly allocation** (`ML_SCORING_ENABLED=True`); still fitted on synthetic data. *(This cell read "but is gated off" from 2026-09-07 until 2026-09-14 — the same stale claim the scoring-layers section had already corrected once.)* |
+| 7 | AI Recovery Probability & Expected Recovery | 🟡 | `ml/recovery_scorecard.py` computes rate 30/60/90 + `expected_recoverable_amount`, snapshotted and surfaced. Hand-weighted and **uncalibrated** — no real outcome matures before 2026-11-22. A *trained*, calibrated alternative now exists and **drives the nightly allocation** (`ML_SCORING_ENABLED=True`): `ml/artifacts/recovery_risk` **2.2.0**, a 15-feature GAM at OOT Gini 0.5122 / KS 38.66, champion since 2026-09-16 and serving every allocation since 2026-09-17; still fitted on synthetic data. *(This cell read "Gini 0.515 out-of-time ... since the 2026-09-08 promotion" until 2026-09-23 — 1.1.0's figure, a champion behind. Before that it read "but is gated off" from 2026-09-07 until 2026-09-14. Third correction to one cell: it is the cell someone checks to find out whether the model is live, so it keeps attracting the stalest sentence in the file.)* |
 | 8 | AI Settlement Recommendation | ❌ | `loan.settlement_status` is a read-only bank flag. No range, no policy, no approval workflow |
 | 9 | AI Agent Performance Intelligence | ✅ | Performance, AI insight, reallocation plan, monthly report, leaderboard, DPD and attendance breakdowns |
 | 10 | AI Fraud & Anomaly Detection | ✅ | `services/fraud_service.py` — 7 finding types (impossible travel, overlapping visits, photo-location mismatch, duplicate photos, short visits, far-from-customer, trail contradiction) over evidence already captured. Manager review; verdicts stored as future training labels. Rules, not a model, deliberately |
@@ -2160,7 +2310,12 @@ depend on judgement layers that do not exist yet.
 
 ## Known issues — open
 
-1. **The frontend lint job fails — 16 errors, all `react-hooks/set-state-in-effect`.**
+1. **The frontend lint job fails — 7 errors, all `react-hooks/set-state-in-effect`**
+   (plus 7 warnings, all `react-hooks/exhaustive-deps`, which do not fail the
+   build). *(This read "16 errors" from 2026-09-10 until 2026-09-23; the
+   "Verify a change" block above has said 7 the whole time, so the two halves
+   of this file disagreed with each other. Re-measured 2026-09-23: 14 problems,
+   7 errors, 7 warnings.)*
    *(This said 18, and its "all" was wrong: two were different rules. Both were
    fixed on 2026-09-10 — `react-refresh/only-export-components` by splitting
    `useBeat` out of `BeatContext.tsx` into `contexts/useBeat.ts`, named for the
@@ -2255,34 +2410,51 @@ depend on judgement layers that do not exist yet.
    appear. Correct as a default; a real gap nonetheless. The API declares it
    (`excludes_system_rows: true`) and the page says so. Scoping them through
    `PTP → agent → manager` is the obvious extension and is not done.
-5. **Two competing schema authorities.** Seventeen Alembic migrations exist —
-   that read "Eight" until 2026-09-10 and "Fifteen … single head `b6c14e83af27`"
-   until 2026-09-16, when `c9a3d5e7f102` (borrower disposition) and
-   `d0b4e6f8a213` (prediction versions + contributions) landed; re-verified by
-   walking the files: single head `d0b4e6f8a213`, base `d7a84c5a710f`, no forks
-   and no dangling revisions — but
+5. **Two competing schema authorities.** Eighteen Alembic migrations exist —
+   that read "Eight" until 2026-09-10, "Fifteen … single head `b6c14e83af27`"
+   until 2026-09-16 and "Seventeen … `d0b4e6f8a213`" until 2026-09-23, when
+   `a1c3e5f7b9d2` (leave requests) landed; re-verified by walking the files:
+   single head **`a1c3e5f7b9d2`**, base `d7a84c5a710f`, no forks and no
+   dangling revisions — but
    `seed_data.py` does `drop_all` + `create_all` and — verified — **never touches
    `alembic_version` at all**. `docker-entrypoint.sh` arbitrates by checking for
    `public.agents`. Fine for a demo box; for production `alembic upgrade head` has
    to be the only path.
-6. **`manager.py` is 4,667 lines of business logic in the route layer** — 40
-   routes and **124 `db.query()` calls** sitting directly in endpoints while a
+
+   **Partly closed 2026-09-22.** The default bootstrap is now the committed
+   fixture, which *does* carry an `alembic_version` (it is a `pg_dump` of a real
+   database), and the entrypoint runs `alembic upgrade head` straight after
+   restoring it — so the fixture path is stamped and migratable end to end. The
+   contradiction survives only on the seed fallback, which is still
+   `drop_all`/`create_all` with no stamp. It bit for real on 2026-09-21: the
+   platform's `fieldops` database was stamped at `d5a72c1e9b40`, fourteen
+   migrations behind the code it was running, because it had been seeded and
+   never stamped.
+6. **`manager.py` is 5,181 lines of business logic in the route layer** — 48
+   routes and **137 `db.query()` calls** sitting directly in endpoints while a
    working `services/` layer exists and is used by every agent flow. There is no
    `manager_service.py`. This is *why* the tenancy leaks happened: there is no
    single place where "the agents this manager owns" is defined, so it gets
-   retyped. (Flagged at 2,316 lines on 2026-08-17, 3,756 on 2026-09-06, 3,967 on
-   2026-09-10; measured 4,667 on 2026-09-14 — still growing, and the 2026-09-11
-   reassignment and compliance endpoints went in here too, for want of a
+   retyped — and issue 13 below is the same disease in a second organ, four
+   spellings of "what day is it" inside this one file. (Flagged at 2,316 lines
+   on 2026-08-17, 3,756 on 2026-09-06, 3,967 on 2026-09-10, 4,667 on
+   2026-09-14; measured 5,181 on 2026-09-23 — still growing, and the leave and
+   field-activity endpoints went in here too, for want of a
    `manager_service.py` to put them in.)
 7. **Frontend test coverage is thin, not absent.** *(This read "Frontend has
    no test tooling at all — no vitest, jest, playwright or cypress" and was
    false from 2026-09-09, when vitest arrived with the allocation-explanation
-   tests; corrected 2026-09-14.)* `npm test` runs **44 vitest tests** over
-   three pure modules — `allocationReasons`, `casesViewState` and
-   `reassignValidation` — and CI runs them since 2026-09-14. Nothing mounts a
-   page: there is no component or browser test, and the six largest pages
-   (1.2k–2.3k lines each) are still covered only by the build. TS `strict`
-   and eslint remain configured.
+   tests; corrected 2026-09-14.)* `npm test` runs **97 vitest tests** over
+   **nine** pure modules — `allocationReasons`, `casePipeline`,
+   `casesViewState`, `fieldActivity`, `liveMapNavigate`, `paymentModes`,
+   `ptpOutcomes`, `reassignValidation` and `todayDpd` — and CI runs them since
+   2026-09-14. *(This read "44 tests over three pure modules" until
+   2026-09-23.)* Nothing mounts a page: there is no component or browser test,
+   and the six largest pages (1.2k–2.3k lines each) are still covered only by
+   the build. Every one of the nine is a pure module extracted from a page
+   precisely so it could be tested without mounting it — which is the pattern
+   that works here, not a substitute for the missing component tests. TS
+   `strict` and eslint remain configured.
 8. **Analytics have three dimensions: agent, DPD bucket, month.** Every `group_by`
    in the manager router is one of those (plus beat date). There is no breakdown by
    branch, city/geography or loan product — though `Customer.city`, `Loan.loan_type`
@@ -2348,6 +2520,54 @@ depend on judgement layers that do not exist yet.
     agent's screen still says nothing. Response-level only, by design: no
     migration.)* Verified NOT to be the `ptp_reminders` defect: that task still
     sends nothing, and says so.
+
+13. **Four spellings of "today" in `manager.py`, and leave is decided by the
+    wrong one.** `_effective_today()` defines the manager's day as *the most
+    recent beat date on or before today* — a demo convenience so the dashboard
+    shows the last day that has data instead of an empty page. That is right
+    for money and activity figures. It is wrong for attendance, and attendance
+    is one of the things it decides.
+
+    Measured live on 2026-09-23, with no plan yet built for that day:
+
+    ```
+    Piyush Sharma (EMP0002)   Agent.status = ON_DUTY
+    approved leave            2026-09-22 → 2026-09-22   (one day, yesterday)
+    agents on leave 09-23     none
+    eff_date (max beat <= today)  2026-09-22   <- yesterday, because no beat today
+
+    GET /manager/agents        -> "status": "ON_LEAVE"
+    GET /agent/home-summary    -> "check_in_status": "ON_DUTY"
+    ```
+
+    Both endpoints are internally consistent and they contradict each other on
+    the same person at the same moment, which is what a manager and an agent
+    each saw on their own screen. The seven `agent_ids_on_leave(...)` call
+    sites in this one file pass **four different dates**:
+
+    ```
+    line  302  today_date        line 1622  eff_today_perf
+    line  850  eff_date          line 2598  today
+    line 1307  leave_today()     line 3131  eff_date
+    line 3829  leave_today()
+    ```
+
+    `leave_service.agent_ids_on_leave` calls itself *"the source of truth for
+    is this agent off the field today"*, and whether somebody is at work is a
+    fact about the real calendar day — `leave_today()`, the IST date — never
+    about the last day a plan happened to exist. Lines 850, 1622 and 3131 are
+    the wrong three.
+
+    **This is the residue of `4bff733` (2026-09-22), not a regression of it.**
+    That commit fixed the *stored* half — `Agent.status` going stale when the
+    00:10 sync missed a night — by deriving duty from the leave table and
+    running the sync at API startup. It did not unify the date those derivations
+    are made against, and the symptom therefore came back the next day in a
+    different place. It clears on its own the moment a plan exists for the
+    current day, which is exactly what makes it easy to dismiss as a glitch.
+    Not fixed here: it moves what every manager surface shows, so it wants its
+    own change and its own test — one that fails if a leave decision is ever
+    taken against `eff_date` again.
 
 ## Fixed on 2026-09-08 — routing (Workstream D)
 
