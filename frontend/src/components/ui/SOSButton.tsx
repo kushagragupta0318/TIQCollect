@@ -93,17 +93,17 @@ export function SOSButton({ compact = false }: { compact?: boolean }) {
       // Report what was actually sent. The three cases are materially different
       // to the person in trouble, so they are not collapsed into one message.
       if (res.location_quality === "LIVE") {
-        toast.error("🚨 SOS SENT — your manager has your exact location. Stay calm.",
+        toast.error("SOS SENT — your manager has your exact location. Stay calm.",
           { duration: 12_000 });
       } else if (res.location_quality === "LAST_KNOWN") {
         const mins = Math.max(1, Math.round((res.location_age_seconds ?? 0) / 60));
         toast.error(
-          `🚨 SOS SENT — GPS did not respond, so your manager was sent your last known location (${mins} min old). Move to open sky if you can.`,
+          `SOS SENT — GPS did not respond, so your manager was sent your last known location (${mins} min old). Move to open sky if you can.`,
           { duration: 15_000 },
         );
       } else {
         toast.error(
-          "🚨 SOS SENT — but your LOCATION COULD NOT BE SENT. Call your manager and 112 now.",
+          "SOS SENT — but your LOCATION COULD NOT BE SENT. Call your manager and 112 now.",
           { duration: 20_000 },
         );
       }

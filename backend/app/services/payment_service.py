@@ -272,11 +272,11 @@ class PaymentService:
         wa_body = (
             f"*Visit Completed & Payment Received – ABC Bank*\n\n"
             f"Dear {customer.full_name},\n\n"
-            f"\U0001f3e0 Agent *{agent.user.full_name}* visited on {pay_date}.\n"
-            f"✅ Rs.{req.amount:,.0f} received via *{mode_label}*\n"
-            f"\U0001f4b3 Loan Account: {masked_acct}\n"
-            f"\U0001f9fe Receipt No: {payment.receipt_number}\n"
-            f"\U0001f4f1 Mobile: {masked_phone}\n\n"
+            f"Agent *{agent.user.full_name}* visited on {pay_date}.\n"
+            f"Rs.{req.amount:,.0f} received via *{mode_label}*\n"
+            f"Loan Account: {masked_acct}\n"
+            f"Receipt No: {payment.receipt_number}\n"
+            f"Mobile: {masked_phone}\n\n"
             f"Thank you for your payment.\n– ABC Bank"
         )
         return NotificationService.send_twilio(e164, sms_body, wa_body)

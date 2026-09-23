@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
-import { MapPin, Navigation, Phone, MessageCircle, ChevronRight, Search, Briefcase, Sparkles, RefreshCw, Loader2 } from "lucide-react";
+import { MapPin, Navigation, Phone, MessageCircle, ChevronRight, Search, Briefcase, Sparkles, RefreshCw, Loader2, AlertTriangle, Flag } from "lucide-react";
 import { DPDBadge, VisitPriorityBadge, CaseStatusBadge } from "@/components/ui/Badge";
 import { Input } from "@/components/ui/Input";
 import { useBeat } from "@/contexts/useBeat";
@@ -62,6 +62,11 @@ export default function AgentCasesPage() {
   const cases = useMemo<Case[]>(() => {
     if (!beat) return [];
     const visitedSet = new Set(beat.visited_today_ids ?? []);
+    // The backend's own list of "on the route, no visit needed" (resolved on
+    // an earlier day). Reading it keeps this page's done-set identical to the
+    // count Home shows — the two used to disagree. The status checks below
+    // stay as the fallback for a payload without the field.
+    const noVisitNeeded = new Set(beat.no_visit_needed_ids ?? []);
     const isBlocked = (c: Case) =>
       Boolean(
         c.customer?.do_not_contact ||
@@ -72,6 +77,7 @@ export default function AgentCasesPage() {
     const isDone = (c: Case) =>
       Boolean(
         visitedSet.has(c.id) ||
+        noVisitNeeded.has(c.id) ||
         c.is_visited_today ||
         c.status === "PAID" ||
         c.status === "CLOSED" ||
@@ -166,7 +172,7 @@ export default function AgentCasesPage() {
   return (
     <div className="flex flex-col h-full">
       {activeCall && <CallModal call={activeCall} onHangUp={hangUp} />}
-      <div className="p-4 lg:px-6 pb-2 space-y-3 bg-white border-b border-slate-100 sticky top-0 z-10">
+      <div className="p-4 lg:px-6 pb-2 space-y-3 tiq-glass-bar border-b border-slate-100/70 sticky top-0 z-10">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-lg font-bold text-slate-900">
@@ -184,7 +190,7 @@ export default function AgentCasesPage() {
               <button
                 onClick={fetchRanked}
                 disabled={rankLoading}
-                className="p-1.5 rounded-lg text-purple-500 hover:bg-purple-50 transition-colors"
+                className="p-1.5 rounded-lg text-brand-500 hover:bg-brand-50 transition-colors"
                 title="Refresh ranking"
               >
                 {rankLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
@@ -195,8 +201,8 @@ export default function AgentCasesPage() {
               disabled={rankLoading}
               className={`tap-target flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border transition-all ${
                 smartOrder
-                  ? "bg-purple-600 text-white border-purple-600"
-                  : "bg-white text-purple-600 border-purple-200 hover:border-purple-400"
+                  ? "bg-brand-600 text-white border-brand-600 shadow-[0_8px_18px_-10px_rgba(37,99,235,0.7)]"
+                  : "bg-white/80 text-brand-600 border-brand-200 hover:border-brand-500 hover:bg-brand-50"
               }`}
             >
               {rankLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
@@ -317,7 +323,7 @@ function CaseCard({ case_: c, rank, rankBadge, rankBadgeColor, rankReason, onNav
       <div className="flex items-start justify-between mb-2">
         <div className="flex items-start gap-2.5 flex-1 min-w-0">
           {rank !== undefined ? (
-            <div className={`w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5 text-xs font-bold ${isDone ? "bg-success-100 text-success-600 border-2 border-success-400" : "bg-purple-100 text-purple-700"}`}>
+            <div className={`w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5 text-xs font-bold ${isDone ? "bg-success-100 text-success-600 border-2 border-success-400" : "bg-brand-100 text-brand-700"}`}>
               {isDone ? "✓" : rank}
             </div>
           ) : isDone ? (
@@ -332,8 +338,8 @@ function CaseCard({ case_: c, rank, rankBadge, rankBadgeColor, rankReason, onNav
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-sm font-semibold text-slate-900">{c.customer.full_name}</span>
-              {c.customer.is_hostile && <span className="badge badge-red text-xs">⚠ Hostile</span>}
-              {c.is_escalated && <span className="badge badge-red text-xs">🔴 Escalated</span>}
+              {c.customer.is_hostile && <span className="badge badge-red text-xs inline-flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> Hostile</span>}
+              {c.is_escalated && <span className="badge badge-red text-xs inline-flex items-center gap-1"><Flag className="w-3 h-3" /> Escalated</span>}
               {SHOW_SLA_BADGE && sla && <span className={`text-xs px-1.5 py-0.5 rounded-full border font-medium ${sla.cls}`}>{sla.label}</span>}
             </div>
             <p className="text-xs text-slate-400 mt-0.5">{c.case_number} · {c.loan.bank_name}</p>
@@ -365,9 +371,9 @@ function CaseCard({ case_: c, rank, rankBadge, rankBadgeColor, rankReason, onNav
       )}
 
       {rankReason && (
-        <div className="flex items-start gap-1.5 mb-2 bg-purple-50 rounded-lg px-2.5 py-1.5">
-          <Sparkles className="w-3.5 h-3.5 text-purple-400 mt-0.5 flex-shrink-0" />
-          <p className="text-xs text-purple-700 leading-snug">{rankReason}</p>
+        <div className="flex items-start gap-1.5 mb-2 bg-brand-50 rounded-lg px-2.5 py-1.5">
+          <Sparkles className="w-3.5 h-3.5 text-brand-500 mt-0.5 flex-shrink-0" />
+          <p className="text-xs text-brand-700 leading-snug">{rankReason}</p>
         </div>
       )}
 

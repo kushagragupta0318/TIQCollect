@@ -305,6 +305,9 @@ export interface PtpHealth {
 export interface DashboardSummary {
   total_agents: number;
   agents_on_duty: number;
+  /** Agents on APPROVED leave for the day — derived from leave requests, so
+   *  it is right even before the nightly status sync has run (2026-09-22). */
+  agents_on_leave: number;
   total_cases: number;
   cases_assigned: number;
   /** Every case held by this manager's agents, keyed by CaseStatus, zero-filled

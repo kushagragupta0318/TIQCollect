@@ -2,7 +2,7 @@ import { useNavigate } from "react-router";
 import {
   ShieldCheck, Map, Zap, Brain, BarChart3, FileCheck, CheckCircle,
   ArrowRight, Phone, Navigation, Bell, Star, IndianRupee, TrendingUp,
-  Globe, AlertTriangle
+  Globe, AlertTriangle, Users, Wallet, Timer, Handshake
 } from "lucide-react";
 import { BrandLogo } from "@/components/ui/BrandLogo";
 
@@ -100,13 +100,13 @@ export default function LandingPage() {
                 {/* KPI tiles */}
                 <div className="grid grid-cols-2 gap-2 mb-4">
                   {[
-                    { label: "Agents On Duty", value: "32/50", icon: "👥", color: "text-blue-300" },
-                    { label: "Collected Today", value: "₹28.5L", icon: "💰", color: "text-green-300" },
-                    { label: "Cases Resolved", value: "87", icon: "✅", color: "text-green-300" },
-                    { label: "Collection Rate", value: "52.8%", icon: "📈", color: "text-yellow-300" },
+                    { label: "Agents On Duty", value: "32/50", icon: Users, color: "text-blue-300" },
+                    { label: "Collected Today", value: "₹28.5L", icon: Wallet, color: "text-green-300" },
+                    { label: "Cases Resolved", value: "87", icon: CheckCircle, color: "text-green-300" },
+                    { label: "Collection Rate", value: "52.8%", icon: TrendingUp, color: "text-yellow-300" },
                   ].map((k) => (
                     <div key={k.label} className="rounded-inner border border-border bg-[#F7F9FC] p-3">
-                      <p className="text-lg">{k.icon}</p>
+                      <k.icon className="w-5 h-5 text-slate-500" />
                       <p className={`text-base font-bold ${k.color}`}>{k.value}</p>
                       <p className="mt-0.5 text-xs text-muted-foreground">{k.label}</p>
                     </div>
@@ -362,7 +362,7 @@ export default function LandingPage() {
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
             {IMPACT.map((item) => (
               <div key={item.stat} className="rounded-card border border-border bg-white p-7 shadow-resting">
-                <div className="text-3xl mb-3">{item.icon}</div>
+                <div className="mb-3 inline-flex h-11 w-11 items-center justify-center rounded-xl bg-brand-50 text-brand-600"><item.icon className="w-5 h-5" /></div>
                 <p className="text-3xl font-extrabold text-slate-900 mb-1">{item.stat}</p>
                 <p className="text-sm font-semibold text-slate-700 mb-2">{item.label}</p>
                 <p className="text-xs text-slate-400 leading-relaxed">{item.desc}</p>
@@ -556,12 +556,12 @@ const COMPLIANCE = [
 ];
 
 const IMPACT = [
-  { icon: "📈", stat: "3.2×", label: "Higher collection rate", desc: "Structured allocation and optimised routing close more cases per agent per day than manual assignment." },
-  { icon: "⏱️", stat: "67%", label: "Less time on routing", desc: "Geo-optimised beat maps eliminate agents crossing each other's paths, cutting wasted travel time by two-thirds." },
-  { icon: "💰", stat: "₹4.2L", label: "Avg monthly per agent", desc: "Agents using TIQCollect collect on average ₹4.2L per month versus ₹1.3L with traditional paper-based systems." },
-  { icon: "✅", stat: "99%", label: "Compliance rate", desc: "Zero RBI violations. Every visit is geo-verified, time-stamped, and logged to an immutable audit trail." },
-  { icon: "🤝", stat: "78%", label: "PTP conversion rate", desc: "Smart PTP reminders and follow-up prioritisation drives near 80% promise-to-pay conversion among Tier 1 agents." },
-  { icon: "🔔", stat: "<30s", label: "SOS response time", desc: "Manager receives geo-tagged SOS alert with agent location within 30 seconds of agent triggering emergency." },
+  { icon: TrendingUp, stat: "3.2×", label: "Higher collection rate", desc: "Structured allocation and optimised routing close more cases per agent per day than manual assignment." },
+  { icon: Timer, stat: "67%", label: "Less time on routing", desc: "Geo-optimised beat maps eliminate agents crossing each other's paths, cutting wasted travel time by two-thirds." },
+  { icon: Wallet, stat: "₹4.2L", label: "Avg monthly per agent", desc: "Agents using TIQCollect collect on average ₹4.2L per month versus ₹1.3L with traditional paper-based systems." },
+  { icon: ShieldCheck, stat: "99%", label: "Compliance rate", desc: "Zero RBI violations. Every visit is geo-verified, time-stamped, and logged to an immutable audit trail." },
+  { icon: Handshake, stat: "78%", label: "PTP conversion rate", desc: "Smart PTP reminders and follow-up prioritisation drives near 80% promise-to-pay conversion among Tier 1 agents." },
+  { icon: Bell, stat: "<30s", label: "SOS response time", desc: "Manager receives geo-tagged SOS alert with agent location within 30 seconds of agent triggering emergency." },
 ];
 
 function FeatureCard({ icon: Icon, color, title, desc }: { icon: React.ElementType; color: string; title: string; desc: string }) {

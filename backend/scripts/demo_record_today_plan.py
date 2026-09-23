@@ -52,6 +52,18 @@ The 2026-09-21 plan, for 225 planned cases (15 agents x 15):
     50  NOT_AVAILABLE    not met
     32  (not visited)
 
+The 2026-09-22 plan, for 210 planned cases:
+    45  PAID_FULL        mostly NPA (90+ DPD) accounts — 36 NPA, 9 from the rest
+    60  PART_PAID        10-45% of the balance
+    33  PTP              mostly low-target cases; dates next week (7-13 d) or
+                         the weeks after (14-40 d), never inside the first week
+    28  NOT_AVAILABLE    borrower not met — a spouse / parent / sibling / relative
+                         answered the door (customer_met False, person_met set,
+                         exactly what RecordVisitPage writes for a third party)
+    44  (not visited)
+   ---
+   210
+
 Per-outcome `pick` rules (see PLANS): "high" / "low" take from the top / bottom
 third of collectable balance, "old_first" sorts by visit_count descending,
 "ptp_due_first" puts cases with a promise due today ahead of the rest.
@@ -129,6 +141,26 @@ PLANS: dict[str, dict] = {
         "paid_full_ptp_due_first": True,
         "ptp_dates": "next_month_or_two",
     },
+    "2026-09-22": {
+        # ("npa_mostly", n, n_npa): n_npa drawn from NPA (90+ DPD) loans, the
+        # rest from everything else — "mostly NPA", not only NPA.
+        "paid_full": ("npa_mostly", 45, 36),
+        "outcomes": [("PAID_FULL", 45), ("PART_PAID", 60), ("PTP", 33), ("NOT_AVAILABLE", 28)],
+        # "low_mostly": 80% from the lowest third of balances, the rest at random
+        "pick": {"PTP": "low_mostly"},
+        # the borrower was out but a family member answered
+        "not_met_third_party": True,
+        "ptp_dates": "next_week_or_after",
+    },
+}
+# Who answered when the borrower was out (plan flag `not_met_third_party`).
+# The same options RecordVisitPage offers under "Who did you meet?".
+THIRD_PARTY_MET = [PersonMet.SPOUSE, PersonMet.PARENT, PersonMet.SIBLING, PersonMet.RELATIVE]
+THIRD_PARTY_NOTES = {
+    PersonMet.SPOUSE:   "Borrower not at home; spouse met, says borrower is at work till evening. Revisit required.",
+    PersonMet.PARENT:   "Borrower not at home; parent met, will pass on the message. Revisit required.",
+    PersonMet.SIBLING:  "Borrower not at home; brother met, says borrower is out of station this week. Revisit required.",
+    PersonMet.RELATIVE: "Borrower not at home; family member met, asked the agent to come on Sunday. Revisit required.",
 }
 # Met, no money: what the borrower said. RTP escalates the case (VisitService);
 # REVISIT records a capacity reason and asks for another visit.
@@ -227,6 +259,15 @@ def main() -> None:
         if pf[0] == "low_mostly":
             paid_full = rng.sample(low, pf[1]) + rng.sample(high, pf[2])
             paid_full_note = f"paid-in-full: {pf[1]} drawn from the lowest third of balances, {pf[2]} from the highest third"
+        elif pf[0] == "npa_mostly":
+            from app.models.loan import DPDBucket
+            npa = [p for p in collectable if p[0].loan and p[0].loan.dpd_bucket == DPDBucket.NPA]
+            n_npa = min(pf[2], len(npa))
+            paid_full = rng.sample(npa, n_npa)
+            others = [p for p in collectable if p[0].id not in {q[0].id for q in paid_full}]
+            paid_full += rng.sample(others, pf[1] - n_npa)
+            paid_full_note = (f"paid-in-full: {n_npa} NPA (90+ DPD) accounts of {len(npa)} available, "
+                              f"{pf[1] - n_npa} from the rest")
         else:
             due_today: list = []
             if plan_cfg.get("paid_full_ptp_due_first"):
@@ -255,6 +296,15 @@ def main() -> None:
                 ordered = sorted(pool, key=lambda p: remaining(p[0]))
                 chunk = ordered[:n]
                 pick_notes.append(f"{outcome}: balances Rs {remaining(chunk[0][0]):,.0f}-{remaining(chunk[-1][0]):,.0f}")
+            elif rule == "low_mostly":
+                ordered = sorted(pool, key=lambda p: remaining(p[0]))
+                n_low = round(n * 0.8)
+                lowest = ordered[:max(len(ordered) // 3, n_low)]
+                chunk = rng.sample(lowest, n_low)
+                rest_pool = [p for p in pool if p[0].id not in {c.id for c, _ in chunk}]
+                chunk += rng.sample(rest_pool, n - n_low)
+                pick_notes.append(f"{outcome}: {n_low} from the lowest third of balances "
+                                  f"(Rs {remaining(ordered[0][0]):,.0f}-{remaining(lowest[-1][0]):,.0f}), {n - n_low} at random")
             elif rule == "high":
                 ordered = sorted(pool, key=lambda p: -remaining(p[0]))
                 chunk = ordered[:n]
@@ -284,6 +334,10 @@ def main() -> None:
                 after = (nxt + timedelta(days=32)).replace(day=1)                   # 1st of the month after
                 start = nxt if rng.random() < 0.5 else after
                 return start + timedelta(days=rng.randint(0, 27))
+            if plan_cfg["ptp_dates"] == "next_week_or_after":
+                if rng.random() < 0.5:
+                    return today + timedelta(days=rng.randint(7, 13))           # next week
+                return today + timedelta(days=rng.randint(14, PTP_MAX_DAYS))    # the weeks after
             if plan_cfg["ptp_dates"] == "next_week_or_october":
                 if rng.random() < 0.5:
                     return today + timedelta(days=rng.randint(7, 13))           # next week
@@ -343,6 +397,7 @@ def main() -> None:
             when = day_start + timedelta(hours=9, minutes=rng.randint(0, 8 * 60))
             cust = case.customer
             not_met = outcome == VisitOutcome.NOT_AVAILABLE
+            third_party = rng.choice(THIRD_PARTY_MET) if (not_met and plan_cfg.get("not_met_third_party")) else None
             visit = Visit(
                 id=_uid(), case_id=case.id, agent_id=agent.id,
                 check_in_latitude=(cust.latitude or 28.6139) + rng.uniform(-0.00025, 0.00025),
@@ -352,11 +407,12 @@ def main() -> None:
                 distance_from_customer_metres=rng.uniform(4.0, 38.0),
                 geo_verified=True, within_contact_hours=is_within_contact_hours(when),
                 customer_met=not not_met,
-                person_met=None if not_met else PersonMet.BORROWER,
+                person_met=third_party if not_met else PersonMet.BORROWER,
                 outcome=outcome,
                 default_reason=DefaultReason(reason) if reason else None,
                 visit_number=(case.visit_count or 0) + 1,
-                notes=rng.choice(NOT_MET_NOTES) if not_met else (note if met_no_money else None),
+                notes=(THIRD_PARTY_NOTES[third_party] if third_party else rng.choice(NOT_MET_NOTES)) if not_met
+                      else (note if met_no_money else None),
             )
             db.add(visit)
             db.flush()

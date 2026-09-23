@@ -1,4 +1,19 @@
 # ─── CHANGELOG (prototype → product) ─────────────────────────────────────────
+# 2026-09-22 — Duty is DERIVED from approved leave, not only from the stored
+#   status. Piyush Sharma's leave for today was approved yesterday and every
+#   manager screen still said On Duty, because the only thing that turned an
+#   approved leave into Agent.status = ON_LEAVE was the 00:10 housekeeping
+#   task — and Celery beat never replays a crontab it slept through (a laptop
+#   lid, a redeploy at the wrong minute, a worker that was down). One missed
+#   run made an approved leave invisible everywhere that reads Agent.status.
+#
+#   `agent_ids_on_leave` / `effective_status` are the fix: a reader asks the
+#   leave table "who is on approved leave on this date" (one indexed query)
+#   and overlays it on the stored status. The stored column stays — the
+#   planner and the Command Centre contract filter on it in SQL — and the
+#   nightly sync stays, now also run at API startup so it self-heals after a
+#   missed night. Readers no longer depend on it having run.
+#
 # 2026-09-21 — New file. See models/leave_request.py for why leave needed a
 #   door. This is the one place a leave request becomes leave beats, an
 #   agent status and an audit row; the agent and manager endpoints only call
@@ -31,6 +46,7 @@ import structlog
 from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
+from app.core.geo import IST
 from app.core.errors import AppException, ErrorCode
 from app.models.agent import Agent, AgentStatus
 from app.models.audit_log import AuditAction
@@ -48,6 +64,40 @@ MAX_LEAVE_DAYS = 30
 # leave start tomorrow at the earliest, so the night's plan is never built for
 # an agent who then says they are not coming.
 SAME_DAY_ALLOWED = frozenset({LeaveType.SICK_LEAVE})
+
+
+def leave_today() -> date:
+    """The calendar date leave is judged against: IST, not the container's
+    UTC. The 00:10 IST housekeeping run is 18:40 UTC the evening before, so
+    `date.today()` there named YESTERDAY and the sync set statuses for a day
+    that had already ended. 2026-09-22."""
+    return datetime.now(IST).date()
+
+
+def agent_ids_on_leave(db: Session, on_date: date, agent_ids: list[str] | None = None) -> set[str]:
+    """Agents with an APPROVED leave covering `on_date`. The source of truth
+    for "is this agent off the field today" — Agent.status is a cache of it."""
+    q = db.query(LeaveRequest.agent_id).filter(
+        LeaveRequest.status == LeaveStatus.APPROVED,
+        LeaveRequest.from_date <= on_date,
+        LeaveRequest.to_date >= on_date,
+    )
+    if agent_ids is not None:
+        if not agent_ids:
+            return set()
+        q = q.filter(LeaveRequest.agent_id.in_(agent_ids))
+    return {r.agent_id for r in q.all()}
+
+
+def effective_status(agent: Agent, on_leave_ids: set[str]) -> AgentStatus:
+    """What the agent's status IS today, whether or not housekeeping has run:
+    ON_LEAVE when an approved leave covers the day, else the stored status.
+    SUSPENDED outranks leave — a suspended agent on leave is still suspended."""
+    if agent.status is AgentStatus.SUSPENDED:
+        return AgentStatus.SUSPENDED
+    if agent.id in on_leave_ids:
+        return AgentStatus.ON_LEAVE
+    return agent.status
 
 
 def _days(from_date: date, to_date: date):
@@ -321,7 +371,7 @@ class LeaveService:
         """Set ON_LEAVE for agents whose approved leave covers today; clear it
         for agents whose leave has ended. Idempotent; runs nightly and after
         every approval so the two agree."""
-        today = today or date.today()
+        today = today or leave_today()
         on_leave_ids = {
             r.agent_id for r in self.db.query(LeaveRequest.agent_id).filter(
                 LeaveRequest.status == LeaveStatus.APPROVED, LeaveRequest.from_date <= today, LeaveRequest.to_date >= today).all()

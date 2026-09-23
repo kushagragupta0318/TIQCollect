@@ -585,6 +585,11 @@ class BeatResponse(BaseModel):
     start_longitude: Optional[float] = None
     cases_visited_today: int
     visited_today_ids: list[str]
+    # Cases on today's route still needing a visit, and the ones that need
+    # none because they are already resolved. One rule, computed in
+    # services/agent_service.py — see the note there (2026-09-22).
+    cases_pending: int
+    no_visit_needed_ids: list[str]
     amount_collected_today: float
     cases: list[BeatCaseItemResponse]
     ptps_due_today: int

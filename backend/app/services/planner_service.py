@@ -209,11 +209,41 @@ class PlannerService:
         """
         target_date = plan_date or get_target_plan_date()
 
-        # 1. Fetch eligible on-duty agents under this manager
+        # 1. Who can work on TARGET_DATE — which is not the same question as
+        #    who is working today.
+        #
+        # `Agent.status` is a statement about TODAY: leave housekeeping sets
+        # ON_LEAVE while a leave covers the current date and clears it the day
+        # after. This plan is for target_date, usually tomorrow, so the status
+        # column is the wrong instrument in BOTH directions and was wrong in
+        # both:
+        #
+        #   * on leave tomorrow, working today  — status ON_DUTY, so the agent
+        #     was planned, and the new beat collided with the leave beat that
+        #     approval had already written for that day (UNIQUE agent_id,
+        #     beat_date). Fixed 2026-09-22 by the leave-table check below.
+        #
+        #   * on leave today, back tomorrow     — status ON_LEAVE, so the agent
+        #     was dropped from a plan for a day they are available. Piyush
+        #     Sharma took 2026-09-22 off; the 20:00 run that evening built
+        #     2026-09-23 for 14 agents instead of 15, and he came back to an
+        #     empty route while his 15 cases sat with his teammates. Found
+        #     2026-09-23.
+        #
+        # So only SUSPENDED filters here — it is an indefinite state, not a
+        # calendar one — and the leave TABLE answers the date question. ON_DUTY
+        # versus OFF_DUTY was never a planning input: both are planned for, and
+        # an agent who has simply not checked in yet is still on tomorrow's
+        # roster.
+        from app.services.leave_service import agent_ids_on_leave
+
         agents = self.db.query(Agent).filter(
             Agent.manager_user_id == self.manager_user_id,
-            Agent.status.in_([AgentStatus.ON_DUTY, AgentStatus.OFF_DUTY]),  # Exclude SUSPENDED / ON_LEAVE
+            Agent.status != AgentStatus.SUSPENDED,
         ).all()
+        _on_leave = agent_ids_on_leave(self.db, target_date, [a.id for a in agents])
+        if _on_leave:
+            agents = [a for a in agents if a.id not in _on_leave]
 
         if not agents:
             # Create a zero-run record if no agents exist

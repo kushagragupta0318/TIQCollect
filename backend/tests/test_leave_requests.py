@@ -10,7 +10,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -27,7 +27,7 @@ from app.models.leave_request import LeaveRequest, LeaveStatus, LeaveType
 from app.models.loan import DPDBucket, Loan, LoanStatus, LoanType
 from app.models.user import User, UserRole
 from app.models.visit import PersonMet, Visit, VisitOutcome
-from app.services.leave_service import MAX_LEAVE_DAYS, LeaveService
+from app.services.leave_service import MAX_LEAVE_DAYS, LeaveService, agent_ids_on_leave, effective_status
 
 TODAY = date(2026, 9, 21)                      # a Monday
 TOMORROW = TODAY + timedelta(days=1)
@@ -35,6 +35,13 @@ TOMORROW = TODAY + timedelta(days=1)
 
 def _session():
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+
+    # /manager/agents groups payments with Postgres's to_char(ts, 'YYYY-MM');
+    # the same shim tests/test_field_activity.py uses so SQLite can run it.
+    @event.listens_for(engine, "connect")
+    def _sqlite_helpers(dbapi_conn, _):
+        dbapi_conn.create_function("to_char", 2, lambda value, fmt: str(value)[:7] if value else None)
+
     Base.metadata.create_all(bind=engine)
     return sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -218,6 +225,32 @@ def test_status_follows_the_dates(w):
     assert w.svc.sync_statuses(today=TOMORROW + timedelta(days=1)) == {"today": (TOMORROW + timedelta(days=1)).isoformat(), "on_leave": 0, "set_on_leave": 0, "cleared": 0}
 
 
+def test_duty_is_derived_from_approved_leave_not_only_the_stored_status(w):
+    """2026-09-22. An approved leave for tomorrow leaves Agent.status ON_DUTY
+    until the 00:10 sync — and that sync can be missed (beat asleep, deploy).
+    Readers must not depend on it: on the leave day the agent IS on leave."""
+    r = w.request(start=TOMORROW, end=TOMORROW)
+    w.svc.approve(w.mgr.id, r.id, today=TODAY)
+    a = w.db.get(Agent, w.agent.id)
+    assert a.status is AgentStatus.ON_DUTY                       # sync has not run
+    # today: nobody is on leave
+    assert agent_ids_on_leave(w.db, TODAY) == set()
+    assert effective_status(a, agent_ids_on_leave(w.db, TODAY)) is AgentStatus.ON_DUTY
+    # tomorrow: the leave covers the day, whatever the column says
+    ids = agent_ids_on_leave(w.db, TOMORROW, [w.agent.id, w.agent2.id])
+    assert ids == {w.agent.id}
+    assert effective_status(a, ids) is AgentStatus.ON_LEAVE
+    assert effective_status(w.db.get(Agent, w.agent2.id), ids) is AgentStatus.ON_DUTY
+    # the scoping list is honoured, and an empty one is an empty answer
+    assert agent_ids_on_leave(w.db, TOMORROW, [w.agent2.id]) == set()
+    assert agent_ids_on_leave(w.db, TOMORROW, []) == set()
+    # a revoked leave no longer counts; suspension outranks leave
+    w.svc.revoke(w.mgr.id, r.id, today=TODAY)
+    assert agent_ids_on_leave(w.db, TOMORROW) == set()
+    a.status = AgentStatus.SUSPENDED
+    assert effective_status(a, {a.id}) is AgentStatus.SUSPENDED
+
+
 def test_rejection_writes_nothing_and_revoke_removes_exactly_its_beats(w):
     r = w.request(start=TOMORROW, end=TOMORROW + timedelta(days=1))
     w.svc.reject(w.mgr.id, r.id, "short-staffed")
@@ -337,3 +370,33 @@ def test_task_is_scheduled_at_00_10():
     from app.workers.celery_app import celery_app
     e = celery_app.conf.beat_schedule["leave-housekeeping"]
     assert e["task"].endswith("sync_leave_statuses") and e["schedule"].hour == {0} and e["schedule"].minute == {10}
+
+
+def test_api_manager_screens_show_approved_leave_even_when_the_status_sync_was_missed(w, client):
+    """The dashboard tile, the agents list and the duty toggle all read leave
+    from the leave table for the day, so a stale ON_DUTY cannot leak through."""
+    today = date.today()
+    # An approved leave spanning yesterday..tomorrow, written directly so the
+    # test is independent of request-date rules; then the stored status is
+    # forced back to ON_DUTY, which is exactly what a missed 00:10 sync leaves.
+    w.db.add(LeaveRequest(agent_id=w.agent.id, manager_user_id=w.mgr.id, from_date=today - timedelta(days=1),
+                          to_date=today + timedelta(days=1), leave_type=LeaveType.CASUAL_LEAVE,
+                          status=LeaveStatus.APPROVED, requested_by_id=w.au.id, decided_by_id=w.mgr.id, beat_ids=[]))
+    w.db.get(Agent, w.agent.id).status = AgentStatus.ON_DUTY
+    w.db.commit()
+
+    dash = client.get("/api/v1/manager/dashboard", headers=_h(w.mgr)).json()
+    assert dash["total_agents"] == 2 and dash["agents_on_duty"] == 1 and dash["agents_on_leave"] == 1
+
+    agents = {a["id"]: a for a in client.get("/api/v1/manager/agents", headers=_h(w.mgr)).json()}
+    assert agents[w.agent.id]["status"] == "ON_LEAVE"
+    assert agents[w.agent2.id]["status"] == "ON_DUTY"
+
+    perf = {a["agent_id"]: a for a in client.get("/api/v1/manager/agents/performance", headers=_h(w.mgr)).json()["agents"]}
+    assert perf[w.agent.id]["status"] == "ON_LEAVE"
+
+    # the duty toggle cannot override the leave
+    r = client.put(f"/api/v1/manager/agents/{w.agent.id}/status", headers=_h(w.mgr), json={"status": "ON_DUTY"})
+    assert r.status_code == 409 and "approved leave" in r.json()["detail"]
+    r = client.put(f"/api/v1/manager/agents/{w.agent2.id}/status", headers=_h(w.mgr), json={"status": "OFF_DUTY"})
+    assert r.status_code == 200 and r.json()["new_status"] == "OFF_DUTY"

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { shortMoney } from "@/lib/money";
 import type { NavigateFunction } from "react-router";
-import { Briefcase, CheckCircle, IndianRupee, Calendar, MapPin, Clock, Camera, X } from "lucide-react";
+import { Briefcase, CheckCircle, IndianRupee, Calendar, MapPin, Clock, Camera, X, ShieldCheck } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { checkIn as apiCheckIn } from "@/api/agent";
 import { StatCard } from "@/components/ui/Card";
@@ -30,8 +30,14 @@ export default function AgentHomePage() {
   const ptpsDue = beat?.ptps_due_today ?? summary?.ptps_due_today ?? 0;
   const totalCases = beat?.total_cases ?? summary?.cases_today ?? 0;
   const doneCases = beat?.cases_visited_today ?? summary?.visits_done ?? 0;
+  // `cases_pending` from the beat, NOT total - done: a case paid off on an
+  // earlier day sits on today's route needing no visit, and subtracting only
+  // today's visits reported it as work still to do while My Cases showed it
+  // finished. See services/agent_service.py (2026-09-22). The subtraction
+  // stays as the fallback for /home-summary, which has no beat.
+  const pendingFromBeat = beat?.cases_pending;
   const collectionPct = totalTarget > 0 ? Math.min(Math.round((collected / totalTarget) * 100), 100) : 0;
-  const pendingCases = Math.max(totalCases - doneCases, 0);
+  const pendingCases = pendingFromBeat ?? Math.max(totalCases - doneCases, 0);
 
   async function startSelfieCapture() {
     setSelfieModal(true);
@@ -75,7 +81,7 @@ export default function AgentHomePage() {
       closeSelfie();
       patch({ check_in_status: "ON_DUTY" });
       patchSummary({ check_in_status: "ON_DUTY" });
-      toast.success("✅ Checked in! Have a safe day, " + user?.full_name.split(" ")[0] + "!");
+      toast.success("Checked in. Have a safe day, " + user?.full_name.split(" ")[0] + "!");
     } catch {
       toast.error("Check-in failed");
     } finally {
@@ -175,6 +181,7 @@ export default function AgentHomePage() {
           doneCases={doneCases}
           collected={collected}
           ptpsDue={ptpsDue}
+          pendingCases={pendingCases}
           navigate={navigate}
         />
       )}
@@ -188,7 +195,7 @@ export default function AgentHomePage() {
           ) : (
             <QuickAction icon={<MapPin className="w-5 h-5 text-slate-400" />} label="No Route Active" sub="Beat map will appear when scheduled" onClick={() => {}} color="bg-slate-50 opacity-60" />
           )}
-          <QuickAction icon={<Briefcase className="w-5 h-5 text-slate-600" />} label="All My Cases" sub={`${pendingCases} pending · ${doneCases} done`} onClick={() => navigate("/agent/cases")} color="bg-slate-50" />
+          <QuickAction icon={<Briefcase className="w-5 h-5 text-slate-600" />} label="All My Cases" sub={`${pendingCases} pending · ${Math.max(totalCases - pendingCases, 0)} done`} onClick={() => navigate("/agent/cases")} color="bg-slate-50" />
           {ptpsDue > 0 && (
             <QuickAction icon={<Calendar className="w-5 h-5 text-warning-600" />} label={`${ptpsDue} PTPs Due Today`} sub="Follow up before 7 PM" onClick={() => navigate("/agent/cases?filter=ptp_due")} color="bg-warning-50" />
           )}
@@ -229,9 +236,9 @@ export default function AgentHomePage() {
                     <div className="absolute top-2 right-2 bg-success-500 text-white text-xs px-2 py-1 rounded-full font-medium">✓ Captured</div>
                   </div>
                   <div className="bg-slate-50 rounded-lg p-3 text-xs text-slate-600 space-y-1">
-                    <p>📍 Location: Mumbai, Maharashtra</p>
-                    <p>🕐 Time: {new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}</p>
-                    <p>✅ Liveness check: Passed</p>
+                    <p className="flex items-center gap-1.5"><MapPin className="w-3.5 h-3.5 text-slate-400" /> Location: Mumbai, Maharashtra</p>
+                    <p className="flex items-center gap-1.5"><Clock className="w-3.5 h-3.5 text-slate-400" /> Time: {new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}</p>
+                    <p className="flex items-center gap-1.5"><ShieldCheck className="w-3.5 h-3.5 text-success-500" /> Liveness check: Passed</p>
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <Button variant="secondary" onClick={() => setCapturedSelfie(null)}>Retake</Button>
@@ -252,15 +259,19 @@ function StatGrid({
   doneCases,
   collected,
   ptpsDue,
+  pendingCases,
   navigate,
 }: {
   totalCases: number;
   doneCases: number;
   collected: number;
   ptpsDue: number;
+  pendingCases: number;
   navigate: NavigateFunction;
 }) {
-  const pendingCases = Math.max(totalCases - doneCases, 0);
+  // These reconcile without a footnote: a case settled before today is not on
+  // the route at all (services/agent_service.py, 2026-09-22), so pending plus
+  // visits today is the whole route.
 
   const animatedPending = useCountUp(pendingCases);
   const animatedDone = useCountUp(doneCases);

@@ -895,6 +895,43 @@ input[type="range"]::-webkit-slider-thumb:active { transform: scale(0.95); }
 
 .agentic-panel { overflow: hidden; }
 
+/* ── Glass surfaces (2026-09-22) ─────────────────────────────────────────────
+   The soft-card block above deliberately flattens `.tiq-glass` so ordinary
+   cards on a white page stay flat — blur over plain white is invisible and
+   only costs paint. These classes are for the surfaces that OVERLAY scrolling
+   content (sticky headers, the fixed action bar, filter rails), where the
+   content sliding underneath is what makes the glass read. `.tiq-ambient`
+   gives the shell a faint brand-tinted wash so there is colour to catch.
+   `@supports` keeps browsers without backdrop-filter on a near-opaque bar
+   rather than a see-through one. */
+.tiq-glass-bar {
+  background: rgba(255, 255, 255, 0.72);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  backdrop-filter: blur(18px) saturate(160%);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 10px 30px -18px rgba(16, 24, 40, 0.18);
+}
+.tiq-glass-bar.rounded-card,
+.tiq-glass-bar.rounded-xl,
+.tiq-glass-bar.rounded-2xl { border: 1px solid rgba(255, 255, 255, 0.7); }
+.tiq-glass-card {
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  backdrop-filter: blur(14px) saturate(140%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6), 0 8px 24px -16px rgba(16, 24, 40, 0.16);
+}
+.tiq-ambient {
+  background:
+    radial-gradient(60% 34% at 12% 0%, rgba(37, 99, 235, 0.07) 0%, rgba(37, 99, 235, 0) 60%),
+    radial-gradient(46% 30% at 100% 8%, rgba(16, 185, 129, 0.05) 0%, rgba(16, 185, 129, 0) 55%),
+    hsl(var(--background));
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .tiq-glass-bar { background: rgba(255, 255, 255, 0.96); }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .tiq-glass-bar { background: rgba(255, 255, 255, 0.96); backdrop-filter: none; -webkit-backdrop-filter: none; }
+  .tiq-glass-card { backdrop-filter: none; -webkit-backdrop-filter: none; }
+}
+
 @media (hover: hover) and (pointer: fine) {
   .panel:hover,
   .card:hover,

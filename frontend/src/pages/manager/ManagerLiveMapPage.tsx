@@ -124,7 +124,7 @@ function agentIcon(a: LiveAgentPosition, isSelected: boolean = false): L.DivIcon
           transition:transform 0.15s ease;
           ${isSelected ? "transform:scale(1.15);" : ""}
         ">
-          ${sos ? "⚠️" : initials}
+          ${sos ? '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>' : initials}
         </div>
         <div style="
           width:0;height:0;
@@ -481,7 +481,7 @@ export default function ManagerLiveMapPage() {
                         className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs flex-shrink-0 text-white shadow-sm transition-transform group-hover:scale-105"
                         style={{ background: color }}
                       >
-                        {a.sos_active ? "⚠️" : initials}
+                        {a.sos_active ? <AlertTriangle className="w-4 h-4" /> : initials}
                       </div>
                       <div className="min-w-0">
                         <div className="flex items-center gap-1.5">

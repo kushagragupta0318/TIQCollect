@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { shortMoney } from "@/lib/money";
-import { ArrowLeft, Navigation, CheckCircle, MapPin, ChevronRight, Zap, Route, RefreshCw } from "lucide-react";
+import { ArrowLeft, Navigation, CheckCircle, MapPin, ChevronRight, Zap, Route, RefreshCw, Phone, ClipboardList, AlertTriangle } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { reoptimizeBeat } from "@/api/agent";
 import { DPDBadge, VisitPriorityBadge, CaseStatusBadge } from "@/components/ui/Badge";
@@ -324,7 +324,7 @@ export default function BeatMapPage() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-1.5">
                         <p className="text-sm font-medium truncate text-slate-900">{c.customer.full_name}</p>
-                        {c.customer.is_hostile && <span className="text-danger-500 text-xs">⚠️</span>}
+                        {c.customer.is_hostile && <AlertTriangle className="w-3.5 h-3.5 text-danger-500" aria-label="Hostile" />}
                       </div>
                       <div className="flex items-center gap-2 mt-0.5">
                         <span className="text-xs text-slate-400">{c.customer.city}</span>
@@ -346,7 +346,7 @@ export default function BeatMapPage() {
                       onClick={() => window.open(`tel:${c.customer.phone_primary}`, "_self")}
                       className="flex-1 flex items-center justify-center gap-1.5 text-xs font-medium py-2 rounded-lg bg-success-50 text-success-700 hover:bg-success-100 transition-colors"
                     >
-                      📞 Call
+                      <Phone className="w-3.5 h-3.5" /> Call
                     </button>
                     <button
                       onClick={() => navigateToStop(c)}
@@ -364,7 +364,7 @@ export default function BeatMapPage() {
                       onClick={() => navigate(`/agent/visit/${c.id}`)}
                       className="flex-1 flex items-center justify-center gap-1.5 text-xs font-medium py-2 rounded-lg bg-warning-50 text-warning-700 hover:bg-warning-100 transition-colors"
                     >
-                      📋 Visit
+                      <ClipboardList className="w-3.5 h-3.5" /> Visit
                     </button>
                   </div>
                 )}

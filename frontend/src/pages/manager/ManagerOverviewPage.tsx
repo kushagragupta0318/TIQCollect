@@ -221,7 +221,10 @@ export default function ManagerOverviewPage() {
       {/* KPI Grid — staggered entrance */}
       <div className="overview-kpi-grid grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         {[
-          { label: "Agents On Duty",  value: `${s.agents_on_duty}/${s.total_agents}`, icon: <Users className="w-5 h-5" />,       colorClass: "text-brand-600",   subtext: "active today" },
+          // "on duty" excludes approved leave for the day, and says so: a manager
+          // reading 14/15 should not have to open the Agents page to learn why.
+          { label: "Agents On Duty",  value: `${s.agents_on_duty}/${s.total_agents}`, icon: <Users className="w-5 h-5" />,       colorClass: "text-brand-600",
+            subtext: s.agents_on_leave > 0 ? `${s.agents_on_leave} on leave today` : "active today" },
           // Allocated, not visited: the backend sets cases_today from the distinct
           // case ids across each agent's latest beat (manager.py:329), so this is
           // today's planned workload. Visits are counted separately (visits_today).

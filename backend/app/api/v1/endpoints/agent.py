@@ -525,10 +525,10 @@ def notify_visit(case_id: str, current_user: AgentOnly, db: DbSession):
     wa_body = (
         f"*Visit Notice – ABC Bank*\n\n"
         f"Dear {customer.full_name},\n\n"
-        f"\U0001f3e0 Our field agent *{agent.user.full_name}* will be visiting you shortly.\n"
-        f"\U0001f4c5 Date: {visit_date}\n"
-        f"\U0001f4b0 Target Amount: Rs.{case.target_amount:,.0f}\n"
-        f"\U0001f4b3 Loan Account: {masked_acct}\n"
+        f"Our field agent *{agent.user.full_name}* will be visiting you shortly.\n"
+        f"Date: {visit_date}\n"
+        f"Target Amount: Rs.{case.target_amount:,.0f}\n"
+        f"Loan Account: {masked_acct}\n"
         f"⏳ DPD: {dpd} days overdue\n\n"
         f"Please be available and keep documents ready.\n– ABC Bank"
     )
@@ -570,10 +570,10 @@ def notify_case(case_id: str, req: NotifyCaseRequest, current_user: AgentOnly, d
         wa_body = (
             f"*Visit Notice – ABC Bank*\n\n"
             f"Dear {customer.full_name},\n\n"
-            f"\U0001f3e0 Our field agent *{agent.user.full_name}* will be visiting you shortly.\n"
-            f"\U0001f4c5 Date: {visit_date}\n"
-            f"\U0001f4b0 Target Amount: Rs.{case.target_amount:,.0f}\n"
-            f"\U0001f4b3 Loan Account: {masked_acct}\n"
+            f"Our field agent *{agent.user.full_name}* will be visiting you shortly.\n"
+            f"Date: {visit_date}\n"
+            f"Target Amount: Rs.{case.target_amount:,.0f}\n"
+            f"Loan Account: {masked_acct}\n"
             f"⏳ DPD: {dpd} days overdue\n\n"
             f"Please be available and keep documents ready.\n– ABC Bank"
         )
@@ -595,9 +595,9 @@ def notify_case(case_id: str, req: NotifyCaseRequest, current_user: AgentOnly, d
         wa_body = (
             f"*PTP Reminder – ABC Bank*\n\n"
             f"Dear {customer.full_name},\n\n"
-            f"\U0001f4b0 Committed Amount: Rs.{active_ptp.committed_amount:,.0f}\n"
-            f"\U0001f4c5 Due Date: {ptp_date}\n"
-            f"\U0001f4b3 Loan Account: {masked_acct}\n\n"
+            f"Committed Amount: Rs.{active_ptp.committed_amount:,.0f}\n"
+            f"Due Date: {ptp_date}\n"
+            f"Loan Account: {masked_acct}\n\n"
             f"Please ensure timely payment on the committed date.\n– ABC Bank"
         )
     elif req.type == "receipt":
@@ -618,10 +618,10 @@ def notify_case(case_id: str, req: NotifyCaseRequest, current_user: AgentOnly, d
         wa_body = (
             f"*Payment Receipt – ABC Bank*\n\n"
             f"Dear {customer.full_name},\n\n"
-            f"✅ Amount Received: Rs.{last_payment.amount:,.0f}\n"
-            f"\U0001f4b3 Loan Account: {masked_acct}\n"
-            f"\U0001f9fe Receipt No: {last_payment.receipt_number}\n"
-            f"\U0001f4c5 Date: {pay_date}\n\n"
+            f"Amount Received: Rs.{last_payment.amount:,.0f}\n"
+            f"Loan Account: {masked_acct}\n"
+            f"Receipt No: {last_payment.receipt_number}\n"
+            f"Date: {pay_date}\n\n"
             f"Thank you for your payment.\n– ABC Bank"
         )
     else:

@@ -81,6 +81,8 @@ import {
   ArrowLeft, Camera, MapPin, CheckCircle, IndianRupee,
   Calendar, Upload, X, AlertTriangle,
   QrCode, Lock, Unlock, Mic, MicOff, ShieldCheck, Send, WifiOff, RefreshCw,
+  Banknote, Smartphone, FileSignature, Landmark, Building2, IdCard, FileText, HeartPulse,
+  User, Users, DoorClosed, Smile, Meh, Frown, Home, Car,
 } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { getCaseDetail, recordVisit, collectPayment, setPTP, getPhotoUploadUrl, getCasePhotos, getRecordingUploadUrl, reoptimizeBeat, transcribeAudio, queueVisitTranscription, sendPaymentOtp, verifyPaymentOtp } from "@/api/agent";
@@ -302,11 +304,11 @@ const DEFAULT_REASONS: { value: DefaultReason; label: string }[] = [
 ];
 
 const PAYMENT_MODES = [
-  { value: "CASH",   label: "Cash",         icon: "💵" },
-  { value: "UPI",    label: "UPI",          icon: "📱" },
-  { value: "CHEQUE", label: "Cheque / PDC", icon: "📝" },
-  { value: "NEFT",   label: "NEFT / IMPS",  icon: "🏦" },
-  { value: "RTGS",   label: "RTGS",         icon: "🏛️" },
+  { value: "CASH",   label: "Cash",         icon: Banknote },
+  { value: "UPI",    label: "UPI",          icon: Smartphone },
+  { value: "CHEQUE", label: "Cheque / PDC", icon: FileSignature },
+  { value: "NEFT",   label: "NEFT / IMPS",  icon: Landmark },
+  { value: "RTGS",   label: "RTGS",         icon: Building2 },
 ];
 
 const NOT_MET_REASONS = [
@@ -319,10 +321,10 @@ const NOT_MET_REASONS = [
 ];
 
 const DOC_CATEGORIES = [
-  { id: "BANK_STMT",      label: "Bank Statement",                  icon: "🏦" },
-  { id: "ID_PROOF",       label: "ID Proof (Aadhaar / PAN)",        icon: "🪪" },
-  { id: "INCOME_PROOF",   label: "GST / Salary Slip / ITR",         icon: "📄" },
-  { id: "MEDICAL_SUPPORT",label: "Medical / Support Docs",          icon: "🏥" },
+  { id: "BANK_STMT",      label: "Bank Statement",                  icon: Landmark },
+  { id: "ID_PROOF",       label: "ID Proof (Aadhaar / PAN)",        icon: IdCard },
+  { id: "INCOME_PROOF",   label: "GST / Salary Slip / ITR",         icon: FileText },
+  { id: "MEDICAL_SUPPORT",label: "Medical / Support Docs",          icon: HeartPulse },
 ];
 
 // ─── Geo helpers ──────────────────────────────────────────────────────────────
@@ -551,7 +553,7 @@ export default function RecordVisitPage() {
       Object.values(restoredDraft).some((v) => v !== "" && v !== null && v !== false),
   );
   useEffect(() => {
-    if (draftRestored) toast("Restored your unsent notes for this visit", { icon: "📝" });
+    if (draftRestored) toast("Restored your unsent notes for this visit");
     // Once per mount. draftRestored cannot change without a remount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -924,7 +926,7 @@ export default function RecordVisitPage() {
     const t = setTimeout(() => {
       setQrPaidDemo(true);
       playSuccessChime();
-      toast.success(`Payment received · ₹${amountNum.toLocaleString("en-IN")}`, { icon: "✅" });
+      toast.success(`Payment received · ₹${amountNum.toLocaleString("en-IN")}`);
     }, QR_DEMO_DELAY_MS);
     return () => clearTimeout(t);
   }, [form.paymentMode, showQR, amountNum, amountExceedsRemainingTarget]);
@@ -942,7 +944,7 @@ export default function RecordVisitPage() {
       setOtpCode("");
       if (isResend) setResendsUsed((n) => n + 1);
       if (res.demo_otp) {
-        toast.success(`Demo Borrower OTP: ${res.demo_otp}`, { duration: 8000, icon: "🔑" });
+        toast.success(`Demo Borrower OTP: ${res.demo_otp}`, { duration: 8000 });
       } else {
         toast.success(`OTP sent to borrower (${res.masked_phone})`);
       }
@@ -962,7 +964,7 @@ export default function RecordVisitPage() {
       if (res.verified) {
         setVerificationId(res.otp_id);
         setOfflineAck(false);
-        toast.success("Borrower verified the amount ✓");
+        toast.success("Borrower verified the amount");
       }
     } catch (err) {
       setOtpError(errorDetail(err, "Incorrect OTP. Please retry."));
@@ -1330,7 +1332,7 @@ export default function RecordVisitPage() {
                 onClick={() => selectMeetingType("BORROWER")}
                 className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl border text-left transition-colors ${form.meetingType === "BORROWER" ? "border-brand-400 bg-brand-50" : "border-slate-200 bg-white hover:border-brand-200"}`}
               >
-                <span className="text-2xl flex-shrink-0">👤</span>
+                <User className="w-6 h-6 flex-shrink-0 text-brand-600" strokeWidth={1.75} />
                 <div>
                   <p className={`text-sm font-semibold ${form.meetingType === "BORROWER" ? "text-brand-800" : "text-slate-800"}`}>Borrower is Present</p>
                   <p className="text-xs text-slate-400 mt-0.5">I am speaking directly with the borrower</p>
@@ -1343,7 +1345,7 @@ export default function RecordVisitPage() {
                 onClick={() => selectMeetingType("THIRD_PARTY")}
                 className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl border text-left transition-colors ${form.meetingType === "THIRD_PARTY" ? "border-warning-400 bg-warning-50" : "border-slate-200 bg-white hover:border-warning-200"}`}
               >
-                <span className="text-2xl flex-shrink-0">👥</span>
+                <Users className="w-6 h-6 flex-shrink-0 text-warning-600" strokeWidth={1.75} />
                 <div>
                   <p className={`text-sm font-semibold ${form.meetingType === "THIRD_PARTY" ? "text-warning-800" : "text-slate-800"}`}>Someone Else at Address</p>
                   <p className="text-xs text-slate-400 mt-0.5">Borrower not present — met a family member, neighbour or staff</p>
@@ -1356,7 +1358,7 @@ export default function RecordVisitPage() {
                 onClick={() => selectMeetingType("NOT_MET")}
                 className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl border text-left transition-colors ${form.meetingType === "NOT_MET" ? "border-slate-400 bg-slate-100" : "border-slate-200 bg-white hover:border-slate-300"}`}
               >
-                <span className="text-2xl flex-shrink-0">🚪</span>
+                <DoorClosed className="w-6 h-6 flex-shrink-0 text-slate-500" strokeWidth={1.75} />
                 <div>
                   <p className={`text-sm font-semibold ${form.meetingType === "NOT_MET" ? "text-slate-800" : "text-slate-800"}`}>No One Available</p>
                   <p className="text-xs text-slate-400 mt-0.5">Premises locked, customer absent or unreachable</p>
@@ -1423,10 +1425,10 @@ export default function RecordVisitPage() {
             <Section title="Borrower Tone" badge="Recommended">
               <div className="grid grid-cols-3 gap-2">
                 {([
-                  { v: "COOPERATIVE", l: "Cooperative", emoji: "😊", sel: "border-success-400 bg-success-50 text-success-700" },
-                  { v: "NEUTRAL",     l: "Neutral",     emoji: "😐", sel: "border-brand-400 bg-brand-50 text-brand-700" },
-                  { v: "HOSTILE",     l: "Hostile",     emoji: "😠", sel: "border-danger-400 bg-danger-50 text-danger-700" },
-                ] as const).map(({ v, l, emoji, sel: selCls }) => (
+                  { v: "COOPERATIVE", l: "Cooperative", icon: Smile, sel: "border-success-400 bg-success-50 text-success-700" },
+                  { v: "NEUTRAL",     l: "Neutral",     icon: Meh, sel: "border-brand-400 bg-brand-50 text-brand-700" },
+                  { v: "HOSTILE",     l: "Hostile",     icon: Frown, sel: "border-danger-400 bg-danger-50 text-danger-700" },
+                ] as const).map(({ v, l, icon: ToneIcon, sel: selCls }) => (
                   <button
                     key={v}
                     onClick={() => upd({ borrowerTone: form.borrowerTone === v ? null : v })}
@@ -1434,7 +1436,7 @@ export default function RecordVisitPage() {
                       form.borrowerTone === v ? selCls : "border-slate-200 bg-white text-slate-600 transition-colors hover:border-brand-200 hover:bg-brand-50/50"
                     }`}
                   >
-                    <span className="text-2xl">{emoji}</span>{l}
+                    <ToneIcon className="w-6 h-6" strokeWidth={1.75} />{l}
                   </button>
                 ))}
               </div>
@@ -1740,7 +1742,7 @@ export default function RecordVisitPage() {
                     <div className="grid grid-cols-3 gap-2">
                       {PAYMENT_MODES.map((m) => (
                         <button key={m.value} onClick={() => upd({ paymentMode: m.value, cashCounted: false, upiRef: "", chequeNumber: "", chequeDate: "", chequeBank: "", neftRef: "" })} className={`flex flex-col items-center gap-1 py-2.5 rounded-xl border text-xs font-medium ${form.paymentMode === m.value ? "border-brand-400 bg-brand-50 text-brand-700" : "border-slate-200 bg-white text-slate-600 transition-colors hover:border-brand-200 hover:bg-brand-50/50"}`}>
-                          <span className="text-lg">{m.icon}</span>{m.label}
+                          <m.icon className="w-5 h-5" strokeWidth={1.75} />{m.label}
                         </button>
                       ))}
                     </div>
@@ -1949,11 +1951,11 @@ export default function RecordVisitPage() {
                 {/* ── Three geo-tagged photo captures ── */}
                 {(
                   [
-                    { field: "agentPhoto" as const, gpsField: "agentPhotoGps" as const, prevField: "agentPhotoFromPrev" as const, photoType: "AGENT_SELFIE", label: "Agent / Premises Photo", hint: "Capture yourself at the address", icon: "🏠", alwaysFresh: true },
-                    { field: "borrowerPhoto" as const, gpsField: "borrowerPhotoGps" as const, prevField: "borrowerPhotoFromPrev" as const, photoType: "BORROWER", label: "Borrower Photo", hint: "Photo of person met", icon: "👤", alwaysFresh: false },
-                    { field: "objectPhoto" as const, gpsField: "objectPhotoGps" as const, prevField: "objectPhotoFromPrev" as const, photoType: "VEHICLE_ASSET", label: "Vehicle / Asset Photo", hint: "Vehicle, property or pledged asset", icon: "🚗", alwaysFresh: false },
+                    { field: "agentPhoto" as const, gpsField: "agentPhotoGps" as const, prevField: "agentPhotoFromPrev" as const, photoType: "AGENT_SELFIE", label: "Agent / Premises Photo", hint: "Capture yourself at the address", icon: Home, alwaysFresh: true },
+                    { field: "borrowerPhoto" as const, gpsField: "borrowerPhotoGps" as const, prevField: "borrowerPhotoFromPrev" as const, photoType: "BORROWER", label: "Borrower Photo", hint: "Photo of person met", icon: User, alwaysFresh: false },
+                    { field: "objectPhoto" as const, gpsField: "objectPhotoGps" as const, prevField: "objectPhotoFromPrev" as const, photoType: "VEHICLE_ASSET", label: "Vehicle / Asset Photo", hint: "Vehicle, property or pledged asset", icon: Car, alwaysFresh: false },
                   ] as const
-                ).map(({ field, gpsField, prevField, photoType, label, hint, icon, alwaysFresh }) => {
+                ).map(({ field, gpsField, prevField, photoType, label, hint, icon: SlotIcon, alwaysFresh }) => {
                   const photo = form[field];
                   const gps = form[gpsField];
                   const fromPrev = form[prevField];
@@ -1965,7 +1967,7 @@ export default function RecordVisitPage() {
                   if (!photo && existing?.viewUrl && !alwaysFresh) {
                     return (
                       <div key={field} className="mb-3">
-                        <p className="text-sm font-medium text-slate-700 mb-1.5"><span className="mr-1.5">{icon}</span>{label}</p>
+                        <p className="text-sm font-medium text-slate-700 mb-1.5 flex items-center gap-1.5"><SlotIcon className="w-4 h-4 text-slate-500" />{label}</p>
                         <div className="relative rounded-xl overflow-hidden border border-brand-200">
                           <img src={existing.viewUrl} alt={label} className="w-full h-36 object-cover opacity-80" />
                           <div className="absolute inset-0 flex flex-col justify-between p-2">
@@ -2007,7 +2009,7 @@ export default function RecordVisitPage() {
                   return (
                     <div key={field} className="mb-3">
                       <p className="text-sm font-medium text-slate-700 mb-1.5">
-                        <span className="mr-1.5">{icon}</span>{label}
+                        <SlotIcon className="w-4 h-4 mr-1.5 inline-block -mt-0.5" />{label}
                         {alwaysFresh && <span className="ml-2 text-[10px] text-slate-400 font-normal">fresh photo required each visit</span>}
                       </p>
                       {photo ? (
@@ -2067,7 +2069,7 @@ export default function RecordVisitPage() {
                       const uploaded = form.documents.find((d) => d.category === cat.id);
                       return (
                         <button key={cat.id} onClick={() => fileRefs.current[cat.id]?.click()} className={`flex items-center gap-2 p-2.5 rounded-xl border text-xs font-medium text-left ${uploaded ? "border-success-400 bg-success-50 text-success-700" : "border-slate-200 bg-white text-slate-600 transition-colors hover:border-brand-200 hover:bg-brand-50/50"}`}>
-                          <span className="text-base flex-shrink-0">{cat.icon}</span>
+                          <cat.icon className="w-4 h-4 flex-shrink-0" />
                           <span className="truncate">{cat.label}</span>
                           {uploaded && <CheckCircle className="w-3.5 h-3.5 text-success-500 ml-auto flex-shrink-0" />}
                           <input ref={(el) => { fileRefs.current[cat.id] = el; }} type="file" accept="image/*,application/pdf" className="hidden" onChange={(e) => handleDocUpload(e, cat.id)} />

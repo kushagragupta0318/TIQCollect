@@ -24,7 +24,7 @@ def run_migration():
         conn.execute(text("ALTER TABLE beats ALTER COLUMN beat_number TYPE VARCHAR(50);"))
         conn.execute(text("ALTER TABLE beats ALTER COLUMN ml_model_version TYPE VARCHAR(50);"))
         conn.commit()
-    print("✅ Database schema migration completed successfully!")
+    print("Database schema migration completed successfully!")
 
 
 if __name__ == "__main__":

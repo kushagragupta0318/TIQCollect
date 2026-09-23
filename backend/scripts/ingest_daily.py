@@ -812,7 +812,7 @@ def run_ingestion(file_path: Path, dry_run: bool = False) -> None:
     log.info("─────────────────────────────────────────────────────────────")
     if not dry_run:
         log.info("")
-        log.info("✅ Done. Celery allocation fires at 8:00 PM IST.")
+        log.info("Done. Celery allocation fires at 8:00 PM IST.")
         log.info("   Agents see new cases + beat route from 6:00 AM tomorrow.")
 
 

@@ -389,10 +389,10 @@ class VisitService:
         wa_body = (
             f"*Visit Completed – ABC Bank*\n\n"
             f"Dear {case.customer.full_name},\n\n"
-            f"\U0001f3e0 Agent *{agent.user.full_name}* visited on {visit_date}.\n"
-            f"\U0001f4b3 Loan Account: {masked_acct}\n"
-            f"\U0001f4b0 Outstanding: Rs.{outstanding:,.0f}\n"
-            f"❌ No payment collected.\n\n"
+            f"Agent *{agent.user.full_name}* visited on {visit_date}.\n"
+            f"Loan Account: {masked_acct}\n"
+            f"Outstanding: Rs.{outstanding:,.0f}\n"
+            f"Payment: none collected.\n\n"
             f"Please contact us to resolve your dues.\n– ABC Bank"
         )
         NotificationService.send_twilio(e164, sms_body, wa_body)

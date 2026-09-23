@@ -51,6 +51,20 @@ def _sync_demo_contact() -> None:
                     phone=settings.DEMO_CONTACT_PHONE)
 
 
+def _sync_leave_statuses() -> None:
+    """Bring Agent.status in step with approved leave. The 00:10 Celery task
+    does this nightly, but beat never replays a crontab it slept through, and
+    a stale ON_DUTY is what every manager screen used to show for an agent on
+    approved leave. Readers now derive duty from the leave table regardless
+    (services/leave_service.py); this keeps the stored column honest too."""
+    from sqlalchemy.orm import Session
+    from app.services.leave_service import LeaveService
+
+    with Session(engine) as db:
+        out = LeaveService(db).sync_statuses()
+        logger.info("leave_statuses_synced", **out)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("startup", service=settings.APP_NAME, env=settings.APP_ENV)
@@ -59,6 +73,10 @@ async def lifespan(app: FastAPI):
             _sync_demo_contact()
         except Exception as exc:  # never block startup on a demo convenience
             logger.warning("demo_contact_sync_failed", error=str(exc))
+    try:
+        _sync_leave_statuses()
+    except Exception as exc:  # a missing table on a first boot must not block startup
+        logger.warning("leave_status_sync_failed", error=str(exc))
     yield
     logger.info("shutdown", service=settings.APP_NAME)
     engine.dispose()

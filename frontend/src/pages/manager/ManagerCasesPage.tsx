@@ -21,7 +21,7 @@ import { useSearchParams } from "react-router";
 import { createPortal } from "react-dom";
 import {
   Search, X, MapPin, Clock, CheckCircle2, AlertTriangle,
-  Calendar, User, FileText, ChevronRight, SlidersHorizontal, ListOrdered,
+  Calendar, User, FileText, ChevronRight, SlidersHorizontal, ListOrdered, Camera,
 } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { getCases, getCaseDetail, getCasesDateRange, getAgents, reassignCase } from "@/api/manager";
@@ -698,7 +698,7 @@ function CaseDetailModal({ caseId, onClose }: { caseId: string; onClose: () => v
                               <img src={ph.view_url} alt={typeLabel[ph.photo_type] ?? ph.photo_type} className="w-full aspect-square object-cover hover:opacity-90 transition-opacity" />
                             </a>
                           ) : (
-                            <div className="w-full aspect-square flex items-center justify-center text-3xl opacity-30" style={{ background: "#F5F6F9" }}>📷</div>
+                            <div className="w-full aspect-square flex items-center justify-center opacity-30" style={{ background: "#F5F6F9" }}><Camera className="w-8 h-8" /></div>
                           )}
                           <div className="p-2">
                             <p className="text-xs font-semibold" style={{ color: "#1C1C1F" }}>{typeLabel[ph.photo_type] ?? ph.photo_type}</p>

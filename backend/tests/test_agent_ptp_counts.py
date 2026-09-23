@@ -34,6 +34,7 @@ from app.models.customer import Customer
 from app.models.loan import DPDBucket, Loan, LoanStatus, LoanType
 from app.models.ptp import PTP, PTPStatus
 from app.models.user import User, UserRole
+from app.models.visit import PersonMet, Visit, VisitOutcome
 from app.services.agent_service import AgentService
 
 TODAY = date.today()
@@ -198,3 +199,103 @@ def test_a_settled_case_stops_counting(db, world):
     assert svc.home_summary(world["a1"])["ptps_due_today"] == 0
     beat = svc.get_beat(world["a1"])
     assert beat["ptps_due_today"] == 0
+
+
+# ── Pending: the same defect, one screen over (2026-09-22) ──────────────────
+# Home read "1 pending" from total_cases - cases_visited_today while My Cases
+# showed every card done, because the Cases page also treats PAID / CLOSED /
+# WRITTEN_OFF / fully-collected as finished. A case paid off on an EARLIER day
+# and still on today's route is exactly the gap between those two rules.
+# `cases_pending` is now computed once, in the service, and both read it.
+
+def _paid_earlier(db, world, *, status=CaseStatus.PAID, collected=10000.0, target=10000.0):
+    """Put a second case on a1's beat that was settled before today."""
+    a1 = world["a1"]
+    src = world["on_beat"]
+    settled = Case(id=_uid(), case_number="SETTLED", customer_id=src.customer_id,
+                   loan_id=src.loan_id, agent_id=a1.id, status=status,
+                   target_amount=target, collected_amount=collected,
+                   allocation_date=TODAY.isoformat())
+    db.add(settled)
+    db.flush()
+    beat = db.query(Beat).filter(Beat.agent_id == a1.id, Beat.beat_date == TODAY).one()
+    beat.ordered_case_ids = list(beat.ordered_case_ids) + [settled.id]
+    beat.total_cases = len(beat.ordered_case_ids)
+    db.commit()
+    return settled
+
+
+def test_a_case_settled_on_an_earlier_day_leaves_the_route(db, world):
+    """2026-09-22 — it is not merely "not pending", it is not a stop at all.
+
+    The beat is written at 20:00 the night before and nothing revises it, so a
+    borrower who settles overnight stayed on the route: 2 stops, 1 of them
+    real, and the home screen had to explain away the second."""
+    settled = _paid_earlier(db, world)
+    out = AgentService(db).get_beat(world["a1"])
+
+    assert out["total_cases"] == 1                  # the route, not the plan
+    assert [c["id"] for c in out["cases"]] == [world["on_beat"].id]
+    assert out["ordered_case_ids"] == [world["on_beat"].id]
+    assert out["cases_visited_today"] == 0          # nobody visited today
+    assert settled.id in out["no_visit_needed_ids"]  # reported, so a client can say why
+    assert out["cases_pending"] == 1                # only the live case is work
+    # Its target went with it — otherwise "collected today" is measured against
+    # money that was already in the bank.
+    assert out["total_target_amount"] == 10000.0
+
+
+def test_the_stored_beat_is_not_rewritten(db, world):
+    """The plan is a record. Dropping a stop from today's view must not edit it."""
+    settled = _paid_earlier(db, world)
+    AgentService(db).get_beat(world["a1"])
+    beat = db.query(Beat).filter(Beat.agent_id == world["a1"].id, Beat.beat_date == TODAY).one()
+    assert settled.id in beat.ordered_case_ids and beat.total_cases == 2
+
+
+def test_home_summary_counts_the_same_route_as_the_beat(db, world):
+    """Two endpoints back one screen; they must not disagree."""
+    _paid_earlier(db, world)
+    svc = AgentService(db)
+    assert svc.home_summary(world["a1"])["cases_today"] == svc.get_beat(world["a1"])["total_cases"]
+
+
+def test_pending_equals_the_cases_the_list_still_shows_as_to_do(db, world):
+    """The property, not the number: what Home counts is what My Cases offers."""
+    _paid_earlier(db, world)
+    on_beat = world["on_beat"]
+    db.add(Visit(id=_uid(), case_id=on_beat.id, agent_id=world["a1"].id,
+                 check_in_latitude=28.63, check_in_longitude=77.21,
+                 check_in_time=datetime.now(timezone.utc),
+                 distance_from_customer_metres=12.0, geo_verified=True,
+                 within_contact_hours=True, customer_met=True,
+                 person_met=PersonMet.BORROWER, outcome=VisitOutcome.PART_PAID,
+                 visit_number=1))
+    db.commit()
+
+    out = AgentService(db).get_beat(world["a1"])
+    done = set(out["visited_today_ids"]) | set(out["no_visit_needed_ids"])
+    still_to_do = [c for c in out["cases"] if c["id"] not in done]
+
+    assert out["cases_pending"] == len(still_to_do) == 0
+    assert out["cases_visited_today"] == 1          # the visit is still a visit
+    assert out["total_cases"] == 1                  # the settled stop is not on the route
+
+
+def test_an_escalated_case_is_still_pending_work(db, world):
+    """ESCALATED is open and visitable — it must never fall into no-visit-needed."""
+    esc = _paid_earlier(db, world, status=CaseStatus.ESCALATED, collected=0.0)
+    out = AgentService(db).get_beat(world["a1"])
+    assert esc.id not in out["no_visit_needed_ids"]
+    assert esc.id in [c["id"] for c in out["cases"]]   # still a stop
+    assert out["total_cases"] == 2
+    assert out["cases_pending"] == 2
+
+
+def test_a_case_collected_to_target_needs_no_visit_even_if_its_status_lags(db, world):
+    """collected >= target is the Cases page's other done rule; keep it."""
+    full = _paid_earlier(db, world, status=CaseStatus.PARTIALLY_PAID, collected=10000.0)
+    out = AgentService(db).get_beat(world["a1"])
+    assert full.id in out["no_visit_needed_ids"]
+    assert full.id not in [c["id"] for c in out["cases"]]
+    assert out["cases_pending"] == 1

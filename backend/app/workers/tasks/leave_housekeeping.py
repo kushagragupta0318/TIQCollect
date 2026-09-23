@@ -1,4 +1,11 @@
 # ─── CHANGELOG (prototype → product) ─────────────────────────────────────────
+# 2026-09-22 — sync_statuses now defaults to the IST date (leave_today).
+#   This task fires at 00:10 IST = 18:40 UTC, and date.today() in the UTC
+#   container was still the previous day, so the sync ran for a day that had
+#   ended. Also runs at API startup now (app/main.py) because beat does not
+#   replay a crontab it slept through. Readers no longer depend on either:
+#   see agent_ids_on_leave / effective_status in services/leave_service.py.
+#
 # 2026-09-21 — New file. Keeps Agent.status in step with approved leave:
 #   ON_LEAVE while a leave covers today, OFF_DUTY the day after it ends. The
 #   planner already excludes ON_LEAVE, so this is what stops a nightly plan

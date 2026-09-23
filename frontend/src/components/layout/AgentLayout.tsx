@@ -295,7 +295,7 @@ function AgentLayoutInner() {
       {/* ── Main column — offset by the rail only where the rail exists.
              Below lg this is the untouched 448px phone shell. ── */}
       <div
-        className="min-w-0 w-full max-w-md md:max-w-none mx-auto md:mx-0 flex flex-col relative"
+        className="min-w-0 w-full max-w-md md:max-w-none mx-auto md:mx-0 flex flex-col relative tiq-ambient"
         style={{ flex: 1, paddingLeft: "var(--rail-w)", minHeight: "100svh" }}
       >
 
@@ -308,8 +308,7 @@ function AgentLayoutInner() {
           {/* Phone header — the brand blue lives here, not on <header>, so it
               cannot bleed through behind the desktop glass bar. */}
           <div
-            className="mx-2 mt-2 flex items-center justify-between rounded-card border bg-card px-4 py-3 lg:hidden"
-            style={{ borderColor: "#ECEDF1", boxShadow: "0 1px 2px rgba(16,24,40,0.04)" }}
+            className="mx-2 mt-2 flex items-center justify-between rounded-card px-4 py-3 lg:hidden tiq-glass-bar"
           >
             <div className="flex items-center gap-2.5 min-w-0">
               <BrandLogo size={32} />
@@ -323,15 +322,9 @@ function AgentLayoutInner() {
             <SOSButton />
           </div>
 
-          {/* Desktop header — same glass bar as the manager console */}
-          <div
-            className="mx-4 mt-4 hidden items-center justify-between gap-3 rounded-card border px-5 py-3 lg:flex"
-            style={{
-              background: "#FFFFFF",
-              borderColor: "#ECEDF1",
-              boxShadow: "0 1px 2px rgba(16,24,40,0.04)",
-            }}
-          >
+          {/* Desktop header — a real glass bar (2026-09-22): the case list
+              scrolls under it, which is what makes the blur legible. */}
+          <div className="mx-4 mt-4 hidden items-center justify-between gap-3 rounded-card px-5 py-3 lg:flex tiq-glass-bar">
             <div className="min-w-0">
               <h1 className="text-[15px] font-bold text-foreground truncate" style={{ letterSpacing: "-0.02em" }}>{user?.full_name ?? "Field Agent"}</h1>
               {/* Live address rather than the date: on a field app the agent's

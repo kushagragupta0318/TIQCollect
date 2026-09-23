@@ -30,6 +30,13 @@ export interface BeatData {
   ordered_case_ids: string[];
   cases_visited_today: number;
   visited_today_ids: string[];
+  /** Still to do today: on the route, neither visited today nor already
+   *  resolved. Computed once in the backend (services/agent_service.py,
+   *  2026-09-22) so Home and My Cases cannot disagree again. Optional: a
+   *  cached payload from before that change has neither field. */
+  cases_pending?: number;
+  /** On the route but needing no visit — paid off or closed on an earlier day. */
+  no_visit_needed_ids?: string[];
   amount_collected_today: number;
   cases: Case[];
   ptps_due_today: number;

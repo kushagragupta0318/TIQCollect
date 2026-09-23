@@ -61,7 +61,7 @@ class AgentService:
     # GET /agent/home-summary
     # -----------------------------------------------------------------
     def home_summary(self, agent: Agent) -> dict:
-        from app.api.v1.endpoints.agent import _effective_day
+        from app.api.v1.endpoints.agent import _effective_day, _visited_today
 
         eff_day = _effective_day(agent.id, self.db)
         from sqlalchemy import or_
@@ -81,6 +81,20 @@ class AgentService:
             .first()
         )
         beat_case_ids = beat.ordered_case_ids if beat else []
+        if beat_case_ids:
+            # Same rule as get_beat: a case settled before today is not today's
+            # work and must not be counted here either, or the two endpoints
+            # behind one screen disagree (2026-09-22).
+            _visited = _visited_today(agent.id, eff_day, self.db)
+            _settled_before_today = {
+                c.id for c in self.db.query(Case).filter(Case.id.in_(beat_case_ids)).all()
+                if c.id not in _visited and (
+                    c.status in RESOLVED_STATUSES
+                    or (float(c.target_amount or 0) > 0
+                        and float(c.collected_amount or 0) >= float(c.target_amount or 0))
+                )
+            }
+            beat_case_ids = [cid for cid in beat_case_ids if cid not in _settled_before_today]
         cases_today = len(beat_case_ids)
         total_target_today = (
             self.db.query(func.coalesce(func.sum(Case.target_amount), 0.0))
@@ -253,11 +267,10 @@ class AgentService:
             .filter(Payment.agent_id == agent.id, Payment.payment_date >= _day_start)
             .scalar() or 0.0
         )
-        total_target_today = (
-            self.db.query(func.coalesce(func.sum(Case.target_amount), 0.0))
-            .filter(Case.id.in_(beat.ordered_case_ids))
-            .scalar() or 0.0
-        ) if beat.ordered_case_ids else 0.0
+        # Summed AFTER the route is resolved (below): a stop that left the route
+        # takes its target with it, or "collected today" is measured against
+        # money that was already in the bank before today started.
+        total_target_today = 0.0
 
         cases_by_id: dict[str, Case] = {}
         if beat.ordered_case_ids:
@@ -268,6 +281,50 @@ class AgentService:
                 .all()
             )
             cases_by_id = {c.id: c for c in cases}
+
+        # 2026-09-22 — PENDING IS NOT total MINUS visited-today.
+        #
+        # Home showed "1 pending" while My Cases showed every card done. Both
+        # read this payload and disagreed, because each had its own idea of
+        # finished: Home did total_cases - cases_visited_today; the Cases page
+        # also counted PAID / CLOSED / WRITTEN_OFF and fully-collected
+        # (AgentCasesPage `isDone`). A case paid off on an earlier day and
+        # still on today's route satisfied the second and not the first, so the
+        # agent was sent looking for work that did not exist.
+        #
+        # The rule lives here now, once, and both screens read `cases_pending`.
+        # RESOLVED_STATUSES (models/case.py) is the set the Cases page used.
+        # ESCALATED is deliberately not in it: an escalated case is still open
+        # and still visitable.
+        no_visit_needed_ids = [
+            cid for cid in _beat_case_set
+            if cid not in _all_visited and (
+                (c := cases_by_id.get(cid)) is not None and (
+                    c.status in RESOLVED_STATUSES
+                    or (float(c.target_amount or 0) > 0
+                        and float(c.collected_amount or 0) >= float(c.target_amount or 0))
+                )
+            )
+        ]
+        # ...and they LEAVE THE ROUTE. The beat is a snapshot taken at 20:00 the
+        # night before; a borrower who settles overnight — or pays online at
+        # 11am — is still on it. Arjun Singh Chauhan's 2026-09-22 route carried
+        # DAILY20260921C191, paid in full on the 21st after the plan was
+        # written: 15 stops, 14 of them real, and every count on the home screen
+        # had to explain away the fifteenth.
+        #
+        # The planner already refuses to ALLOCATE a resolved case
+        # (planner_service.py, `Case.status.notin_(RESOLVED_STATUSES)`); this is
+        # the same rule applied at the moment the agent looks, because a case
+        # can settle after planning and nothing revises the stored beat. The
+        # stored `ordered_case_ids` is left untouched — it is the record of what
+        # was planned, and allocation_decisions says why — so this is a view of
+        # today's work, not a rewrite of history. `no_visit_needed_ids` is still
+        # returned so a client can explain a route shorter than the plan rather
+        # than silently dropping a stop.
+        _dropped = set(no_visit_needed_ids)
+        route_case_ids = [cid for cid in (beat.ordered_case_ids or []) if cid not in _dropped]
+        cases_pending = max(len(route_case_ids) - len(visited_today_ids), 0)
 
         # Case IDs on THIS BEAT that have an active PTP committed for today.
         #
@@ -318,8 +375,13 @@ class AgentService:
                              loans={c.loan_id: c.loan for c in cases_by_id.values()
                                     if c.loan_id and c.loan})
 
+        total_target_today = sum(
+            float(cases_by_id[cid].target_amount or 0.0)
+            for cid in route_case_ids if cid in cases_by_id
+        )
+
         ordered_cases = []
-        for cid in beat.ordered_case_ids:
+        for cid in route_case_ids:
             if cid in cases_by_id:
                 case_dict = _format_case(cases_by_id[cid])
                 case_dict["ptp_due_today"] = cid in ptp_due_today_ids
@@ -332,7 +394,7 @@ class AgentService:
             "id": beat.id,
             "beat_date": beat.beat_date.isoformat(),
             "beat_number": beat.beat_number,
-            "ordered_case_ids": beat.ordered_case_ids,
+            "ordered_case_ids": route_case_ids,
             "total_cases": len(ordered_cases),
             "estimated_distance_km": beat.estimated_distance_km,
             "estimated_duration_minutes": beat.estimated_duration_minutes,
@@ -350,6 +412,11 @@ class AgentService:
             # Real-time today stats — single source of truth for all agent views
             "cases_visited_today": len(visited_today_ids),
             "visited_today_ids": visited_today_ids,
+            # Still to do today: neither visited today nor already resolved.
+            "cases_pending": cases_pending,
+            # On the route but needing no visit (paid off / closed earlier).
+            # Sent so the Cases page fades exactly what Home counted as done.
+            "no_visit_needed_ids": no_visit_needed_ids,
             "amount_collected_today": round(float(amount_collected_today), 2),
             "cases": ordered_cases,
             # Fields formerly only in /home-summary — now consolidated here
@@ -513,24 +580,24 @@ class AgentService:
             alert_time = now_utc.strftime("%d %b %Y, %I:%M %p")
             if quality == "NONE":
                 where_sms = "Location UNAVAILABLE - agent's GPS did not respond."
-                where_wa = "📍 Location *UNAVAILABLE* - the agent's GPS did not respond."
+                where_wa = "Location *UNAVAILABLE* - the agent's GPS did not respond."
             else:
                 maps_link = f"https://www.google.com/maps?q={lat},{lon}"
                 if quality == "LIVE":
                     where_sms = f"Location: {maps_link}"
-                    where_wa = f"📍 Location: {maps_link}"
+                    where_wa = f"Location: {maps_link}"
                 else:
                     mins = max(1, round((age_seconds or 0) / 60))
                     where_sms = f"LAST KNOWN location ({mins} min old): {maps_link}"
-                    where_wa = f"📍 *Last known* location ({mins} min old): {maps_link}"
+                    where_wa = f"*Last known* location ({mins} min old): {maps_link}"
             sms_body = (
                 f"SOS ALERT: Field agent {agent.user.full_name} ({agent.employee_code}) "
                 f"triggered an emergency SOS at {alert_time} UTC. {where_sms} - ABC Bank"
             )
             wa_body = (
-                f"\U0001f6a8 *SOS ALERT*\n\n"
+                f"*SOS ALERT*\n\n"
                 f"Agent *{agent.user.full_name}* ({agent.employee_code}) triggered an emergency SOS.\n"
-                f"\U0001f550 {alert_time} UTC\n"
+                f"Time: {alert_time} UTC\n"
                 f"{where_wa}\n\n"
                 f"Please respond immediately."
             )

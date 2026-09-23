@@ -53,6 +53,7 @@ from app.models.ptp import PTP, PTPStatus
 from app.models.user import User
 from app.models.visit import Visit, VisitOutcome
 from app.services.notification_service import NotificationService
+from app.services.leave_service import agent_ids_on_leave, effective_status, leave_today
 
 router = APIRouter(prefix="/manager", tags=["manager"])
 
@@ -295,10 +296,14 @@ def dashboard(current_user: ManagerOnly, db: DbSession):
     start_of_day, end_of_day, today_date = _effective_today(my_agent_ids, db)
 
     total_agents = len(my_agent_ids)
-    agents_on_duty = (
-        db.query(func.count(Agent.id))
-        .filter(Agent.id.in_(my_agent_ids), Agent.status == AgentStatus.ON_DUTY)
-        .scalar() or 0
+    # On duty = stored ON_DUTY minus anyone on APPROVED leave today. The
+    # stored status alone lied whenever the 00:10 sync was missed — see
+    # services/leave_service.py, 2026-09-22.
+    _on_leave_today = agent_ids_on_leave(db, today_date, my_agent_ids)
+    agents_on_leave = len(_on_leave_today)
+    agents_on_duty = sum(
+        1 for a in db.query(Agent).filter(Agent.id.in_(my_agent_ids)).all()
+        if effective_status(a, _on_leave_today) is AgentStatus.ON_DUTY
     )
     total_cases = (
         db.query(func.count(Case.id)).filter(Case.agent_id.in_(my_agent_ids)).scalar() or 0
@@ -483,6 +488,7 @@ def dashboard(current_user: ManagerOnly, db: DbSession):
     return {
         "total_agents": total_agents,
         "agents_on_duty": agents_on_duty,
+        "agents_on_leave": agents_on_leave,
         "total_cases": total_cases,
         "cases_assigned": cases_assigned,
         "case_status_counts": case_status_counts,
@@ -841,6 +847,7 @@ def list_agents(current_user: ManagerOnly, db: DbSession):
     agent_ids = [a.id for a in agents]
     start_of_day, end_of_day, eff_date = _effective_today(agent_ids, db)
     eff_date_str = eff_date.isoformat()
+    on_leave_today = agent_ids_on_leave(db, eff_date, agent_ids)
 
     # ── Today's figures: three grouped queries for the WHOLE team ────────────
     # This was four queries PER AGENT in the loop below — 61 statements for a
@@ -939,7 +946,7 @@ def list_agents(current_user: ManagerOnly, db: DbSession):
             "date_of_birth": agent.user.date_of_birth,
             "territory": agent.territory,
             "tier": agent.tier,
-            "status": agent.status,
+            "status": effective_status(agent, on_leave_today),
             "specialization": agent.specialization,
             "languages_spoken": agent.languages_spoken,
             "ranking_score": agent.ranking_score,
@@ -1297,7 +1304,8 @@ def unallocated_cases(current_user: ManagerOnly, db: DbSession):
         .filter(Agent.manager_user_id == current_user.id)
         .options(joinedload(Agent.user)).all()
     )
-    on_duty = [a for a in my_agents if a.status == AgentStatus.ON_DUTY]
+    _on_leave_today = agent_ids_on_leave(db, leave_today(), [a.id for a in my_agents])
+    on_duty = [a for a in my_agents if effective_status(a, _on_leave_today) is AgentStatus.ON_DUTY]
 
     cases = (
         db.query(Case)
@@ -1611,6 +1619,7 @@ def agents_performance(
         a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()
     ]
     _, _, eff_today_perf = _effective_today(my_agent_ids_perf, db)
+    on_leave_today_perf = agent_ids_on_leave(db, eff_today_perf, my_agent_ids_perf)
     # Arithmetically stepped so no month is skipped or duplicated — see
     # _recent_months. The old 30-day-timedelta loop could drop a month.
     month_list: list[str] = _recent_months(eff_today_perf, max(months, 1))
@@ -1685,7 +1694,7 @@ def agents_performance(
             "tier": agent.tier,
             "territory": agent.territory,
             "ranking_score": round(agent.ranking_score, 1),
-            "status": agent.status,
+            "status": effective_status(agent, on_leave_today_perf),
             "total_target": totals["target"],
             "total_collected": totals["collected"],
             "overall_rate_pct": round(totals["collected"] / totals["target"] * 100, 1) if totals["target"] else 0.0,
@@ -2584,15 +2593,16 @@ def analytics(current_user: ManagerOnly, db: DbSession):
     leaderboard_all.sort(key=lambda r: (-r["total_collected"], -r["collection_rate_pct"]))
     leaderboard = leaderboard_all[:10]
 
-    # Off-duty summary derived from Agent.status (no new table)
-    off_duty_count = (
-        db.query(func.count(Agent.id))
-        .filter(Agent.id.in_(my_agent_ids), Agent.status == AgentStatus.OFF_DUTY)
-        .scalar() or 0
-    )
-    on_duty_count = len(my_agent_ids) - off_duty_count
-    leave_summary: dict = {"ON_DUTY": on_duty_count, "OFF_DUTY": off_duty_count}
-    total_leave_days = off_duty_count  # proxy: agents currently off
+    # Duty summary: ON_DUTY / OFF_DUTY / ON_LEAVE for the effective day, with
+    # leave read from approved requests (not only the stored status).
+    _on_leave_today = agent_ids_on_leave(db, today, my_agent_ids)
+    _eff = [effective_status(a, _on_leave_today)
+            for a in db.query(Agent).filter(Agent.id.in_(my_agent_ids)).all()]
+    on_duty_count = sum(1 for st in _eff if st is AgentStatus.ON_DUTY)
+    on_leave_count = sum(1 for st in _eff if st is AgentStatus.ON_LEAVE)
+    off_duty_count = len(_eff) - on_duty_count - on_leave_count
+    leave_summary: dict = {"ON_DUTY": on_duty_count, "OFF_DUTY": off_duty_count, "ON_LEAVE": on_leave_count}
+    total_leave_days = on_leave_count  # agents on approved leave today
 
     # Overall KPIs (all-time for manager's agents)
     overall_target = (
@@ -3118,11 +3128,9 @@ def ai_briefing(current_user: ManagerOnly, db: DbSession, refresh: bool = False)
         .filter(Case.id.in_(visited_case_ids_today))
         .scalar() or 0.0
     ) if visited_case_ids_today else 0.0
-    agents_on_duty = (
-        db.query(func.count(Agent.id))
-        .filter(Agent.id.in_(my_agent_ids), Agent.status == AgentStatus.ON_DUTY)
-        .scalar() or 0
-    )
+    _on_leave_today = agent_ids_on_leave(db, eff_date, my_agent_ids)
+    _agents_all = db.query(Agent).options(joinedload(Agent.user)).filter(Agent.id.in_(my_agent_ids)).all()
+    agents_on_duty = sum(1 for a in _agents_all if effective_status(a, _on_leave_today) is AgentStatus.ON_DUTY)
     total_agents = len(my_agent_ids)
 
     # ── PTP risk classification ───────────────────────────────────────────────
@@ -3186,12 +3194,11 @@ def ai_briefing(current_user: ManagerOnly, db: DbSession, refresh: bool = False)
         .filter(Visit.agent_id.in_(my_agent_ids), Visit.check_in_time >= start_of_day)
         .distinct().all()
     }
-    on_duty_rows = (
-        db.query(Agent.id, User.full_name)
-        .join(User, Agent.user_id == User.id)
-        .filter(Agent.id.in_(my_agent_ids), Agent.status == AgentStatus.ON_DUTY)
-        .all()
-    )
+    # Someone on approved leave today is not "yet to start" — they are off.
+    on_duty_rows = [
+        (a.id, a.user.full_name) for a in _agents_all
+        if effective_status(a, _on_leave_today) is AgentStatus.ON_DUTY
+    ]
     stalled_agents = [{"id": r[0], "name": r[1]} for r in on_duty_rows if r[0] not in visited_agent_ids_today]
 
     # ── DPD portfolio breakdown (real data) ──────────────────────────────────
@@ -3816,6 +3823,16 @@ def update_agent_status(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
+    # A duty toggle cannot override an approved leave: the leave is the
+    # record, and the day's leave beat already released the agent's cases.
+    # Revoke the leave (POST /leave-requests/{id}/revoke) to bring them back.
+    if agent.id in agent_ids_on_leave(db, leave_today(), [agent.id]):
+        raise HTTPException(
+            status_code=409,
+            detail=f"{agent.user.full_name if agent.user else 'Agent'} is on approved leave today; "
+                   "revoke the leave to change their duty status.",
+        )
+
     agent.status = AgentStatus[body.status]
     db.commit()
     db.refresh(agent)
@@ -3865,7 +3882,7 @@ def acknowledge_agent_sos(
             f"responding. Stay safe. - ABC Bank"
         )
         wa_body = (
-            f"\U0001f6a8 *SOS Acknowledged*\n\n"
+            f"*SOS Acknowledged*\n\n"
             f"Your manager *{current_user.full_name}* has seen your SOS alert and is responding.\n"
             f"Stay where you are if it's safe to do so."
         )

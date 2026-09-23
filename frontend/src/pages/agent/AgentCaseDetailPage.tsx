@@ -35,7 +35,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAnimatedValue } from "@/hooks/useAnimatedValue";
 import { useParams, useNavigate } from "react-router";
-import { ArrowLeft, Phone, Navigation, Calendar, MapPin, CheckCircle, MessageCircle, Lock, Unlock, Sparkles, RefreshCw, Clock, AlertTriangle, TrendingUp, Zap, PhoneCall, X, ShieldCheck, Send } from "lucide-react";
+import { ArrowLeft, Phone, Navigation, Calendar, MapPin, CheckCircle, MessageCircle, Lock, Unlock, Sparkles, RefreshCw, Clock, AlertTriangle, TrendingUp, Zap, PhoneCall, X, ShieldCheck, Send, Languages, Flag, Ban, ClipboardList, CreditCard, Camera, CalendarClock, type LucideIcon } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { AiBadge } from "@/components/ui/AiBadge";
 import { RepaymentScore, type RepaymentScoreData } from "@/components/ui/RepaymentScore";
@@ -103,11 +103,9 @@ const OUTCOME_LABELS: Record<string, { label: string; tag: string; color: string
   REVISIT:         { label: "Revisit Required",     tag: "REVISIT",       color: "text-brand-600 bg-brand-50" },
 };
 
-const LANGUAGE_FLAGS: Record<string, string> = {
-  HINDI: "🇮🇳", ENGLISH: "🇬🇧", BENGALI: "🪷", TELUGU: "🌿",
-  TAMIL: "🌺", MARATHI: "🏔️", GUJARATI: "🎪", MALAYALAM: "🌴",
-  KANNADA: "🌻", PUNJABI: "🌾", ODIA: "🌊",
-};
+// 2026-09-22 — the per-language flag/flower emoji set is gone. Flags stand
+// for countries, not languages, and the rest were decoration; one language
+// glyph beside the name says the same thing without the guesswork.
 
 // Combine a "HH:MM" from a <input type="time"> with today's date -> ISO string
 function timeTodayToISO(hhmm: string): string {
@@ -383,7 +381,7 @@ export default function AgentCaseDetailPage() {
 
   const tabs = [
     { id: "overview",  label: "Overview" },
-    { id: "strategy",  label: "✦ Strategy" },
+    { id: "strategy",  label: "Strategy" },
     { id: "visits",    label: `Visits (${c.visits.length})` },
     { id: "payments",  label: `Payments (${c.payments.length})` },
     { id: "ptps",      label: `PTPs (${c.ptps.length})` },
@@ -397,7 +395,7 @@ export default function AgentCaseDetailPage() {
     <div className="min-h-svh bg-slate-50 pb-28 lg:pb-24">
       {activeCall && <CallModal call={activeCall} onHangUp={hangUp} />}
       {/* Header */}
-      <div className="bg-white border-b border-slate-100 sticky top-0 z-20">
+      <div className="tiq-glass-bar border-b border-slate-100/70 sticky top-0 z-20">
         <div className="flex items-center gap-3 p-4">
           <button onClick={() => navigate(-1)} className="p-1 -ml-1 text-slate-400 hover:text-slate-700"><ArrowLeft className="w-5 h-5" /></button>
           <div className="flex-1 min-w-0">
@@ -419,13 +417,13 @@ export default function AgentCaseDetailPage() {
         {tab === "overview" && (
           <>
             {/* Alert banners */}
-            {c.is_escalated && <AlertBanner icon="🔴" color="danger" message="Case escalated — Manager review pending" />}
-            {c.customer.is_hostile && <AlertBanner icon="⚠️" color="warning" message="Customer marked hostile — exercise caution" />}
+            {c.is_escalated && <AlertBanner icon={Flag} color="danger" message="Case escalated — Manager review pending" />}
+            {c.customer.is_hostile && <AlertBanner icon={AlertTriangle} color="warning" message="Customer marked hostile — exercise caution" />}
             {/* The API has always sent requires_female_agent and nothing rendered
                 it. Allocation now respects the flag, but a case can still reach an
                 agent by handover or manual reassignment — so the person at the door
                 needs to see it, not just the scheduler. */}
-            {c.customer.requires_female_agent && <AlertBanner icon="🚫" color="danger" message="Female agent required — do not visit; hand this case back to your manager" />}
+            {c.customer.requires_female_agent && <AlertBanner icon={Ban} color="danger" message="Female agent required — do not visit; hand this case back to your manager" />}
             {/* Repayment likelihood. Sits BELOW the eligibility banners on
                 purpose: do-not-contact and female-agent are instructions, this
                 is only a steer on how to approach the conversation. It never
@@ -461,8 +459,8 @@ export default function AgentCaseDetailPage() {
                     <VisitPriorityBadge priority={c.visit_priority} />
                     <span className="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded-full">{c.loan.dpd} DPD</span>
                     <span className="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded-full">{c.loan.loan_type}</span>
-                    <span className="text-xs bg-purple-50 text-purple-700 border border-purple-100 px-2 py-1 rounded-full font-medium">
-                      {LANGUAGE_FLAGS[c.customer.language_preference] ?? "🌐"} {c.customer.language_preference}
+                    <span className="text-xs bg-brand-50 text-brand-700 border border-brand-100 px-2 py-1 rounded-full font-medium">
+                      <Languages className="w-3 h-3 inline-block -mt-0.5 mr-1" />{c.customer.language_preference}
                     </span>
                     {slaInfo && (
                       <span className={`text-xs px-2 py-1 rounded-full border font-medium ${slaInfo.cls}`} title={slaInfo.desc}>
@@ -487,7 +485,7 @@ export default function AgentCaseDetailPage() {
             {maxVisitsReached && !handoverDone && (
               <div className="card border-warning-200 bg-warning-50 space-y-3">
                 <div className="flex items-start gap-2">
-                  <span className="text-lg mt-0.5">🔄</span>
+                  <RefreshCw className="w-4 h-4 mt-0.5 text-warning-600 flex-shrink-0" />
                   <div>
                     <p className="text-sm font-semibold text-warning-800">Max Visits Reached ({c.visit_count}/{c.max_visits_allowed})</p>
                     <p className="text-xs text-warning-700 mt-0.5">Write handover notes for the next agent before returning this case to the pool.</p>
@@ -539,7 +537,7 @@ export default function AgentCaseDetailPage() {
               <ActionBtn icon={<Phone className="w-4 h-4" />} label="Call" color="bg-success-50 text-success-700 border-success-100" onClick={() => startCall(c.customer.phone_primary, c.customer.full_name)} />
               <ActionBtn icon={<Navigation className="w-4 h-4" />} label="Navigate" color="bg-brand-50 text-brand-700 border-brand-100" onClick={() => window.open(`https://www.google.com/maps/dir/?api=1&destination=${c.customer.latitude},${c.customer.longitude}&travelmode=driving`, "_blank")} />
               <ActionBtn icon={<MessageCircle className="w-4 h-4" />} label="WhatsApp" color="bg-green-50 text-green-700 border-green-100" onClick={() => openWhatsApp("reminder")} />
-              <ActionBtn icon={<PhoneCall className="w-4 h-4" />} label="Log Call" color="bg-purple-50 text-purple-700 border-purple-100" onClick={() => setShowCallModal(true)} />
+              <ActionBtn icon={<PhoneCall className="w-4 h-4" />} label="Log Call" color="bg-brand-50 text-brand-700 border-brand-100" onClick={() => setShowCallModal(true)} />
             </div>
 
             {hasVerifiedContact ? (
@@ -597,7 +595,7 @@ export default function AgentCaseDetailPage() {
                 />
               )}
               <InfoRow label="Area" value={`${c.customer.city}, ${c.customer.state}`} />
-              <InfoRow label="Language" value={`${LANGUAGE_FLAGS[c.customer.language_preference] ?? ""} ${c.customer.language_preference}`} />
+              <InfoRow label="Language" value={c.customer.language_preference} />
               {c.customer.customer_segment && <InfoRow label="Segment" value={c.customer.customer_segment} />}
             </InfoSection>
 
@@ -662,7 +660,7 @@ export default function AgentCaseDetailPage() {
                       <TrendingUp className="w-3.5 h-3.5" /> Payment Signal
                     </div>
                     <span className={`text-sm font-bold ${strategy.payment_readiness === "HIGH" ? "text-success-600" : strategy.payment_readiness === "MEDIUM" ? "text-warning-600" : "text-danger-600"}`}>
-                      {strategy.payment_readiness === "HIGH" ? "🟢 High" : strategy.payment_readiness === "MEDIUM" ? "🟡 Medium" : "🔴 Low"}
+                      {strategy.payment_readiness === "HIGH" ? "High" : strategy.payment_readiness === "MEDIUM" ? "Medium" : "Low"}
                     </span>
                     <p className="text-xs text-slate-400">readiness to pay</p>
                   </div>
@@ -746,7 +744,7 @@ export default function AgentCaseDetailPage() {
 
         {tab === "visits" && (
           <div className="space-y-3">
-            {c.visits.length === 0 ? <EmptyState icon="📋" message="No visits recorded yet" /> : c.visits.slice().reverse().map((v) => {
+            {c.visits.length === 0 ? <EmptyState icon={ClipboardList} message="No visits recorded yet" /> : c.visits.slice().reverse().map((v) => {
               const meta = OUTCOME_LABELS[v.outcome] ?? { label: v.outcome, color: "text-slate-600 bg-slate-50" };
               return (
                 <div key={v.id} className="card">
@@ -791,7 +789,7 @@ export default function AgentCaseDetailPage() {
 
         {tab === "payments" && (
           <div className="space-y-3">
-            {c.payments.length === 0 ? <EmptyState icon="💳" message="No payments recorded" /> : c.payments.map((p) => (
+            {c.payments.length === 0 ? <EmptyState icon={CreditCard} message="No payments recorded" /> : c.payments.map((p) => (
               <div key={p.id} className="card">
                 <div className="flex items-start justify-between mb-1">
                   <p className="text-base font-bold text-slate-900">₹{p.amount.toLocaleString("en-IN")}</p>
@@ -813,7 +811,7 @@ export default function AgentCaseDetailPage() {
         {tab === "photos" && (
           <div className="space-y-3">
             {photos.length === 0 ? (
-              <EmptyState icon="📷" message="No photos captured" />
+              <EmptyState icon={Camera} message="No photos captured" />
             ) : (
               <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
                 {photos.map((ph) => {
@@ -827,7 +825,7 @@ export default function AgentCaseDetailPage() {
                       {ph.view_url ? (
                         <img src={ph.view_url} alt={typeLabel[ph.photo_type] ?? ph.photo_type} className="w-full aspect-square object-cover" />
                       ) : (
-                        <div className="w-full aspect-square bg-slate-100 flex items-center justify-center text-4xl opacity-40">📷</div>
+                        <div className="w-full aspect-square bg-slate-100 flex items-center justify-center opacity-40"><Camera className="w-8 h-8" /></div>
                       )}
                       <div className="p-2">
                         <p className="text-xs font-semibold text-slate-700">{typeLabel[ph.photo_type] ?? ph.photo_type}</p>
@@ -845,7 +843,7 @@ export default function AgentCaseDetailPage() {
 
         {tab === "ptps" && (
           <div className="space-y-3">
-            {c.ptps.length === 0 ? <EmptyState icon="📅" message="No PTPs recorded" /> : c.ptps.map((p) => (
+            {c.ptps.length === 0 ? <EmptyState icon={CalendarClock} message="No PTPs recorded" /> : c.ptps.map((p) => (
               <div key={p.id} className="card">
                 <div className="flex items-start justify-between mb-2">
                   <div>
@@ -886,7 +884,7 @@ export default function AgentCaseDetailPage() {
             {/* Modal header */}
             <div className="flex items-center justify-between p-4 border-b border-slate-100 sticky top-0 bg-white z-10">
               <div className="flex items-center gap-2">
-                <PhoneCall className="w-4 h-4 text-purple-600" />
+                <PhoneCall className="w-4 h-4 text-brand-600" />
                 <h2 className="text-sm font-semibold text-slate-800">Log Call</h2>
               </div>
               <button onClick={closeCallModal} aria-label="Close log call" className="tap-target p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 flex items-center justify-center">
@@ -904,7 +902,7 @@ export default function AgentCaseDetailPage() {
                     const selected = callForm.outcome === o;
                     return (
                       <button key={o} onClick={() => setCallForm(f => ({ ...f, outcome: o }))}
-                        className={`py-2 px-2 rounded-xl text-xs font-medium border transition-colors ${selected ? "border-purple-500 bg-purple-50 text-purple-700" : "border-slate-200 text-slate-600 hover:border-slate-300"}`}>
+                        className={`py-2 px-2 rounded-xl text-xs font-medium border transition-colors ${selected ? "border-brand-500 bg-brand-50 text-brand-700" : "border-slate-200 text-slate-600 hover:border-slate-300"}`}>
                         {labels[o]}
                       </button>
                     );
@@ -920,7 +918,7 @@ export default function AgentCaseDetailPage() {
                       <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1.5">Duration (seconds)</label>
                       <input
                         type="number" min={0} placeholder="e.g. 120"
-                        className="w-full rounded-xl border border-slate-200 text-sm px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-purple-300"
+                        className="w-full rounded-xl border border-slate-200 text-sm px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-brand-200"
                         value={callForm.duration_seconds ?? ""}
                         onChange={(e) => setCallForm(f => ({ ...f, duration_seconds: e.target.value ? parseInt(e.target.value) : undefined }))}
                       />
@@ -930,7 +928,7 @@ export default function AgentCaseDetailPage() {
                       <div className="flex rounded-xl border border-slate-200 overflow-hidden">
                         {(["PRIMARY", "ALTERNATE"] as const).map((p) => (
                           <button key={p} onClick={() => setCallForm(f => ({ ...f, phone_used: p }))}
-                            className={`flex-1 py-2.5 text-xs font-medium transition-colors ${callForm.phone_used === p ? "bg-purple-600 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}>
+                            className={`flex-1 py-2.5 text-xs font-medium transition-colors ${callForm.phone_used === p ? "bg-brand-600 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}>
                             {p === "PRIMARY" ? "Primary" : "Alternate"}
                           </button>
                         ))}
@@ -943,15 +941,15 @@ export default function AgentCaseDetailPage() {
                     <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1.5">What did the customer say?</label>
                     <textarea
                       rows={3} placeholder="Customer said he'll pay after salary on 5th, wife handles payments, not at home till Sunday..."
-                      className="w-full rounded-xl border border-slate-200 text-sm px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-purple-300 resize-none placeholder-slate-400"
+                      className="w-full rounded-xl border border-slate-200 text-sm px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-brand-200 resize-none placeholder-slate-400"
                       value={callForm.customer_response_notes ?? ""}
                       onChange={(e) => setCallForm(f => ({ ...f, customer_response_notes: e.target.value }))}
                     />
                   </div>
 
                   {/* Intel section */}
-                  <div className="bg-purple-50 rounded-2xl p-4 space-y-4 border border-purple-100">
-                    <p className="text-xs font-semibold text-purple-700 uppercase tracking-wide flex items-center gap-1.5">
+                  <div className="bg-brand-50 rounded-2xl p-4 space-y-4 border border-brand-100">
+                    <p className="text-xs font-semibold text-brand-700 uppercase tracking-wide flex items-center gap-1.5">
                       <Zap className="w-3.5 h-3.5" /> Scheduling Intelligence
                     </p>
                     {/* Named the feature it actually feeds. This read "used by AI
@@ -963,7 +961,7 @@ export default function AgentCaseDetailPage() {
                         scores call-log availability, last outcome, PTPs and
                         customer flags, and asks a model only for the one-line
                         reason it prints. */}
-                    <p className="text-xs text-purple-600 -mt-2">This intel feeds Smart Order, which re-ranks today's beat</p>
+                    <p className="text-xs text-brand-600 -mt-2">This intel feeds Smart Order, which re-ranks today's beat</p>
 
                     {/* Visit feasible today */}
                     <div>
@@ -974,7 +972,7 @@ export default function AgentCaseDetailPage() {
                           const sel = callForm.visit_feasible_today === v;
                           return (
                             <button key={String(v)} onClick={() => setCallForm(f => ({ ...f, visit_feasible_today: v }))}
-                              className={`flex-1 py-2 rounded-xl text-xs font-medium border transition-colors ${sel ? "border-purple-500 bg-purple-600 text-white" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"}`}>
+                              className={`flex-1 py-2 rounded-xl text-xs font-medium border transition-colors ${sel ? "border-brand-500 bg-brand-600 text-white" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"}`}>
                               {label}
                             </button>
                           );
@@ -987,7 +985,7 @@ export default function AgentCaseDetailPage() {
                       <label className="text-xs font-semibold text-slate-600 block mb-1.5">Best time to visit (if mentioned)</label>
                       <input
                         type="text" placeholder="e.g. after 6 PM, Saturday morning, before 10 AM"
-                        className="w-full rounded-xl border border-slate-200 bg-white text-sm px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-purple-300"
+                        className="w-full rounded-xl border border-slate-200 bg-white text-sm px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-brand-200"
                         value={callForm.best_time_to_visit ?? ""}
                         onChange={(e) => setCallForm(f => ({ ...f, best_time_to_visit: e.target.value }))}
                       />
@@ -1005,7 +1003,7 @@ export default function AgentCaseDetailPage() {
                               available_from: undefined,
                               available_until: new Date(Date.now() + p.minutes * 60_000).toISOString(),
                             }))}
-                            className="flex-1 py-2 rounded-xl text-[11px] font-medium border border-slate-200 bg-white text-slate-600 hover:border-purple-300 hover:text-purple-700 transition-colors"
+                            className="flex-1 py-2 rounded-xl text-[11px] font-medium border border-slate-200 bg-white text-slate-600 hover:border-brand-200 hover:text-brand-700 transition-colors"
                           >
                             {p.label}
                           </button>
@@ -1016,7 +1014,7 @@ export default function AgentCaseDetailPage() {
                           <label className="text-[11px] text-slate-400 block mb-1">From</label>
                           <input
                             type="time"
-                            className="w-full rounded-xl border border-slate-200 bg-white text-sm px-3 py-2 focus:outline-none focus:ring-2 focus:ring-purple-300"
+                            className="w-full rounded-xl border border-slate-200 bg-white text-sm px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand-200"
                             value={isoToLocalTime(callForm.available_from)}
                             onChange={(e) => setCallForm(f => ({
                               ...f,
@@ -1028,7 +1026,7 @@ export default function AgentCaseDetailPage() {
                           <label className="text-[11px] text-slate-400 block mb-1">Until</label>
                           <input
                             type="time"
-                            className="w-full rounded-xl border border-slate-200 bg-white text-sm px-3 py-2 focus:outline-none focus:ring-2 focus:ring-purple-300"
+                            className="w-full rounded-xl border border-slate-200 bg-white text-sm px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand-200"
                             value={isoToLocalTime(callForm.available_until)}
                             onChange={(e) => setCallForm(f => ({
                               ...f,
@@ -1052,7 +1050,7 @@ export default function AgentCaseDetailPage() {
                       <label className="text-xs font-semibold text-slate-600 block mb-1.5">Customer unavailable until (block visits)</label>
                       <input
                         type="date"
-                        className="w-full rounded-xl border border-slate-200 bg-white text-sm px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-purple-300"
+                        className="w-full rounded-xl border border-slate-200 bg-white text-sm px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-brand-200"
                         value={callForm.blocked_until_date ?? ""}
                         onChange={(e) => setCallForm(f => ({ ...f, blocked_until_date: e.target.value }))}
                       />
@@ -1067,7 +1065,7 @@ export default function AgentCaseDetailPage() {
                           const sel = callForm.payment_intent_signalled === v;
                           return (
                             <button key={String(v)} onClick={() => setCallForm(f => ({ ...f, payment_intent_signalled: v }))}
-                              className={`flex-1 py-2 rounded-xl text-xs font-medium border transition-colors ${sel ? "border-purple-500 bg-purple-600 text-white" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"}`}>
+                              className={`flex-1 py-2 rounded-xl text-xs font-medium border transition-colors ${sel ? "border-brand-500 bg-brand-600 text-white" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"}`}>
                               {label}
                             </button>
                           );
@@ -1081,7 +1079,7 @@ export default function AgentCaseDetailPage() {
                         <label className="text-xs font-semibold text-slate-600 block mb-1.5">Date customer mentioned for payment</label>
                         <input
                           type="date"
-                          className="w-full rounded-xl border border-slate-200 bg-white text-sm px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-purple-300"
+                          className="w-full rounded-xl border border-slate-200 bg-white text-sm px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-brand-200"
                           value={callForm.verbal_payment_date ?? ""}
                           onChange={(e) => setCallForm(f => ({ ...f, verbal_payment_date: e.target.value }))}
                         />
@@ -1093,7 +1091,7 @@ export default function AgentCaseDetailPage() {
                       <label className="text-xs font-semibold text-slate-600 block mb-1.5">Alternate location hint (optional)</label>
                       <input
                         type="text" placeholder="e.g. At brother's shop in Lajpat Nagar"
-                        className="w-full rounded-xl border border-slate-200 bg-white text-sm px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-purple-300"
+                        className="w-full rounded-xl border border-slate-200 bg-white text-sm px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-brand-200"
                         value={callForm.alternate_location_hint ?? ""}
                         onChange={(e) => setCallForm(f => ({ ...f, alternate_location_hint: e.target.value }))}
                       />
@@ -1106,7 +1104,7 @@ export default function AgentCaseDetailPage() {
               <button
                 onClick={handleLogCall}
                 disabled={callSubmitting}
-                className="w-full py-3 rounded-xl bg-purple-600 text-white text-sm font-semibold hover:bg-purple-700 active:scale-[0.98] transition-all disabled:opacity-50"
+                className="w-full py-3 rounded-xl bg-brand-600 text-white text-sm font-semibold hover:bg-brand-700 active:scale-[0.98] transition-all disabled:opacity-50"
               >
                 {callSubmitting ? "Saving…" : "Save Call Log"}
               </button>
@@ -1117,7 +1115,7 @@ export default function AgentCaseDetailPage() {
 
       {/* Bottom CTA — constrained to max-w-md to stay inside the mobile frame */}
       <div className="fixed bottom-16 lg:bottom-0 left-0 right-0 z-20 pointer-events-none" style={{ paddingLeft: "var(--rail-w, 0px)" }}>
-        <div className="max-w-md md:max-w-none mx-auto md:mx-0 pointer-events-auto bg-white border-t border-slate-100 safe-bottom">
+        <div className="max-w-md md:max-w-none mx-auto md:mx-0 pointer-events-auto tiq-glass-bar border-t border-slate-100/70 safe-bottom">
           {/* Geo-fence status bar */}
           {canRecordVisit && (
             <div className={`flex items-center justify-between gap-2 px-4 py-2 text-xs font-medium border-b ${withinFence ? "bg-success-50 border-success-100 text-success-700" : (geoError && distanceM === null) ? "bg-danger-50 border-danger-100 text-danger-700" : distanceM === null ? "bg-slate-50 border-slate-100 text-slate-500" : "bg-danger-50 border-danger-100 text-danger-700"}`}>
@@ -1172,11 +1170,11 @@ export default function AgentCaseDetailPage() {
   );
 }
 
-function AlertBanner({ icon, color, message }: { icon: string; color: "danger" | "warning"; message: string }) {
+function AlertBanner({ icon: Icon, color, message }: { icon: LucideIcon; color: "danger" | "warning"; message: string }) {
   const cls = color === "danger" ? "border-danger-200 bg-danger-50 text-danger-700" : "border-warning-200 bg-warning-50 text-warning-700";
   return (
     <div className={`card flex items-center gap-2 ${cls}`}>
-      <span>{icon}</span>
+      <Icon className="w-4 h-4 flex-shrink-0" />
       <p className="text-sm font-medium">{message}</p>
     </div>
   );
@@ -1263,10 +1261,10 @@ function maskPhone(phone: string): string {
   return "X".repeat(digits.length - 4) + digits.slice(-4);
 }
 
-function EmptyState({ icon, message }: { icon: string; message: string }) {
+function EmptyState({ icon: Icon, message }: { icon: LucideIcon; message: string }) {
   return (
     <div className="flex flex-col items-center justify-center py-12 text-slate-400">
-      <span className="text-4xl mb-3 opacity-50">{icon}</span>
+      <Icon className="w-9 h-9 mb-3 opacity-50" strokeWidth={1.5} />
       <p className="text-sm">{message}</p>
     </div>
   );
@@ -1313,7 +1311,7 @@ function PendingPaymentVerify({ caseId, payment, onVerified }: {
     setVerifying(true);
     try {
       await verifyPaymentOtp(caseId, { otp_id: otp.id, code });
-      toast.success("Payment verified ✓");
+      toast.success("Payment verified");
       await onVerified();
     } catch (err) {
       setError(errorDetail(err, "Incorrect OTP"));

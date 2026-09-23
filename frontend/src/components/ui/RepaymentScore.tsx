@@ -101,7 +101,7 @@ export function RepaymentScore({ data }: { data: RepaymentScoreData | null }) {
 
   return (
     <div
-      className="rounded-xl p-4"
+      className="rounded-xl p-4 tiq-glass-card"
       style={{ background: style.bg, border: `1px solid ${style.border}` }}
     >
       <div className="flex items-start justify-between gap-3">

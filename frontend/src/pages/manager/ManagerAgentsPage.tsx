@@ -135,7 +135,9 @@ export default function ManagerAgentsPage() {
 
   const filtered = useMemo(() => {
     return agents.filter((a) => {
-      if (statusFilter !== "ALL" && a.status !== statusFilter) return false;
+      // "Off Duty" is everyone not working today: OFF_DUTY and ON_LEAVE alike.
+      if (statusFilter === "ON_DUTY" && a.status !== "ON_DUTY") return false;
+      if (statusFilter === "OFF_DUTY" && a.status === "ON_DUTY") return false;
       if (tierFilter  !== "ALL" && a.tier   !== tierFilter)   return false;
       if (search) {
         const q = search.toLowerCase();
@@ -545,9 +547,9 @@ function AgentRow({
         </div>
 
         <div className="col-span-1 flex items-center gap-1.5">
-          <span className={`w-2 h-2 rounded-full ${agent.status === "ON_DUTY" ? "bg-success-500" : "bg-slate-300"}`} />
-          <span className={`text-xs font-medium ${agent.status === "ON_DUTY" ? "text-success-600" : "text-slate-400"}`}>
-            {agent.status === "ON_DUTY" ? "On Duty" : "Off"}
+          <span className={`w-2 h-2 rounded-full ${agent.status === "ON_DUTY" ? "bg-success-500" : agent.status === "ON_LEAVE" ? "bg-warning-500" : "bg-slate-300"}`} />
+          <span className={`text-xs font-medium ${agent.status === "ON_DUTY" ? "text-success-600" : agent.status === "ON_LEAVE" ? "text-warning-600" : "text-slate-400"}`}>
+            {agent.status === "ON_DUTY" ? "On Duty" : agent.status === "ON_LEAVE" ? "On Leave" : "Off"}
           </span>
           <ChevronDown
             className="w-3 h-3 ml-auto transition-transform"
@@ -607,9 +609,9 @@ function AgentRow({
           <span>{agent.current_month_visits} visits</span>
           <span>PTP {ptpRate}%</span>
           <span className="flex items-center gap-1 ml-auto">
-            <span className={`w-2 h-2 rounded-full ${agent.status === "ON_DUTY" ? "bg-success-500" : "bg-slate-300"}`} />
-            <span className={agent.status === "ON_DUTY" ? "text-success-600 font-medium" : "text-slate-400"}>
-              {agent.status === "ON_DUTY" ? "On Duty" : "Off"}
+            <span className={`w-2 h-2 rounded-full ${agent.status === "ON_DUTY" ? "bg-success-500" : agent.status === "ON_LEAVE" ? "bg-warning-500" : "bg-slate-300"}`} />
+            <span className={agent.status === "ON_DUTY" ? "text-success-600 font-medium" : agent.status === "ON_LEAVE" ? "text-warning-600 font-medium" : "text-slate-400"}>
+              {agent.status === "ON_DUTY" ? "On Duty" : agent.status === "ON_LEAVE" ? "On Leave" : "Off"}
             </span>
           </span>
         </div>
@@ -699,6 +701,19 @@ function AgentRow({
                 <Loader2 className="w-3 h-3 animate-spin" /> Analysing…
               </span>
             )}
+            {/* On an approved leave day the leave is the record (its beat already
+                released the agent's cases), so the duty toggle gives way to a
+                note; the API refuses the toggle with 409 anyway. */}
+            {agent.status === "ON_LEAVE" ? (
+              <span
+                className="text-xs px-3 py-1.5 rounded-xl font-semibold flex items-center gap-1.5"
+                style={{ background: "rgba(245,158,11,0.10)", color: "#d97706", border: "1px solid rgba(245,158,11,0.25)" }}
+                title="Revoke the leave to put this agent back on duty"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-warning-500" />
+                On approved leave today
+              </span>
+            ) : (
             <button
               onClick={toggleStatus}
               disabled={statusUpdating}
@@ -715,6 +730,7 @@ function AgentRow({
               }
               {agent.status === "ON_DUTY" ? "Mark Off Duty" : "Mark On Duty"}
             </button>
+            )}
             <button
               onClick={() => setMarkLeave(true)}
               className="tap-target text-xs px-3 py-1.5 rounded-xl font-semibold transition hover:brightness-95 flex items-center justify-center gap-1.5"
@@ -731,7 +747,7 @@ function AgentRow({
                 className="flex items-center gap-1.5 rounded-control border px-3 py-1.5 text-xs font-semibold text-danger-700 transition hover:bg-danger-100"
                 style={{ background: "#FFFFFF", borderColor: "#F04438" }}
               >
-                {sosAcking ? <Loader2 className="w-3 h-3 animate-spin" /> : "🆘"} Emergency Response
+                {sosAcking ? <Loader2 className="w-3 h-3 animate-spin" /> : <AlertTriangle className="w-3 h-3" />} Emergency Response
               </button>
             )}
           </div>

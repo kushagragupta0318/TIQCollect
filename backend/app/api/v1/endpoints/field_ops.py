@@ -44,6 +44,7 @@ from app.models.case import Case, CaseStatus
 from app.models.loan import Loan
 from app.models.payment import Payment, PaymentStatus
 from app.models.visit import Visit, VisitOutcome
+from app.services.leave_service import agent_ids_on_leave, effective_status
 
 
 def _verify_command_centre(
@@ -243,6 +244,9 @@ def _build_agent_rows(db: Session) -> tuple[list[dict], dict]:
 
     rows: list[dict] = []
     totals = {"visits": 0, "targets": 0, "deviations": 0, "collected": 0.0}
+    # Approved leave for the day counts as Absent even before the nightly
+    # status sync has run (services/leave_service.py, 2026-09-22).
+    on_leave_today = agent_ids_on_leave(db, eff_date, [a.id for a in agents])
 
     for agent in agents:
         v = visits_by_agent.get(agent.id)
@@ -267,7 +271,7 @@ def _build_agent_rows(db: Session) -> tuple[list[dict], dict]:
         # status answers "where are they right now". Only the first is stored,
         # so the second is derived. A geo-fence breach outranks being on site:
         # it is the exception the dashboard exists to surface.
-        if agent.status is not AgentStatus.ON_DUTY:
+        if effective_status(agent, on_leave_today) is not AgentStatus.ON_DUTY:
             contract_status = "Absent"
         elif deviations:
             contract_status = "Deviation"

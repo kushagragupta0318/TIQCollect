@@ -939,3 +939,70 @@ def test_transform_is_paired_to_the_model_probabilities(db_session, test_data, m
         simulate=True, force_replan=True)
     assert captured.get("value_transform") == settings.ALLOCATOR_VALUE_TRANSFORM
     assert captured.get("use_ml_affinity") is True
+
+
+def test_an_agent_on_approved_leave_for_the_plan_date_is_not_planned(db_session, test_data):
+    """2026-09-22. Agent.status only says ON_LEAVE while a leave covers TODAY;
+    the plan is for tomorrow, so the planner must ask the leave table. Before,
+    an agent approved for leave tomorrow was planned tonight and the new beat
+    collided with the leave beat approval had written for that day."""
+    from app.models.leave_request import LeaveRequest, LeaveStatus, LeaveType
+
+    mgr = test_data["manager"]
+    tomorrow = date.today() + timedelta(days=1)
+    db_session.add(LeaveRequest(agent_id=test_data["agent1"].id, manager_user_id=mgr.id, from_date=tomorrow,
+                                to_date=tomorrow, leave_type=LeaveType.CASUAL_LEAVE, status=LeaveStatus.APPROVED,
+                                requested_by_id=test_data["agent1"].user_id, decided_by_id=mgr.id, beat_ids=[]))
+    db_session.commit()
+    assert db_session.get(Agent, test_data["agent1"].id).status is AgentStatus.ON_DUTY  # not yet synced
+
+    run = PlannerService(db_session, manager_user_id=mgr.id).plan_next_day(plan_date=tomorrow, strategy="SMART")
+
+    assert run.status == AllocationRunStatus.PLANNED.value
+    planned_agents = {b.agent_id for b in db_session.query(Beat).filter(Beat.allocation_run_id == run.id).all()}
+    assert test_data["agent1"].id not in planned_agents
+    assert all(d.allocated_agent_id != test_data["agent1"].id for d in run.decisions)
+
+
+def test_an_agent_on_leave_today_is_planned_for_tomorrow(db_session, test_data):
+    """2026-09-23 — the mirror of the test above, and the one that bit.
+
+    Agent.status is a statement about TODAY: housekeeping sets ON_LEAVE while
+    a leave covers the current date. The 20:00 run plans TOMORROW, so filtering
+    on that column dropped an agent whose leave ends tonight. Piyush Sharma
+    took 2026-09-22 off and the plan for the 23rd was built for 14 agents
+    instead of 15; he came back to an empty route.
+    """
+    from app.models.leave_request import LeaveRequest, LeaveStatus, LeaveType
+
+    mgr = test_data["manager"]
+    today = date.today()
+    tomorrow = today + timedelta(days=1)
+
+    # Leave covers TODAY only, and the status column says so.
+    db_session.add(LeaveRequest(agent_id=test_data["agent1"].id, manager_user_id=mgr.id,
+                                from_date=today, to_date=today, leave_type=LeaveType.CASUAL_LEAVE,
+                                status=LeaveStatus.APPROVED, requested_by_id=test_data["agent1"].user_id,
+                                decided_by_id=mgr.id, beat_ids=[]))
+    db_session.get(Agent, test_data["agent1"].id).status = AgentStatus.ON_LEAVE
+    db_session.commit()
+
+    run = PlannerService(db_session, manager_user_id=mgr.id).plan_next_day(
+        plan_date=tomorrow, strategy="SMART")
+
+    planned_agents = {b.agent_id for b in db_session.query(Beat).filter(Beat.allocation_run_id == run.id).all()}
+    assert test_data["agent1"].id in planned_agents, "back from leave, but left off tomorrow's plan"
+
+
+def test_a_suspended_agent_is_never_planned(db_session, test_data):
+    """SUSPENDED is indefinite, not calendar — it is the one status that still
+    filters here after the 2026-09-23 change."""
+    db_session.get(Agent, test_data["agent1"].id).status = AgentStatus.SUSPENDED
+    db_session.commit()
+
+    run = PlannerService(db_session, manager_user_id=test_data["manager"].id).plan_next_day(
+        plan_date=date.today() + timedelta(days=1), strategy="SMART")
+
+    planned_agents = {b.agent_id for b in db_session.query(Beat).filter(Beat.allocation_run_id == run.id).all()}
+    assert test_data["agent1"].id not in planned_agents
+    assert all(d.allocated_agent_id != test_data["agent1"].id for d in run.decisions)

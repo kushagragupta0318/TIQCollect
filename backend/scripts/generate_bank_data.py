@@ -393,7 +393,7 @@ def generate(n_rows: int, output_path: Path) -> None:
         buckets[r["BUCKET"]] = buckets.get(r["BUCKET"], 0) + 1
         stages[r["COLLECTION_STAGE"]] = stages.get(r["COLLECTION_STAGE"], 0) + 1
 
-    print(f"\n✅ Generated {n_rows} rows  →  {output_path}")
+    print(f"\nGenerated {n_rows} rows  →  {output_path}")
     print(f"\n{len(BANK_COLUMNS)} columns across 4 blocks:")
     print("  Block 1 – Customer Identity   : CUSTOMER_ID … FRAUD_FLAG          (13 cols)")
     print("  Block 2 – Loan / Account      : LOAN_ACCOUNT_NO … RISK_SCORE       (15 cols)")
