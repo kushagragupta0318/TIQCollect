@@ -39,6 +39,7 @@ from app.services.global_allocator import (
     GlobalAllocator, case_bar, pair_bar,
 )
 
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 from tests.test_global_allocator import (   # noqa: E402  — shared fixtures
     BASE_LAT, BASE_LON, allocate, assigned, make_agent, make_case, outcomes,
 )
@@ -218,9 +219,8 @@ def test_the_shared_gate_functions_agree_with_the_matrix_loop():
 # Part 2 — POST /manager/cases/{id}/reassign
 # ═══════════════════════════════════════════════════════════════════════════
 
-engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
-                       poolclass=StaticPool)
-TestingSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+engine = make_engine()
+TestingSession = make_session_factory(autocommit=False, autoflush=False, bind=engine)
 TODAY = date.today()
 
 
@@ -275,7 +275,7 @@ def _case(db, number, cust, loan, agent, status=CaseStatus.ASSIGNED):
 
 @pytest.fixture(scope="module")
 def world():
-    Base.metadata.create_all(engine)
+    create_schema(engine)
     db = TestingSession()
     mgr = _user(db, "mgr@t.io", UserRole.AGENCY_MANAGER, "Manager One")
     other = _user(db, "other@t.io", UserRole.AGENCY_MANAGER, "Manager Two")
@@ -315,7 +315,7 @@ def world():
            "plain": plain, "fem": fem, "dnc": dnc, "fat": fat, "paid": paid, "foreign": foreign,
            "unowned": unowned}
     db.close()
-    Base.metadata.drop_all(engine)
+    drop_schema(engine)
 
 
 @pytest.fixture(scope="module")

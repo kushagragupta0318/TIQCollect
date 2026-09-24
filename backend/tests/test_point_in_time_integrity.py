@@ -39,6 +39,7 @@ from app.models.payment import Payment, PaymentMode, PaymentStatus
 from app.models.ptp import PTPStatus
 from app.models.visit import VisitOutcome
 from app.services.repayment_service import RepaymentService
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
 SVC = RepaymentService(db=None)
 AS_OF = date(2026, 5, 1)
@@ -144,9 +145,9 @@ def test_payment_recency_refuses_a_loan_column_that_post_dates_as_of():
 
 @pytest.fixture()
 def db():
-    engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
-    Base.metadata.create_all(engine)
-    session = sessionmaker(bind=engine)()
+    engine = make_engine()
+    create_schema(engine)
+    session = make_session_factory(bind=engine)()
     try:
         yield session
     finally:

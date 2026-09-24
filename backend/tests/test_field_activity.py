@@ -27,6 +27,7 @@ from app.models.user import User, UserRole
 from app.models.visit import PersonMet, Visit, VisitOutcome
 from app.services import field_activity_service as fa
 from app.services.field_activity_service import VisitRow, classify
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
 # ── the pure classifier ──────────────────────────────────────────────────────
 
@@ -139,7 +140,7 @@ def test_window_bounds_anchor_on_the_effective_date():
 
 # ── the API, on a controlled book ────────────────────────────────────────────
 
-engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+engine = make_engine()
 
 
 @event.listens_for(engine, "connect")
@@ -149,7 +150,7 @@ def _sqlite_helpers(dbapi_conn, _):
     dbapi_conn.create_function("to_char", 2, to_char)
 
 
-Session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Session = make_session_factory(autocommit=False, autoflush=False, bind=engine)
 
 TODAY = date.today()
 NOW = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
@@ -188,7 +189,7 @@ def _visit(db, case, agent, outcome, when, n=1):
 
 @pytest.fixture(scope="module")
 def book():
-    Base.metadata.create_all(bind=engine)
+    create_schema(bind=engine)
     db = Session()
     mgr = _user(db, "fa_mgr@t.in", UserRole.AGENCY_MANAGER, "Mgr")
     other = _user(db, "fa_other@t.in", UserRole.AGENCY_MANAGER, "Other")

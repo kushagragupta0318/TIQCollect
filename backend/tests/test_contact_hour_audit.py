@@ -44,10 +44,10 @@ from app.models.user import User, UserRole
 from app.models.visit import Visit, VisitOutcome
 from app.schemas.agent import RecordVisitRequest
 from app.services import visit_service as vs
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
-engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
-                       poolclass=StaticPool)
-TestingSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+engine = make_engine()
+TestingSession = make_session_factory(autocommit=False, autoflush=False, bind=engine)
 TODAY = date.today()
 BACKEND = pathlib.Path(__file__).resolve().parents[1]
 
@@ -99,7 +99,7 @@ def _case_for(db, agent, ref):
 
 @pytest.fixture(scope="module")
 def world():
-    Base.metadata.create_all(engine)
+    create_schema(engine)
     db = TestingSession()
     mgr_a = _user(db, "a@t.io", UserRole.AGENCY_MANAGER, "Manager A")
     mgr_b = _user(db, "b@t.io", UserRole.AGENCY_MANAGER, "Manager B")
@@ -114,7 +114,7 @@ def world():
     yield {"db": db, "mgr_a": mgr_a, "mgr_b": mgr_b, "ag_a": ag_a, "ag_b": ag_b,
            "case_a": case_a, "case_a2": case_a2, "case_b": case_b}
     db.close()
-    Base.metadata.drop_all(engine)
+    drop_schema(engine)
 
 
 @pytest.fixture(scope="module")

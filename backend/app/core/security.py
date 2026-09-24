@@ -41,22 +41,49 @@ def _make_token(subject: str, token_type: str, expires_delta: timedelta, extra: 
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 
-def create_access_token(user_id: str, role: str, device_id: str) -> str:
+def create_access_token(user_id: str, role: str, device_id: str, *, sid: str | None = None,
+                        bank_id: str | None = None, agency_id: str | None = None) -> str:
+    """2026-09-24 (A02/A05): `sid` names the user_sessions row the token was
+    issued under (revoking it stops the token at once); `bank_id` / `agency_id`
+    are the tenant the request context is built from. All three are optional
+    so tokens minted directly (tests, service accounts) keep their shape."""
+    extra: dict[str, Any] = {"role": role, "device_id": device_id}
+    if sid:
+        extra["sid"] = sid
+    if bank_id:
+        extra["bank_id"] = bank_id
+    if agency_id:
+        extra["agency_id"] = agency_id
     return _make_token(
         subject=user_id,
         token_type="access",
         expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
-        extra={"role": role, "device_id": device_id},
+        extra=extra,
     )
 
 
-def create_refresh_token(user_id: str, device_id: str) -> str:
+def create_refresh_token(user_id: str, device_id: str, *, sid: str | None = None) -> str:
+    extra: dict[str, Any] = {"device_id": device_id}
+    if sid:
+        extra["sid"] = sid
     return _make_token(
         subject=user_id,
         token_type="refresh",
         expires_delta=timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
-        extra={"device_id": device_id},
+        extra=extra,
     )
+
+
+def token_sha256(token: str) -> str:
+    """Stored form of a refresh/invite/reset token. sha256, not bcrypt: these
+    are high-entropy signed values and must be found by an index lookup, which
+    bcrypt's per-hash salt makes impossible (design §4.1, user_sessions)."""
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def device_fingerprint_for(device_id: str) -> str:
+    """What agent_devices.device_fingerprint stores for a client device id."""
+    return hashlib.sha256(f"device:{device_id}".encode()).hexdigest()
 
 
 # collection_dashboard: mints the link token used by generate_quick_login_link.py.

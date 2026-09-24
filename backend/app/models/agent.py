@@ -49,6 +49,19 @@ class AgentSpecialization(str, enum.Enum):
     BOTH = "BOTH"
 
 
+# ONE definition of what Agent.gender and Agent.vehicle_type may hold. The
+# database CHECKs below are built from these tuples, and ml/eligibility.py
+# imports AGENT_GENDER_FEMALE for the female-agent hard gate — so the rule the
+# allocator enforces and the values the database accepts cannot drift.
+# Case-insensitive (the CHECK compares upper()), because the column is free
+# text that tests and seeds have written as "M", "F", "male" and "FEMALE".
+# 2026-09-24: first drafted WITHOUT these CHECKs "because existing values vary";
+# reversed on coordinator review — an integrity rule is written over the values
+# that are valid, not dropped for convenience.
+AGENT_GENDER_FEMALE: tuple[str, ...] = ("F", "FEMALE", "WOMAN")
+AGENT_GENDER_VALUES: tuple[str, ...] = AGENT_GENDER_FEMALE + ("M", "MALE", "MAN", "OTHER")
+VEHICLE_TYPES: tuple[str, ...] = ("TWO_WHEELER", "FOUR_WHEELER", "PUBLIC_TRANSPORT")
+
 AGENT_TIER_SQL = SAEnum(AgentTier, name="agent_tier_enum", schema=PUBLIC, metadata=Base.metadata)
 AGENT_STATUS_SQL = SAEnum(AgentStatus, name="agent_status_enum", schema=PUBLIC, metadata=Base.metadata)
 AGENT_SPEC_SQL = SAEnum(AgentSpecialization, name="agent_spec_enum", schema=PUBLIC, metadata=Base.metadata)
@@ -146,6 +159,14 @@ class Agent(Base, UUIDPrimaryKey, TimestampMixin):
                              ondelete="RESTRICT"),
         ForeignKeyConstraint(["territory_region_id", "bank_id"], ["tenancy.regions.id", "tenancy.regions.bank_id"],
                              ondelete="RESTRICT"),
+        CheckConstraint(
+            "gender IS NULL OR upper(gender) IN (" + ", ".join(repr(g) for g in AGENT_GENDER_VALUES) + ")",
+            name="gender",
+        ),
+        CheckConstraint(
+            "vehicle_type IN (" + ", ".join(repr(v) for v in VEHICLE_TYPES) + ")",
+            name="vehicle_type",
+        ),
         Index(None, "agency_id", "status"),
         Index(None, "agency_id", "manager_user_id"),
         Index(None, "agency_id", "tier", "ranking_score"),
@@ -153,6 +174,24 @@ class Agent(Base, UUIDPrimaryKey, TimestampMixin):
               postgresql_where=text("gender IS NOT NULL"), sqlite_where=text("gender IS NOT NULL")),
         {"schema": "workforce"},
     )
+
+
+def month_start(value) -> date:
+    """First day of the month `value` names — a date, a datetime, or the
+    v1 "YYYY-MM" string. The one converter between the API's month keys and
+    AgentPerformance.month (a DATE since 2026-09-24; it was 'YYYY-MM')."""
+    if isinstance(value, datetime):
+        return date(value.year, value.month, 1)
+    if isinstance(value, date):
+        return value.replace(day=1)
+    y, m = str(value)[:7].split("-")
+    return date(int(y), int(m), 1)
+
+
+def month_key(value) -> str:
+    """"YYYY-MM" for a month — the form every API response has always used."""
+    d = month_start(value)
+    return f"{d.year:04d}-{d.month:02d}"
 
 
 class AgentPerformance(Base, UUIDPrimaryKey, TimestampMixin):

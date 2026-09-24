@@ -33,20 +33,17 @@ from app.models.ptp import PTP, PTPStatus
 from app.models.user import User, UserRole
 from app.models.visit import PersonMet, Visit, VisitOutcome
 from app.services.planner_service import PlannerService, get_target_plan_date
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
-test_engine = create_engine(
-    "sqlite://",
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
-)
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
+test_engine = make_engine()
+TestingSessionLocal = make_session_factory(autocommit=False, autoflush=False, bind=test_engine)
 
 
 @pytest.fixture(autouse=True)
 def setup_db():
-    Base.metadata.create_all(bind=test_engine)
+    create_schema(bind=test_engine)
     yield
-    Base.metadata.drop_all(bind=test_engine)
+    drop_schema(bind=test_engine)
 
 
 @pytest.fixture

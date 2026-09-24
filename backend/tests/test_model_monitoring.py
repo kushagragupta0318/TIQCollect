@@ -28,21 +28,21 @@ MODEL = "recovery_risk"
 # model that is serving", and the 19:15 task resolves that through champion.txt;
 # a literal "1.1.0" broke the day 2.2.0 was promoted, for no defect.
 from tests._served_champion import champion_selected as _champion_selected, served_vector as _served_vector  # noqa: E402
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
 SERVING = mon.serving_version(MODEL) or "1.1.0"
 OTHER_VERSION = "1.0.0"
 OTHER_RULE = "some-other-outcome-2.0.0"
 
-test_engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
-                            poolclass=StaticPool)
-Session = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
+test_engine = make_engine()
+Session = make_session_factory(autocommit=False, autoflush=False, bind=test_engine)
 
 
 @pytest.fixture(autouse=True)
 def setup_db():
-    Base.metadata.create_all(bind=test_engine)
+    create_schema(bind=test_engine)
     yield
-    Base.metadata.drop_all(bind=test_engine)
+    drop_schema(bind=test_engine)
 
 
 @pytest.fixture

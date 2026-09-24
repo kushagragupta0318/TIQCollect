@@ -30,6 +30,7 @@ from app.models.base import Base
 from app.models.customer import RiskCategory
 from app.models.repayment_snapshot import RepaymentSnapshot
 from app.services.repayment_service import RepaymentService, _CENSORING_STATUSES
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
 SVC = RepaymentService(db=None)
 AS_OF = date(2026, 7, 1)
@@ -290,9 +291,9 @@ def db():
     test_otp_service.py. This is what proves the recovery columns survive the
     JSON .with_variant fallback and that the scan predicate does what the pure
     tests above say it does."""
-    engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
-    Base.metadata.create_all(engine)
-    session = sessionmaker(bind=engine)()
+    engine = make_engine()
+    create_schema(engine)
+    session = make_session_factory(bind=engine)()
     try:
         yield session
     finally:

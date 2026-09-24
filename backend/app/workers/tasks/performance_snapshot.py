@@ -6,7 +6,7 @@ logger = structlog.get_logger()
 
 @celery_app.task(name="app.workers.tasks.performance_snapshot.take_monthly_snapshot", bind=True)
 def take_monthly_snapshot(self):
-    from datetime import date, timedelta
+    from datetime import date, datetime, time, timedelta, timezone
     from sqlalchemy import func
     from app.core.database import SessionLocal
     from app.models.agent import Agent, AgentPerformance, AgentTier
@@ -19,9 +19,12 @@ def take_monthly_snapshot(self):
     db = SessionLocal()
     try:
         last_month = (date.today().replace(day=1) - timedelta(days=1))
-        month_str = last_month.strftime("%Y-%m")
         month_start = last_month.replace(day=1)
         month_end = date.today().replace(day=1)
+        # Instants for the timestamp columns; the DATE columns compare to the
+        # dates themselves (2026-09-24: they were compared as ISO strings).
+        start_at = datetime.combine(month_start, time.min, tzinfo=timezone.utc)
+        end_at = datetime.combine(month_end, time.min, tzinfo=timezone.utc)
 
         agents = db.query(Agent).all()
         snapshotted = 0
@@ -29,16 +32,16 @@ def take_monthly_snapshot(self):
         for agent in agents:
             payments = db.query(Payment).filter(
                 Payment.agent_id == agent.id,
-                Payment.payment_date >= month_start.isoformat(),
-                Payment.payment_date < month_end.isoformat(),
+                Payment.payment_date >= start_at,
+                Payment.payment_date < end_at,
                 Payment.status == PaymentStatus.VERIFIED,
             ).all()
 
             total_collected = sum(p.amount for p in payments)
             cases_assigned = db.query(Case).filter(
                 Case.agent_id == agent.id,
-                Case.allocation_date >= month_start.isoformat(),
-                Case.allocation_date < month_end.isoformat(),
+                Case.allocation_date >= month_start,
+                Case.allocation_date < month_end,
             ).count()
 
             # 2026-08-25: keyed on committed_date, not created_at, to match
@@ -85,8 +88,8 @@ def take_monthly_snapshot(self):
             visited_case_ids = [
                 r[0] for r in db.query(Visit.case_id).filter(
                     Visit.agent_id == agent.id,
-                    Visit.check_in_time >= month_start.isoformat(),
-                    Visit.check_in_time < month_end.isoformat(),
+                    Visit.check_in_time >= start_at,
+                    Visit.check_in_time < end_at,
                 ).distinct().all()
             ]
             total_target = float(
@@ -105,7 +108,7 @@ def take_monthly_snapshot(self):
             snap = AgentPerformance(
                 id=str(uuid.uuid4()),
                 agent_id=agent.id,
-                month=month_str,
+                month=month_start,
                 total_visits=agent.current_month_visits,
                 customer_met=0,
                 total_collected=total_collected,

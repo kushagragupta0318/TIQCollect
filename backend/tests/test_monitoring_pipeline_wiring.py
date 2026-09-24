@@ -35,18 +35,18 @@ from app.models.model_prediction import ModelPrediction
 # (tests/_served_champion.py); a literal "1.1.0" described nothing once 2.2.0
 # was promoted and the whole chain correctly reported not_ready.
 from tests._served_champion import served_vector, serving_version  # noqa: E402
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
 SERVING = serving_version()
-engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
-                       poolclass=StaticPool)
-Session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+engine = make_engine()
+Session = make_session_factory(autocommit=False, autoflush=False, bind=engine)
 
 
 @pytest.fixture(autouse=True)
 def setup_db():
-    Base.metadata.create_all(bind=engine)
+    create_schema(bind=engine)
     yield
-    Base.metadata.drop_all(bind=engine)
+    drop_schema(bind=engine)
 
 
 @pytest.fixture

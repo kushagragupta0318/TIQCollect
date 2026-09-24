@@ -23,6 +23,7 @@ from alembic.migration import MigrationContext
 from alembic.operations import Operations
 
 from app.models.repayment_snapshot import RepaymentSnapshot
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
 MIGRATIONS = pathlib.Path(__file__).resolve().parents[1] / "alembic" / "versions"
 REVISION = "f4b7d9c1e832"
@@ -144,7 +145,7 @@ def _table_without_recovery(metadata):
 @pytest.fixture()
 def legacy_db():
     """A pre-feature database with one existing snapshot row in it."""
-    engine = sa.create_engine("sqlite://")
+    engine = make_engine()
     metadata = sa.MetaData()
     table = _table_without_recovery(metadata)
     metadata.create_all(engine)

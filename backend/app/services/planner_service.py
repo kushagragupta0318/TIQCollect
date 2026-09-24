@@ -727,7 +727,7 @@ class PlannerService:
                 # it belongs: `beat_date` plus `ordered_case_ids` say exactly
                 # which cases are worked when, and the agent's day is built from
                 # those, never from this column.
-                assigned_on = date.today().strftime("%Y-%m-%d")
+                assigned_on = date.today()
                 for c in cases_for_agent:
                     c.agent_id = ag.id
                     c.allocation_date = assigned_on
@@ -752,7 +752,7 @@ class PlannerService:
             allocated_ids = {c.id for lst in assigned_cases_by_agent.values() for c in lst}
             # Must match what the loop above actually wrote, or the sweep looks
             # for a stamp nobody made and silently clears nothing.
-            stamp = date.today().strftime("%Y-%m-%d")
+            stamp = date.today()
             stale = [
                 c for c in self.db.query(Case)
                 .filter(Case.allocation_date == stamp).all()
@@ -767,7 +767,7 @@ class PlannerService:
                 for c in stale:
                     when = last_visit.get(c.id)
                     if when is not None:
-                        c.allocation_date = when.date().strftime("%Y-%m-%d")
+                        c.allocation_date = when.date()
 
         # 8. Create and Persist AllocationRun
         run = AllocationRun(

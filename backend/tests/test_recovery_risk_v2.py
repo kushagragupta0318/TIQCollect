@@ -33,6 +33,7 @@ from app.ml.pipeline.config import (
     CANDIDATE_SPECS, LOGGED_FEATURES, RECOVERY_RISK, RECOVERY_RISK_V2,
 )
 from app.ml.pipeline.engine import DecisionEngine
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
 V2 = "2.0.0"
 
@@ -263,10 +264,9 @@ def test_the_adapter_supplies_every_feature_v2_selected(meta):
     from app.models.visit import DefaultReason, Visit, VisitOutcome
     from app.services.ml_scoring_service import MLScoringService
 
-    engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
-                           poolclass=StaticPool)
-    Base.metadata.create_all(bind=engine)
-    db = sessionmaker(bind=engine)()
+    engine = make_engine()
+    create_schema(bind=engine)
+    db = make_session_factory(bind=engine)()
     now = datetime.now(timezone.utc)
 
     user = User(id=str(uuid.uuid4()), email="a@x.test", phone="9000000001",

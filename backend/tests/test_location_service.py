@@ -23,10 +23,10 @@ from app.models.agent import Agent, AgentSpecialization, AgentStatus, AgentTier
 from app.models.agent_location import AgentLocation
 from app.models.user import User, UserRole
 from app.services.location_service import MIN_MOVE_METRES, LocationService
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
-engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
-                       poolclass=StaticPool)
-Session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+engine = make_engine()
+Session = make_session_factory(autocommit=False, autoflush=False, bind=engine)
 
 GURGAON = (28.4595, 77.0266)
 
@@ -37,11 +37,11 @@ def _uid():
 
 @pytest.fixture
 def db():
-    Base.metadata.create_all(engine)
+    create_schema(engine)
     s = Session()
     yield s
     s.close()
-    Base.metadata.drop_all(engine)
+    drop_schema(engine)
 
 
 @pytest.fixture

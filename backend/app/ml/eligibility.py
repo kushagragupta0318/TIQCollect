@@ -23,7 +23,7 @@
 """Who may be sent to whom — the hard rules, and the ranking preferences."""
 from __future__ import annotations
 
-from app.models.agent import Agent, AgentSpecialization
+from app.models.agent import AGENT_GENDER_FEMALE, Agent, AgentSpecialization
 from app.models.customer import Customer
 from app.models.loan import Loan, LoanType
 
@@ -33,7 +33,9 @@ BLOCKED_NEEDS_FEMALE_AGENT = "REQUIRES_FEMALE_AGENT"
 
 # Gender values accepted as female. Stored free-text rather than an enum
 # because Customer.gender already is, and the two should read alike.
-_FEMALE = {"f", "female", "woman"}
+# 2026-09-24: imported from models/agent.py, the one definition the database
+# CHECK is also built from (was restated here as {"f", "female", "woman"}).
+_FEMALE = {v.lower() for v in AGENT_GENDER_FEMALE}
 
 # Loan types whose collateral makes them secured work. BUSINESS is deliberately
 # absent: business loans are secured or unsecured depending on the facility, so

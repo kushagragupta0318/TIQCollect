@@ -25,10 +25,10 @@ from app.core.security import _make_token, create_access_token, create_agent_ver
 from app.main import app
 from app.models.agent import Agent, AgentSpecialization, AgentStatus, AgentTier
 from app.models.user import User, UserRole
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
-engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
-                       poolclass=StaticPool)
-TestingSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+engine = make_engine()
+TestingSession = make_session_factory(autocommit=False, autoflush=False, bind=engine)
 URL = "/api/v1/verify-agent"
 ALLOWED = {"agent_name", "employee_code", "agency", "active"}
 
@@ -50,7 +50,7 @@ def _fresh_rate_limit_window():
 
 @pytest.fixture(scope="module")
 def world():
-    Base.metadata.create_all(engine)
+    create_schema(engine)
     db = TestingSession()
     mgr = User(id=_uid(), email="m@t.io", phone="9000000001", full_name="Manager",
                hashed_password="x", role=UserRole.AGENCY_MANAGER, is_active=True, is_verified=True)
@@ -78,7 +78,7 @@ def world():
     db.commit()
     yield {"db": db, "ok": ok, "susp": susp, "off": off, "dis": dis, "u_ok": u_ok}
     db.close()
-    Base.metadata.drop_all(engine)
+    drop_schema(engine)
 
 
 @pytest.fixture(scope="module")

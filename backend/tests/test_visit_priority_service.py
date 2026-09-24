@@ -35,10 +35,10 @@ from app.models.ptp import PTP, PTPStatus
 from app.models.repayment_snapshot import TRIGGER_SEED, RepaymentSnapshot
 from app.models.user import User, UserRole
 from app.services.visit_priority_service import score_cases
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
-engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
-                       poolclass=StaticPool)
-Session = sessionmaker(bind=engine, autoflush=False)
+engine = make_engine()
+Session = make_session_factory(bind=engine, autoflush=False)
 TODAY = date.today()
 
 
@@ -135,8 +135,8 @@ def _build(db, *, n=None, dnc_idx=(), female_idx=(), ptp_idx=()):
 
 @pytest.fixture
 def db():
-    Base.metadata.drop_all(engine)
-    Base.metadata.create_all(engine)
+    drop_schema(engine)
+    create_schema(engine)
     s = Session()
     yield s
     s.close()

@@ -163,7 +163,7 @@ class AgentService:
         agent.status = AgentStatus.ON_DUTY
         agent.last_known_latitude = req.latitude
         agent.last_known_longitude = req.longitude
-        agent.last_location_update = datetime.now(timezone.utc).isoformat()
+        agent.last_location_update = datetime.now(timezone.utc)
         if settings.DEMO_MODE:
             self._anchor_demo_customers(req.latitude, req.longitude)
         self.db.commit()
@@ -535,7 +535,7 @@ class AgentService:
 
         now_utc = datetime.now(timezone.utc)
         agent.sos_active = True
-        agent.sos_triggered_at = now_utc.isoformat()
+        agent.sos_triggered_at = now_utc
 
         lat, lon = req.latitude, req.longitude
         quality = "NONE"
@@ -546,7 +546,7 @@ class AgentService:
             age_seconds = 0
             agent.last_known_latitude = lat
             agent.last_known_longitude = lon
-            agent.last_location_update = now_utc.isoformat()
+            agent.last_location_update = now_utc
             # Pin the SOS itself into the trail so an incident replay has a
             # marked origin, independent of the sos_active flag that
             # cancel_sos() later clears.

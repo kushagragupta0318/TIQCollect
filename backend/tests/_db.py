@@ -53,21 +53,34 @@ def make_engine(url: str = "sqlite://"):
     return engine.execution_options(schema_translate_map=SCHEMA_MAP)
 
 
-def make_session_factory(engine, **kw):
-    kw.setdefault("autocommit", False)
+def make_session_factory(engine=None, *, bind=None, **kw):
+    """A sessionmaker with the test default tenant. Accepts `bind=` as well as
+    a positional engine, so `sessionmaker(bind=engine, …)` call sites migrate
+    by name only. `autocommit` is dropped (SQLAlchemy 2 has no such option;
+    the old call sites passed False, which was already the only behaviour)."""
+    kw.pop("autocommit", None)
     kw.setdefault("autoflush", False)
     kw.setdefault("info", {"default_tenant": dict(DEFAULT_TENANT)})
-    return sessionmaker(bind=engine, **kw)
+    return sessionmaker(bind=engine if engine is not None else bind, **kw)
 
 
-def create_schema(engine, *, seed_tenant: bool = True) -> None:
+def create_schema(engine=None, *, bind=None, seed_tenant: bool = True) -> None:
+    """create_all + lookup rows + the default test bank and agency. Idempotent:
+    several suites call it once per test without dropping in between."""
+    from sqlalchemy import select, func
     from app.models.tenancy import Agency, Bank
 
+    engine = engine if engine is not None else bind
     Base.metadata.create_all(engine)
     with engine.begin() as conn:
         for table, rows in LOOKUP_SEEDS.items():
-            conn.execute(insert(LOOKUP_MODELS[table].__table__), rows)
-        if seed_tenant:
+            model = LOOKUP_MODELS[table]
+            if conn.execute(select(func.count()).select_from(model.__table__)).scalar():
+                continue
+            conn.execute(insert(model.__table__), rows)
+        already = conn.execute(select(func.count()).select_from(Bank.__table__)
+                               .where(Bank.__table__.c.id == TEST_BANK_ID)).scalar()
+        if seed_tenant and not already:
             conn.execute(insert(Bank.__table__), [{
                 "id": TEST_BANK_ID, "code": "MTB", "legal_name": "Meridian Trust Bank Ltd.",
                 "display_name": "Meridian Trust Bank", "timezone": "Asia/Kolkata", "brand": {},
@@ -80,5 +93,5 @@ def create_schema(engine, *, seed_tenant: bool = True) -> None:
             }])
 
 
-def drop_schema(engine) -> None:
-    Base.metadata.drop_all(engine)
+def drop_schema(engine=None, *, bind=None) -> None:
+    Base.metadata.drop_all(engine if engine is not None else bind)

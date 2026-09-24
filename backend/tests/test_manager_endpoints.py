@@ -37,11 +37,9 @@ from app.models.ptp import PTP, PTPStatus
 from app.models.user import User, UserRole
 from app.models.visit import PersonMet, Visit, VisitOutcome
 
-engine = create_engine(
-    "sqlite://",  # in-memory
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
-)
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
+
+engine = make_engine()
 
 # _live_monthly_metrics uses Postgres' func.to_char(col, 'YYYY-MM'). Give SQLite
 # a compatible implementation so the endpoint code paths run unchanged.
@@ -65,7 +63,7 @@ def _add_to_char(dbapi_conn, _):
         return str(dt)
     dbapi_conn.create_function("to_char", 2, to_char)
 
-TestingSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+TestingSession = make_session_factory(autocommit=False, autoflush=False, bind=engine)
 
 TODAY = date.today()
 NOW = datetime.now(timezone.utc)
@@ -80,7 +78,7 @@ def _user(db, email: str, role: UserRole, name: str) -> User:
 
 @pytest.fixture(scope="module")
 def seeded():
-    Base.metadata.create_all(engine)
+    create_schema(engine)
     db = TestingSession()
     # Manager + another manager (for tenant-scoping assertions)
     mgr = _user(db, "mgr@t.io", UserRole.AGENCY_MANAGER, "Manager One")

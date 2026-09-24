@@ -88,7 +88,7 @@ TIER_ORDER = {
 class CaseAllocator:
     def __init__(self, db: "Session") -> None:
         self.db = db
-        self.today = date.today().isoformat()
+        self.today = date.today()
         # Customers and loans for the cases in play, fetched once. The previous
         # version issued one Customer query per case inside the assignment loop.
         self._customers: dict[str, Customer] = {}
@@ -190,7 +190,7 @@ class CaseAllocator:
             "cases_assigned": assigned_count,
             "cases_unallocated": unallocated_count,
             "agents_used": len([a for a, c in assigned_today.items() if c > 0]),
-            "allocation_date": self.today,
+            "allocation_date": self.today.isoformat(),
             # "rule" is load-bearing: a transparent scorecard, not a model.
             "method": f"rule_based_v3_visit_priority_{SCORE_VERSION}",
             "ordering": "visit_priority",

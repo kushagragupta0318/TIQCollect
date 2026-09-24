@@ -241,7 +241,7 @@ class VisitService:
 
         agent.last_known_latitude = req.check_in_latitude
         agent.last_known_longitude = req.check_in_longitude
-        agent.last_location_update = now_utc.isoformat()
+        agent.last_location_update = now_utc
         agent.current_month_visits += 1
 
         self.db.commit()

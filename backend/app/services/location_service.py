@@ -147,11 +147,11 @@ class LocationService:
             if newest is not None and self._is_newer(agent.last_location_update, newest):
                 agent.last_known_latitude = rows[-1].latitude
                 agent.last_known_longitude = rows[-1].longitude
-                agent.last_location_update = newest.isoformat()
+                agent.last_location_update = newest
         # A stationary heartbeat moves the clock and nothing else: the position
         # is within MIN_MOVE_METRES of what is already stored.
         if heard is not None and (newest is None or heard > newest)                 and self._is_newer(agent.last_location_update, heard):
-            agent.last_location_update = heard.isoformat()
+            agent.last_location_update = heard
         if rows or heard is not None:
             self.db.commit()
         # 2026-09-24 — one event per batch carrying only the newest stored fix,
@@ -351,15 +351,19 @@ class LocationService:
             return None
 
     @classmethod
-    def _parse(cls, raw: str | None) -> datetime | None:
+    def _parse(cls, raw: str | datetime | None) -> datetime | None:
+        # Agent.last_location_update is a TIMESTAMPTZ since 2026-09-24; the
+        # string branch stays for payloads and v1 rows read through old code.
         if not raw:
             return None
+        if isinstance(raw, datetime):
+            return cls._as_utc(raw)
         try:
             return cls._as_utc(datetime.fromisoformat(raw))
         except ValueError:
             return None
 
     @classmethod
-    def _is_newer(cls, existing_iso: str | None, candidate: datetime) -> bool:
+    def _is_newer(cls, existing_iso: str | datetime | None, candidate: datetime) -> bool:
         existing = cls._parse(existing_iso)
         return existing is None or candidate > existing

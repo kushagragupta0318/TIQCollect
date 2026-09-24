@@ -27,6 +27,7 @@ from app.models.base import Base
 from app.models.case import Case
 from app.models.loan import DPDBucket, Loan, LoanType
 from app.models.payment import Payment, PaymentMode, PaymentStatus
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
 AS_OF = date(2026, 9, 3)
 SEG = ("PERSONAL", "BUCKET_2")
@@ -36,9 +37,9 @@ SEG = ("PERSONAL", "BUCKET_2")
 
 @pytest.fixture()
 def db():
-    engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
-    Base.metadata.create_all(engine)
-    session = sessionmaker(bind=engine)()
+    engine = make_engine()
+    create_schema(engine)
+    session = make_session_factory(bind=engine)()
     try:
         yield session
     finally:

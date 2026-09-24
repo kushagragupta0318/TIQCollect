@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Request
-from app.core.dependencies import DbSession, CurrentUser
+from app.core.dependencies import DbSession, CurrentUser, TokenPayload
 from app.core.ratelimit import AUTH_LIMIT, limiter
 from app.schemas.auth import LoginRequest, LoginResponse, QuickLoginRequest, RefreshRequest, TokenResponse, MessageResponse
 from app.services import auth_service
@@ -25,9 +25,11 @@ async def refresh(body: RefreshRequest, request: Request, db: DbSession):
     return auth_service.refresh_tokens(db, body.refresh_token, request)
 
 
-@router.post("/logout", response_model=MessageResponse, summary="Invalidate all sessions for current user")
-async def logout(current_user: CurrentUser, request: Request, db: DbSession):
-    auth_service.logout(db, current_user, request)
+@router.post("/logout", response_model=MessageResponse, summary="End this device's session")
+async def logout(current_user: CurrentUser, payload: TokenPayload, request: Request, db: DbSession):
+    # 2026-09-24 (A05): ends THIS session only — the summary used to say "all
+    # sessions", which was true only because there was a single slot.
+    auth_service.logout(db, current_user, request, sid=payload.get("sid"))
     return {"message": "Logged out successfully"}
 
 

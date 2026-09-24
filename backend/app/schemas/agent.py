@@ -363,9 +363,9 @@ class LoanSummary(BaseModel):
     emi_amount: float
     tenure_months: Optional[int] = None
     interest_rate: float
-    last_payment_date: Optional[str] = None
+    last_payment_date: Optional[date] = None
     last_payment_amount: float
-    next_due_date: Optional[str] = None
+    next_due_date: Optional[date] = None
     legal_status: str
     settlement_status: str
 
@@ -413,7 +413,7 @@ class CaseSummaryResponse(BaseModel):
     priority: CasePriority
     target_amount: float
     collected_amount: float
-    allocation_date: Optional[str] = None
+    allocation_date: Optional[date] = None
     visit_count: int
     is_escalated: bool
     agent_id: Optional[str] = None
@@ -422,7 +422,7 @@ class CaseSummaryResponse(BaseModel):
     customer: CustomerSummary
     loan: LoanSummary
     collection_stage: str
-    bank_ptp_date: Optional[str] = None
+    bank_ptp_date: Optional[date] = None
     bank_ptp_amount: Optional[float] = None
     bank_ptp_status: Optional[str] = None
     bank_agent_remarks: Optional[str] = None
@@ -605,7 +605,7 @@ class ProfileResponse(BaseModel):
     full_name: str
     email: str
     phone: str
-    date_of_birth: Optional[str] = None
+    date_of_birth: Optional[date] = None
     territory: str
     tier: AgentTier
     status: AgentStatus

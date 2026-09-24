@@ -28,13 +28,14 @@ from app.models.loan import DPDBucket, Loan, LoanStatus, LoanType
 from app.models.user import User, UserRole
 from app.models.visit import PersonMet, Visit, VisitOutcome
 from app.services.leave_service import MAX_LEAVE_DAYS, LeaveService, agent_ids_on_leave, effective_status
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
 TODAY = date(2026, 9, 21)                      # a Monday
 TOMORROW = TODAY + timedelta(days=1)
 
 
 def _session():
-    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    engine = make_engine()
 
     # /manager/agents groups payments with Postgres's to_char(ts, 'YYYY-MM');
     # the same shim tests/test_field_activity.py uses so SQLite can run it.
@@ -42,8 +43,8 @@ def _session():
     def _sqlite_helpers(dbapi_conn, _):
         dbapi_conn.create_function("to_char", 2, lambda value, fmt: str(value)[:7] if value else None)
 
-    Base.metadata.create_all(bind=engine)
-    return sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    create_schema(bind=engine)
+    return make_session_factory(autocommit=False, autoflush=False, bind=engine)
 
 
 class World:

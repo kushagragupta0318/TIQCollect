@@ -32,6 +32,7 @@ from app.ml.simulation.ledger.panel import build_panel
 from app.models.base import Base
 from app.models.loan import Loan
 from app.services.ml_scoring_service import MLScoringService
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
 CFG = LedgerConfig(n_borrowers=300, months=12, seed=17)
 #: Snapshot days to compare. Enough (loan, as_of) pairs to clear the 1,000
@@ -71,14 +72,13 @@ RATIO = ["arrears_ratio", "penal_ratio", "outstanding_to_sanction",
 MONEY_TOL = 0.01
 RATIO_TOL = 0.002
 
-engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
-                       poolclass=StaticPool)
-Session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+engine = make_engine()
+Session = make_session_factory(autocommit=False, autoflush=False, bind=engine)
 
 
 @pytest.fixture(scope="module")
 def world():
-    Base.metadata.create_all(bind=engine)
+    create_schema(bind=engine)
     ledger = LedgerSimulator(CFG).run(intercept=-4.1562)
     panel = build_panel(ledger, CFG)
     db = Session()
@@ -88,7 +88,7 @@ def world():
         yield ledger, panel, db, mat
     finally:
         db.close()
-        Base.metadata.drop_all(bind=engine)
+        drop_schema(bind=engine)
 
 
 def _adapter_rows(db, mat, panel, day):

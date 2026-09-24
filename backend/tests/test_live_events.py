@@ -34,10 +34,10 @@ from app.core.security import create_access_token
 from app.main import app
 from app.models.agent import Agent, AgentSpecialization, AgentStatus, AgentTier
 from app.models.user import User, UserRole
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
-engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
-                       poolclass=StaticPool)
-TestingSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+engine = make_engine()
+TestingSession = make_session_factory(autocommit=False, autoflush=False, bind=engine)
 
 
 class FakeStore:
@@ -124,7 +124,7 @@ def test_recent_is_newest_first_and_capped(store):
 
 @pytest.fixture(scope="module")
 def world():
-    Base.metadata.create_all(engine)
+    create_schema(engine)
     db = TestingSession()
 
     def user(email, role, name):
@@ -146,7 +146,7 @@ def world():
     db.commit()
     yield {"db": db, "m1": m1, "m2": m2, "au": au, "agent": agent}
     db.close()
-    Base.metadata.drop_all(engine)
+    drop_schema(engine)
 
 
 def test_check_in_publishes_with_its_position(store, world, monkeypatch):

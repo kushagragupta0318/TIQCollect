@@ -36,6 +36,7 @@ from app.models.ptp import PTP, PTPStatus
 from app.models.user import User, UserRole
 from app.models.visit import PersonMet, Visit, VisitOutcome
 from app.services.agent_service import AgentService
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
 TODAY = date.today()
 NOW = datetime.now(timezone.utc)
@@ -43,10 +44,9 @@ NOW = datetime.now(timezone.utc)
 
 @pytest.fixture()
 def db():
-    engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
-                           poolclass=StaticPool)
-    Base.metadata.create_all(engine)
-    s = sessionmaker(bind=engine, autoflush=False)()
+    engine = make_engine()
+    create_schema(engine)
+    s = make_session_factory(bind=engine, autoflush=False)()
     yield s
     s.close()
 

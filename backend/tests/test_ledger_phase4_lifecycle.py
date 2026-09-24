@@ -37,6 +37,7 @@ from app.models.loan import Loan, LoanStatus
 from app.models.model_prediction import ModelPrediction
 from app.models.payment import Payment, PaymentStatus
 from app.services.ml_scoring_service import MLScoringService
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
 # Sized so ONE cohort clears `MIN_MATURED_FOR_MONITORING` (500). At 260
 # borrowers the monitoring assertion skipped, which is the same as not having
@@ -45,15 +46,14 @@ CFG = LedgerConfig(n_borrowers=900, months=20, seed=23)
 AS_OF_DAY = 400
 HORIZON = 30
 
-engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
-                       poolclass=StaticPool)
-Session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+engine = make_engine()
+Session = make_session_factory(autocommit=False, autoflush=False, bind=engine)
 
 
 @pytest.fixture(scope="module")
 def lifecycle():
     """Score one cohort, advance 30 days, label it — the production sequence."""
-    Base.metadata.create_all(bind=engine)
+    create_schema(bind=engine)
     prev = settings.ML_MODEL_VERSION
     settings.ML_MODEL_VERSION = "1.2.0-ledger"
     DecisionEngine.clear_cache()
@@ -86,7 +86,7 @@ def lifecycle():
         yield ledger, db, mat, rows, summary, mature_as_of
     finally:
         db.close()
-        Base.metadata.drop_all(bind=engine)
+        drop_schema(bind=engine)
         settings.ML_MODEL_VERSION = prev
         DecisionEngine.clear_cache()
 

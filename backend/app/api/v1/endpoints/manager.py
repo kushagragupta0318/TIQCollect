@@ -35,7 +35,7 @@ from app.core.dependencies import DbSession, ManagerOnly
 from app.core.config import settings
 from app.core import llm as _llm
 from app.ml import eligibility as _elig
-from app.models.agent import Agent, AgentStatus, AgentPerformance
+from app.models.agent import Agent, AgentStatus, AgentPerformance, month_start
 # Module level, not a local import: the audit-log endpoints below share a
 # scoping helper, and a per-function import would make it easy for one of the
 # two callers to drift onto a different model reference.
@@ -555,7 +555,8 @@ _TREND_MONTHS = 5
 def _complete_months_before(anchor: date, count: int) -> list[str]:
     """The `count` complete months immediately before `anchor`'s own month.
 
-    Oldest first, as "YYYY-MM" to match AgentPerformance.month. `anchor`'s month
+    Oldest first, as "YYYY-MM" — the API's month key (AgentPerformance.month
+    is a DATE since 2026-09-24; convert with models.agent.month_start). `anchor`'s month
     is excluded because it is still accruing — see the call site.
     """
     months: list[str] = []
@@ -687,7 +688,9 @@ def _live_monthly_metrics(db, agent_ids: list[str], months: list[str]) -> dict[s
 
     def _month_of(col):
         # Postgres-only, like the enum types and psycopg2 driver this app
-        # already depends on. Matches AgentPerformance.month's "YYYY-MM" form.
+        # already depends on. Produces the API's "YYYY-MM" month key (this
+        # comment said it matched AgentPerformance.month, which is a DATE since
+        # 2026-09-24).
         return func.to_char(col, "YYYY-MM")
 
     # 1. Collected
@@ -4138,19 +4141,19 @@ def get_monthly_report(
 
         row = (
             db.query(AgentPerformance)
-            .filter(AgentPerformance.agent_id == agent_id, AgentPerformance.month == month)
+            .filter(AgentPerformance.agent_id == agent_id, AgentPerformance.month == month_start(month))
             .first()
         )
         prev_row = (
             db.query(AgentPerformance)
-            .filter(AgentPerformance.agent_id == agent_id, AgentPerformance.month == prev_month)
+            .filter(AgentPerformance.agent_id == agent_id, AgentPerformance.month == month_start(prev_month))
             .first()
         )
 
         # Team averages for the month
         team_rows = (
             db.query(AgentPerformance)
-            .filter(AgentPerformance.agent_id.in_(my_agent_ids), AgentPerformance.month == month)
+            .filter(AgentPerformance.agent_id.in_(my_agent_ids), AgentPerformance.month == month_start(month))
             .all()
         )
         n_team = len(team_rows) or 1
@@ -4272,13 +4275,13 @@ def get_monthly_report(
 
         rows = (
             db.query(AgentPerformance)
-            .filter(AgentPerformance.agent_id.in_(my_agent_ids), AgentPerformance.month == month)
+            .filter(AgentPerformance.agent_id.in_(my_agent_ids), AgentPerformance.month == month_start(month))
             .options(joinedload(AgentPerformance.agent).joinedload(Agent.user))
             .all()
         )
         prev_rows = (
             db.query(AgentPerformance)
-            .filter(AgentPerformance.agent_id.in_(my_agent_ids), AgentPerformance.month == prev_month)
+            .filter(AgentPerformance.agent_id.in_(my_agent_ids), AgentPerformance.month == month_start(prev_month))
             .all()
         )
 

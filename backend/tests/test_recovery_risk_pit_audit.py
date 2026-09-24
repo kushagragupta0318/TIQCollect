@@ -43,6 +43,7 @@ from app.models.payment import Payment, PaymentMode, PaymentStatus
 from app.models.ptp import PTP, PTPStatus
 from app.models.visit import Visit, VisitOutcome
 from app.services.ml_scoring_service import MLScoringService
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
 #: The world the audited model was fitted on, in miniature. Every observability
 #: channel on, disposition at the audited read noise.
@@ -231,10 +232,9 @@ def test_the_inclusive_lower_window_edge_is_exact(world):
 @pytest.fixture(scope="module")
 def served(world):
     led, panel = world
-    engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
-                           poolclass=StaticPool)
-    Base.metadata.create_all(bind=engine)
-    db = sessionmaker(bind=engine)()
+    engine = make_engine()
+    create_schema(bind=engine)
+    db = make_session_factory(bind=engine)()
     mat = Materialiser(led, CFG)
     mat.load(db)
     day = MONTH * CFG.cycle_days
@@ -253,7 +253,7 @@ def served(world):
         yield db, svc, loan, as_of_date
     finally:
         db.close()
-        Base.metadata.drop_all(bind=engine)
+        drop_schema(bind=engine)
 
 
 MIDNIGHT = time(0, 0, 0, 0)

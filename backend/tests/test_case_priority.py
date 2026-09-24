@@ -16,6 +16,7 @@ from app.models.case import Case, CasePriority, CaseStatus, priority_for
 from app.models.customer import Customer, RiskCategory
 from app.models.loan import DPDBucket, Loan, LoanStatus, LoanType, dpd_bucket_for
 from app.services.case_priority_service import restamp
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
 
 @pytest.mark.parametrize("dpd,want", [
@@ -58,9 +59,9 @@ def test_nobody_restates_the_ladder():
 
 
 def _book():
-    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
-    Base.metadata.create_all(bind=engine)
-    db = sessionmaker(autocommit=False, autoflush=False, bind=engine)()
+    engine = make_engine()
+    create_schema(bind=engine)
+    db = make_session_factory(autocommit=False, autoflush=False, bind=engine)()
     cust = Customer(customer_ref="CP1", full_name="B", date_of_birth="1990-01-01", gender="M", pan_masked="X",
                     aadhaar_masked="X", phone_primary="9000000001", address_line1="1", city="Delhi", state="DL",
                     pincode="110001", latitude=28.6, longitude=77.2, risk_category=RiskCategory.MEDIUM)

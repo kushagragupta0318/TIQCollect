@@ -41,6 +41,7 @@ from app.models.payment import Payment, PaymentMode, PaymentStatus
 from app.models.ptp import PTP, PTPStatus
 from app.models.visit import Visit, VisitOutcome
 from app.services.ml_scoring_service import MLScoringService, _PTP_STATUS_LEVEL, _ptp_status_level
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
 #: The wd10 recipe (every observability channel on, read noise 0.10) in
 #: miniature — the world the 2.2.0 features were developed on.
@@ -54,14 +55,13 @@ NEW = ["latest_disposition", "disposition_recency_class", "last_commit_status",
        "recent_ptp_status"]
 MODEL = RECOVERY_RISK_GAM.all_features
 
-engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
-                       poolclass=StaticPool)
-Session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+engine = make_engine()
+Session = make_session_factory(autocommit=False, autoflush=False, bind=engine)
 
 
 @pytest.fixture(scope="module")
 def world():
-    Base.metadata.create_all(bind=engine)
+    create_schema(bind=engine)
     led = LedgerSimulator(CFG).run(intercept=-4.23438)
     panel = build_panel(led, CFG)
     db = Session()
@@ -71,7 +71,7 @@ def world():
         yield led, panel, db, mat
     finally:
         db.close()
-        Base.metadata.drop_all(bind=engine)
+        drop_schema(bind=engine)
 
 
 def _as_of(day: int) -> datetime:
@@ -483,7 +483,7 @@ def test_a_promise_resolved_after_as_of_reads_open_on_the_rewound_book(world):
 
 def test_no_cases_means_none_for_every_status():
     """A loan with no case has no contact history; the levels say so."""
-    Base.metadata.create_all(bind=engine)
+    create_schema(bind=engine)
     db = Session()
     try:
         svc = MLScoringService(db)

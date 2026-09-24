@@ -29,6 +29,22 @@
 #   unchanged and still used by every existing caller; send_sms() is additive
 #   because the OTP channel was specified as SMS. See
 #   prototype_to_product/30.07.md and /changelog.md.
+# 2026-09-24 (standalone plan B22) — INVENTED NUMBERS ARE NEVER CONTACTED.
+#   The demo book is invented people with real-format Indian mobiles
+#   (seed_data draws `9` + random digits), and the only thing between a
+#   recorded visit and an SMS to a stranger was whether Twilio credentials
+#   happened to be set (coordinator audit P0-A1). Now, before any send:
+#     - an unresolved "${VAR}" credential counts as unset (a docker
+#       --env-file does not interpolate, so .env.example's
+#       `TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID}` arrived as a literal,
+#       non-empty SID and the client dialled api.twilio.com);
+#     - in DEMO_MODE, or for a demo tenant (`demo_tenant=True` from callers
+#       that know the bank/agency), a message goes out ONLY to a number on the
+#       explicit allowlist: DEMO_CONTACT_PHONE (the presenter's own phone the
+#       showcase OTP is meant to reach) plus DEMO_NOTIFY_ALLOWLIST. Everything
+#       else is suppressed and logged — never sent.
+#   Suppression returns False like any other non-send, so callers' existing
+#   "receipt_sent / sms_sent" reporting stays truthful.
 # ───────────────────────────────────────────────────────────────────────────
 """
 SMS/WhatsApp notification via Twilio.
@@ -46,6 +62,36 @@ import structlog
 from app.core.config import settings
 
 logger = structlog.get_logger()
+
+
+def _real(value: str | None) -> bool:
+    """A setting that is present AND not an uninterpolated "${VAR}" reference."""
+    return bool(value) and not str(value).strip().startswith("${")
+
+
+def twilio_configured() -> bool:
+    return _real(settings.TWILIO_ACCOUNT_SID) and _real(settings.TWILIO_AUTH_TOKEN)
+
+
+def _digits(phone: str) -> str:
+    return re.sub(r"\D", "", phone or "")
+
+
+def demo_allowlist() -> set[str]:
+    """E.164 digits (no '+') that may be contacted while demo data is live."""
+    raw = [settings.DEMO_CONTACT_PHONE, *str(getattr(settings, "DEMO_NOTIFY_ALLOWLIST", "") or "").split(",")]
+    return {NotificationService.normalize_phone(p) for p in raw if p and p.strip()}
+
+
+def outbound_allowed(phone_e164: str, *, demo_tenant: bool = False) -> bool:
+    """The one gate every send passes. Suppressed sends are logged, masked."""
+    if not (settings.DEMO_MODE or demo_tenant):
+        return True
+    if _digits(phone_e164) in demo_allowlist():
+        return True
+    logger.info("notification.suppressed_demo", to_last4=_digits(phone_e164)[-4:],
+                demo_mode=settings.DEMO_MODE, demo_tenant=demo_tenant)
+    return False
 
 
 class NotificationService:
@@ -79,18 +125,21 @@ class NotificationService:
         return cc + digits.lstrip("0")
 
     @staticmethod
-    def send_twilio(phone_e164: str, sms_body: str, wa_body: str) -> bool:
+    def send_twilio(phone_e164: str, sms_body: str, wa_body: str, *, demo_tenant: bool = False) -> bool:
         """Send SMS + WhatsApp via Twilio. Best-effort — exceptions are swallowed.
 
         Returns whether at least one message was handed to the transport.
         2026-09-11 — this returned None, so no caller could tell a delivered
         receipt from a swallowed failure. It still never raises; callers that
         ignore the result behave exactly as before. False also covers "Twilio
-        not configured" and "no sending number set": nothing was sent, and
+        not configured", "no sending number set" and (2026-09-24) "suppressed
+        because the recipient is invented demo data": nothing was sent, and
         saying so is the point.
         """
         try:
-            if not settings.TWILIO_ACCOUNT_SID or not settings.TWILIO_AUTH_TOKEN:
+            if not twilio_configured():
+                return False
+            if not outbound_allowed(phone_e164, demo_tenant=demo_tenant):
                 return False
             from twilio.rest import Client
             client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
@@ -109,7 +158,7 @@ class NotificationService:
             return False
 
     @staticmethod
-    def send_sms(phone_e164: str, sms_body: str) -> bool:
+    def send_sms(phone_e164: str, sms_body: str, *, demo_tenant: bool = False) -> bool:
         """Send an SMS only (no WhatsApp) via Twilio. Best-effort — exceptions
         are swallowed. Used for borrower payment-verification OTPs, whose
         delivery channel is SMS. When Twilio is unconfigured this is a no-op,
@@ -119,7 +168,9 @@ class NotificationService:
         send_twilio). OtpService does not read it yet; the OTP path's own
         "sent" claim remains a known gap."""
         try:
-            if not settings.TWILIO_ACCOUNT_SID or not settings.TWILIO_AUTH_TOKEN:
+            if not twilio_configured():
+                return False
+            if not outbound_allowed(phone_e164, demo_tenant=demo_tenant):
                 return False
             from twilio.rest import Client
             client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)

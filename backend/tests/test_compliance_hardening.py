@@ -41,10 +41,10 @@ from app.schemas.agent import CollectPaymentRequest, RecordVisitRequest, SetPTPR
 from app.services import notification_service as ns
 from app.services import payment_service as ps
 from app.services import visit_service as vs
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
-engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
-                       poolclass=StaticPool)
-TestingSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+engine = make_engine()
+TestingSession = make_session_factory(autocommit=False, autoflush=False, bind=engine)
 TODAY = date.today()
 
 
@@ -90,7 +90,7 @@ def _case(db, agent, ref, phone="9812345678"):
 
 @pytest.fixture(scope="module")
 def world():
-    Base.metadata.create_all(engine)
+    create_schema(engine)
     db = TestingSession()
     mgr = _user(db, "m@t.io", UserRole.AGENCY_MANAGER, "Manager", "9000000001")
     ua = _user(db, "a@t.io", UserRole.FIELD_AGENT, "Agent A", "9000000002")
@@ -102,7 +102,7 @@ def world():
     db.commit()
     yield {"db": db, "mgr": mgr, "ua": ua, "ag": ag, **cases}
     db.close()
-    Base.metadata.drop_all(engine)
+    drop_schema(engine)
 
 
 @pytest.fixture(scope="module")

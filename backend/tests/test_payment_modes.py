@@ -20,8 +20,9 @@ from app.models.customer import Customer, RiskCategory
 from app.models.loan import DPDBucket, Loan, LoanStatus, LoanType
 from app.models.payment import Payment, PaymentMode, PaymentStatus
 from app.models.user import User, UserRole
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
-engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+engine = make_engine()
 
 
 @event.listens_for(engine, "connect")
@@ -29,7 +30,7 @@ def _sqlite_helpers(dbapi_conn, _):
     dbapi_conn.create_function("to_char", 2, lambda v, f: str(v)[:7] if v else None)
 
 
-Session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Session = make_session_factory(autocommit=False, autoflush=False, bind=engine)
 NOW = datetime.now(timezone.utc).replace(day=15, hour=12, minute=0, second=0, microsecond=0)
 THIS_MONTH = NOW.strftime("%Y-%m")
 LAST_MONTH_DT = (NOW.replace(day=1) - timedelta(days=1)).replace(day=10)
@@ -51,7 +52,7 @@ def _agent(db, code, user, mgr):
 
 @pytest.fixture(scope="module")
 def book():
-    Base.metadata.create_all(bind=engine)
+    create_schema(bind=engine)
     db = Session()
     mgr = _user(db, "pm_mgr@t.in", UserRole.AGENCY_MANAGER, "Mgr")
     other = _user(db, "pm_other@t.in", UserRole.AGENCY_MANAGER, "Other")

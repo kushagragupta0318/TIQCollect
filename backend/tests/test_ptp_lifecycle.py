@@ -35,6 +35,7 @@ from app.services.ptp_lifecycle_service import (
     GRACE_DAYS, REASON_GRACE_EXPIRED, SOURCE_BACKFILL, SOURCE_NIGHTLY, process_scope,
 )
 from app.workers.tasks.ptp_lifecycle import run_for_all_managers
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
 EFF = date(2026, 9, 17)                      # the business date every test judges against
 D_TODAY, D_YESTERDAY, D_ELIGIBLE = EFF, EFF - timedelta(days=1), EFF - timedelta(days=2)
@@ -47,9 +48,9 @@ def _at(d: date, hour=12, minute=0):
 
 
 def _session():
-    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
-    Base.metadata.create_all(bind=engine)
-    return sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    engine = make_engine()
+    create_schema(bind=engine)
+    return make_session_factory(autocommit=False, autoflush=False, bind=engine)
 
 
 class World:

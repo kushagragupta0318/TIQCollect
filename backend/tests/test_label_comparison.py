@@ -44,6 +44,7 @@ from app.models.repayment_snapshot import (
     OUTCOME_CENSORED, OUTCOME_NO_PAYMENT, OUTCOME_PARTIAL, POSITIVE_OUTCOMES,
 )
 from app.models.user import User, UserRole
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
 HORIZON = settings.REPAYMENT_OUTCOME_HORIZON_DAYS
 AS_OF = date(2026, 7, 1)
@@ -53,16 +54,15 @@ OVERDUE = 24000.0
 EMI = 8000.0
 THRESHOLD = MATERIAL_PAYMENT_RATIO * min(OVERDUE, EMI)      # 6400.0
 
-test_engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
-                            poolclass=StaticPool)
-Session = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
+test_engine = make_engine()
+Session = make_session_factory(autocommit=False, autoflush=False, bind=test_engine)
 
 
 @pytest.fixture(autouse=True)
 def setup_db():
-    Base.metadata.create_all(bind=test_engine)
+    create_schema(bind=test_engine)
     yield
-    Base.metadata.drop_all(bind=test_engine)
+    drop_schema(bind=test_engine)
 
 
 @pytest.fixture

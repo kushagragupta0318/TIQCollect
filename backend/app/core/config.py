@@ -161,6 +161,11 @@ class Settings(BaseSettings):
     # number here — no reseed, no rebuild; a backend restart applies it.
     DEMO_CONTACT_NAME: str = "Balraj Singh"
     DEMO_CONTACT_PHONE: str = "8015935790"
+    # 2026-09-24 (B22) — while DEMO_MODE is on (or the tenant is a demo
+    # tenant), SMS/WhatsApp go ONLY to DEMO_CONTACT_PHONE and to the numbers
+    # listed here (comma-separated, any format). Every other recipient is
+    # invented demo data and is suppressed, never contacted.
+    DEMO_NOTIFY_ALLOWLIST: str = ""
     # customer_ref of that showcase customer. Also what _sync_demo_contact()
     # renames on startup, so the name/phone and the anchoring agree by
     # construction instead of by two copies of the same literal.

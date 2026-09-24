@@ -20,12 +20,13 @@ from app.models.case import Case
 from app.models.customer import Customer
 from app.models.loan import Loan, dpd_bucket_for
 from app.workers.tasks import demo_daily_feed as feed
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
 
 def _db():
-    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
-    Base.metadata.create_all(bind=engine)
-    return sessionmaker(autocommit=False, autoflush=False, bind=engine)()
+    engine = make_engine()
+    create_schema(bind=engine)
+    return make_session_factory(autocommit=False, autoflush=False, bind=engine)()
 
 
 def test_seed_day_creates_a_pool_batch_with_consistent_buckets():

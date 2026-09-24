@@ -25,6 +25,7 @@ from app.models.payment import Payment, PaymentMode, PaymentStatus
 import app.services.otp_service as otp_module
 from app.services.otp_service import OtpService
 from app.services.payment_service import PaymentService
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
 
 # ── Minimal in-process fake Redis (only the commands OtpService uses) ─────────
@@ -95,9 +96,9 @@ def test_masked_phone_shows_last_four():
 
 @pytest.fixture()
 def db():
-    engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
-    Base.metadata.create_all(engine)
-    session = sessionmaker(bind=engine)()
+    engine = make_engine()
+    create_schema(engine)
+    session = make_session_factory(bind=engine)()
     try:
         yield session
     finally:

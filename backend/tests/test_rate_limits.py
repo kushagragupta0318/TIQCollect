@@ -23,16 +23,16 @@ from app.core.database import Base, get_db
 from app.core.ratelimit import limiter
 from app.core.security import create_agent_verify_token
 from app.main import app
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
-engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
-                       poolclass=StaticPool)
-TestingSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+engine = make_engine()
+TestingSession = make_session_factory(autocommit=False, autoflush=False, bind=engine)
 LIMIT = settings.AUTH_RATE_LIMIT_PER_MINUTE
 
 
 @pytest.fixture(scope="module")
 def client():
-    Base.metadata.create_all(engine)
+    create_schema(engine)
 
     def override():
         db = TestingSession()
@@ -44,7 +44,7 @@ def client():
     with TestClient(app) as c:
         yield c
     app.dependency_overrides.pop(get_db, None)
-    Base.metadata.drop_all(engine)
+    drop_schema(engine)
 
 
 @pytest.fixture(autouse=True)

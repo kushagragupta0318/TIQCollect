@@ -32,21 +32,21 @@ from app.ml.pipeline.outcomes import (
     MATERIAL_PAYMENT_RATIO, OUTCOME_DEFINITION_VERSION, OutcomeStatus,
     attach_outcomes, evaluate, payment_window,
 )
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
 HORIZON = 30
 AS_OF = date(2026, 7, 1)
 TODAY = date(2026, 9, 1)          # comfortably past the horizon
 
-test_engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
-                            poolclass=StaticPool)
-Session = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
+test_engine = make_engine()
+Session = make_session_factory(autocommit=False, autoflush=False, bind=test_engine)
 
 
 @pytest.fixture(autouse=True)
 def setup_db():
-    Base.metadata.create_all(bind=test_engine)
+    create_schema(bind=test_engine)
     yield
-    Base.metadata.drop_all(bind=test_engine)
+    drop_schema(bind=test_engine)
 
 
 @pytest.fixture

@@ -38,6 +38,7 @@ from app.models.base import Base
 from app.models.case import Case, CaseStatus
 from app.models.user import UserRole
 from tests.test_visit_priority_service import TODAY, Session, _build, engine
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
 ENDPOINT = (pathlib.Path(__file__).resolve().parents[1]
             / "app" / "api" / "v1" / "endpoints" / "manager.py")
@@ -52,8 +53,8 @@ def client(request):
     so an unassigned fixture would return an empty page and every assertion
     below would pass vacuously.
     """
-    Base.metadata.drop_all(engine)
-    Base.metadata.create_all(engine)
+    drop_schema(engine)
+    create_schema(engine)
     db = Session()
     _build(db)
     for i, case in enumerate(db.query(Case).order_by(Case.case_number).all()):
