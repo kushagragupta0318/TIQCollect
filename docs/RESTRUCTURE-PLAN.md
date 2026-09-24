@@ -120,6 +120,15 @@ ADRs seeded in step 1.11:
 - 0005 champion 2.2.0 and its known limits (KS 38.66 < 39; ML-1)
 - 0006 the comment and doc standard
 
+**Added 2026-09-24:**
+- **1.15** writes the missing exploration-eligibility test: every explored case still passes
+  every hard gate, each gate re-checked independently.
+  - CLAUDE.md cited `test_exploration_never_sends_a_case_to_an_ineligible_agent`, and it
+    does not exist.
+  - It lands before N04 adds the DRA gate.
+  - `global_allocator.py` is unowned, but 43 edits the planner, so agree the fixture shape
+    first.
+
 ### Triage of the business lead's walkthrough findings (2026-09-24)
 
 Proposed owners. The coordinator assigns them.
