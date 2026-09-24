@@ -1,5 +1,5 @@
-// Sample data for the component gallery (/bank/_gallery). Illustrative, not
-// live: a mid-sized bank's retail collections book, internally consistent so
+// Sample data for the component gallery (/bank/_gallery). INVENTED, not any
+// bank's book: a mid-sized bank's retail collections book, internally consistent so
 // the screenshots read like a real screen — the DPD ladder, the funnel and the
 // product × bucket grid all sum to the same ₹612.4 Cr delinquent exposure, and
 // every transition-matrix row sums to 100. Agency names are invented.
@@ -229,6 +229,15 @@ export const RECOVERY_CURVE = DAILY.map((collected, i) => {
 });
 
 /* ── Cost to collect ──────────────────────────────────────────────────── */
+
+/** Share of each bucket's accounts worked this cycle (%). Falls with DPD, as effort per account rises. */
+export const COVERAGE_PCT_BY_BUCKET: Record<string, number> = {
+  "1-30": 72.4,
+  "31-60": 61.8,
+  "61-90": 48.2,
+  "90-180": 36.5,
+  "180+": 22.9,
+};
 
 export const COST_BY_BUCKET = [
   { bucket: "1-30", costPerAccount: 186, costPer100: 1.9 },

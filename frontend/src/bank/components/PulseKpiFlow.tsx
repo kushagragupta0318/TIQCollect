@@ -6,6 +6,7 @@
 // the basis tooltip is the native `title` attribute.
 import { Minus, TrendingDown, TrendingUp } from "lucide-react";
 import { trendDisplay, type Kpi, type KpiRow } from "./kpi";
+import { SampleDataNote } from "./SampleDataNote";
 
 const TREND_ICON = { up: TrendingUp, down: TrendingDown, flat: Minus } as const;
 
@@ -47,10 +48,12 @@ export interface PulseKpiFlowProps {
   /** The frame label on the right, e.g. "30 days to 22 Sep 2026". */
   frameLabel?: string;
   narrative?: string;
+  /** Mark the figures as invented (the gallery). */
+  sampleData?: boolean;
   onSelect?: (drill: string) => void;
 }
 
-export function PulseKpiFlow({ kpis, rows, title = "Portfolio Health", frameLabel, narrative, onSelect }: PulseKpiFlowProps) {
+export function PulseKpiFlow({ kpis, rows, title = "Portfolio Health", frameLabel, narrative, sampleData = false, onSelect }: PulseKpiFlowProps) {
   if (!kpis.length) return null;
   const byId = new Map(kpis.map((k) => [k.id, k]));
   // Card index runs across both rows, as CC's `cardIndex++` does.
@@ -60,7 +63,10 @@ export function PulseKpiFlow({ kpis, rows, title = "Portfolio Health", frameLabe
     <section className="mb-10">
       <div className="mb-5 flex items-baseline justify-between gap-4 px-1">
         <h2 className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">{title}</h2>
-        {frameLabel && <span className="text-[11px] font-medium text-muted-foreground">{frameLabel}</span>}
+        <div className="flex items-baseline gap-3">
+          {sampleData && <SampleDataNote />}
+          {frameLabel && <span className="text-[11px] font-medium text-muted-foreground">{frameLabel}</span>}
+        </div>
       </div>
 
       <div className="space-y-5">

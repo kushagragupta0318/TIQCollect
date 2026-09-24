@@ -2,19 +2,20 @@
 // `/bank/*` (plan §2.4). It guards the roles, mounts the Command Center shell
 // and registers every page in navigation.ts, so the sidebar and the router
 // cannot list different screens.
-import { lazy, Suspense, useCallback } from "react";
+import { Suspense, useCallback } from "react";
 import { Navigate, Route, Routes, useNavigate } from "react-router";
 import api from "@/api/axios";
 import { useAuthStore } from "@/store/authStore";
 import { AnalyticsLoading } from "./components/analytics";
+// Null unless the gallery is enabled (galleryFlag.ts); lazy when it is, so
+// Recharts and the sample data never sit in the shell's chunk.
+import { BankComponentGalleryPage } from "./galleryFlag";
 import { BankLayout } from "./layout/BankLayout";
 import { guardRedirect } from "@/lib/roles";
 import { BANK_PORTAL_ROLES, BANK_ROLE_LABELS, isBankPortalRole } from "./layout/bankRoles";
 import { BANK_NAV_ITEMS } from "./layout/navigation";
 import { BankPlaceholderPage } from "./pages/BankPlaceholderPage";
 
-// Recharts and the sample data stay out of the shell's chunk.
-const BankComponentGalleryPage = lazy(() => import("./pages/BankComponentGalleryPage"));
 
 export default function BankApp() {
   const { isAuthenticated, user, logout } = useAuthStore();
@@ -46,14 +47,16 @@ export default function BankApp() {
         {BANK_NAV_ITEMS.map((item) => (
           <Route key={item.path} path={item.path} element={<BankPlaceholderPage item={item} />} />
         ))}
-        <Route
-          path="_gallery"
-          element={
-            <Suspense fallback={<AnalyticsLoading label="Loading gallery…" />}>
-              <BankComponentGalleryPage />
-            </Suspense>
-          }
-        />
+        {BankComponentGalleryPage && (
+          <Route
+            path="_gallery"
+            element={
+              <Suspense fallback={<AnalyticsLoading label="Loading gallery…" />}>
+                <BankComponentGalleryPage />
+              </Suspense>
+            }
+          />
+        )}
         <Route path="*" element={<Navigate to="overview" replace />} />
       </Route>
     </Routes>

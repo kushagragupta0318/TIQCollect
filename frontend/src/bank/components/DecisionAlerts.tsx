@@ -8,6 +8,7 @@ import { DPD_COLORS } from "../theme/colors";
 import { n, rs } from "../theme/format";
 import { BucketChip } from "./analytics";
 import { severityStyle, type AlertSeverity } from "./alertSeverity";
+import { SampleDataNote } from "./SampleDataNote";
 
 export interface AlertAccountRow {
   accountId: string;
@@ -133,8 +134,16 @@ export interface DecisionAlertsProps {
   /** null while the rules are still running. */
   alerts: DecisionAlert[] | null;
   onAction?: (target: string) => void;
+  /**
+   * CC's is "AI Alerts". The bank's alerts are SQL rules (task C06), and this
+   * repo does not let a rule present itself as AI (CLAUDE.md), so the default
+   * is plain "Alerts" — a recorded deviation (UI spec §9).
+   */
   title?: string;
+  /** Provenance line. No default: CC's "Derived live from the loan book…" is a claim only the caller can make. */
   subtitle?: string;
+  /** Mark the cards as invented figures (the gallery). */
+  sampleData?: boolean;
   /** Open one card initially (screenshots, deep links). */
   defaultOpenId?: string | null;
 }
@@ -142,8 +151,9 @@ export interface DecisionAlertsProps {
 export function DecisionAlerts({
   alerts,
   onAction,
-  title = "AI Alerts",
-  subtitle = "Derived live from the loan book — the same population and period as the Portfolio Overview",
+  title = "Alerts",
+  subtitle,
+  sampleData = false,
   defaultOpenId = null,
 }: DecisionAlertsProps) {
   const [openId, setOpenId] = useState<string | null>(defaultOpenId);
@@ -163,11 +173,14 @@ export function DecisionAlerts({
       <div className="flex items-center justify-between mb-4 px-1 gap-3 flex-wrap">
         <div>
           <h2 className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest">{title}</h2>
-          <p className="text-[11px] text-muted-foreground mt-1">{subtitle}</p>
+          {subtitle && <p className="text-[11px] text-muted-foreground mt-1">{subtitle}</p>}
         </div>
-        <span className="text-[10px] text-muted-foreground font-semibold bg-muted px-2.5 py-1 rounded-full border border-border/50">
-          {alerts.length} active
-        </span>
+        <div className="flex items-center gap-2">
+          {sampleData && <SampleDataNote />}
+          <span className="text-[10px] text-muted-foreground font-semibold bg-muted px-2.5 py-1 rounded-full border border-border/50">
+            {alerts.length} active
+          </span>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">

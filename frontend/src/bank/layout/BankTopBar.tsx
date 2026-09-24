@@ -19,12 +19,19 @@ export interface StandingAlert {
 export interface BankTopBarProps {
   product: string;
   geography: string;
+  /**
+   * CC hard-codes a pulsing "Live System" dot. Here it shows only when the
+   * caller has a real signal to put behind it (e.g. the bank feed's last
+   * successful ingest); absent, nothing is claimed. Recorded as a deviation
+   * in the UI spec §9.
+   */
+  systemStatus?: { label: string; live: boolean };
   standingAlert?: StandingAlert;
   searchExtra?: SearchEntry[];
   onRaiseQuery?: () => void;
 }
 
-export function BankTopBar({ product, geography, standingAlert, searchExtra, onRaiseQuery }: BankTopBarProps) {
+export function BankTopBar({ product, geography, systemStatus, standingAlert, searchExtra, onRaiseQuery }: BankTopBarProps) {
   // The chrome date, fixed at mount (CC recomputes it on every render).
   const [today] = useState(() => chromeDate(new Date()));
 
@@ -35,13 +42,15 @@ export function BankTopBar({ product, geography, standingAlert, searchExtra, onR
           <h1 className="text-[15px] font-bold text-foreground">Command Center</h1>
         </div>
         <div className="flex items-center gap-4 text-[12px] text-muted-foreground font-medium">
-          <span className="flex items-center gap-1.5">
-            <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-75" />
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-success" />
+          {systemStatus && (
+            <span className="flex items-center gap-1.5">
+              <span className="relative flex h-2 w-2" aria-hidden="true">
+                {systemStatus.live && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-75" />}
+                <span className={`relative inline-flex rounded-full h-2 w-2 ${systemStatus.live ? "bg-success" : "bg-muted-foreground"}`} />
+              </span>
+              {systemStatus.label}
             </span>
-            Live System
-          </span>
+          )}
           <span className="flex items-center gap-1 capitalize">
             <Package size={11} />
             {product}

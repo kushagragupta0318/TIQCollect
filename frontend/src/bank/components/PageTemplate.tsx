@@ -12,21 +12,27 @@ export function PageRoot({ children }: { children: ReactNode }) {
 
 export interface ExecutiveHeaderProps {
   title: string;
-  /** The live-dot meta line, e.g. ["Live book", "4,82,310 accounts", "As of 24 Sep 2026"]. */
+  /** The meta line, e.g. ["Live book", "4,82,310 accounts", "As of 24 Sep 2026"]. */
   meta?: string[];
+  /**
+   * Show CC's pulsing green "live" dot before the meta line. Only for a page
+   * whose figures really come from the live book — CC always shows it; here it
+   * must be earned (sample and placeholder pages leave it off).
+   */
+  live?: boolean;
   /** The right-hand scope note. */
   scopeNote?: ReactNode;
 }
 
 /** Variant A — Overview, Decision Center: title left, scope note right, no actions. */
-export function ExecutiveHeader({ title, meta = [], scopeNote }: ExecutiveHeaderProps) {
+export function ExecutiveHeader({ title, meta = [], live = false, scopeNote }: ExecutiveHeaderProps) {
   return (
     <div className="mb-8 flex flex-col justify-between gap-4 md:flex-row md:items-end">
       <div>
         <h2 className="text-2xl font-bold text-foreground tracking-tight">{title}</h2>
         {meta.length > 0 && (
           <div className="flex items-center gap-2 text-[11px] text-muted-foreground font-semibold mt-1 flex-wrap">
-            <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse inline-block" />
+            {live && <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse inline-block" aria-hidden="true" />}
             {meta.map((m, i) => (
               <Fragment key={`${i}-${m}`}>
                 {i > 0 && <span>·</span>}

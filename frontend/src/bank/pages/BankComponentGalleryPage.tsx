@@ -33,6 +33,7 @@ import {
   AS_OF,
   BUDGET_ROWS,
   COST_BY_BUCKET,
+  COVERAGE_PCT_BY_BUCKET,
   CURE_ROLL,
   DELINQUENT_TREND,
   DPD_LADDER,
@@ -222,12 +223,12 @@ export default function BankComponentGalleryPage() {
     <PageRoot>
       <ExecutiveHeader
         title="Component Gallery"
-        meta={["Illustrative sample book", `As of ${AS_OF}`, "Tasks UI02–UI05"]}
-        scopeNote="Every Command Center token, primitive and composite ported to the bank portal, on sample data. Parity screenshots are taken from this page."
+        meta={["Sample book — invented figures", `Sample date ${AS_OF}`, "Tasks UI02–UI05"]}
+        scopeNote="Every Command Center token, primitive and composite ported to the bank portal, on an invented sample book. Nothing here is the bank's data. Parity screenshots are taken from this page."
       />
 
       {/* ── KPI flow ───────────────────────────────────────────────────── */}
-      <PulseKpiFlow kpis={KPIS} rows={KPI_ROWS} frameLabel={`30 days to ${AS_OF}`} narrative={KPI_NARRATIVE} onSelect={jumpToTab} />
+      <PulseKpiFlow kpis={KPIS} rows={KPI_ROWS} frameLabel={`30 days to ${AS_OF}`} narrative={KPI_NARRATIVE} sampleData onSelect={jumpToTab} />
 
       {/* ── Analytics ──────────────────────────────────────────────────── */}
       <div id="portfolio-analytics" ref={analyticsRef} className="scroll-mt-4">
@@ -290,7 +291,7 @@ export default function BankComponentGalleryPage() {
                     <CureRollBars flows={CURE_ROLL} />
                   </Panel>
                 </div>
-                <Panel title="Delinquent population — 12-month trajectory" hint="accounts, from the monthly DPD panel">
+                <Panel title="Delinquent population — 12-month trajectory" hint="accounts, sample monthly series">
                   <TrendAreaChart
                     data={DELINQUENT_TREND}
                     xKey="month"
@@ -352,8 +353,8 @@ export default function BankComponentGalleryPage() {
                 </Panel>
                 <Panel title="Coverage — who actually got worked">
                   <div className="space-y-3.5">
-                    {DPD_LADDER.map((b, i) => {
-                      const coverage = [72.4, 61.8, 48.2, 36.5, 22.9][i];
+                    {DPD_LADDER.map((b) => {
+                      const coverage = COVERAGE_PCT_BY_BUCKET[b.bucket];
                       return (
                         <DrillRow key={b.bucket} onDrill={() => openDrill(`${b.bucket} DPD`, b.exposureCr, b.accounts, b.sharePct)} className="block p-1.5 -m-1.5">
                           <div className="flex items-baseline justify-between mb-1.5">
@@ -389,7 +390,12 @@ export default function BankComponentGalleryPage() {
 
       {/* ── Alerts: every severity; the first opens with its detail ─────── */}
       <div className="pt-4">
-        <DecisionAlerts alerts={ALERTS} defaultOpenId="untouched_placed" subtitle="Derived live from the placed book — the same population and period as the Overview" />
+        <DecisionAlerts
+          alerts={ALERTS}
+          defaultOpenId="untouched_placed"
+          subtitle="Sample alerts on the invented book — they show the card, not a rule's result"
+          sampleData
+        />
       </div>
 
       {/* ── Overlays ───────────────────────────────────────────────────── */}
@@ -552,8 +558,8 @@ export default function BankComponentGalleryPage() {
               <p className="text-[13px] font-semibold text-foreground">.card-base · .icon-circle</p>
             </div>
             <div className="flex flex-wrap gap-2">
-              <span className="chip-badge bg-success/10 text-success">Live</span>
-              <span className="chip-badge bg-warning/10 text-warning">Simulation</span>
+              <span className="chip-badge bg-success/10 text-success">Success chip</span>
+              <span className="chip-badge bg-warning/10 text-warning">Warning chip</span>
             </div>
           </div>
           <div className="card-base p-6 space-y-3">
@@ -620,12 +626,13 @@ export default function BankComponentGalleryPage() {
         </Card>
       </GallerySection>
 
-      {drill && <DrillPanel drillKey={drill.key} data={drill.data} onClose={() => setDrill(null)} />}
+      {drill && <DrillPanel drillKey={drill.key} data={drill.data} sampleData onClose={() => setDrill(null)} />}
 
       {workspaceOpen && (
         <WorkspaceModal
           tool={{ panel: "budget", label: "Budget Optimizer" }}
           mode="Simulation — allocation is not applied until you confirm"
+          sampleData
           onRunAnalysis={() => setBudgetRuns((r) => r + 1)}
           getExport={() => ({
             filename: "budget-optimizer.csv",

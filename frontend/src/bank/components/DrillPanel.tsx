@@ -12,6 +12,7 @@ import { BRAND, DPD_COLORS } from "../theme/colors";
 import { cr, rs } from "../theme/format";
 import { getBankPortalRoot } from "../lib/portal";
 import { BucketChip } from "./analytics";
+import { SampleDataNote } from "./SampleDataNote";
 import { splitBarWidth } from "./visualMath";
 
 export interface DrillSplitItem {
@@ -57,6 +58,8 @@ export interface DrillPanelProps {
   drillKey: string;
   data: DrillData | null;
   error?: boolean;
+  /** Mark the slice as invented figures (the gallery). The drawer portals out of the page, so it needs its own marker. */
+  sampleData?: boolean;
   onClose: () => void;
 }
 
@@ -97,7 +100,7 @@ function Centered({ children }: { children: ReactNode }) {
   return <p className="text-xs text-muted-foreground py-16 text-center font-medium">{children}</p>;
 }
 
-export function DrillPanel({ drillKey, data, error = false, onClose }: DrillPanelProps) {
+export function DrillPanel({ drillKey, data, error = false, sampleData = false, onClose }: DrillPanelProps) {
   useEffect(() => {
     const esc = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -124,6 +127,11 @@ export function DrillPanel({ drillKey, data, error = false, onClose }: DrillPane
             <p className="text-[11px] font-medium text-muted-foreground">Drill-down</p>
             <h3 className="text-lg font-extrabold text-foreground tracking-tight truncate mt-0.5">{data?.title || drillKey}</h3>
             {data?.subtitle && <p className="text-[11px] font-semibold text-muted-foreground mt-1">{data.subtitle}</p>}
+            {sampleData && (
+              <div className="mt-2">
+                <SampleDataNote />
+              </div>
+            )}
           </div>
           <button
             onClick={onClose}

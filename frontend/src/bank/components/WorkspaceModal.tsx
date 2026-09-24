@@ -8,6 +8,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { CheckCircle, Download, Play, RefreshCw, Save, Settings, Share2, X } from "lucide-react";
 import { getBankPortalRoot } from "../lib/portal";
+import { SampleDataNote } from "./SampleDataNote";
 import { scenarioStorageKey, toCsv, type WorkspaceExport, type WorkspaceTool } from "./workspace";
 
 export interface WorkspaceModalProps {
@@ -20,6 +21,8 @@ export interface WorkspaceModalProps {
   getExport?: () => WorkspaceExport | null;
   /** Extra state to keep with a saved scenario. */
   getScenarioState?: () => unknown;
+  /** Mark the workspace as invented figures (the gallery). It portals out of the page, so it needs its own marker. */
+  sampleData?: boolean;
   onClose: () => void;
   children?: ReactNode;
 }
@@ -30,6 +33,7 @@ export function WorkspaceModal({
   onRunAnalysis,
   getExport,
   getScenarioState,
+  sampleData = false,
   onClose,
   children,
 }: WorkspaceModalProps) {
@@ -139,6 +143,7 @@ export function WorkspaceModal({
               <h2 className="text-lg font-extrabold text-foreground tracking-tight">{tool.label || "Workspace"}</h2>
               <p className="text-[11px] font-semibold text-muted-foreground">{mode}</p>
             </div>
+            {sampleData && <SampleDataNote />}
           </div>
           <div className="flex items-center gap-2">
             <button onClick={handleSaveScenario} title="Save scenario to browser storage" className="btn-secondary flex items-center gap-1.5 text-xs">
