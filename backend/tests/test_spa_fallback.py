@@ -12,9 +12,8 @@
 # deploy, or /sw.js after a service-worker rollback, getting HTML where it
 # expected JavaScript). Every other unknown path is unchanged.
 #
-# And the containment fix beside it (same as hotfix/spa-containment): static
-# file serving could read outside the static root; anything that resolves
-# outside static/ is now a 404.
+# Containment (paths outside static/) is covered once, in
+# tests/test_spa_containment.py, which came in with hotfix/spa-containment.
 import os
 
 from app.main import _spa_target
@@ -73,45 +72,3 @@ def test_a_missing_non_js_asset_still_falls_back_to_index_html(tmp_path):
     index = os.path.join(str(tmp_path), "index.html")
     _touch(index, "<html>shell</html>")
     assert _spa_target("assets/app.css", str(tmp_path)) == index
-
-
-def _static_beside_a_secret(tmp_path):
-    secret = os.path.join(str(tmp_path), "secret.txt")
-    _touch(secret, "TOP SECRET")
-    static_dir = os.path.join(str(tmp_path), "static")
-    _touch(os.path.join(static_dir, "index.html"), "<html>shell</html>")
-    return static_dir, secret
-
-
-def test_dot_dot_out_of_static_is_refused(tmp_path):
-    """Parent segments, as the server decodes them before routing."""
-    static_dir, _ = _static_beside_a_secret(tmp_path)
-    assert _spa_target("../secret.txt", static_dir) is None
-    assert _spa_target("assets/../../secret.txt", static_dir) is None
-    assert _spa_target("../../../outside/file.txt", static_dir) is None
-
-
-def test_an_absolute_path_is_refused(tmp_path):
-    """os.path.join discards the root when the second part is absolute."""
-    static_dir, secret = _static_beside_a_secret(tmp_path)
-    assert _spa_target(secret, static_dir) is None
-    assert _spa_target("/outside/file.txt", static_dir) is None
-
-
-def test_a_symlink_pointing_out_of_static_is_refused(tmp_path):
-    static_dir, secret = _static_beside_a_secret(tmp_path)
-    try:
-        os.symlink(secret, os.path.join(static_dir, "innocent.txt"))
-    except (OSError, NotImplementedError):
-        import pytest
-        pytest.skip("symlinks unavailable on this filesystem")
-    assert _spa_target("innocent.txt", static_dir) is None
-
-
-def test_dot_dot_that_stays_inside_static_is_still_served(tmp_path):
-    """Containment, not a blanket ban on "..": a path that resolves inside
-    static/ is an ordinary request."""
-    static_dir, _ = _static_beside_a_secret(tmp_path)
-    _touch(os.path.join(static_dir, "favicon.svg"), "<svg/>")
-    target = _spa_target("assets/../favicon.svg", static_dir)
-    assert target == os.path.realpath(os.path.join(static_dir, "favicon.svg"))
