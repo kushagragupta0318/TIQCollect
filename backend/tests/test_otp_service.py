@@ -381,3 +381,28 @@ def test_verification_path_is_untouched_by_delivery_result(db, fake_redis, monke
         OtpService(db).verify(_agent(), "case-1", res["otp_id"], "0000")
     assert fake_redis.hgetall(OtpService._otp_key(res["otp_id"]))["attempts"] == "1"
     assert OtpService(db).verify(_agent(), "case-1", res["otp_id"], "1234")["verified"] is True
+
+
+# ── Demo echo of the code (2026-09-24) ───────────────────────────────────────
+# The public platform deployment runs DEMO_MODE=true, and the echo used to ride
+# on DEMO_MODE: the agent's own response carried the borrower's code. It now
+# needs DEMO_OTP_ECHO, which no deployment gets by accident.
+
+def test_demo_mode_alone_does_not_hand_the_agent_the_borrowers_code(db, fake_redis, monkeypatch):
+    _seed_case(db)
+    _sms(monkeypatch, False)
+    monkeypatch.setattr(settings, "DEMO_MODE", True)
+    monkeypatch.setattr(settings, "DEMO_OTP_ECHO", False)
+    res = OtpService(db).generate_and_send(_agent(), "case-1", 5000.0)
+    assert "demo_otp" not in res
+    assert res["otp_id"]                      # the OTP itself is still issued
+
+
+def test_the_code_is_echoed_only_when_the_echo_is_switched_on(db, fake_redis, monkeypatch):
+    _seed_case(db)
+    _sms(monkeypatch, False)
+    monkeypatch.setattr(OtpService, "_generate_code", staticmethod(lambda: "2468"))
+    monkeypatch.setattr(settings, "DEMO_MODE", False)
+    monkeypatch.setattr(settings, "DEMO_OTP_ECHO", True)
+    res = OtpService(db).generate_and_send(_agent(), "case-1", 5000.0)
+    assert res["demo_otp"] == "2468"

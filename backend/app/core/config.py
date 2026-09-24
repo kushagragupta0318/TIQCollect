@@ -157,6 +157,10 @@ class Settings(BaseSettings):
     # contact (DEMO0003) name/phone is synced from the vars below on startup.
     # Leave false in real deployments — none of this touches non-demo data.
     DEMO_MODE: bool = False
+    # Return the borrower's payment OTP to the agent's app, for a demo with no SMS
+    # transport. It lets an agent confirm a payment without the borrower, so it is
+    # its own switch: a public deployment running DEMO_MODE must not get it too.
+    DEMO_OTP_ECHO: bool = False
     # The showcase customer (DEMO0003). Swap the phone to your CEO's / manager's
     # number here — no reseed, no rebuild; a backend restart applies it.
     DEMO_CONTACT_NAME: str = "Balraj Singh"
@@ -492,6 +496,15 @@ class Settings(BaseSettings):
 
     RATE_LIMIT_PER_MINUTE: int = 60
     AUTH_RATE_LIMIT_PER_MINUTE: int = 10
+    # Peers whose X-Forwarded-For is believed: IPs or CIDRs, uvicorn's
+    # FORWARDED_ALLOW_IPS format. The limiter keys on the client address, and
+    # behind a reverse proxy every request arrives from the proxy, so without
+    # this every user shares one bucket. The default trusts loopback and private
+    # networks only. In the platform deployment the API port is reachable only
+    # from the Docker network, so an internet client cannot choose its own
+    # address. Narrow this to the proxy's address wherever the port is exposed
+    # on a LAN.
+    FORWARDED_ALLOW_IPS: str = "127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
 
     # Razorpay
     RAZORPAY_TEST_API: str = ""

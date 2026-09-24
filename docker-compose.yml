@@ -173,6 +173,9 @@ services:
       # physically at a seeded Gurugram address. DEMO_MODE re-anchors the demo
       # customers to the agent's live GPS on check-in.
       DEMO_MODE: ${DEMO_MODE:-true}
+      # Local only: shows the borrower OTP in the agent app, since dev sends no
+      # SMS. Never set it on a deployment people outside the team can reach.
+      DEMO_OTP_ECHO: ${DEMO_OTP_ECHO:-true}
       # RBI contact hours are enforced with a real 403. Left open so the app
       # works outside 08:00-19:00 IST; set 8 and 19 for true behaviour.
       CONTACT_HOUR_START: ${CONTACT_HOUR_START:-0}
