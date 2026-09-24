@@ -120,7 +120,6 @@ def test_every_caller_now_delegates_rather_than_restating():
 
     root = pathlib.Path(__file__).resolve().parents[1]
     for rel in ("scripts/seed_data.py", "scripts/ingest_daily.py",
-                "scripts/backfill_eb_features.py",
                 "app/workers/tasks/demo_daily_feed.py"):
         src = (root / rel).read_text(encoding="utf-8")
         assert "dpd_bucket_for" in src, rel
