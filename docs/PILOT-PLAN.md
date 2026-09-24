@@ -11,9 +11,9 @@ and `ECONOMICS.md`. The engineering sequencing is in [RESTRUCTURE-PLAN.md](RESTR
 ## Milestone — paused 2026-09-24 (owner offline), tiqcollect-bb
 
 **Branches and heads.**
-- `lead-structure` **f11ef83** (C:\dev	iq\lead): 32 commits on c75053a (33 with this milestone commit).
-- `hotfix/live-security-2` **b1caf04** (C:\dev	iq\hotfix2).
-- `ci/test-env` **e8f41f7** (C:\dev	iq\ci). It is merged into TIQCollect-app as 9deb0e4
+- `lead-structure` **f11ef83** (C:\dev\tiq\lead): 32 commits on c75053a (33 with this milestone commit).
+- `hotfix/live-security-2` **b1caf04** (C:\dev\tiq\hotfix2).
+- `ci/test-env` **e8f41f7** (C:\dev\tiq\ci). It is merged into TIQCollect-app as 9deb0e4
   up to 8b0c209; e8f41f7 (pyarrow) is not yet merged.
 - Local archive tags: `archive/research-2026-09`, `archive/field-ops-contract-2026-09`,
   `archive/plan-fleet-2026-09`. The owner pushes them.
