@@ -41,7 +41,7 @@ Rules for every step:
 | D7 | `plan_fleet` (142 lines, built and tested, never wired) | Keep **only if** wiring the multi-vehicle CVRPTW is on the roadmap (feature #5); otherwise delete | — |
 | D8 | Docs nothing links to: `decision-flow.pdf`, `TIQCollect-feature-tracker.xlsx`, `COMPETITIVE-ANALYSIS.md`, `CALL-ROUND-PLAN.md`; stale `case-allocation.{html,pdf}`, `PLAN.md`, root `ML-PLATFORM-PLAN.md` | Business docs **move** to `docs/business/` (business lead). Stale engineering docs are **deleted**, their true parts absorbed into ARCHITECTURE and ADRs | step 1.11 |
 | D9 | Prediction logging: every re-plan re-logs the whole pool (the monitor already de-duplicates 4.3×), and `model_predictions` has no retention | **Log once per (case, as_of_date); keep 13 months.** It touches the ML feedback loop, so it is the owner's call | about 7 GB/month less per 1,000 agents (§4) |
-| D10 | Visit-notification SMS + WhatsApp to the borrower on **every** visit (`visit_service.py:407`) | A business-lead question. With 15 visits a day this is the largest variable cost (§4.4) | — |
+| D10 | Visit-notification SMS + WhatsApp to the borrower on every **non-payment** visit (`visit_service.py:278,407`). It discloses the outstanding amount to whoever holds the phone, including after a DECEASED outcome | The business lead recommends **default off, per-lender setting**. It costs about ₹1,850 per agent-month on Twilio (§4.4) | — |
 | D11 | Frontend test tooling: add `@testing-library/react` + `jsdom` (dev only) | **Yes.** No page has a single test today, and the big pages cannot be split safely without them | step 1.10, 2.7 |
 | D12 | Generated API types (`openapi-typescript`, dev only) replacing the 989 hand-written lines in `api/manager.ts` | **Yes, after** the routes have `response_model` (2.4) | step 2.6 |
 
@@ -87,6 +87,19 @@ ADRs seeded in step 1.11:
 - 0004 the model outcome definition
 - 0005 champion 2.2.0 and its known limits (KS 38.66 < 39; ML-1)
 - 0006 the comment and doc standard
+
+### Triage of the business lead's walkthrough findings (2026-09-24)
+
+Proposed owners. The coordinator assigns them.
+
+| # | Finding | Evidence | Proposed owner | Step |
+|---|---|---|---|---|
+| BL-1 | **Duplicate visits.** The LLM visit report runs inside the submit request (20 s timeout) while axios gives up at 15 s, so a retry records the visit twice | `visit_service.py:271` (commented "in the background", called inline), `axios.ts:6` | **d4** (the visit flow, H14): an idempotency key on `POST /agent/cases/{id}/visit` plus the report on the `default` queue | after H14 |
+| BL-2 | Voice notes transcribed twice: while the agent waits (`transcribe_audio_adhoc`) and again in the background (`queue_visit_transcription`) | `media_service.py:87,117`; `RecordVisitPage` `useRecordAndTranscribe` | **bb** (the background task skips a recording that already has a transcript) + d4 (frontend) | 1.12 |
+| BL-3 | Nominatim reverse geocoding every 40 m moved | `useLiveLocation.ts:108` (`GEOCODE_MOVE_M = 40`) | **bb:** only at check-in and at a visit, through a backend proxy with a cache (public Nominatim policy: 1 request/s, no heavy use) | 1.13 |
+| BL-4 | GPS reporting starts when the agent layout mounts (login), not at check-in | `AgentLayout.tsx:184-187` | **owner decision** (DPDP: track only on duty), then bb | 1.14 |
+| BL-5 | The post-visit SMS/WA discloses "Outstanding: Rs.X" to whoever holds the phone, including after DECEASED | `visit_service.py:278,386` | **owner** (D10), then **43** (A14 owns all SMS text) | — |
+| BL-6 | RecordVisit says "logged as unverified" while the server returns 403 | `RecordVisitPage.tsx:1324` | **d4** | after H14 |
 
 **Expected at the end of Wave 1:**
 - about −2,300 lines of dead code (−2,750 with D4; about −12,500 with D4 and D5)
@@ -135,29 +148,39 @@ Expected at the end of Wave 2:
 replaced by a measurement** at the step named. The model is a 90-line calculation (in the
 author's scratchpad, reproducible on request); everything below is its output.
 
+**Reconciled with the business lead's `docs/business/ECONOMICS.md`** (branch `business-lead`,
+`0bdd9bb`), 2026-09-24:
+- Shared volume assumptions: 12 visits/day, 3 payments/day, 15% OTP resends, 1-minute voice
+  notes, a 50 km beat.
+- Two corrections to this plan's first draft, both verified in code and both theirs:
+  - The borrower visit message goes only on **non-payment** outcomes (`visit_service.py:278`).
+  - The server **drops stationary GPS fixes within 25 m** (`location_service.py:123`), so stored
+    rows follow distance travelled, not time.
+- Messaging and transcription now agree to within ₹10.
+- Remaining differences, and why, are at the end of §4.4.
+
 ### 4.1 Assumptions
 
 | Input | Value | Basis |
 |---|---|---|
 | Agents / manager | 15 | A (demo: 18 agents, 2 managers) |
 | Working days / month | 26 | A |
-| Visits / agent / day | 15 | A: `max_cases_per_day` default 15 (M, `models/agent.py:54`); M: 114 allocated per 8 agents per run = 14.3. The demo book *records* only 2.4 per agent-day |
-| Payments / visit · PTPs / visit | 0.20 · 0.28 | A · M (demo 663 / 2,404). Demo payments 0.43 treated as inflated |
-| Shift | 9 h | A |
-| GPS fixes / agent-hour | 300 | A, between M 240 (a stationary fix every 15 s, `locationReporter.ts:36`) and about 400 when moving (a fix per 50 m, `:35`) |
-| Location uploads | every 15 s | M (`FLUSH_INTERVAL_MS`) |
+| Visits / agent / day | 12 | A, shared. Upper bound M: 114 allocated per 8 agents per run = 14.3; `max_cases_per_day` default 15 (`models/agent.py:54`) |
+| Payments / day · PTPs / visit | 3 · 0.28 | A, shared · M (demo 663 / 2,404) |
+| GPS rows stored / agent-day | 1,024 | M rule, A distance: the client queues a fix per 50 m moved (`locationReporter.ts:35`); the server drops heartbeat fixes within 25 m; a 50 km beat plus 2 fixes per visit |
+| Location uploads | every 15 s on shift | M (`FLUSH_INTERVAL_MS`) |
 | Pool rows per agent per plan run | 76 | M (607 evaluated / 8 agents, 10-day mean) |
 | Plan runs per night | 2 | A (demo 4.8, from manual re-plans) |
 | Loans per agent · snapshot change rate | 150 · 10%/day | A (demo 93, stress profile 600) · M (4,802 rows / 28 days / 1,674 loans) |
 | Bytes per row incl. indexes | predictions 1,678 · decisions 690 · snapshots 3,952 · visits 908 · audit 850 | M (`pg_total_relation_size` / rows) |
 | Bytes per location row | 260 | A (57 demo rows too few; heap + 5 indexes) |
-| Media per visit | 0.81 MB | A: 3 photos (M: 3 slots) × 180 KB (M: 1280×720 JPEG q 0.88; size A) + half of visits with 90 s of 48 kbps audio + a 20 KB signature. MinIO in the demo is empty, so it cannot be measured |
+| Media per visit | 0.72 MB | A: 3 photos (M: 3 slots) × 180 KB (M: 1280×720 JPEG q 0.88; size A) + half of visits with 60 s of 48 kbps audio + a 20 KB signature. MinIO in the demo is empty, so it cannot be measured |
 | LLM | visit report per visit (M: max 250 out), visit strategy on 30% of visits (M: max 1,500), case ranking daily (M: max 900); per manager: briefing daily, 3 insights, a monthly report | A: calls and input sizes |
-| LLM prices ($/M tokens in/out) | Groq gpt-oss-120b 0.15/0.60 (A, verify) · Claude Haiku 4.5 1.00/5.00 · Claude Sonnet 5 2.00/10.00 | Anthropic prices from the API reference (cached 2026-06-24) |
-| Transcription | $0.006/min | A (OpenAI whisper list price, verify); `TRANSCRIPTION_PROVIDER` defaults to `openai` (M) |
-| SMS / WhatsApp per agent-day | 21.6 SMS, 18 WA | M call sites: every visit sends SMS + WA (`visit_service.py:407`); every payment sends OTP SMS (A 1.2 sends, max 4) + receipt SMS + WA |
-| SMS price | Twilio international → India ₹7.3 · Indian DLT aggregator ₹0.20 | A (verify with a quote) |
-| WhatsApp utility message | ₹0.13 | A |
+| LLM prices ($/M tokens in/out) | Groq gpt-oss-120b 0.15/0.60 · Claude Haiku 4.5 1.00/5.00 · Claude Sonnet 5 2.00/10.00 | Groq: business lead's source · Anthropic: API price list (cached 2026-06-24) |
+| Transcription | $0.006/min, **each note transcribed twice today** | A price; the double transcription was found by the business lead (to fix, §4.4) |
+| SMS / WhatsApp per agent-day | 15.4 SMS, 12 WA | M call sites: a non-payment visit sends SMS + WA (`visit_service.py:278,407`); a payment sends an OTP SMS (1.15 sends, max 4) + a receipt SMS + WA |
+| SMS price | Twilio international → India ₹7.32 ($0.0832) · Indian DLT gateway ₹0.15 | business lead's sources |
+| WhatsApp utility message | ₹0.136 (₹0.115 + 18% GST); Twilio adds $0.005 | business lead's sources |
 | FX | ₹88 / $ | A |
 
 ### 4.2 Storage
@@ -166,32 +189,38 @@ Per agent per month:
 
 | Table / store | Growth | Retention today | At 1,000 agents |
 |---|---|---|---|
-| `agent_locations` | 18.3 MB (70,200 rows) | 90 days (M) | 55 GB steady; **2.3 M rows/day, deleted row by row by a nightly sweep** |
 | `model_predictions` | 7.6 MB (4,552 rows) | **none** | 92 GB/year; about 22 GB/year with D9 |
+| `agent_locations` | 6.9 MB (26,600 rows) | 90 days (M) | 21 GB steady; about 0.9 M rows/day, **deleted row by row by a nightly sweep** |
 | `allocation_decisions` | 3.1 MB | none | 38 GB/year |
 | `repayment_score_snapshots` | 1.8 MB | 400 days (M) | 24 GB steady |
-| `audit_logs` | 0.6 MB | 1,825 days (M) | 36 GB at 5 years |
-| visits, payments, PTPs, calls | 0.6 MB | — | 7 GB/year |
-| **Postgres, year one** | **32 MB/agent-month** | | **~250 GB** at 1,000 agents; 40 GB at 160; 1.26 TB at 5,000 |
-| **MinIO media** | **0.31 GB** | none defined | **3.6 TB/year** at 1,000 agents |
+| `audit_logs` | 0.5 MB | 1,825 days (M) | 31 GB at 5 years |
+| visits, payments, PTPs, calls | 0.5 MB | — | 6 GB/year |
+| **Postgres, year one** | **20.5 MB/agent-month** | | **~210 GB** at 1,000 agents; 34 GB at 160; 1.06 TB at 5,000 |
+| **MinIO media** | **0.22 GB** | none defined | **2.6 TB/year** at 1,000 agents |
 
 What follows from these numbers:
-1. **The GPS trail dominates the database.** Monthly partitions with `DETACH` replace the
-   row-delete sweep (B07/B12). The live map reads the latest position from Redis, not from the
-   table.
-2. **Predictions and decisions grow without bound** and are re-logged on each re-plan: D9, plus
-   partitions.
-3. **Media is the largest store by a factor of about 15.** It needs a lifecycle rule: audio to a
+1. **Two ML tables, not the GPS trail, dominate growth.** `model_predictions` and
+   `allocation_decisions` are 53% of monthly growth, have no retention, and are re-written on
+   every re-plan. D9, retention on decisions, and monthly partitions address them.
+2. **The GPS trail is the largest *steady-state* write load.** About 0.9 M rows/day at 1,000
+   agents, with a row-by-row delete sweep. Monthly partitions with `DETACH` replace the sweep
+   (B07/B12), and the live map reads the latest position from Redis.
+3. **Media is the largest store by a factor of about 12.** It needs a lifecycle rule: audio to a
    cold class after 90 days, and photos kept for the evidence period. That period is a
-   compliance decision for the owner, not an engineering default.
+   compliance (DPDP / RBI) decision for the owner, not an engineering default.
 4. **Indexes.** Drop the duplicate and prefix indexes (audit §3.11). With 5 indexes on
    `agent_locations` and 13 on `model_predictions`, every insert is a 6- or 14-way write.
 
 ### 4.3 Throughput and the nightly window
 
-- **API.** At 1,000 agents on shift, location uploads alone are **67 requests/s**. The prod
-  image runs one uvicorn process with 40 sync threads. Size it at 2–4 workers per 2 vCPU after a
-  **load test (step 1.7)**; nothing has been measured yet.
+- **API.** At 1,000 agents on shift, location uploads alone are **67 requests/s** (one upload
+  per 15 s, even when every fix in it is dropped). The prod image runs one uvicorn process with
+  40 sync threads. Size it at 2–4 workers per 2 vCPU after a **load test (step 1.7)**; nothing
+  has been measured yet.
+- **The visit submit** runs the LLM visit report inline with a 20 s timeout, while the axios
+  client gives up at 15 s, so a retry creates a duplicate visit (business lead).
+  - Fix: an idempotency key, and the report on the `default` queue.
+  - The comment at `visit_service.py:270` says "in the background"; the call is synchronous.
 - **Connections.** Each process has a pool of 20 + 40. Four API workers and two Celery children
   can open 360 against `max_connections=100`. Set the pool to 5 + 5 per process and put
   PgBouncer in front (B14).
@@ -203,37 +232,49 @@ What follows from these numbers:
   - Measured in step 2.9 on the `stress` profile. Until then, "it fits" is an assumption.
 - **Celery.** `--concurrency=2` with one queue means a nightly allocation and a batch of
   transcriptions compete for two slots, with no time limit (SEC-8 → step 1.9).
-- **OSRM.** The default is the public demo server (`config.py:102`), which cannot carry
-  production load (A: usage policy). About 2 calls per beat (A) means about 2,000 per night at 1,000
-  agents. Self-host it (the `routing` compose profile already exists). A: 8 GB RAM for a
-  state-level extract, about 32 GB for all of India.
+- **Maps.** Three free public services are used whose policies rule out production volume:
+  - **OSRM demo routing:** about 2 calls per beat at night, plus a re-optimise after every visit.
+  - **OSM tiles.**
+  - **Nominatim reverse geocoding:** called every 40 m moved (`useLiveLocation.ts:107`), about
+    1,250 lookups per agent-day (business lead).
+  - Self-host routing, tiles and the geocoder on one maps VM. Geocode only at check-in and at a
+    visit. A: 32 GB RAM for a north-India or all-India extract.
 - **Redis.** Broker, OTP keys, 1-hour LLM cache, pub/sub fan-out and, after 1.8, limiter
   counters. A: under 1 GB at 1,000 agents. One SSE stream holds one Redis connection (M:
   `endpoints/events.py:62`); fine at manager scale.
 
 ### 4.4 Cost per agent per month
 
-₹, at 1,000 agents; the infra line scales down with size.
+₹, at 1,000 agents; variable costs per agent, fixed costs as a share.
 
 | Line | Amount | Note |
 |---|---|---|
-| Infrastructure | ₹132 (₹198 at 160 agents, ₹67 at 5,000) | A: indicative cloud list prices (api, workers, managed Postgres + replica, Redis, self-hosted OSRM, backups). Not a quote |
-| Object storage | ₹4 | A: $0.025/GB-month, year-one average |
-| LLM | **₹19** Groq · ₹142 Claude Haiku 4.5 · ₹284 Claude Sonnet 5 | 0.59 M input + 0.21 M output tokens per agent-month (A) |
-| Transcription | ₹155 | 292 min/agent-month (A) at the OpenAI rate; ₹0 cash with local faster-whisper, paid for instead in CPU (dev default) |
-| Messaging, DLT SMS gateway | **₹112 SMS + ₹61 WhatsApp** | 21.6 SMS + 18 WA per agent-day |
-| Messaging, Twilio international SMS | **₹4,112 SMS** + ₹61 WhatsApp | the current integration (`notification_service.py`) |
-| **Total** | **≈ ₹483** with a DLT gateway and Groq · **≈ ₹4,483** with Twilio SMS | |
+| Infrastructure | ₹132 (₹198 at 160 agents, ₹67 at 5,000) | A: indicative cloud list prices (api, workers, managed Postgres + replica, Redis, self-hosted OSRM, backups). Not a quote; see the difference note below |
+| Object storage | ₹3 | A: $0.025/GB-month, year-one average |
+| LLM | **₹15** Groq · ₹117 Claude Haiku 4.5 · ₹235 Claude Sonnet 5 | 0.49 M input + 0.17 M output tokens per agent-month (A) |
+| Transcription | ₹165 today · **₹82** once the double transcription is fixed | 312 min/agent-month at the OpenAI rate; ₹0 cash with local faster-whisper, paid for instead in CPU |
+| Messaging, Indian DLT gateway | **₹60 SMS + ₹42 WhatsApp** | 15.4 SMS + 12 WA per agent-day |
+| Messaging, Twilio as coded | **₹2,941 SMS + ₹179 WhatsApp** (incl. the $0.005 Twilio fee) | `notification_service.py` |
+| **Total** | **≈ ₹417** (DLT + Groq, as coded otherwise) · **≈ ₹335** with the transcription fix · **≈ ₹3,435** with Twilio SMS | |
 
-**The one number that matters.** Messaging is the only line that can dominate. At Twilio's
-international rate the per-visit notification SMS (D10) costs more than everything else
-combined, by about 11× (₹4,112 against ₹371). Moving SMS to an Indian DLT-registered gateway is also a TRAI
-requirement for commercial A2P traffic (A: verify), so it is likely needed anyway. It fits the
-existing single seam in `core/notifications`. The choice of LLM moves the total by at most
-₹265.
+**The one number that matters.** Messaging on Twilio (₹3,120) is 9× everything else combined.
+Commercial SMS to Indian numbers must go through TRAI DLT registration whichever gateway sends
+it (business lead's source). Moving to an Indian gateway is therefore a cost decision, and it
+fits the existing single seam in `notification_service`. The per-visit borrower message (D10) is
+₹67 on a DLT gateway and about ₹1,850 on Twilio. The choice of LLM moves the total by at most
+₹220.
 
-These figures are the engineering input to the business lead's unit economics. Every `A` above
-is a place to put a quote or a measurement before any price is set.
+**Differences that remain with ECONOMICS.md, and why:**
+1. **Fixed cost.**
+   - This model: about ₹32k/month at 160 agents, ₹1.32 lakh at 1,000. Its infra line is sized
+     only for the services running today.
+   - ECONOMICS.md: ₹60k at up to 150 agents, ₹1.2 lakh at 1,000. It adds a maps VM (tiles and
+     geocoder, not only OSRM), local speech-to-text capacity and monitoring.
+   - **Use ECONOMICS.md's figure for pricing:** those services are needed (§4.3 Maps).
+2. **LLM:** ₹15 here against ₹21 there. That is 30% against about 2 in 3 visits opening the
+   strategy brief. Both are assumptions; the real rate is measurable from `/manager/ai/health`
+   counters once there is traffic.
+3. **Support** (₹100/agent) is in ECONOMICS.md only. It is not an engineering cost.
 
 ---
 
