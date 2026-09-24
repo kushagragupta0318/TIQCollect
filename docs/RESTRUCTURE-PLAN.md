@@ -45,6 +45,38 @@ Rules for every step:
 | D11 | Frontend test tooling: add `@testing-library/react` + `jsdom` (dev only) | **Yes.** No page has a single test today, and the big pages cannot be split safely without them | step 1.10, 2.7 |
 | D12 | Generated API types (`openapi-typescript`, dev only) replacing the 989 hand-written lines in `api/manager.ts` | **Yes, after** the routes have `response_model` (2.4) | step 2.6 |
 
+### Owner's answers, 2026-09-24 (relayed by tiqcollect-64)
+
+- **D2, D3, D5–D9, D11, D12: accepted as recommended.** Wave 1 approved.
+- **D4: delete if unused.** No caller was found in the Collections platform, so it is deleted:
+  `0c32082`, tag `archive/field-ops-contract-2026-09`.
+- **D10 / BL-5:** the post-visit message stays, but **neutral**: no amount, no loan details,
+  and never after DECEASED, DISPUTE or HOSTILE. d4 ships it on the live hotfix; 43 carries it
+  in A14.
+- **BL-4: location tracking stays from login** (won't-fix). The DPDP points are recorded in
+  PILOT-PLAN N02.
+- **F10 and F12 stay active** despite the P5 pause (PILOT-PLAN §2).
+- **Merges:** audited, green branches merge into TIQCollect-app without asking each time.
+  The coordinator runs them; bb is the last quality gate and may object.
+
+**Correction to D5 found while executing it.** Five scripts on the delete list are not
+research: they check live behaviour against real data, or back tests another lane is
+editing. They are **kept**:
+- `validate_recovery.py`, together with `ml/recovery_validation.py` and the synthetic
+  fixture and its tests. It validates the live recovery scorecard against the 2026-08-24
+  cohort, whose 30-day outcomes landed on 2026-09-23.
+- `value_transform_study.py` and `value_transform_sensitivity.py`. They are the check to
+  re-run on a live book before trusting the allocator's +28%.
+- `phase4_ledger_lifecycle.py` and `ptp_lifecycle_backfill.py`. Tests that 43 is editing
+  use them.
+
+Deleted under D5, all recoverable from tag `archive/research-2026-09`:
+- `scripts/research` (22 files)
+- the synthetic shadow-model study (9 files)
+- two closed studies
+- six applied one-off repairs
+- `docs/rollback`
+
 ---
 
 ## 2. Wave 1: now, in files no lane owns

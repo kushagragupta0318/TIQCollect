@@ -53,7 +53,14 @@ task with a testable **Done when**.
     step audited.
   - A **breach runbook** (docs, including who notifies whom and within what time).
   - **Data minimisation:** the agent sees only what the visit needs.
-  - **No location tracking before check-in** (BL-4, awaiting the owner's decision).
+  - Location tracking **starts at login, by the owner's decision** (BL-4, closed as won't-fix
+    on 2026-09-24). The N02 review must still cover it, because DPDP asks for notice and
+    purpose limitation:
+    - the agent notice states that location is recorded from login, not only on duty;
+    - the trail is used only for field-operations purposes (live map, visit evidence,
+      reconciliation);
+    - it keeps its 90-day retention.
+    The data-principal request flow must cover the agent's own trail.
 - **Done when:**
   - Every data class in DATA-MODEL-V2 has a retention entry, and a test proves the job enforces
     it.
@@ -63,8 +70,8 @@ task with a testable **Done when**.
   - A test asserts that the agent-facing case detail exposes no field beyond what
     `RecordVisitPage` and `AgentCaseDetailPage` use: name, contact, outstanding and security
     address, not the full Borrower 360.
-- **Depends on:** B09 (immutable audit), B06 (`visit_media`), and the owner's answers on BL-4
-  and D10.
+- **Depends on:** B09 (immutable audit), B06 (`visit_media`). The owner has answered BL-4
+  (tracking from login) and D10 (a neutral visit message).
 
 ### N03 · India data residency and a per-lender AI switch (LLM and speech-to-text) · M · ce (llm, transcription), 43 (tenant setting), bb (deployment)
 
@@ -121,17 +128,22 @@ task with a testable **Done when**.
 - **What:**
   - A DLT-registered Indian SMS provider behind the existing `notification_service` seam: sender
     ID, template ids, delivery receipts. Twilio stays only as a fallback, off by default.
-  - A **per-lender message policy** saying which messages go out. The post-visit borrower
-    message is **default off**, pending the owner's D10.
+  - A **per-lender message policy** saying which messages go out.
+  - **The post-visit borrower message is neutral**, by the owner's D10/BL-5 decision:
+    - no amount and no loan details;
+    - never sent after a DECEASED, DISPUTE or HOSTILE outcome;
+    - d4 ships it on the live hotfix, and 43 carries it in A14's templates on p1.
   - Demo tenants never send (B22).
 - **Done when:**
   - The OTP, receipt and PTP-reminder SMS go through the DLT provider with a registered template
     id.
   - A delivery receipt is stored per message.
   - The per-lender policy switches each message type, with a test per type.
+  - A test proves the post-visit message carries no amount and no loan details, and is not
+    sent after DECEASED, DISPUTE or HOSTILE.
   - The messaging cost per agent-month is measured on the pilot and compared with the reconciled
     floor in `docs/business/ECONOMICS.md` §0.
-- **Depends on:** A14 (message text as data), B22 (demo suppression), D10 (the owner).
+- **Depends on:** A14 (message text as data), B22 (demo suppression).
 - **Why it matters:** on Twilio as coded, messaging alone costs several times a plausible seat
   price (`docs/business/ECONOMICS.md` §0, the reconciled figures).
 
@@ -214,7 +226,9 @@ days of pilot data. **Dropped** means removed at integration, with the reason re
 | E09 (report engine) | **Keep, narrowed** | Already built on d4's branch. It is the base for N08; XLSX first, PPTX last. |
 | **E05** simulator UI, **E08** Scenario Lab | **Drop** | A lender's risk team owns IFRS-9 and stress testing and will not use ours. |
 | **P5:** F02–F05, F07–F09, F11 | **Pause** | An agent runtime, registry, evals and MLOps console with nothing real to run on. F01 stays as done. |
-| **F10** (bank-feed quarantine), **F12** (restrict model promotion) | **Recommend: keep active.** Owner to confirm | The business lead rates both pilot must-haves. The first real bank file will contain duplicates and DPD jumps. Today any manager can change the live model for every tenant (known issue 11). Both are S–M. |
+| **F10** (bank-feed quarantine) · M · 43 (ingest, B05 staging tables) + bb (the scheduled ingest task, RESTRUCTURE-PLAN 2.9) | **Keep active** (owner, 2026-09-24) | The first real bank file will contain duplicates and DPD jumps. Quarantine saves the pilot's first week. |
+| **F12** (restrict `ml.approve` / `ml.promote` to `BANK_TECHOPS`) · S · 43 (A01 capabilities) | **Keep active** (owner, 2026-09-24) | Today any manager can change the live model for every tenant (known issue 11). |
+| **A15** `/api/field-ops` contract | **Changed:** it no longer preserves `/api/field-ops/*` | Deleted on 2026-09-24 (owner's D4: "delete if unused"). No caller in the Collections platform, whose own proxy was removed in its commit 41dfae6. Commit `0c32082` on lead-structure; archive tag `archive/field-ops-contract-2026-09`. A15 keeps `PRODUCT_MODE` and the `SERVICE` role accounts that replace manager-password service logins. |
 | **F06** AI Agents UI | **Drop** | A lender will not build AI agents inside a vendor's collections app. |
 | **P6:** H01–H13, H15–H18 | **Pause** | Each needs real outcomes: the first 30-day labels mature from 2026-10-08, 90-day from 2026-11-22. Scored against the generator's ground truth, they only prove the generator. H14 (voice → report) continues. |
 | **H06** next-best-action bandit | **Drop** | A bandit with no outcome data. If needed, a transparent rules table comes first. |
