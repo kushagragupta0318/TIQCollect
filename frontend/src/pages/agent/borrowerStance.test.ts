@@ -49,7 +49,7 @@ describe("no default", () => {
   );
 });
 
-describe("four outcomes and the hardship reasons pre-select", () => {
+describe("three outcomes and the hardship reasons pre-select", () => {
   it.each([
     ["RTP", "REFUSES"], ["BROKEN_PTP", "REFUSES"], ["DISPUTE", "DISPUTE"],
   ])("outcome %s -> %s", (outcome, stance) => {

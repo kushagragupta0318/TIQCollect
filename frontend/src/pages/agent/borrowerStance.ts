@@ -6,7 +6,7 @@
 //   until now nothing in the product wrote it: 0 of 2,404 visits.
 //
 //   The stance is the AGENT'S READ, not a copy of the outcome: the model
-//   already has the outcome (last_visit_outcome). So only four outcomes, and
+//   already has the outcome (last_visit_outcome). So only three outcomes, and
 //   hardship reasons, pre-select one — the pairs where the outcome and the
 //   stance mean the same thing — and the agent's last tap wins. A PTP does NOT
 //   pre-select WILL_PAY (coordinator, 2026-09-24).
@@ -28,7 +28,7 @@ export const STANCE_OPTIONS: readonly { value: BorrowerStance; label: string; hi
   { value: "REFUSES",       label: "Refuses",        hint: "Will not pay" },
 ];
 
-/** Outcomes that already say the stance. Only these four; everything else
+/** Outcomes that already say the stance. Only these three; everything else
  *  leaves it to the agent. */
 const STANCE_FROM_OUTCOME: Readonly<Record<string, BorrowerStance>> = {
   RTP: "REFUSES",

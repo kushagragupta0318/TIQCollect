@@ -22,6 +22,13 @@
 #
 #   Never defaulted. NULL means "not recorded", and a default would be a
 #   reading nobody took (models/call_log.BorrowerDisposition says the same).
+#
+#   "Required" is the UI's rule, not the server's: RecordVisitPage will not
+#   submit a Borrower-path visit without a stance, but a request with none is
+#   accepted and stored as NULL. Deliberate (coordinator, 2026-09-24): ce's
+#   offline outbox (I01) replays visits queued before this change, with no
+#   stance, and those must land rather than 422. The only refusal here is a
+#   stance on a contact that did not reach the borrower.
 # ────────────────────────────────────────────────────────────────────────────
 """When a borrower's stance (BorrowerDisposition) may be recorded."""
 from __future__ import annotations
