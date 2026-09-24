@@ -52,7 +52,8 @@ jobs:
           # 2026-09-06.
           python-version: "3.12"
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        # The dev set = the app's requirements plus test-only tools (pyarrow).
+        run: pip install -r requirements-dev.txt
       - name: Compile check
         run: python -m compileall app
       - name: Run tests

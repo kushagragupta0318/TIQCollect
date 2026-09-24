@@ -1,0 +1,7 @@
+# Everything the test suite needs. The production image installs requirements.txt
+# only (see ../Dockerfile), so nothing listed here ships.
+-r requirements.txt
+
+# Parquet I/O: the ledger simulator and the tests that build panels read and
+# write .parquet. Imported only by ml/simulation, scripts and tests.
+pyarrow==25.0.1
