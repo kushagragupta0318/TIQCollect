@@ -23,7 +23,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.base import Base, UUIDPrimaryKey
+from sqlalchemy import CheckConstraint, ForeignKeyConstraint, SmallInteger
+from app.models.base import PUBLIC, Base, UUIDPrimaryKey, UUIDType, uuid_fk
 
 
 class LocationSource(str, enum.Enum):
@@ -37,13 +38,26 @@ class LocationSource(str, enum.Enum):
     SOS       = "SOS"         # captured during an active SOS
 
 
-class AgentLocation(Base, UUIDPrimaryKey):
-    """One GPS fix for one agent. Append-only."""
-    __tablename__ = "agent_locations"
+LOCATION_SOURCE_SQL = SAEnum(LocationSource, name="location_source_enum", schema=PUBLIC, metadata=Base.metadata)
 
-    agent_id: Mapped[str] = mapped_column(
-        ForeignKey("agents.id", ondelete="CASCADE"), nullable=False, index=True
-    )
+
+class AgentLocation(Base, UUIDPrimaryKey):
+    """One GPS fix for one agent. Append-only.
+
+    2026-09-24 (B07): workforce schema; tenant columns; the agent FK is
+    RESTRICT (a cascade into a 30M-row partitioned table is a trap). On
+    Postgres the table is partitioned LIST(is_sos) then RANGE(recorded_at)
+    monthly, with PK (id, is_sos, recorded_at) — migration-only DDL (design
+    §7); the ORM keeps `id` as its identity so lookups by id still work. The
+    SOS partition is kept forever: retention can never drop an SOS point.
+    """
+    __tablename__ = "agent_locations"
+    __tenant_parents__ = (("agent_id", "Agent"),)
+
+    bank_id: Mapped[str] = mapped_column(UUIDType, nullable=False)
+    agency_id: Mapped[str] = mapped_column(UUIDType, nullable=False)
+    agent_id: Mapped[str] = mapped_column(UUIDType, nullable=False)
+    agent_device_id: Mapped[str | None] = uuid_fk("workforce.agent_devices.id", nullable=True)
 
     latitude: Mapped[float] = mapped_column(Float, nullable=False)
     longitude: Mapped[float] = mapped_column(Float, nullable=False)
@@ -62,8 +76,7 @@ class AgentLocation(Base, UUIDPrimaryKey):
     )
 
     source: Mapped[LocationSource] = mapped_column(
-        SAEnum(LocationSource, name="location_source_enum"),
-        default=LocationSource.HEARTBEAT, nullable=False,
+        LOCATION_SOURCE_SQL, default=LocationSource.HEARTBEAT, nullable=False,
     )
 
     # True for every fix captured while an SOS was active. Denormalised
@@ -73,15 +86,22 @@ class AgentLocation(Base, UUIDPrimaryKey):
 
     # Phone battery at capture, 0-100. A lone worker whose phone is about to die
     # is a safety signal, not telemetry.
-    battery_pct: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    battery_pct: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
 
-    agent: Mapped["Agent"] = relationship("Agent", lazy="noload")  # type: ignore[name-defined]  # noqa: F821
+    agent: Mapped["Agent"] = relationship(  # type: ignore[name-defined]  # noqa: F821
+        "Agent", lazy="noload", primaryjoin="AgentLocation.agent_id == Agent.id",
+        foreign_keys="[AgentLocation.agent_id]")
 
     __table_args__ = (
+        ForeignKeyConstraint(["agent_id", "agency_id"], ["workforce.agents.id", "workforce.agents.agency_id"],
+                             ondelete="RESTRICT"),
+        CheckConstraint("battery_pct IS NULL OR (battery_pct >= 0 AND battery_pct <= 100)", name="battery"),
         # The trail query: one agent, one day, in order.
         Index("ix_agent_location_agent_time", "agent_id", "recorded_at"),
-        # Retention sweeps delete by age across all agents.
+        Index(None, "agency_id", "recorded_at"),
+        # Kept on SQLite and pre-partition: retention and SOS replay. On the
+        # partitioned table the partitions ARE these indexes (design §4.4).
         Index("ix_agent_location_recorded", "recorded_at"),
-        # Pulling just the SOS points for an incident replay.
         Index("ix_agent_location_sos", "agent_id", "is_sos", "recorded_at"),
+        {"schema": "workforce"},
     )

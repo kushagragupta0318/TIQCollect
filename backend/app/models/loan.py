@@ -1,7 +1,30 @@
+# ─── CHANGELOG (standalone plan) ────────────────────────────────────────────
+# 2026-09-24 (B05) — lending.loans (docs/DATA-MODEL-V2.md §4.2).
+#   - bank_id replaces the free-text bank_name ("ABC Bank" on 1,478/1,478
+#     demo loans). `bank_name` survives as a read-only property over the
+#     bank's display name, because borrower SMS text reads it.
+#   - branch_code stays a code, now with a composite natural-key FK
+#     (bank_id, branch_code) → branches. The design proposed a surrogate
+#     branch_id plus a read-only branch_code property; the natural key gives
+#     the same integrity and leaves every reader (the ML adapter reads
+#     branch_code) untouched. Recorded as a departure in the design's §0.
+#   - money is NUMERIC(14,2) (read as float); the four dates are DATEs.
+#   - customer_id is RESTRICT (was CASCADE): deleting a borrower must never
+#     silently delete their loans.
+#   - dpd_as_of says how old the current dpd is; npa_since splits NPA-Sub
+#     from Doubtful for the Monte Carlo state space.
+#   - legal_status / settlement_status are FKs to lookup tables.
+# ────────────────────────────────────────────────────────────────────────────
 import enum
-from sqlalchemy import String, Float, Integer, Boolean, Enum as SAEnum, ForeignKey, Index, Date
+from datetime import date
+
+from sqlalchemy import (
+    Boolean, CheckConstraint, Date, Enum as SAEnum, Float, ForeignKey, ForeignKeyConstraint, Index,
+    Integer, SmallInteger, String, UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from app.models.base import Base, TimestampMixin, UUIDPrimaryKey
+
+from app.models.base import PUBLIC, Base, Money, Rate, TimestampMixin, UUIDPrimaryKey, UUIDType, uuid_fk
 
 
 class RecoveryPotential(str, enum.Enum):
@@ -71,56 +94,64 @@ class LoanStatus(str, enum.Enum):
     NPA = "NPA"
 
 
+LOAN_TYPE_SQL = SAEnum(LoanType, name="loan_type_enum", schema=PUBLIC, metadata=Base.metadata)
+DPD_BUCKET_SQL = SAEnum(DPDBucket, name="dpd_bucket_enum", schema=PUBLIC, metadata=Base.metadata)
+LOAN_STATUS_SQL = SAEnum(LoanStatus, name="loan_status_enum", schema=PUBLIC, metadata=Base.metadata)
+RECOVERY_POTENTIAL_SQL = SAEnum(RecoveryPotential, name="recovery_potential_enum", schema=PUBLIC,
+                                metadata=Base.metadata)
+
+
 class Loan(Base, UUIDPrimaryKey, TimestampMixin):
     __tablename__ = "loans"
 
-    loan_account_number: Mapped[str] = mapped_column(String(30), unique=True, nullable=False, index=True)
-    customer_id: Mapped[str] = mapped_column(ForeignKey("customers.id", ondelete="CASCADE"), nullable=False, index=True)
+    bank_id: Mapped[str] = uuid_fk("tenancy.banks.id")
+    loan_account_number: Mapped[str] = mapped_column(String(30), nullable=False)
+    customer_id: Mapped[str] = mapped_column(UUIDType, nullable=False)
 
-    loan_type: Mapped[LoanType] = mapped_column(SAEnum(LoanType, name="loan_type_enum"), nullable=False)
-    bank_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    loan_type: Mapped[LoanType] = mapped_column(LOAN_TYPE_SQL, nullable=False)
     branch_code: Mapped[str] = mapped_column(String(20), nullable=False)
 
     # Amounts
-    sanctioned_amount: Mapped[float] = mapped_column(Float, nullable=False)
-    disbursed_amount: Mapped[float] = mapped_column(Float, nullable=False)
-    outstanding_principal: Mapped[float] = mapped_column(Float, nullable=False)
-    total_outstanding: Mapped[float] = mapped_column(Float, nullable=False)  # principal + interest + charges
-    overdue_amount: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
-    emi_amount: Mapped[float] = mapped_column(Float, nullable=False)
+    sanctioned_amount: Mapped[float] = mapped_column(Money, nullable=False)
+    disbursed_amount: Mapped[float] = mapped_column(Money, nullable=False)
+    outstanding_principal: Mapped[float] = mapped_column(Money, nullable=False)
+    total_outstanding: Mapped[float] = mapped_column(Money, nullable=False)  # principal + interest + charges
+    overdue_amount: Mapped[float] = mapped_column(Money, default=0.0, nullable=False)
+    emi_amount: Mapped[float] = mapped_column(Money, nullable=False)
 
     # Dates
-    disbursement_date: Mapped[str] = mapped_column(String(10), nullable=False)
-    maturity_date: Mapped[str] = mapped_column(String(10), nullable=False)
-    last_payment_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
-    next_due_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    disbursement_date: Mapped[date] = mapped_column(Date, nullable=False)
+    maturity_date: Mapped[date] = mapped_column(Date, nullable=False)
+    last_payment_date: Mapped[date | None] = mapped_column(Date)
+    next_due_date: Mapped[date | None] = mapped_column(Date)
 
-    # DPD tracking
+    # DPD tracking — CURRENT state, still overwritten by the feed. History is
+    # lending.loan_dpd_history; dpd_as_of says how old this reading is.
     dpd: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    dpd_bucket: Mapped[DPDBucket] = mapped_column(
-        SAEnum(DPDBucket, name="dpd_bucket_enum"), default=DPDBucket.CURRENT, nullable=False
-    )
-    status: Mapped[LoanStatus] = mapped_column(
-        SAEnum(LoanStatus, name="loan_status_enum"), default=LoanStatus.ACTIVE, nullable=False
-    )
+    dpd_as_of: Mapped[date | None] = mapped_column(Date)
+    dpd_bucket: Mapped[DPDBucket] = mapped_column(DPD_BUCKET_SQL, default=DPDBucket.CURRENT, nullable=False)
+    status: Mapped[LoanStatus] = mapped_column(LOAN_STATUS_SQL, default=LoanStatus.ACTIVE, nullable=False)
 
     # Interest breakdown (bank sends these separately)
-    interest_rate: Mapped[float] = mapped_column(Float, nullable=False)
-    outstanding_interest: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
-    penal_charges: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
-    tenure_months: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    interest_rate: Mapped[float] = mapped_column(Rate, nullable=False)
+    outstanding_interest: Mapped[float] = mapped_column(Money, default=0.0, nullable=False)
+    penal_charges: Mapped[float] = mapped_column(Money, default=0.0, nullable=False)
+    tenure_months: Mapped[int | None] = mapped_column(SmallInteger)
 
     # Payment history
-    last_payment_amount: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    last_payment_amount: Mapped[float] = mapped_column(Money, default=0.0, nullable=False)
 
     # NPA / legal / settlement (bank-reported flags)
     npa_flag: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    npa_since: Mapped[date | None] = mapped_column(Date)
     legal_status: Mapped[str] = mapped_column(
-        String(30), default="NONE", nullable=False
-    )  # NONE / NOTICE_SENT / SARFAESI / SUIT_FILED / DRT / ARBITRATION
+        String(30), ForeignKey("lending.legal_statuses.code", ondelete="RESTRICT"), default="NONE", nullable=False
+    )
+    # The BANK's settlement flag. Our settlement workflow is its own table.
     settlement_status: Mapped[str] = mapped_column(
-        String(30), default="NONE", nullable=False
-    )  # NONE / OFFERED / NEGOTIATING / ACCEPTED / REJECTED
+        String(30), ForeignKey("lending.settlement_statuses.code", ondelete="RESTRICT"), default="NONE",
+        nullable=False,
+    )
 
     # Bank's own risk score for this loan (probability of default / NPA risk)
     bank_risk_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
@@ -132,11 +163,12 @@ class Loan(Base, UUIDPrimaryKey, TimestampMixin):
     #
     # 2026-08-24 — this comment used to read "Daily recovery tag pushed by
     # Command Centre". That was never true: nothing has ever pushed it, and the
-    # bank's daily feed carries 45 columns of which this is not one
+    # bank's daily feed carries 46 columns of which this is not one
     # (scripts/sample_daily_feed.csv). The claim mattered because it was the only
     # thing in the codebase suggesting the label arrived from outside, and it
     # sent anyone asking "do we compute this or does the bank send it?" to the
     # wrong answer. Corrected rather than deleted so the change is visible.
+    # (2026-09-24: this comment said "45 columns"; the sample feed has 46.)
     #
     # WE compute it, in ml/recovery_scorecard.py, banded on the 90-day expected
     # recovery rate. Written by exactly one site — RepaymentService.
@@ -146,15 +178,29 @@ class Loan(Base, UUIDPrimaryKey, TimestampMixin):
     #
     # It was filled by random.choices() until that date, by two separate writers
     # with different weights, while nothing read it.
-    recovery_potential: Mapped[RecoveryPotential | None] = mapped_column(
-        SAEnum(RecoveryPotential, name="recovery_potential_enum"), nullable=True
-    )
+    recovery_potential: Mapped[RecoveryPotential | None] = mapped_column(RECOVERY_POTENTIAL_SQL)
 
     customer: Mapped["Customer"] = relationship("Customer", back_populates="loans")  # type: ignore[name-defined]  # noqa: F821
     cases: Mapped[list["Case"]] = relationship("Case", back_populates="loan", lazy="noload")  # type: ignore[name-defined]  # noqa: F821
+    bank: Mapped["Bank"] = relationship("Bank", lazy="joined", foreign_keys="[Loan.bank_id]")  # type: ignore[name-defined]  # noqa: F821
 
     __table_args__ = (
-        Index("ix_loan_dpd_status", "dpd_bucket", "status"),
-        Index("ix_loan_customer_status", "customer_id", "status"),
-        Index("ix_loan_overdue_amount", "overdue_amount"),
+        UniqueConstraint("bank_id", "loan_account_number"),
+        UniqueConstraint("id", "bank_id"),
+        ForeignKeyConstraint(["customer_id", "bank_id"], ["lending.customers.id", "lending.customers.bank_id"],
+                             ondelete="RESTRICT"),
+        ForeignKeyConstraint(["bank_id", "branch_code"], ["tenancy.branches.bank_id", "tenancy.branches.branch_code"],
+                             ondelete="RESTRICT"),
+        CheckConstraint("dpd >= 0", name="dpd_non_negative"),
+        Index(None, "bank_id", "status", "dpd_bucket"),
+        Index(None, "customer_id", "status"),
+        Index(None, "bank_id", "overdue_amount"),
+        Index(None, "bank_id", "branch_code"),
+        {"schema": "lending"},
     )
+
+    @property
+    def bank_name(self) -> str | None:
+        """The lending bank's display name — what v1 stored as a literal."""
+        bank = self.bank
+        return bank.display_name if bank is not None else None

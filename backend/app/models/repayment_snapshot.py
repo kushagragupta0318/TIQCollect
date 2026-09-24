@@ -35,8 +35,9 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base, UUIDPrimaryKey
-from app.models.customer import RiskCategory
+from sqlalchemy import ForeignKeyConstraint
+from app.models.base import Base, Money, UUIDPrimaryKey, UUIDType, uuid_fk
+from app.models.customer import RISK_CATEGORY_SQL, RiskCategory
 
 # ── What caused this row to be written ───────────────────────────────────────
 TRIGGER_NIGHTLY = "NIGHTLY"
@@ -95,21 +96,27 @@ OUTCOME_SOURCE_INFERRED = "INFERRED"
 class RepaymentSnapshot(Base, UUIDPrimaryKey):
     """A repayment likelihood as it stood on one day, for one loan."""
     __tablename__ = "repayment_score_snapshots"
+    __tenant_parents__ = (("loan_id", "Loan"),)
+
+    # 2026-09-24 (B09): ml schema; the loan's bank. FKs are RESTRICT (were
+    # CASCADE / SET NULL): this is the training-set table and a deleted loan
+    # must not silently take its history with it.
+    bank_id: Mapped[str] = mapped_column(UUIDType, nullable=False)
 
     # ── Grain ────────────────────────────────────────────────────────────────
     # NOT NULL is load-bearing, not defensive. Postgres treats NULLs as distinct
     # inside a UNIQUE constraint, so a nullable loan_id would let duplicate
     # customer-level rows through the uq_ below without a word.
     loan_id: Mapped[str] = mapped_column(
-        ForeignKey("loans.id", ondelete="CASCADE"), nullable=False, index=True
+        UUIDType, nullable=False
     )
     # Denormalised so the worst-loan customer rollup does not join back through
     # loans on every read — same reasoning as FraudReview.agent_id.
     customer_id: Mapped[str] = mapped_column(
-        ForeignKey("customers.id", ondelete="CASCADE"), nullable=False, index=True
+        UUIDType, nullable=False
     )
     case_id: Mapped[str | None] = mapped_column(
-        ForeignKey("cases.id", ondelete="SET NULL"), nullable=True
+        UUIDType, nullable=True
     )
 
     # The point-in-time key. Every feature in `features` was computed with a
@@ -138,7 +145,7 @@ class RepaymentSnapshot(Base, UUIDPrimaryKey):
     risk_score: Mapped[float] = mapped_column(Float, nullable=False)
     band: Mapped[str] = mapped_column(String(20), nullable=False)
     risk_category: Mapped[RiskCategory] = mapped_column(
-        SAEnum(RiskCategory, name="risk_category_enum"), nullable=False
+        RISK_CATEGORY_SQL, nullable=False
     )
     # Share of the scorecard's total weight that had any evidence behind it.
     # Carried so a modeller can drop thin rows rather than assume they are solid.
@@ -150,7 +157,7 @@ class RepaymentSnapshot(Base, UUIDPrimaryKey):
     # ── What actually happened. All nullable — written by the labeller, one
     # outcome horizon later. NULL means "not yet known", never "nothing happened".
     outcome: Mapped[str | None] = mapped_column(String(24), nullable=True)
-    outcome_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    outcome_amount: Mapped[float | None] = mapped_column(Money, nullable=True)
     outcome_source: Mapped[str | None] = mapped_column(String(20), nullable=True)
     outcome_observed_at: Mapped[date | None] = mapped_column(Date, nullable=True)
     outcome_horizon_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -204,9 +211,9 @@ class RepaymentSnapshot(Base, UUIDPrimaryKey):
     # hardest — 50 of the 115 caseless loans are LOW against 26 HIGH — flattering
     # the scorecard's apparent separation. Validation excludes these and counts
     # them separately.
-    recovered_amount_30: Mapped[float | None] = mapped_column(Float, nullable=True)
-    recovered_amount_60: Mapped[float | None] = mapped_column(Float, nullable=True)
-    recovered_amount_90: Mapped[float | None] = mapped_column(Float, nullable=True)
+    recovered_amount_30: Mapped[float | None] = mapped_column(Money, nullable=True)
+    recovered_amount_60: Mapped[float | None] = mapped_column(Money, nullable=True)
+    recovered_amount_90: Mapped[float | None] = mapped_column(Money, nullable=True)
 
     # How far the labeller has got with this row: 0, 30, 60 or 90. NOT NULL with
     # a server default, so the partial index below has a total predicate and a
@@ -227,6 +234,12 @@ class RepaymentSnapshot(Base, UUIDPrimaryKey):
         # 19:30, the beat scored it again at 19:45" a no-op instead of a
         # duplicate, and it is why both paths are safe to leave enabled.
         UniqueConstraint("loan_id", "as_of_date", name="uq_repayment_snapshot_grain"),
+        ForeignKeyConstraint(["loan_id", "bank_id"], ["lending.loans.id", "lending.loans.bank_id"],
+                             ondelete="RESTRICT"),
+        ForeignKeyConstraint(["customer_id", "bank_id"], ["lending.customers.id", "lending.customers.bank_id"],
+                             ondelete="RESTRICT"),
+        ForeignKeyConstraint(["case_id"], ["collections.cases.id"], ondelete="RESTRICT"),
+        Index(None, "bank_id", "as_of_date"),
         Index("ix_repayment_snapshot_customer_asof", "customer_id", "as_of_date"),
         # The training pull: everything labelled, in a date window.
         Index("ix_repayment_snapshot_asof_outcome", "as_of_date", "outcome"),
@@ -249,6 +262,7 @@ class RepaymentSnapshot(Base, UUIDPrimaryKey):
             "ix_repayment_snapshot_recovery_unlabelled", "as_of_date",
             postgresql_where=text("recovery_labelled_through_days < 90"),
         ),
+        {"schema": "ml"},
     )
 
     def __repr__(self) -> str:      # pragma: no cover - debugging aid

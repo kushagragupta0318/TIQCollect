@@ -20,7 +20,8 @@ from sqlalchemy import (
     ForeignKey, Enum as SAEnum, Index, Text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from app.models.base import Base, TimestampMixin, UUIDPrimaryKey
+from sqlalchemy import ForeignKeyConstraint
+from app.models.base import PUBLIC, Base, TimestampMixin, UUIDPrimaryKey, UUIDType
 
 
 class CallOutcome(str, enum.Enum):
@@ -63,6 +64,11 @@ class BorrowerDisposition(str, enum.Enum):
     REFUSES       = "REFUSES"
 
 
+CALL_OUTCOME_SQL = SAEnum(CallOutcome, name="call_outcome_enum", schema=PUBLIC, metadata=Base.metadata)
+BORROWER_DISPOSITION_SQL = SAEnum(BorrowerDisposition, name="borrower_disposition_enum", schema=PUBLIC,
+                                  metadata=Base.metadata)
+
+
 class CallLog(Base, UUIDPrimaryKey, TimestampMixin):
     """Records every phone call attempt an agent makes to a customer for a case.
 
@@ -70,18 +76,22 @@ class CallLog(Base, UUIDPrimaryKey, TimestampMixin):
     directly from the call record without needing to parse visit history.
     """
     __tablename__ = "call_logs"
+    __tenant_parents__ = (("case_id", "Case"), ("agent_id", "Agent"))
 
     # ── Core foreign keys ────────────────────────────────────────────────────
-    case_id:     Mapped[str] = mapped_column(ForeignKey("cases.id",     ondelete="CASCADE"), nullable=False, index=True)
-    agent_id:    Mapped[str] = mapped_column(ForeignKey("agents.id",    ondelete="CASCADE"), nullable=False, index=True)
-    customer_id: Mapped[str] = mapped_column(ForeignKey("customers.id", ondelete="CASCADE"), nullable=False, index=True)
+    # 2026-09-24 (B06): tenant columns + composite FKs; the three CASCADEs
+    # became RESTRICT — deleting a case must never silently erase the calls
+    # that were made about it.
+    bank_id:     Mapped[str] = mapped_column(UUIDType, nullable=False)
+    agency_id:   Mapped[str] = mapped_column(UUIDType, nullable=False)
+    case_id:     Mapped[str] = mapped_column(UUIDType, nullable=False)
+    agent_id:    Mapped[str] = mapped_column(UUIDType, nullable=False)
+    customer_id: Mapped[str] = mapped_column(UUIDType, nullable=False)
 
     # ── Call metadata ────────────────────────────────────────────────────────
-    called_at:        Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    called_at:        Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)   # None if not answered
-    outcome: Mapped[CallOutcome] = mapped_column(
-        SAEnum(CallOutcome, name="call_outcome_enum"), nullable=False
-    )
+    outcome: Mapped[CallOutcome] = mapped_column(CALL_OUTCOME_SQL, nullable=False)
     phone_used: Mapped[str | None] = mapped_column(String(20), nullable=True)  # "PRIMARY" | "ALTERNATE"
 
     # ── What the customer said (agent's free-text note) ──────────────────────
@@ -115,7 +125,7 @@ class CallLog(Base, UUIDPrimaryKey, TimestampMixin):
     # 2026-09-16 — the structured disposition, recorded only on an ANSWERED
     # call and only when the agent captured it. See BorrowerDisposition.
     borrower_disposition: Mapped[BorrowerDisposition | None] = mapped_column(
-        SAEnum(BorrowerDisposition, name="borrower_disposition_enum"), nullable=True
+        BORROWER_DISPOSITION_SQL, nullable=True
     )
 
     # Date customer mentioned for payment (PTP over call — not a formal PTP record)
@@ -126,13 +136,21 @@ class CallLog(Base, UUIDPrimaryKey, TimestampMixin):
     ai_intel_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # ── Relationships ────────────────────────────────────────────────────────
-    case:     Mapped["Case"]     = relationship("Case",     foreign_keys=[case_id],     lazy="noload")  # type: ignore[name-defined]  # noqa: F821
-    agent:    Mapped["Agent"]    = relationship("Agent",    foreign_keys=[agent_id],    lazy="noload")  # type: ignore[name-defined]  # noqa: F821
-    customer: Mapped["Customer"] = relationship("Customer", foreign_keys=[customer_id], lazy="noload")  # type: ignore[name-defined]  # noqa: F821
+    case:     Mapped["Case"]     = relationship("Case",     primaryjoin="CallLog.case_id == Case.id",         foreign_keys=[case_id],     lazy="noload")  # type: ignore[name-defined]  # noqa: F821
+    agent:    Mapped["Agent"]    = relationship("Agent",    primaryjoin="CallLog.agent_id == Agent.id",       foreign_keys=[agent_id],    lazy="noload")  # type: ignore[name-defined]  # noqa: F821
+    customer: Mapped["Customer"] = relationship("Customer", primaryjoin="CallLog.customer_id == Customer.id", foreign_keys=[customer_id], lazy="noload")  # type: ignore[name-defined]  # noqa: F821
 
     __table_args__ = (
+        ForeignKeyConstraint(["case_id", "agency_id"], ["collections.cases.id", "collections.cases.agency_id"],
+                             ondelete="RESTRICT"),
+        ForeignKeyConstraint(["agent_id", "agency_id"], ["workforce.agents.id", "workforce.agents.agency_id"],
+                             ondelete="RESTRICT"),
+        ForeignKeyConstraint(["customer_id", "bank_id"], ["lending.customers.id", "lending.customers.bank_id"],
+                             ondelete="RESTRICT"),
         Index("ix_call_log_case_time",     "case_id",     "called_at"),
         Index("ix_call_log_agent_time",    "agent_id",    "called_at"),
         Index("ix_call_log_customer_time", "customer_id", "called_at"),
-        Index("ix_call_log_outcome",       "outcome"),
+        Index(None, "agency_id", "called_at"),
+        Index("ix_call_log_outcome",       "agency_id", "outcome", "called_at"),
+        {"schema": "collections"},
     )

@@ -5,13 +5,24 @@
 #   unknown fields), and consent_given/signature_key had a schema field but
 #   no column and were never read in visit_service.py. Full detail + why:
 #   /changelog.md
+# 2026-09-24 (B06) — collections.visits (docs/DATA-MODEL-V2.md §4.3).
+#   bank_id / agency_id with composite FKs (case_id, agency_id) → cases and
+#   (agent_id, agency_id) → agents: a visit by one agency's agent on another
+#   agency's case is now impossible in the database, not only in scope.py
+#   (leak 3 of plan §1). uq(id, case_id) lets payments and PTPs require that
+#   their visit belongs to the same case. agent_device_id links the device.
+#   DEFERRED to B23: the 27 photo/recording/signature columns move to
+#   collections.visit_media once their ~110 readers move with them.
 # ───────────────────────────────────────────────────────────────────────────
 import enum
 from datetime import datetime
-from sqlalchemy import String, Float, Boolean, Enum as SAEnum, ForeignKey, Index, Text, DateTime, Integer
+from sqlalchemy import (
+    String, Float, Boolean, Enum as SAEnum, ForeignKeyConstraint, Index, Text, DateTime, SmallInteger,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from app.models.base import Base, TimestampMixin, UUIDPrimaryKey
-from app.models.call_log import BorrowerDisposition
+from app.models.base import PUBLIC, Base, TimestampMixin, UUIDPrimaryKey, UUIDType, uuid_fk
+from app.models.call_log import BORROWER_DISPOSITION_SQL, BorrowerDisposition
 
 
 class VisitOutcome(str, enum.Enum):
@@ -69,11 +80,21 @@ class NotMetReason(str, enum.Enum):
     OTHER              = "OTHER"
 
 
+VISIT_OUTCOME_SQL = SAEnum(VisitOutcome, name="visit_outcome_enum", schema=PUBLIC, metadata=Base.metadata)
+PERSON_MET_SQL = SAEnum(PersonMet, name="person_met_enum", schema=PUBLIC, metadata=Base.metadata)
+DEFAULT_REASON_SQL = SAEnum(DefaultReason, name="default_reason_enum", schema=PUBLIC, metadata=Base.metadata)
+NOT_MET_REASON_SQL = SAEnum(NotMetReason, name="not_met_reason_enum", schema=PUBLIC, metadata=Base.metadata)
+
+
 class Visit(Base, UUIDPrimaryKey, TimestampMixin):
     __tablename__ = "visits"
+    __tenant_parents__ = (("case_id", "Case"), ("agent_id", "Agent"))
 
-    case_id: Mapped[str] = mapped_column(ForeignKey("cases.id"), nullable=False, index=True)
-    agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"), nullable=False, index=True)
+    bank_id: Mapped[str] = mapped_column(UUIDType, nullable=False)
+    agency_id: Mapped[str] = mapped_column(UUIDType, nullable=False)
+    case_id: Mapped[str] = mapped_column(UUIDType, nullable=False)
+    agent_id: Mapped[str] = mapped_column(UUIDType, nullable=False)
+    agent_device_id: Mapped[str | None] = uuid_fk("workforce.agent_devices.id", nullable=True)
 
     # Geo-verification — visit must be within 100m of customer address
     check_in_latitude: Mapped[float] = mapped_column(Float, nullable=False)
@@ -88,17 +109,17 @@ class Visit(Base, UUIDPrimaryKey, TimestampMixin):
 
     # Outcome
     customer_met: Mapped[bool] = mapped_column(Boolean, nullable=False)
-    outcome: Mapped[VisitOutcome] = mapped_column(SAEnum(VisitOutcome, name="visit_outcome_enum"), nullable=False)
-    person_met: Mapped[PersonMet | None] = mapped_column(SAEnum(PersonMet, name="person_met_enum"), nullable=True)
-    default_reason: Mapped[DefaultReason | None] = mapped_column(SAEnum(DefaultReason, name="default_reason_enum"), nullable=True)
-    not_met_reason: Mapped[NotMetReason | None] = mapped_column(SAEnum(NotMetReason, name="not_met_reason_enum"), nullable=True)
+    outcome: Mapped[VisitOutcome] = mapped_column(VISIT_OUTCOME_SQL, nullable=False)
+    person_met: Mapped[PersonMet | None] = mapped_column(PERSON_MET_SQL, nullable=True)
+    default_reason: Mapped[DefaultReason | None] = mapped_column(DEFAULT_REASON_SQL, nullable=True)
+    not_met_reason: Mapped[NotMetReason | None] = mapped_column(NOT_MET_REASON_SQL, nullable=True)
     # 2026-09-16 — what the borrower said about paying when MET. Same enum and
     # same Postgres type as CallLog.borrower_disposition, because the model
     # pools the two channels. NULL when not met or not captured.
     borrower_disposition: Mapped[BorrowerDisposition | None] = mapped_column(
-        SAEnum(BorrowerDisposition, name="borrower_disposition_enum"), nullable=True
+        BORROWER_DISPOSITION_SQL, nullable=True
     )
-    visit_number: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    visit_number: Mapped[int] = mapped_column(SmallInteger, default=1, nullable=False)
 
     # Selfie proof (agent check-in selfie — legacy, kept for backward compat)
     selfie_photo_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -153,14 +174,28 @@ class Visit(Base, UUIDPrimaryKey, TimestampMixin):
     consent_given: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     signature_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
-    case: Mapped["Case"] = relationship("Case", back_populates="visits")  # type: ignore[name-defined]  # noqa: F821
-    agent: Mapped["Agent"] = relationship("Agent", back_populates="visits")  # type: ignore[name-defined]  # noqa: F821
-    payment: Mapped["Payment | None"] = relationship("Payment", back_populates="visit", uselist=False, lazy="noload")  # type: ignore[name-defined]  # noqa: F821
-    ptp: Mapped["PTP | None"] = relationship("PTP", back_populates="visit", uselist=False, lazy="noload")  # type: ignore[name-defined]  # noqa: F821
+    case: Mapped["Case"] = relationship(  # type: ignore[name-defined]  # noqa: F821
+        "Case", back_populates="visits", primaryjoin="Visit.case_id == Case.id", foreign_keys="[Visit.case_id]")
+    agent: Mapped["Agent"] = relationship(  # type: ignore[name-defined]  # noqa: F821
+        "Agent", back_populates="visits", primaryjoin="Visit.agent_id == Agent.id", foreign_keys="[Visit.agent_id]")
+    payment: Mapped["Payment | None"] = relationship(  # type: ignore[name-defined]  # noqa: F821
+        "Payment", back_populates="visit", uselist=False, lazy="noload",
+        primaryjoin="Visit.id == Payment.visit_id", foreign_keys="[Payment.visit_id]")
+    ptp: Mapped["PTP | None"] = relationship(  # type: ignore[name-defined]  # noqa: F821
+        "PTP", back_populates="visit", uselist=False, lazy="noload",
+        primaryjoin="Visit.id == PTP.visit_id", foreign_keys="[PTP.visit_id]")
 
     __table_args__ = (
+        UniqueConstraint("id", "agency_id"),
+        UniqueConstraint("id", "case_id"),
+        ForeignKeyConstraint(["case_id", "agency_id"], ["collections.cases.id", "collections.cases.agency_id"],
+                             ondelete="RESTRICT"),
+        ForeignKeyConstraint(["agent_id", "agency_id"], ["workforce.agents.id", "workforce.agents.agency_id"],
+                             ondelete="RESTRICT"),
+        Index(None, "agency_id", "check_in_time"),
         Index("ix_visit_agent_date", "agent_id", "check_in_time"),
         Index("ix_visit_case", "case_id", "check_in_time"),
-        Index("ix_visit_outcome", "outcome"),
-        Index("ix_visit_check_in_time", "check_in_time"),
+        Index(None, "agency_id", "outcome", "check_in_time"),
+        Index(None, "bank_id", "check_in_time"),
+        {"schema": "collections"},
     )

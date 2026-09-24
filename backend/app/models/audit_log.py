@@ -1,8 +1,8 @@
 import enum
 from datetime import datetime
-from sqlalchemy import String, Enum as SAEnum, ForeignKey, Index, Text, DateTime, JSON
+from sqlalchemy import String, Enum as SAEnum, Index, Text, DateTime
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from app.models.base import Base, TimestampMixin, UUIDPrimaryKey
+from app.models.base import PUBLIC, Base, JsonDoc, TimestampMixin, UUIDPrimaryKey, UUIDType, uuid_fk
 
 
 class AuditAction(str, enum.Enum):
@@ -44,10 +44,16 @@ class AuditLog(Base, UUIDPrimaryKey):
     # Timestamps stored directly — no mixin (must be immutable)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
 
-    user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
-    action: Mapped[AuditAction] = mapped_column(SAEnum(AuditAction, name="audit_action_enum"), nullable=False)
+    # 2026-09-24 (B09): RESTRICT, was SET NULL. Users are never deleted, and the
+    # immutability trigger (design §7.4) would block a SET NULL cascade anyway.
+    user_id: Mapped[str | None] = uuid_fk("tenancy.users.id", nullable=True)
+    # Denormalised tenant, so the bank / agency audit views need no join and
+    # system-written rows (user_id NULL) can still be scoped (known issue 4).
+    bank_id: Mapped[str | None] = mapped_column(UUIDType)
+    agency_id: Mapped[str | None] = mapped_column(UUIDType)
+    action: Mapped[AuditAction] = mapped_column(SAEnum(AuditAction, name="audit_action_enum", schema=PUBLIC, metadata=Base.metadata), nullable=False)
     entity_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    entity_id: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
+    entity_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     # Request context
     ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
@@ -55,9 +61,9 @@ class AuditLog(Base, UUIDPrimaryKey):
     device_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     # Change detail
-    details: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    old_values: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    new_values: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    details: Mapped[dict | None] = mapped_column(JsonDoc, nullable=True)
+    old_values: Mapped[dict | None] = mapped_column(JsonDoc, nullable=True)
+    new_values: Mapped[dict | None] = mapped_column(JsonDoc, nullable=True)
 
     success: Mapped[bool] = mapped_column(default=True, nullable=False)
     failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -68,4 +74,7 @@ class AuditLog(Base, UUIDPrimaryKey):
         Index("ix_audit_user_action", "user_id", "action"),
         Index("ix_audit_entity", "entity_type", "entity_id"),
         Index("ix_audit_created_at", "created_at"),
+        Index(None, "bank_id", "created_at"),
+        Index(None, "agency_id", "created_at"),
+        {"schema": "audit"},
     )
