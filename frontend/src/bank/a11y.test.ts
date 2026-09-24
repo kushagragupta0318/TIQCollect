@@ -32,6 +32,18 @@ describe("focus trap: where Tab goes", () => {
   it("does nothing on a surface with no focusable element", () => {
     expect(nextTrappedFocus([], a, false)).toBeNull();
   });
+
+  // `nextTrappedFocus([], ...)` returning null is exercised above; whether Tab
+  // is then BLOCKED or left to the browser is a decision made in the keydown
+  // handler inside `useModalFocus`'s effect, which is not exported and needs a
+  // real DOM (a mounted surface, real focusable descendants, a dispatched
+  // KeyboardEvent) to exercise directly — this repo has no jsdom/testing-library
+  // configured (see the file header). Pinned as a textual tripwire instead, in
+  // the style of the "wiring" checks below.
+  it("the Tab handler blocks Tab itself when nothing is focusable, not just via nextTrappedFocus", () => {
+    const src = readFileSync(join(__dirname, "lib/useModalFocus.ts"), "utf8");
+    expect(src).toMatch(/if \(items\.length === 0\) \{\s*e\.preventDefault\(\);\s*return;\s*\}/);
+  });
 });
 
 describe("clickable rows answer the keyboard like a button", () => {

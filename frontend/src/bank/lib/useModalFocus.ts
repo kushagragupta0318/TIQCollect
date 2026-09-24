@@ -15,6 +15,16 @@
 //   onClose. On close: restore the scroll and return focus to where it was.
 //   Overlays stack — a dialog opened over the workspace owns Tab and Escape
 //   until it closes — so only the topmost one reacts.
+//
+// 2026-09-24 (later) — Accessibility re-audit: Tab did not trap on a surface
+//   with zero focusable descendants (e.g. a drill panel still in its loading
+//   state). `nextTrappedFocus([], ...)` already, correctly, returns null —
+//   there is nowhere to send focus — but the caller read that null as "let
+//   the browser handle it" and never called `preventDefault()`, so Tab walked
+//   out to the hidden page behind the overlay. The keydown handler now checks
+//   `items.length === 0` itself and blocks Tab outright in that case, rather
+//   than asking `nextTrappedFocus` to say both "nowhere to go" and "don't
+//   leave" with the same null.
 // ─────────────────────────────────────────────────────────────────────────────
 import { useEffect, useRef, type RefObject } from "react";
 
@@ -88,7 +98,12 @@ export function useModalFocus(
         return;
       }
       if (e.key !== "Tab") return;
-      const target = nextTrappedFocus(focusableWithin(surface), document.activeElement, e.shiftKey);
+      const items = focusableWithin(surface);
+      if (items.length === 0) {
+        e.preventDefault();
+        return;
+      }
+      const target = nextTrappedFocus(items, document.activeElement, e.shiftKey);
       if (target) {
         e.preventDefault();
         target.focus();
