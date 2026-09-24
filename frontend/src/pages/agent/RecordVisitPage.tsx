@@ -82,6 +82,15 @@
 //   and "ABC Bank" hardcoded here; the payee now comes from GET
 //   /agent/upi-config (settings UPI_VPA / UPI_PAYEE_NAME, no default), and no
 //   payee means no QR. Rules and tests: upiPayment.ts.
+// 2026-09-24 (board ML-1, option A) - "Borrower Tone" (Cooperative / Neutral /
+//   Hostile, folded into the notes as "[Tone: X]") is replaced by the
+//   borrower's STANCE: the six-way BorrowerDisposition the backend has stored
+//   on Visit since 2026-09-16 and recovery_risk 2.2.0 reads as
+//   latest_disposition, its strongest behavioural feature. Nothing wrote it -
+//   0 of 2,404 visits - so the model served every allocation with it at NONE.
+//   Required on the Borrower path, no default; RTP / BROKEN_PTP / DISPUTE and
+//   the hardship reasons pre-select it and the agent's last tap wins (rules
+//   and tests: borrowerStance.ts). Sent as borrower_disposition.
 // ──────────────────────────────────────────────────────────────────────────
 import { useEffect, useRef, useState } from "react";
 import QRCode from "react-qr-code";
@@ -92,12 +101,13 @@ import {
   Calendar, Upload, X, AlertTriangle,
   QrCode, Lock, Unlock, Mic, MicOff, ShieldCheck, Send, WifiOff, RefreshCw,
   Banknote, Smartphone, FileSignature, Landmark, Building2, IdCard, FileText, HeartPulse,
-  User, Users, DoorClosed, Smile, Meh, Frown, Home, Car,
+  User, Users, DoorClosed, Home, Car,
 } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { getCaseDetail, recordVisit, collectPayment, setPTP, getPhotoUploadUrl, getCasePhotos, getRecordingUploadUrl, reoptimizeBeat, transcribeAudio, queueVisitTranscription, sendPaymentOtp, verifyPaymentOtp, getUpiConfig } from "@/api/agent";
 import { useQuery } from "@tanstack/react-query";
 import { DEMO_UPI_REFERENCE_PREFIX, demoUpiAutoconfirmEnabled, demoUpiReference, paymentReferenceOk, upiQrValue, upiReferenceOk } from "./upiPayment";
+import { STANCE_OPTIONS, nextStance, type BorrowerStance, type StanceEvent, type StanceState } from "./borrowerStance";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import SignaturePad from "@/components/ui/SignaturePad";
@@ -144,7 +154,7 @@ const DRAFT_FIELDS = [
   "ptpAmount", "ptpDate", "ptpReason",
   "escalationNotes", "witnessPresent", "witnessName",
   "propertyType", "occupancyStatus", "vehiclePresent", "businessRunning",
-  "borrowerTone", "informantName", "informantRelation",
+  "borrowerStance", "stanceSource", "informantName", "informantRelation",
   "notes", "customerStatement",
   // `satisfies` ties this list to FormState: renaming a form field now fails
   // the build instead of silently dropping that field from every saved draft.
@@ -249,8 +259,9 @@ interface FormState {
   objectPhotoGps: PhotoGps;
   objectPhotoFromPrev: boolean;
   documents: DocUpload[];
-  // Tone & DECEASED informant
-  borrowerTone: "COOPERATIVE" | "NEUTRAL" | "HOSTILE" | null;
+  // Borrower's stance (ML-1) & DECEASED informant
+  borrowerStance: BorrowerStance | null;
+  stanceSource: StanceState["source"];
   informantName: string;
   informantRelation: string;
   // Notes & consent (always last)
@@ -528,7 +539,7 @@ export default function RecordVisitPage() {
     chequeBank: "", neftRef: "", receiptPhoto: null, cashCounted: false,
     ptpAmount: "", ptpDate: "", ptpReason: "",
     escalationNotes: "", witnessPresent: false, witnessName: "",
-    borrowerTone: null, informantName: "", informantRelation: "",
+    borrowerStance: null, stanceSource: null, informantName: "", informantRelation: "",
     propertyType: "", occupancyStatus: "", vehiclePresent: null, businessRunning: null,
     agentPhoto: null, agentPhotoGps: null, agentPhotoFromPrev: false,
     borrowerPhoto: null, borrowerPhotoGps: null, borrowerPhotoFromPrev: false,
@@ -544,6 +555,11 @@ export default function RecordVisitPage() {
   }));
 
   const upd = (patch: Partial<FormState>) => setForm((f) => ({ ...f, ...patch }));
+  /** Apply a field change and the stance it implies, in one update (ML-1). */
+  const updWithStance = (patch: Partial<FormState>, event: StanceEvent) => setForm((f) => {
+    const s = nextStance({ stance: f.borrowerStance, source: f.stanceSource }, event);
+    return { ...f, ...patch, borrowerStance: s.stance, stanceSource: s.source };
+  });
 
   // Connectivity, tracked here rather than read from AgentLayout because the
   // submit gate needs it and a page can be open across a signal drop.
@@ -819,7 +835,7 @@ export default function RecordVisitPage() {
     if (!form.meetingType) return false;
     if (!locationReady) return false;
     if (form.meetingType === "BORROWER")
-      return !!form.outcome && paymentValid && paymentVerified && ptpValid && escalationValid;
+      return !!form.outcome && !!form.borrowerStance && paymentValid && paymentVerified && ptpValid && escalationValid;
     if (form.meetingType === "THIRD_PARTY")
       return !!form.personMet && !!form.outcome;
     if (form.meetingType === "NOT_MET")
@@ -836,6 +852,7 @@ export default function RecordVisitPage() {
       customerMet: type === "BORROWER" ? true : false,
       outcome: null,
       amount: "", cashCounted: false, upiRef: "",
+      borrowerStance: null, stanceSource: null,     // the stance is the borrower's; a new path starts empty
     });
   }
 
@@ -1020,9 +1037,6 @@ export default function RecordVisitPage() {
         const relation = THIRD_PARTY_OPTIONS.find(p => p.value === form.personMet)?.label ?? form.personMet;
         finalNotes = `Met with: ${form.thirdPartyName} (${relation}). ${form.notes}`.trim();
       }
-      if (form.borrowerTone) {
-        finalNotes = `[Tone: ${form.borrowerTone}]${finalNotes ? " " + finalNotes : ""}`;
-      }
       if (form.outcome === "DECEASED" && form.informantName) {
         const rel = form.informantRelation ? ` (${form.informantRelation})` : "";
         finalNotes = `Informant: ${form.informantName}${rel}. ${finalNotes}`.trim();
@@ -1058,6 +1072,9 @@ export default function RecordVisitPage() {
         person_met: form.personMet ?? undefined,
         default_reason: form.defaultReason ?? undefined,
         not_met_reason: form.notMetReason || undefined,
+        // Only on the Borrower path: the server refuses a stance on a visit
+        // that did not meet the borrower (DISPOSITION_WITHOUT_BORROWER).
+        borrower_disposition: form.meetingType === "BORROWER" ? form.borrowerStance ?? undefined : undefined,
         notes: finalNotes || undefined,
         consent_given: form.consentGiven || undefined,
         property_type: form.propertyType || undefined,
@@ -1446,28 +1463,6 @@ export default function RecordVisitPage() {
             </Section>
           )}
 
-          {/* ── Borrower Tone — just after Field Investigation (borrower path) ── */}
-          {form.meetingType === "BORROWER" && (
-            <Section title="Borrower Tone" badge="Recommended">
-              <div className="grid grid-cols-3 gap-2">
-                {([
-                  { v: "COOPERATIVE", l: "Cooperative", icon: Smile, sel: "border-success-400 bg-success-50 text-success-700" },
-                  { v: "NEUTRAL",     l: "Neutral",     icon: Meh, sel: "border-brand-400 bg-brand-50 text-brand-700" },
-                  { v: "HOSTILE",     l: "Hostile",     icon: Frown, sel: "border-danger-400 bg-danger-50 text-danger-700" },
-                ] as const).map(({ v, l, icon: ToneIcon, sel: selCls }) => (
-                  <button
-                    key={v}
-                    onClick={() => upd({ borrowerTone: form.borrowerTone === v ? null : v })}
-                    className={`flex flex-col items-center gap-1 py-3 rounded-xl border text-xs font-medium transition-colors ${
-                      form.borrowerTone === v ? selCls : "border-slate-200 bg-white text-slate-600 transition-colors hover:border-brand-200 hover:bg-brand-50/50"
-                    }`}
-                  >
-                    <ToneIcon className="w-6 h-6" strokeWidth={1.75} />{l}
-                  </button>
-                ))}
-              </div>
-            </Section>
-          )}
 
           {/* ══════════════════════════════════════════════════════════════════
               THIRD PARTY PATH: Who specifically + notes
@@ -1643,7 +1638,10 @@ export default function RecordVisitPage() {
               <Section title="Visit Outcome" required>
                 <select
                   value={form.outcome ?? ""}
-                  onChange={(e) => upd({ outcome: (e.target.value as VisitOutcome) || null })}
+                  onChange={(e) => {
+                    const outcome = (e.target.value as VisitOutcome) || null;
+                    updWithStance({ outcome }, { kind: "outcome", value: outcome });
+                  }}
                   className="w-full rounded-xl border border-slate-200 bg-white text-sm px-3 py-3 focus:outline-none focus:ring-2 focus:ring-brand-300"
                 >
                   <option value="">— Select outcome —</option>
@@ -1659,7 +1657,10 @@ export default function RecordVisitPage() {
                 <Section title="Reason for Default" badge="Recommended">
                   <div className="space-y-1.5">
                     {DEFAULT_REASONS.map((r) => (
-                      <button key={r.value} onClick={() => upd({ defaultReason: form.defaultReason === r.value ? null : r.value })} className={`w-full text-sm px-3 py-2.5 rounded-xl border text-left transition-colors ${form.defaultReason === r.value ? "border-brand-400 bg-brand-50 text-brand-700 font-medium" : "border-slate-200 bg-white text-slate-600 transition-colors hover:border-brand-200 hover:bg-brand-50/50"}`}>
+                      <button key={r.value} onClick={() => {
+                        const defaultReason = form.defaultReason === r.value ? null : r.value;
+                        updWithStance({ defaultReason }, { kind: "reason", value: defaultReason });
+                      }} className={`w-full text-sm px-3 py-2.5 rounded-xl border text-left transition-colors ${form.defaultReason === r.value ? "border-brand-400 bg-brand-50 text-brand-700 font-medium" : "border-slate-200 bg-white text-slate-600 transition-colors hover:border-brand-200 hover:bg-brand-50/50"}`}>
                         {r.label}
                         {form.defaultReason === r.value && <CheckCircle className="w-4 h-4 text-brand-500 float-right mt-0.5" />}
                       </button>
@@ -1667,6 +1668,32 @@ export default function RecordVisitPage() {
                   </div>
                 </Section>
               )}
+
+              {/* ── C2. The borrower's stance (ML-1) ─────────────────────────── */}
+              <Section title="Borrower's Stance on Paying" required>
+                <p className="text-xs text-slate-500 mb-2 px-1">
+                  Your read of what the borrower said, whatever the outcome.
+                </p>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2" role="radiogroup" aria-label="Borrower's stance on paying">
+                  {STANCE_OPTIONS.map((o) => {
+                    const on = form.borrowerStance === o.value;
+                    return (
+                      <button
+                        key={o.value}
+                        role="radio"
+                        aria-checked={on}
+                        onClick={() => updWithStance({}, { kind: "tap", value: o.value })}
+                        className={`py-2.5 px-3 rounded-xl border text-left transition-colors ${
+                          on ? "border-brand-400 bg-brand-50 text-brand-800" : "border-slate-200 bg-white text-slate-600 hover:border-brand-200 hover:bg-brand-50/50"
+                        }`}
+                      >
+                        <span className="block text-sm font-medium">{o.label}</span>
+                        <span className="block text-xs text-slate-500">{o.hint}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </Section>
 
               {/* ── D. Payment ──────────────────────────────────────────────── */}
               {sel?.needsPayment && (
@@ -2169,6 +2196,7 @@ export default function RecordVisitPage() {
               {!locationCaptured && <p>• Waiting for GPS location — enable location and hold still</p>}
               {locationCaptured && !locationVerified && <p>• Move within 100m of the customer's address to verify GPS (or select "Address Issue" if the address is wrong)</p>}
               {form.meetingType === "BORROWER" && !form.outcome && <p>• Select visit outcome</p>}
+              {form.meetingType === "BORROWER" && !form.borrowerStance && <p>• Record the borrower's stance on paying</p>}
               {form.meetingType === "THIRD_PARTY" && !form.personMet && <p>• Select who you met</p>}
               {form.meetingType === "THIRD_PARTY" && !form.outcome && <p>• Select outcome</p>}
               {form.meetingType === "NOT_MET" && !form.outcome && <p>• Select outcome</p>}

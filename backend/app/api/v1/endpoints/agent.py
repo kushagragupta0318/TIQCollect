@@ -720,6 +720,9 @@ def log_call(case_id: str, req: LogCallRequest, current_user: AgentOnly, db: DbS
 
     agent = _get_agent_or_404(current_user, db)
     case = _get_accessible_case_or_404(db, agent, case_id)
+    # ML-1: a stance only on an answered call — nobody said anything otherwise.
+    from app.services.borrower_stance import check_call_stance
+    check_call_stance(req.borrower_disposition, outcome=req.outcome)
 
     log = CallLog(
         case_id=case_id,
@@ -739,6 +742,7 @@ def log_call(case_id: str, req: LogCallRequest, current_user: AgentOnly, db: DbS
         payment_intent_signalled=req.payment_intent_signalled,
         verbal_payment_date=req.verbal_payment_date,
         ai_intel_summary=req.ai_intel_summary,
+        borrower_disposition=req.borrower_disposition,
     )
     db.add(log)
     db.commit()
