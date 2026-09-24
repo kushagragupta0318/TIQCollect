@@ -150,16 +150,26 @@ def _point_near(lat: float, lon: float) -> tuple[float, float]:
     return round(lat + dlat, 6), round(lon + dlon, 6)
 
 
-def _territory_anchors(db) -> list[tuple[float, float, str]]:
-    """(base_lat, base_lon, territory) for every active agent with a base."""
+def _territory_anchors(db) -> list[tuple[float, float, str, str, str]]:
+    """(base_lat, base_lon, territory, bank_id, agency_id) for every active
+    agent with a base. 2026-09-24: carries the agent's tenant, because a new
+    case now belongs to an AGENCY (the one whose territory it lands in) and a
+    borrower to that agency's bank."""
     from app.models.agent import Agent, AgentStatus
     rows = (
-        db.query(Agent.base_latitude, Agent.base_longitude, Agent.territory)
+        db.query(Agent.base_latitude, Agent.base_longitude, Agent.territory, Agent.bank_id, Agent.agency_id)
         .filter(Agent.base_latitude.isnot(None), Agent.base_longitude.isnot(None),
                 Agent.status != AgentStatus.SUSPENDED)
         .all()
     )
-    return [(float(la), float(lo), t) for la, lo, t in rows]
+    return [(float(la), float(lo), t, b, a) for la, lo, t, b, a in rows]
+
+
+def _active_contracts(db) -> dict[str, str]:
+    """agency_id → its ACTIVE contract id (the placement's contract)."""
+    from app.models.tenancy import AgencyContract
+    rows = db.query(AgencyContract.agency_id, AgencyContract.id).filter(AgencyContract.status == "ACTIVE").all()
+    return {a: c for a, c in rows}
 
 _FIRST = ["Amit", "Pooja", "Sanjay", "Neha", "Rahul", "Divya", "Manish", "Kiran",
           "Vijay", "Anjali", "Deepak", "Sneha", "Rohan", "Preeti", "Nikhil"]
@@ -194,6 +204,15 @@ def _seed_day(db, day: date) -> int:
 
     n = random.randint(NEW_CASES_MIN, NEW_CASES_MAX)
     anchors = _territory_anchors(db)
+    if not anchors:
+        # 2026-09-24: a case must belong to an agency, and an agency is known
+        # only through its agents. With none, there is nobody to place with —
+        # say so rather than invent an unowned case (the v1 feed fell back to a
+        # Gurugram box with no owner).
+        logger.info("demo_daily_feed.skip_no_agents", day=str(day))
+        return 0
+    contracts = _active_contracts(db)
+    from app.models.placement import Placement
     created = 0
     new_loan_ids: list[str] = []
     for i in range(n):
@@ -221,17 +240,13 @@ def _seed_day(db, day: date) -> int:
         outstanding = round(emi * months_left, 2)
         priority = priority_for(dpd)   # 2026-09-21: the one rule (models/case.py)
 
-        if anchors:
-            base_lat, base_lon, territory = random.choice(anchors)
-            lat, lon = _point_near(base_lat, base_lon)
-            city, state, pincode = _city_for(territory)
-        else:
-            lat, lon = round(random.uniform(*_GGN_LAT), 6), round(random.uniform(*_GGN_LON), 6)
-            city, state, pincode = "Gurugram", "Haryana", "122001"
+        base_lat, base_lon, territory, bank_id, agency_id = random.choice(anchors)
+        lat, lon = _point_near(base_lat, base_lon)
+        city, state, pincode = _city_for(territory)
         cust = Customer(
-            id=_uid(), customer_ref=f"{ref_prefix}{i:02d}",
+            id=_uid(), bank_id=bank_id, customer_ref=f"{ref_prefix}{i:02d}",
             full_name=f"{random.choice(_FIRST)} {random.choice(_LAST)}",
-            date_of_birth="1986-03-10", gender=random.choice(["MALE", "FEMALE"]),
+            date_of_birth=date(1986, 3, 10), gender=random.choice(["MALE", "FEMALE"]),
             pan_masked="XXXXX1234X", aadhaar_masked="XXXXXXXX5678",
             phone_primary=f"9{random.randint(100000000, 999999999):09d}",
             address_line1=f"{random.randint(1, 200)}, Sector {random.randint(1, 70)}",
@@ -249,9 +264,9 @@ def _seed_day(db, day: date) -> int:
         db.flush()
 
         loan = Loan(
-            id=_uid(), loan_account_number=f"{ref_prefix}LN{i:02d}",
+            id=_uid(), bank_id=bank_id, loan_account_number=f"{ref_prefix}LN{i:02d}",
             customer_id=cust.id, loan_type=loan_type,
-            bank_name="ABC Bank", branch_code="GGN044",
+            branch_code="GGN044",
             sanctioned_amount=round(outstanding * 1.4, 2),
             disbursed_amount=round(outstanding * 1.3, 2),
             outstanding_principal=outstanding,
@@ -262,8 +277,8 @@ def _seed_day(db, day: date) -> int:
             # matched to how late the account is — not a flat share of the balance.
             overdue_amount=round(emi * max(1, dpd // 30), 2),
             emi_amount=emi,
-            disbursement_date="2022-01-15", maturity_date="2025-01-15",
-            last_payment_date="2025-11-10", next_due_date=day.strftime("%Y-%m-%d"),
+            disbursement_date=date(2022, 1, 15), maturity_date=date(2025, 1, 15),
+            last_payment_date=date(2025, 11, 10), next_due_date=day,
             dpd=dpd,
             # Was an inline chain with no CURRENT and no BUCKET_1 branch, so
             # any DPD at or below 30 would have been written BUCKET_2.
@@ -278,13 +293,29 @@ def _seed_day(db, day: date) -> int:
         db.flush()
         new_loan_ids.append(loan.id)
 
+        # The bank places the loan with the agency whose territory it lands in
+        # (a FEED placement against that agency's active contract); the case is
+        # that agency's work item on it.
+        placement_id = None
+        if agency_id in contracts:
+            placement = Placement(
+                bank_id=bank_id, agency_id=agency_id, loan_id=loan.id, contract_id=contracts[agency_id],
+                source="FEED", status="ACTIVE", placed_on=day,
+                dpd_at_placement=dpd, dpd_bucket_at_placement=dpd_bucket_for(dpd),
+                exposure_at_placement=loan.total_outstanding, overdue_at_placement=loan.overdue_amount,
+            )
+            db.add(placement)
+            db.flush()
+            placement_id = placement.id
+
         case = Case(
-            id=_uid(), case_number=f"{ref_prefix}C{i:02d}",
+            id=_uid(), bank_id=bank_id, agency_id=agency_id, placement_id=placement_id,
+            case_number=f"{ref_prefix}C{i:02d}",
             customer_id=cust.id, loan_id=loan.id,
             agent_id=None, status=CaseStatus.UNASSIGNED,
             priority=priority,
             target_amount=emi, collected_amount=0.0,
-            allocation_date=day.strftime("%Y-%m-%d"),
+            allocation_date=day,
             allocation_score=float({"CRITICAL": 95, "HIGH": 75, "MEDIUM": 45, "LOW": 20}[priority.value]),
             is_ml_allocated=False, visit_count=0, max_visits_allowed=5,
             collection_stage="NPA_RECOVERY" if dpd > 90 else "FIELD",

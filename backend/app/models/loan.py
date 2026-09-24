@@ -180,9 +180,14 @@ class Loan(Base, UUIDPrimaryKey, TimestampMixin):
     # with different weights, while nothing read it.
     recovery_potential: Mapped[RecoveryPotential | None] = mapped_column(RECOVERY_POTENTIAL_SQL)
 
-    customer: Mapped["Customer"] = relationship("Customer", back_populates="loans")  # type: ignore[name-defined]  # noqa: F821
-    cases: Mapped[list["Case"]] = relationship("Case", back_populates="loan", lazy="noload")  # type: ignore[name-defined]  # noqa: F821
-    bank: Mapped["Bank"] = relationship("Bank", lazy="joined", foreign_keys="[Loan.bank_id]")  # type: ignore[name-defined]  # noqa: F821
+    # Joined on id ONLY (2026-09-24, coordinator audit): inferred from the
+    # composite (customer_id, bank_id) FK the join also compared bank_id, so a
+    # bank mismatch made loan.customer silently None and the ML adapter
+    # dropped cibil/age/city — the 2026-09-08 "silent failure" pattern. The
+    # tenant listener refuses a mismatch at flush instead.
+    customer: Mapped["Customer"] = relationship("Customer", back_populates="loans", primaryjoin="Loan.customer_id == Customer.id", foreign_keys="[Loan.customer_id]")  # type: ignore[name-defined]  # noqa: F821
+    cases: Mapped[list["Case"]] = relationship("Case", back_populates="loan", lazy="noload", primaryjoin="Loan.id == Case.loan_id", foreign_keys="[Case.loan_id]")  # type: ignore[name-defined]  # noqa: F821
+    bank: Mapped["Bank"] = relationship("Bank", lazy="joined", foreign_keys="[Loan.bank_id]", primaryjoin="Loan.bank_id == Bank.id", viewonly=True)  # type: ignore[name-defined]  # noqa: F821
 
     __table_args__ = (
         UniqueConstraint("bank_id", "loan_account_number"),

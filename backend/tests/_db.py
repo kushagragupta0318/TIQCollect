@@ -14,7 +14,9 @@ SQLite has no schemas, so every one of them would have failed at
   produce rows with a bank and an agency (models/tenancy_listener.py).
   Production sessions never set it.
 - `create_schema(engine)` — create_all plus the lookup rows, plus the default
-  test bank + agency rows themselves, so FK-shaped reads (`loan.bank`) work.
+  test bank + agency rows themselves and the branches in TEST_BRANCH_CODES,
+  so FK-shaped reads (`loan.bank`) work and — foreign keys being ENFORCED on
+  this SQLite (make_engine) — a fixture loan's branch exists.
 - `test_id(name)` — a deterministic UUID for a readable name. Ids are native
   UUIDs in v2; a literal like "c1" is accepted by SQLite on insert, stored
   mangled and raises on read (measured, design §2.2).
@@ -23,7 +25,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import create_engine, insert
+from sqlalchemy import create_engine, event, insert
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -48,8 +50,27 @@ TEST_AGENCY_ID = test_id("agency:aravalli-field-services")
 DEFAULT_TENANT = {"bank_id": TEST_BANK_ID, "agency_id": TEST_AGENCY_ID}
 
 
+# Branch codes the suite's loan fixtures use. loans carry a composite FK
+# (bank_id, branch_code) -> branches, which SQLite now enforces.
+TEST_BRANCH_CODES = ("BR", "BR1", "BR01", "B1", "DL01", "GG01", "GGN044", "NO01")
+
+
 def make_engine(url: str = "sqlite://"):
+    """SQLite with foreign keys ENFORCED (2026-09-24, coordinator audit item 3).
+
+    SQLite ignores every FOREIGN KEY clause unless `PRAGMA foreign_keys=ON` is
+    issued on the connection, so until now the composite tenant FKs — the
+    database-level guarantee that a visit cannot join agency A's case to
+    agency B's agent — were decorative in every test. A suite that cannot see
+    a violated FK passes on data Postgres would refuse."""
     engine = create_engine(url, connect_args={"check_same_thread": False}, poolclass=StaticPool)
+
+    @event.listens_for(engine, "connect")
+    def _enforce_foreign_keys(dbapi_conn, _record):  # noqa: ARG001
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA foreign_keys=ON")
+        cur.close()
+
     return engine.execution_options(schema_translate_map=SCHEMA_MAP)
 
 
@@ -68,7 +89,7 @@ def create_schema(engine=None, *, bind=None, seed_tenant: bool = True) -> None:
     """create_all + lookup rows + the default test bank and agency. Idempotent:
     several suites call it once per test without dropping in between."""
     from sqlalchemy import select, func
-    from app.models.tenancy import Agency, Bank
+    from app.models.tenancy import Agency, Bank, Branch
 
     engine = engine if engine is not None else bind
     Base.metadata.create_all(engine)
@@ -91,7 +112,26 @@ def create_schema(engine=None, *, bind=None, seed_tenant: bool = True) -> None:
                 "legal_name": "Aravalli Field Services Pvt. Ltd.", "trade_name": "Aravalli Field Services",
                 "status": "ACTIVE", "contacts": [], "is_demo": True,
             }])
+            conn.execute(insert(Branch.__table__), [
+                {"id": test_id(f"branch:{code}"), "bank_id": TEST_BANK_ID, "branch_code": code,
+                 "name": f"Meridian Trust Bank {code}", "is_active": True}
+                for code in TEST_BRANCH_CODES
+            ])
 
 
 def drop_schema(engine=None, *, bind=None) -> None:
-    Base.metadata.drop_all(engine if engine is not None else bind)
+    """drop_all with foreign keys suspended on SQLite: with them enforced,
+    DROP TABLE is an implicit DELETE and a populated cycle
+    (cases <-> bank_actions, cases -> placements -> model_predictions) cannot
+    be dropped in any order."""
+    engine = engine if engine is not None else bind
+    if engine.dialect.name != "sqlite":
+        Base.metadata.drop_all(engine)
+        return
+    with engine.connect() as conn:
+        conn.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        try:
+            Base.metadata.drop_all(conn)
+            conn.commit()
+        finally:
+            conn.exec_driver_sql("PRAGMA foreign_keys=ON")

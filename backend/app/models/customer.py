@@ -84,8 +84,8 @@ class Customer(Base, UUIDPrimaryKey, TimestampMixin):
 
     tags: Mapped[list] = mapped_column(JsonDoc, default=list, nullable=False)
 
-    loans: Mapped[list["Loan"]] = relationship("Loan", back_populates="customer", lazy="noload")  # type: ignore[name-defined]  # noqa: F821
-    cases: Mapped[list["Case"]] = relationship("Case", back_populates="customer", lazy="noload")  # type: ignore[name-defined]  # noqa: F821
+    loans: Mapped[list["Loan"]] = relationship("Loan", back_populates="customer", lazy="noload", primaryjoin="Customer.id == Loan.customer_id", foreign_keys="[Loan.customer_id]")  # type: ignore[name-defined]  # noqa: F821
+    cases: Mapped[list["Case"]] = relationship("Case", back_populates="customer", lazy="noload", primaryjoin="Customer.id == Case.customer_id", foreign_keys="[Case.customer_id]")  # type: ignore[name-defined]  # noqa: F821
 
     __table_args__ = (
         UniqueConstraint("bank_id", "customer_ref"),

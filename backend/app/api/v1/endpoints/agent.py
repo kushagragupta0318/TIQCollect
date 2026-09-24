@@ -113,6 +113,7 @@ import structlog
 from app.core.dependencies import DbSession, AgentOnly
 from app.core import llm
 from app.core.config import settings
+from app.core.ids import UUIDPath
 from app.models.agent import Agent, AgentStatus
 from app.models.beat import Beat
 from app.models.case import Case, CaseStatus, CasePriority
@@ -403,7 +404,7 @@ def get_ranked_cases(current_user: AgentOnly, db: DbSession):
 # ---------------------------------------------------------------------------
 
 @router.get("/cases/{case_id}", response_model=CaseDetailResponse)
-def get_case_detail(case_id: str, current_user: AgentOnly, db: DbSession):
+def get_case_detail(case_id: UUIDPath, current_user: AgentOnly, db: DbSession):
     from app.services.case_service import CaseService
     agent = _get_agent_or_404(current_user, db)
     return CaseService(db).case_detail(agent, case_id)
@@ -414,7 +415,7 @@ def get_case_detail(case_id: str, current_user: AgentOnly, db: DbSession):
 # ---------------------------------------------------------------------------
 
 @router.post("/cases/{case_id}/visit", response_model=VisitResponse)
-def record_visit(case_id: str, req: RecordVisitRequest, current_user: AgentOnly, db: DbSession):
+def record_visit(case_id: UUIDPath, req: RecordVisitRequest, current_user: AgentOnly, db: DbSession):
     """Record a field visit outcome.
 
     See VisitService.record_visit for the actual logic (geo/contact-hours
@@ -431,7 +432,7 @@ def record_visit(case_id: str, req: RecordVisitRequest, current_user: AgentOnly,
 # ---------------------------------------------------------------------------
 
 @router.post("/cases/{case_id}/payment", response_model=PaymentResponse)
-def collect_payment(case_id: str, req: CollectPaymentRequest, current_user: AgentOnly, db: DbSession):
+def collect_payment(case_id: UUIDPath, req: CollectPaymentRequest, current_user: AgentOnly, db: DbSession):
     agent = _get_agent_or_404(current_user, db)
     return PaymentService(db).collect_payment(agent, case_id, req)
 
@@ -442,7 +443,7 @@ def collect_payment(case_id: str, req: CollectPaymentRequest, current_user: Agen
 # ---------------------------------------------------------------------------
 
 @router.post("/cases/{case_id}/payment/otp/send", response_model=OtpSendResponse)
-def send_payment_otp(case_id: str, req: OtpSendRequest, current_user: AgentOnly, db: DbSession):
+def send_payment_otp(case_id: UUIDPath, req: OtpSendRequest, current_user: AgentOnly, db: DbSession):
     """Send a 4-digit OTP to the borrower's REGISTERED phone to confirm a
     collection amount. `payment_id` present = re-verify an existing pending
     (offline) payment; absent = verify before collecting. See OtpService."""
@@ -451,7 +452,7 @@ def send_payment_otp(case_id: str, req: OtpSendRequest, current_user: AgentOnly,
 
 
 @router.post("/cases/{case_id}/payment/otp/verify", response_model=OtpVerifyResponse)
-def verify_payment_otp(case_id: str, req: OtpVerifyRequest, current_user: AgentOnly, db: DbSession):
+def verify_payment_otp(case_id: UUIDPath, req: OtpVerifyRequest, current_user: AgentOnly, db: DbSession):
     """Verify the borrower's OTP. For a deferred (payment-bound) OTP this
     promotes the pending Payment to VERIFIED and sends the e-receipt; for the
     pre-collection flow it marks the OTP used so collect_payment can consume it."""
@@ -467,7 +468,7 @@ class PaymentLinkRequest(BaseModel):
     amount: float
 
 @router.post("/cases/{case_id}/payment-link", response_model=PaymentLinkResponse)
-def create_payment_link(case_id: str, req: PaymentLinkRequest, current_user: AgentOnly, db: DbSession):
+def create_payment_link(case_id: UUIDPath, req: PaymentLinkRequest, current_user: AgentOnly, db: DbSession):
     return PaymentService(db).create_payment_link(case_id, req.amount)
 
 
@@ -503,7 +504,7 @@ def _get_accessible_case_or_404(db: DbSession, agent: Agent, case_id: str) -> Ca
 # ---------------------------------------------------------------------------
 
 @router.post("/cases/{case_id}/notify-visit")
-def notify_visit(case_id: str, current_user: AgentOnly, db: DbSession):
+def notify_visit(case_id: UUIDPath, current_user: AgentOnly, db: DbSession):
     agent = _get_agent_or_404(current_user, db)
     case = _get_accessible_case_or_404(db, agent, case_id)
 
@@ -545,7 +546,7 @@ class NotifyCaseRequest(BaseModel):
 
 
 @router.post("/cases/{case_id}/notify")
-def notify_case(case_id: str, req: NotifyCaseRequest, current_user: AgentOnly, db: DbSession):
+def notify_case(case_id: UUIDPath, req: NotifyCaseRequest, current_user: AgentOnly, db: DbSession):
     agent = _get_agent_or_404(current_user, db)
     case = _get_accessible_case_or_404(db, agent, case_id)
 
@@ -636,7 +637,7 @@ def notify_case(case_id: str, req: NotifyCaseRequest, current_user: AgentOnly, d
 # ---------------------------------------------------------------------------
 
 @router.post("/cases/{case_id}/ptp", response_model=PTPResponse)
-def set_ptp(case_id: str, req: SetPTPRequest, current_user: AgentOnly, db: DbSession):
+def set_ptp(case_id: UUIDPath, req: SetPTPRequest, current_user: AgentOnly, db: DbSession):
     agent = _get_agent_or_404(current_user, db)
     return PaymentService(db).set_ptp(agent, case_id, req)
 
@@ -693,7 +694,7 @@ def cancel_sos(current_user: AgentOnly, db: DbSession):
 # ---------------------------------------------------------------------------
 
 @router.post("/cases/{case_id}/handover", response_model=HandoverResponse)
-def handover_case(case_id: str, req: HandoverRequest, current_user: AgentOnly, db: DbSession):
+def handover_case(case_id: UUIDPath, req: HandoverRequest, current_user: AgentOnly, db: DbSession):
     from app.services.case_service import CaseService
     agent = _get_agent_or_404(current_user, db)
     return CaseService(db).handover_case(agent, case_id, req)
@@ -704,7 +705,7 @@ def handover_case(case_id: str, req: HandoverRequest, current_user: AgentOnly, d
 # ---------------------------------------------------------------------------
 
 @router.post("/cases/{case_id}/call-log", status_code=201, response_model=LogCallResponse)
-def log_call(case_id: str, req: LogCallRequest, current_user: AgentOnly, db: DbSession):
+def log_call(case_id: UUIDPath, req: LogCallRequest, current_user: AgentOnly, db: DbSession):
     """Record a phone call attempt and any scheduling/payment intel gathered."""
     from app.models.call_log import CallLog
 
@@ -745,7 +746,7 @@ def log_call(case_id: str, req: LogCallRequest, current_user: AgentOnly, db: DbS
 # ---------------------------------------------------------------------------
 
 @router.patch("/customers/{customer_id}/flag", response_model=FlagCustomerResponse)
-def flag_customer(customer_id: str, req: CustomerFlagRequest, current_user: AgentOnly, db: DbSession):
+def flag_customer(customer_id: UUIDPath, req: CustomerFlagRequest, current_user: AgentOnly, db: DbSession):
     from app.services.case_service import CaseService
     agent = _get_agent_or_404(current_user, db)
     return CaseService(db).flag_customer(agent, customer_id, req)
@@ -758,13 +759,13 @@ def flag_customer(customer_id: str, req: CustomerFlagRequest, current_user: Agen
 # ---------------------------------------------------------------------------
 
 @router.post("/cases/{case_id}/photo-upload-url")
-def get_photo_upload_url(case_id: str, subject: str, current_user: AgentOnly, db: DbSession):
+def get_photo_upload_url(case_id: UUIDPath, subject: str, current_user: AgentOnly, db: DbSession):
     agent = _get_agent_or_404(current_user, db)
     return MediaService(db).get_photo_upload_url(agent, case_id, subject)
 
 
 @router.get("/cases/{case_id}/photos")
-def get_case_photos(case_id: str, current_user: AgentOnly, db: DbSession):
+def get_case_photos(case_id: UUIDPath, current_user: AgentOnly, db: DbSession):
     """Return latest geo-tagged photo per type for this case, extracted from visits."""
     agent = _get_agent_or_404(current_user, db)
     return MediaService(db).get_case_photos(agent, case_id)
@@ -777,7 +778,7 @@ def get_case_photos(case_id: str, current_user: AgentOnly, db: DbSession):
 # ---------------------------------------------------------------------------
 
 @router.post("/cases/{case_id}/recording-upload-url")
-def get_recording_upload_url(case_id: str, recorder: str, current_user: AgentOnly, db: DbSession):
+def get_recording_upload_url(case_id: UUIDPath, recorder: str, current_user: AgentOnly, db: DbSession):
     agent = _get_agent_or_404(current_user, db)
     return MediaService(db).get_recording_upload_url(agent, case_id, recorder)
 
@@ -788,7 +789,7 @@ def get_recording_upload_url(case_id: str, recorder: str, current_user: AgentOnl
 # ---------------------------------------------------------------------------
 
 @router.get("/visits/{visit_id}/recording-urls")
-def get_recording_playback_urls(visit_id: str, current_user: AgentOnly, db: DbSession):
+def get_recording_playback_urls(visit_id: UUIDPath, current_user: AgentOnly, db: DbSession):
     agent = _get_agent_or_404(current_user, db)
     return MediaService(db).get_recording_playback_urls(agent, visit_id)
 
@@ -802,7 +803,7 @@ def get_recording_playback_urls(visit_id: str, current_user: AgentOnly, db: DbSe
 # ---------------------------------------------------------------------------
 
 @router.post("/visits/{visit_id}/transcribe", status_code=202, response_model=TranscribeQueuedResponse)
-def transcribe_visit_recording(visit_id: str, current_user: AgentOnly, db: DbSession, recorder: str = "both"):
+def transcribe_visit_recording(visit_id: UUIDPath, current_user: AgentOnly, db: DbSession, recorder: str = "both"):
     """Enqueue transcription; returns immediately with a task id.
 
     See MediaService.queue_visit_transcription for the actual logic (why
@@ -848,7 +849,7 @@ def transcribe_audio(current_user: AgentOnly, db: DbSession, audio: UploadFile =
 # ---------------------------------------------------------------------------
 
 @router.get("/cases/{case_id}/visit-strategy")
-def get_visit_strategy(case_id: str, current_user: AgentOnly, db: DbSession):
+def get_visit_strategy(case_id: UUIDPath, current_user: AgentOnly, db: DbSession):
     """Generate an LLM-powered customer approach strategy for this case.
 
     Reads the last 3 visits (transcripts + ai_visit_note) and last 5 call logs,
@@ -1121,7 +1122,7 @@ def create_leave_request(body: _LeaveRequestBody, current_user: AgentOnly, db: D
 
 
 @router.delete("/leave-requests/{request_id}")
-def withdraw_leave_request(request_id: str, current_user: AgentOnly, db: DbSession):
+def withdraw_leave_request(request_id: UUIDPath, current_user: AgentOnly, db: DbSession):
     from app.services.leave_service import LeaveService, serialize
     agent = _get_agent_or_404(current_user, db)
     return serialize(LeaveService(db).withdraw(agent, request_id), agent.user.full_name if agent.user else None)

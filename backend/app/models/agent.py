@@ -139,11 +139,12 @@ class Agent(Base, UUIDPrimaryKey, TimestampMixin):
     user: Mapped["User"] = relationship(  # type: ignore[name-defined]  # noqa: F821
         "User", foreign_keys="[Agent.user_id]", primaryjoin="Agent.user_id == User.id",
         back_populates="agent_profile")
-    cases: Mapped[list["Case"]] = relationship("Case", back_populates="agent", lazy="noload")  # type: ignore[name-defined]  # noqa: F821
-    visits: Mapped[list["Visit"]] = relationship("Visit", back_populates="agent", lazy="noload")  # type: ignore[name-defined]  # noqa: F821
-    beats: Mapped[list["Beat"]] = relationship("Beat", back_populates="agent", lazy="noload")  # type: ignore[name-defined]  # noqa: F821
+    cases: Mapped[list["Case"]] = relationship("Case", back_populates="agent", lazy="noload", primaryjoin="Agent.id == Case.agent_id", foreign_keys="[Case.agent_id]")  # type: ignore[name-defined]  # noqa: F821
+    visits: Mapped[list["Visit"]] = relationship("Visit", back_populates="agent", lazy="noload", primaryjoin="Agent.id == Visit.agent_id", foreign_keys="[Visit.agent_id]")  # type: ignore[name-defined]  # noqa: F821
+    beats: Mapped[list["Beat"]] = relationship("Beat", back_populates="agent", lazy="noload", primaryjoin="Agent.id == Beat.agent_id", foreign_keys="[Beat.agent_id]")  # type: ignore[name-defined]  # noqa: F821
     performance_records: Mapped[list["AgentPerformance"]] = relationship(  # type: ignore[name-defined]  # noqa: F821
-        "AgentPerformance", back_populates="agent", lazy="noload")
+        "AgentPerformance", back_populates="agent", lazy="noload",
+        primaryjoin="Agent.id == AgentPerformance.agent_id", foreign_keys="[AgentPerformance.agent_id]")
 
     __table_args__ = (
         UniqueConstraint("user_id"),

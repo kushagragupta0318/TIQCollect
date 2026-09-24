@@ -66,7 +66,7 @@ class User(Base, UUIDPrimaryKey, TimestampMixin):
     deactivated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deactivated_by: Mapped[str | None] = uuid_fk("tenancy.users.id", nullable=True)
 
-    agent_profile: Mapped["Agent"] = relationship("Agent", foreign_keys="[Agent.user_id]", back_populates="user", uselist=False)  # type: ignore[name-defined]  # noqa: F821
+    agent_profile: Mapped["Agent"] = relationship("Agent", foreign_keys="[Agent.user_id]", primaryjoin="User.id == Agent.user_id", back_populates="user", uselist=False)  # type: ignore[name-defined]  # noqa: F821
     audit_logs: Mapped[list["AuditLog"]] = relationship("AuditLog", back_populates="user", lazy="noload", foreign_keys="[AuditLog.user_id]")  # type: ignore[name-defined]  # noqa: F821
 
     __table_args__ = (

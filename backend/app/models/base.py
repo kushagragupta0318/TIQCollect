@@ -44,11 +44,11 @@ def _utcnow() -> datetime:
 
 
 def uuid_fk(target: str, *, ondelete: str = "RESTRICT", nullable: bool = False,
-            index: bool = False, **kw):
+            index: bool = False, use_alter: bool = False, **kw):
     """A UUID foreign-key column. RESTRICT is the default (design §2.8):
     business rows are never hard-deleted, and a cascade that silently removes
     money, evidence or who-approved-what is the failure the rule prevents."""
-    return mapped_column(UUIDType, ForeignKey(target, ondelete=ondelete),
+    return mapped_column(UUIDType, ForeignKey(target, ondelete=ondelete, use_alter=use_alter),
                          nullable=nullable, index=index, **kw)
 
 

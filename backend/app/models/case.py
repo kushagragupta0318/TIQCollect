@@ -156,7 +156,7 @@ class Case(Base, UUIDPrimaryKey, TimestampMixin):
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     resolution_notes: Mapped[str | None] = mapped_column(Text)
     closure_reason: Mapped[str | None] = mapped_column(String(20))
-    closed_by_bank_action_id: Mapped[str | None] = uuid_fk("lending.bank_actions.id", nullable=True)
+    closed_by_bank_action_id: Mapped[str | None] = uuid_fk("lending.bank_actions.id", nullable=True, use_alter=True)
 
     # Bank-provided collection metadata (sent with the portfolio)
     collection_stage: Mapped[str] = mapped_column(
@@ -184,9 +184,9 @@ class Case(Base, UUIDPrimaryKey, TimestampMixin):
         "Loan", back_populates="cases", primaryjoin="Case.loan_id == Loan.id", foreign_keys="[Case.loan_id]")
     agent: Mapped["Agent | None"] = relationship(  # type: ignore[name-defined]  # noqa: F821
         "Agent", back_populates="cases", primaryjoin="Case.agent_id == Agent.id", foreign_keys="[Case.agent_id]")
-    visits: Mapped[list["Visit"]] = relationship("Visit", back_populates="case", lazy="noload")  # type: ignore[name-defined]  # noqa: F821
-    payments: Mapped[list["Payment"]] = relationship("Payment", back_populates="case", lazy="noload")  # type: ignore[name-defined]  # noqa: F821
-    ptps: Mapped[list["PTP"]] = relationship("PTP", back_populates="case", lazy="noload")  # type: ignore[name-defined]  # noqa: F821
+    visits: Mapped[list["Visit"]] = relationship("Visit", back_populates="case", lazy="noload", primaryjoin="Case.id == Visit.case_id", foreign_keys="[Visit.case_id]")  # type: ignore[name-defined]  # noqa: F821
+    payments: Mapped[list["Payment"]] = relationship("Payment", back_populates="case", lazy="noload", primaryjoin="Case.id == Payment.case_id", foreign_keys="[Payment.case_id]")  # type: ignore[name-defined]  # noqa: F821
+    ptps: Mapped[list["PTP"]] = relationship("PTP", back_populates="case", lazy="noload", primaryjoin="Case.id == PTP.case_id", foreign_keys="[PTP.case_id]")  # type: ignore[name-defined]  # noqa: F821
 
     __table_args__ = (
         UniqueConstraint("bank_id", "case_number"),

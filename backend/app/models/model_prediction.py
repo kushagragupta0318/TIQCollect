@@ -73,7 +73,7 @@ class ModelPrediction(Base, UUIDPrimaryKey):
     entity_type: Mapped[str] = mapped_column(String(30), nullable=False)   # loan | case | visit
     entity_id: Mapped[str] = mapped_column(UUIDType, nullable=False)
     loan_id: Mapped[str | None] = uuid_fk("lending.loans.id", nullable=True)
-    case_id: Mapped[str | None] = uuid_fk("collections.cases.id", nullable=True)
+    case_id: Mapped[str | None] = uuid_fk("collections.cases.id", nullable=True, use_alter=True)
     agent_id: Mapped[str | None] = uuid_fk("workforce.agents.id", nullable=True)
 
     # ── when, and as of when ────────────────────────────────────────────────

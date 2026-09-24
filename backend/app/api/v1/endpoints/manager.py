@@ -33,6 +33,7 @@ from sqlalchemy.orm import joinedload
 
 from app.core.dependencies import DbSession, ManagerOnly
 from app.core.config import settings
+from app.core.ids import UUIDPath, UUIDQuery, UUIDQueryRequired
 from app.core import llm as _llm
 from app.ml import eligibility as _elig
 from app.models.agent import Agent, AgentStatus, AgentPerformance, month_start
@@ -1127,7 +1128,7 @@ def list_cases(
     db: DbSession,
     status: Optional[str] = None,
     priority: Optional[str] = None,
-    agent_id: Optional[str] = None,
+    agent_id: UUIDQuery = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     # HIGH / MEDIUM / LOW. Filters on the loan's LATEST computed label, so it
@@ -1441,7 +1442,7 @@ def cases_date_range(current_user: ManagerOnly, db: DbSession):
 # ---------------------------------------------------------------------------
 
 @router.get("/cases/{case_id}")
-def get_case_detail(case_id: str, current_user: ManagerOnly, db: DbSession):
+def get_case_detail(case_id: UUIDPath, current_user: ManagerOnly, db: DbSession):
     from sqlalchemy.orm import joinedload as jl
     from app.models.visit import Visit as VisitModel
     from app.models.payment import Payment as PaymentModel
@@ -1890,7 +1891,7 @@ def ml_candidates(current_user: ManagerOnly, db: DbSession,
 
 
 @router.get("/ml/candidates/{candidate_id}")
-def ml_candidate_detail(candidate_id: str, current_user: ManagerOnly, db: DbSession):
+def ml_candidate_detail(candidate_id: UUIDPath, current_user: ManagerOnly, db: DbSession):
     from app.ml.pipeline import registry
     from app.models.model_candidate import ModelCandidate
 
@@ -1908,7 +1909,7 @@ def ml_candidate_detail(candidate_id: str, current_user: ManagerOnly, db: DbSess
 
 
 @router.post("/ml/candidates/{candidate_id}/approve")
-def ml_approve_candidate(candidate_id: str, current_user: ManagerOnly,
+def ml_approve_candidate(candidate_id: UUIDPath, current_user: ManagerOnly,
                          db: DbSession, note: Optional[str] = None):
     """Record a person's decision to accept the challenger. Does NOT promote."""
     from app.ml.pipeline.lifecycle import ApprovalRefused, approve
@@ -1933,7 +1934,7 @@ def ml_approve_candidate(candidate_id: str, current_user: ManagerOnly,
 
 
 @router.post("/ml/candidates/{candidate_id}/reject")
-def ml_reject_candidate(candidate_id: str, current_user: ManagerOnly,
+def ml_reject_candidate(candidate_id: UUIDPath, current_user: ManagerOnly,
                         db: DbSession, note: Optional[str] = None):
     from app.ml.pipeline.lifecycle import ApprovalRefused, reject
 
@@ -1956,7 +1957,7 @@ def ml_reject_candidate(candidate_id: str, current_user: ManagerOnly,
 
 
 @router.post("/ml/candidates/{candidate_id}/promote")
-def ml_promote_candidate(candidate_id: str, current_user: ManagerOnly,
+def ml_promote_candidate(candidate_id: UUIDPath, current_user: ManagerOnly,
                          db: DbSession):
     """The one write in this codebase that changes what borrowers are scored by.
 
@@ -3046,7 +3047,7 @@ def get_team_dpd_breakdown(
 # ---------------------------------------------------------------------------
 
 @router.get("/visits/{visit_id}/media-urls")
-def get_visit_media_urls(visit_id: str, current_user: ManagerOnly, db: DbSession):
+def get_visit_media_urls(visit_id: UUIDPath, current_user: ManagerOnly, db: DbSession):
     # Ownership is checked BEFORE any presigned URL is minted, and that
     # ordering is the whole point: these URLs carry borrower photographs and
     # call recordings, and once issued they are valid for an hour WITHOUT
@@ -3363,7 +3364,7 @@ def agents_live(current_user: ManagerOnly, db: DbSession):
 
 @router.get("/agents/{agent_id}/trail")
 def agent_trail(
-    agent_id: str,
+    agent_id: UUIDPath,
     current_user: ManagerOnly,
     db: DbSession,
     date: str | None = None,
@@ -3399,7 +3400,7 @@ def agent_trail(
 # ---------------------------------------------------------------------------
 
 @router.get("/agents/{agent_id}/ai-insight")
-def agent_ai_insight(agent_id: str, current_user: ManagerOnly, db: DbSession):
+def agent_ai_insight(agent_id: UUIDPath, current_user: ManagerOnly, db: DbSession):
     from app.models.loan import Loan as LoanModel
 
     my_agent_ids = [
@@ -3631,7 +3632,7 @@ def agent_ai_insight(agent_id: str, current_user: ManagerOnly, db: DbSession):
 # ---------------------------------------------------------------------------
 
 @router.get("/agents/{agent_id}/reallocation-plan")
-def reallocation_plan(agent_id: str, current_user: ManagerOnly, db: DbSession):
+def reallocation_plan(agent_id: UUIDPath, current_user: ManagerOnly, db: DbSession):
     from app.models.loan import Loan as LoanModel
     from app.models.customer import Customer as CustomerModel
 
@@ -3807,7 +3808,7 @@ class _StatusBody(_BM):
 
 @router.put("/agents/{agent_id}/status")
 def update_agent_status(
-    agent_id: str,
+    agent_id: UUIDPath,
     body: _StatusBody,
     current_user: ManagerOnly,
     db: DbSession,
@@ -3856,7 +3857,7 @@ def update_agent_status(
 
 @router.post("/agents/{agent_id}/sos/acknowledge")
 def acknowledge_agent_sos(
-    agent_id: str,
+    agent_id: UUIDPath,
     current_user: ManagerOnly,
     db: DbSession,
 ):
@@ -3905,7 +3906,7 @@ def acknowledge_agent_sos(
 
 @router.get("/agents/{agent_id}/availability-calendar")
 def manager_get_agent_availability_calendar(
-    agent_id: str,
+    agent_id: UUIDPath,
     current_user: ManagerOnly,
     db: DbSession,
 ):
@@ -3997,7 +3998,7 @@ def manager_get_agent_availability_calendar(
 
 @router.get("/agents/{agent_id}/dpd-breakdown")
 def manager_get_agent_dpd_breakdown(
-    agent_id: str,
+    agent_id: UUIDPath,
     current_user: ManagerOnly,
     db: DbSession,
     month: Optional[str] = None,  # YYYY-MM — if provided, sums payments made in that month
@@ -4078,7 +4079,7 @@ def get_monthly_report(
     month: str,
     current_user: ManagerOnly,
     db: DbSession,
-    agent_id: Optional[str] = None,
+    agent_id: UUIDQuery = None,
 ):
     """Generate a 60-90 word eagle-view AI performance brief with DPD breakdown,
     agent spread, and month-over-month trend for the agency head."""
@@ -4386,7 +4387,7 @@ def get_ptp_outcomes(
     current_user: ManagerOnly,
     db: DbSession,
     months: int = 6,
-    agent_id: Optional[str] = None,
+    agent_id: UUIDQuery = None,
 ):
     """Promises grouped by the MONTH THEY FELL DUE (committed_date), split by
     how they ended: honored / partly / broken / rescheduled, plus those still
@@ -4507,7 +4508,7 @@ def list_leave_requests(current_user: ManagerOnly, db: DbSession, status: Option
 
 
 @router.post("/leave-requests/{request_id}/approve")
-def approve_leave_request(request_id: str, body: _LeaveDecisionBody, current_user: ManagerOnly, db: DbSession):
+def approve_leave_request(request_id: UUIDPath, body: _LeaveDecisionBody, current_user: ManagerOnly, db: DbSession):
     from app.services.leave_service import LeaveService, serialize
     out = LeaveService(db).approve(current_user.id, request_id, body.note)
     r = out["request"]
@@ -4515,21 +4516,21 @@ def approve_leave_request(request_id: str, body: _LeaveDecisionBody, current_use
 
 
 @router.post("/leave-requests/{request_id}/reject")
-def reject_leave_request(request_id: str, body: _LeaveDecisionBody, current_user: ManagerOnly, db: DbSession):
+def reject_leave_request(request_id: UUIDPath, body: _LeaveDecisionBody, current_user: ManagerOnly, db: DbSession):
     from app.services.leave_service import LeaveService, serialize
     r = LeaveService(db).reject(current_user.id, request_id, body.note)
     return serialize(r, _leave_names(db, [r]).get(r.agent_id))
 
 
 @router.post("/leave-requests/{request_id}/revoke")
-def revoke_leave_request(request_id: str, body: _LeaveDecisionBody, current_user: ManagerOnly, db: DbSession):
+def revoke_leave_request(request_id: UUIDPath, body: _LeaveDecisionBody, current_user: ManagerOnly, db: DbSession):
     from app.services.leave_service import LeaveService, serialize
     r = LeaveService(db).revoke(current_user.id, request_id, body.note)
     return serialize(r, _leave_names(db, [r]).get(r.agent_id))
 
 
 @router.post("/agents/{agent_id}/leave", status_code=201)
-def mark_agent_leave(agent_id: str, body: _MarkLeaveBody, current_user: ManagerOnly, db: DbSession):
+def mark_agent_leave(agent_id: UUIDPath, body: _MarkLeaveBody, current_user: ManagerOnly, db: DbSession):
     """Record leave for one of this manager's agents, approved in one step.
     ABSENT is the manager's word for a no-show and may be back-dated."""
     from app.models.leave_request import LeaveType
@@ -4942,7 +4943,7 @@ def rollback_allocation_plan(
 
 @router.get("/allocation/export-decisions")
 def export_allocation_decisions_csv(
-    run_id: str,
+    run_id: UUIDQueryRequired,
     current_user: ManagerOnly,
     db: DbSession,
 ):
@@ -5067,7 +5068,7 @@ def _latest_reassignments(db, case_ids: list[str]) -> dict[str, dict]:
 
 @router.post("/cases/{case_id}/reassign")
 def reassign_case(
-    case_id: str,
+    case_id: UUIDPath,
     body: _ReassignBody,
     current_user: ManagerOnly,
     db: DbSession,
