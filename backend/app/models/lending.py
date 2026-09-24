@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
+from sqlalchemy import text as text  # noqa: F401
 from sqlalchemy import (
     Boolean, CheckConstraint, Date, DateTime, ForeignKey, ForeignKeyConstraint, Index, Integer,
     SmallInteger, String, Text, UniqueConstraint, func,
@@ -57,7 +58,7 @@ class LoanInstalment(Base, UUIDPrimaryKey, CreatedAtMixin):
                              ondelete="CASCADE"),
         CheckConstraint("source IN ('BANK_FEED', 'LEDGER', 'GENERATED')", name="source"),
         Index("ix_loan_instalments_due", "bank_id", "due_date",
-              postgresql_where="is_current_schedule", sqlite_where="is_current_schedule = 1"),
+              postgresql_where=text("is_current_schedule"), sqlite_where=text("is_current_schedule = 1")),
         {"schema": SCHEMA},
     )
 
@@ -106,7 +107,7 @@ class LoanDpdHistory(Base):
         CheckConstraint("dpd >= 0", name="dpd_non_negative"),
         Index(None, "bank_id", "as_of_date"),
         Index("ix_loan_dpd_history_month_end", "bank_id", "as_of_date",
-              postgresql_where="is_month_end", sqlite_where="is_month_end = 1"),
+              postgresql_where=text("is_month_end"), sqlite_where=text("is_month_end = 1")),
         Index(None, "agency_id", "as_of_date"),
         {"schema": SCHEMA},
     )
@@ -172,7 +173,7 @@ class BankFeedRow(Base, UUIDPrimaryKey, CreatedAtMixin):
         UniqueConstraint("batch_id", "row_no"),
         CheckConstraint("status IN (" + ", ".join(repr(s) for s in FEED_ROW_STATUSES) + ")", name="status"),
         Index("ix_bank_feed_rows_quarantined", "bank_id", "status",
-              postgresql_where="status = 'QUARANTINED'", sqlite_where="status = 'QUARANTINED'"),
+              postgresql_where=text("status = 'QUARANTINED'"), sqlite_where=text("status = 'QUARANTINED'")),
         Index(None, "loan_account_number"),
         {"schema": SCHEMA},
     )

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
+from sqlalchemy import text as text  # noqa: F401
 from sqlalchemy import (
     Boolean, CheckConstraint, Date, DateTime, Float, ForeignKeyConstraint, Index, Integer, String, Text,
     UniqueConstraint,
@@ -85,7 +86,7 @@ class Placement(Base, UUIDPrimaryKey, TimestampMixin):
                         name="prediction_pair"),
         # At most one ACTIVE placement per loan.
         Index("uq_placements_active_loan", "loan_id", unique=True,
-              postgresql_where="status = 'ACTIVE'", sqlite_where="status = 'ACTIVE'"),
+              postgresql_where=text("status = 'ACTIVE'"), sqlite_where=text("status = 'ACTIVE'")),
         Index(None, "agency_id", "status", "placed_on"),
         Index(None, "bank_id", "status", "placed_on"),
         Index(None, "contract_id"),
@@ -142,8 +143,8 @@ class SettlementOffer(Base, UUIDPrimaryKey, TimestampMixin):
         CheckConstraint("offered_amount > 0 AND offered_amount <= outstanding_at_offer", name="amount"),
         CheckConstraint("approved_by IS NULL OR approved_by <> proposed_by", name="four_eyes"),
         Index("uq_settlement_offers_live_case", "case_id", unique=True,
-              postgresql_where="status IN ('PENDING_BANK_APPROVAL', 'APPROVED', 'OFFERED', 'ACCEPTED')",
-              sqlite_where="status IN ('PENDING_BANK_APPROVAL', 'APPROVED', 'OFFERED', 'ACCEPTED')"),
+              postgresql_where=text("status IN ('PENDING_BANK_APPROVAL', 'APPROVED', 'OFFERED', 'ACCEPTED')"),
+              sqlite_where=text("status IN ('PENDING_BANK_APPROVAL', 'APPROVED', 'OFFERED', 'ACCEPTED')")),
         Index(None, "agency_id", "status"),
         Index(None, "bank_id", "status", "created_at"),
         {"schema": SCHEMA},

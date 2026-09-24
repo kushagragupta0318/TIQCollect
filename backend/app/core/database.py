@@ -1,10 +1,16 @@
 # ─── CHANGELOG (standalone plan) ────────────────────────────────────────────
 # 2026-09-24 (B02) — the v2 data model (docs/DATA-MODEL-V2.md §2).
-#   - Ten domain schemas. Every model is schema-qualified; every Postgres
-#     connection also sets a search_path covering all ten, so raw SQL and the
-#     many scripts that write `FROM agents` keep resolving. That is only safe
-#     because table names are globally unique across schemas (Appendix A of
-#     the design, re-checked by tests/test_schema_v2.py).
+#   - Ten domain schemas. Every model is schema-qualified. Raw SQL and the
+#     many scripts that write `FROM agents` keep resolving through a
+#     search_path covering all ten — set ON THE DATABASE by the v2 baseline
+#     migration (`ALTER DATABASE … SET search_path`), not per connection here.
+#     A session-level SET at connect is lost or leaks under PgBouncer
+#     transaction pooling, and only this engine would get it: the Celery
+#     worker, Alembic, psql, pg_restore and every script that builds its own
+#     engine would not (coordinator review, 2026-09-24). The same applies to
+#     timezone='UTC', which moves to the database with it. Unqualified names
+#     are only safe because table names are globally unique across schemas
+#     (Appendix A of the design, re-checked by tests/test_schema_v2.py).
 #   - A naming convention on the metadata, so every constraint and index has a
 #     deterministic name the migrations and tests can refer to.
 # ────────────────────────────────────────────────────────────────────────────
@@ -43,9 +49,11 @@ engine = create_engine(
 
 @event.listens_for(engine, "connect")
 def set_pg_session_defaults(dbapi_conn, _):
+    # Kept for the v1 database, which has no database-level timezone setting.
+    # v2 databases carry `timezone` and `search_path` themselves (baseline
+    # migration); this SET is then a harmless no-op repeat of the default.
     with dbapi_conn.cursor() as cur:
         cur.execute("SET timezone='UTC'")
-        cur.execute(f"SET search_path TO {SEARCH_PATH}")
 
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

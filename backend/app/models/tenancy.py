@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
+from sqlalchemy import text as text  # noqa: F401
 from sqlalchemy import (
     BigInteger, Boolean, CheckConstraint, Date, DateTime, Float, ForeignKey,
     ForeignKeyConstraint, Index, Integer, SmallInteger, String, Text, UniqueConstraint,
@@ -303,7 +304,7 @@ class AgencyDocument(Base, UUIDPrimaryKey, TimestampMixin):
         CheckConstraint(_check_in("scan_status", SCAN_STATUSES), name="scan_status"),
         Index(None, "agency_id", "doc_type", "status"),
         Index("ix_agency_documents_expiring", "bank_id", "expires_on",
-              postgresql_where="status = 'VERIFIED'", sqlite_where="status = 'VERIFIED'"),
+              postgresql_where=text("status = 'VERIFIED'"), sqlite_where=text("status = 'VERIFIED'")),
         {"schema": SCHEMA},
     )
 

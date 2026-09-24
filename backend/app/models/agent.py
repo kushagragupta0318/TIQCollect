@@ -20,6 +20,7 @@
 import enum
 from datetime import date, datetime
 
+from sqlalchemy import text as text  # noqa: F401
 from sqlalchemy import (
     Boolean, CheckConstraint, Date, DateTime, Enum as SAEnum, Float, ForeignKeyConstraint, Index, Integer,
     SmallInteger, String, Text, UniqueConstraint,
@@ -149,7 +150,7 @@ class Agent(Base, UUIDPrimaryKey, TimestampMixin):
         Index(None, "agency_id", "manager_user_id"),
         Index(None, "agency_id", "tier", "ranking_score"),
         Index("ix_agents_gender", "agency_id", "gender",
-              postgresql_where="gender IS NOT NULL", sqlite_where="gender IS NOT NULL"),
+              postgresql_where=text("gender IS NOT NULL"), sqlite_where=text("gender IS NOT NULL")),
         {"schema": "workforce"},
     )
 
@@ -215,7 +216,7 @@ class AgentDevice(Base, UUIDPrimaryKey, TimestampMixin):
                              ondelete="RESTRICT"),
         CheckConstraint("platform IS NULL OR platform IN ('ANDROID', 'IOS', 'WEB', 'SIMULATOR')", name="platform"),
         Index("uq_agent_devices_bound", "agent_id", unique=True,
-              postgresql_where="is_bound", sqlite_where="is_bound = 1"),
+              postgresql_where=text("is_bound"), sqlite_where=text("is_bound = 1")),
         Index(None, "agency_id", "last_seen_at"),
         {"schema": "workforce"},
     )

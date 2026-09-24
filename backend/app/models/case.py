@@ -20,6 +20,7 @@
 import enum
 from datetime import date, datetime
 
+from sqlalchemy import text as text  # noqa: F401
 from sqlalchemy import (
     Boolean, CheckConstraint, Date, DateTime, Enum as SAEnum, Float, ForeignKey, ForeignKeyConstraint,
     Index, Integer, SmallInteger, String, Text, UniqueConstraint,
@@ -215,6 +216,6 @@ class Case(Base, UUIDPrimaryKey, TimestampMixin):
         Index(None, "placement_id"),
         # The per-agency unassigned pool (leaks 1 and 2 of plan §1).
         Index("ix_cases_unassigned_pool", "agency_id", "status",
-              postgresql_where="agent_id IS NULL", sqlite_where="agent_id IS NULL"),
+              postgresql_where=text("agent_id IS NULL"), sqlite_where=text("agent_id IS NULL")),
         {"schema": "collections"},
     )

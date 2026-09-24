@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from sqlalchemy import text as text  # noqa: F401
 from sqlalchemy import CheckConstraint, DateTime, Index, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -57,7 +58,7 @@ class UserSession(Base, UUIDPrimaryKey, CreatedAtMixin):
             name="revoked_reason",
         ),
         Index("ix_user_sessions_live", "user_id",
-              postgresql_where="revoked_at IS NULL", sqlite_where="revoked_at IS NULL"),
+              postgresql_where=text("revoked_at IS NULL"), sqlite_where=text("revoked_at IS NULL")),
         Index(None, "bank_id", "last_used_at"),
         {"schema": SCHEMA},
     )
@@ -99,8 +100,8 @@ class UserInvite(Base, UUIDPrimaryKey, CreatedAtMixin):
         CheckConstraint("delivery_channel IN ('EMAIL', 'SMS', 'LINK')", name="channel"),
         # One open invite per address.
         Index("uq_user_invites_open_email", "email", unique=True,
-              postgresql_where="accepted_at IS NULL AND revoked_at IS NULL",
-              sqlite_where="accepted_at IS NULL AND revoked_at IS NULL"),
+              postgresql_where=text("accepted_at IS NULL AND revoked_at IS NULL"),
+              sqlite_where=text("accepted_at IS NULL AND revoked_at IS NULL")),
         Index(None, "agency_id", "created_at"),
         Index(None, "bank_id", "created_at"),
         {"schema": SCHEMA},
@@ -126,6 +127,6 @@ class PasswordResetToken(Base, UUIDPrimaryKey, CreatedAtMixin):
         UniqueConstraint("token_sha256"),
         CheckConstraint("kind IN ('ADMIN_RESET', 'SELF_SERVICE', 'FIRST_LOGIN')", name="kind"),
         Index("ix_password_reset_tokens_open", "user_id",
-              postgresql_where="used_at IS NULL", sqlite_where="used_at IS NULL"),
+              postgresql_where=text("used_at IS NULL"), sqlite_where=text("used_at IS NULL")),
         {"schema": SCHEMA},
     )
