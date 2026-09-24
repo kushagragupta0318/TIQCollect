@@ -173,7 +173,20 @@ Per the owner's decision (§3b): a fictional lender "… Finance Ltd", `.test` e
 | Coromandel Recovery Partners LLP | 2026-09-24 | Weak partial: Coromandel International is real but is agrochemicals, not collections. Different sector, different suffix | **Pass** |
 | Hooghly Credit Management Pvt. Ltd. | 2026-09-24 | Clear — no matching company found | **Pass** |
 
-**One rename needed: Konkan Asset Recovery Pvt. Ltd.** Same region word, same industry, overlapping cities — the one name in the roster that a Mumbai-based buyer could plausibly mistake for a real competitor. Suggest **"Sahyadri Field Recovery Pvt. Ltd."** (Sahyadri is the same mountain range Konkan sits below, so the regional flavour survives the rename) — not yet screened; screen it the same way before 43 commits B16. Every other agency name and Northfield Small Finance Bank Ltd (the second tenant; also needs "Bank" dropped per the owner's rule — not yet renamed or screened, flagging for the same pass) can go forward as is.
+**One rename needed: Konkan Asset Recovery Pvt. Ltd.** Same region word, same industry, overlapping cities — the one name in the roster that a Mumbai-based buyer could plausibly mistake for a real competitor. Replacement, screened 2026-09-24: **Sahyadri Field Recovery Pvt. Ltd.** (Sahyadri is the same mountain range Konkan sits below, so the regional flavour survives). Web search finds only unrelated Sahyadri entities in other sectors and forms — industries (building materials), hospitals, an agri-produce platform, and several member-owned rural co-operative *credit societies* (a different legal form and business from a Pvt Ltd collections agency, the same distance as the Sarthak/Coromandel "weak partial, pass" rows above). No Pvt Ltd or LLP collections/recovery agency of that name found. **Pass — adopt as the replacement.**
+
+### Second demo tenant — replacing "Northfield Small Finance Bank Ltd"
+
+Northfield Bank is a real US bank, and "… Bank" also breaks the owner's no-banking-licence rule for a fictional demo tenant. Candidates for the second lender, "… Finance Ltd", checked 2026-09-24:
+
+| Candidate | Result | Verdict |
+|---|---|---|
+| Shivalik Finance Ltd | **Collides.** Shivalik Small Finance Bank is a large, real, well-known regulated Indian bank | **Reject** |
+| Nilgiri Finance Ltd | **Collides (close).** Nilgiri Financial Consultants Ltd is a real, active Delhi company in the finance sector | **Reject** |
+| Malwa Finance Ltd | **Collides.** Malwa Finance Pvt Ltd is a real, active company (since 1958), same sector, same name | **Reject** |
+| **Kumaon Finance Ltd** | **Clear.** No finance-sector company found; other "Kumaon" entities (exports, a state tourism corporation, general enterprises) are unrelated sectors | **Recommend** |
+
+**Recommend Kumaon Finance Ltd** for the second tenant.
 
 ## Method and footprint
 
