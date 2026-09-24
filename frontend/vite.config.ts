@@ -1,7 +1,14 @@
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
+import { VitePWA } from "vite-plugin-pwa";
 import fs from "fs";
 import path from "path";
+import { pwaOptions } from "./src/lib/pwaConfig";
+
+// 2026-09-24 (I01) — PWA: manifest, icons and an app-shell service worker,
+// options in src/lib/pwaConfig.ts (where the test that pins them lives). The
+// SW exists only in `vite build` output; the dev server below is untouched.
+// Installing on a phone: frontend/README.md.
 
 // Ports follow the collections platform's numbering (command-center 5173/8000,
 // digi-tele 5273/8100, tech-ops 5373/8200). Standalone TIQCollect used
@@ -50,7 +57,7 @@ export default defineConfig(({ mode }) => {
   const apiTarget = env.VITE_API_TARGET || "http://localhost:8400";
 
   return {
-    plugins: [react()],
+    plugins: [react(), VitePWA(pwaOptions)],
     resolve: {
       alias: {
         "@": path.resolve(__dirname, "./src"),
