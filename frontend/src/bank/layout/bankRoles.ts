@@ -1,13 +1,9 @@
-// The roles that may open the bank portal (plan §2.1). The backend adds them in
-// a parallel branch; until `UserRole` in src/types carries them, the bank tree
-// compares plain strings so this module does not have to edit the shared type.
-export const BANK_PORTAL_ROLES = ["BANK_ADMIN", "BANK_ANALYST", "BANK_TECHOPS", "PLATFORM_ADMIN"] as const;
+// The bank portal's view of the roles. The definitions live in src/lib/roles.ts
+// (one place, shared with RootRedirect, ProtectedRoute and the login pages);
+// they are re-exported here so bank modules keep one import path.
+import type { BankPortalRole } from "@/lib/roles";
 
-export type BankPortalRole = (typeof BANK_PORTAL_ROLES)[number];
-
-export function isBankPortalRole(role: string | null | undefined): role is BankPortalRole {
-  return role != null && (BANK_PORTAL_ROLES as readonly string[]).includes(role);
-}
+export { BANK_PORTAL_ROLES, isBankPortalRole, type BankPortalRole } from "@/lib/roles";
 
 /** The persona card's role line (CC `ROLE_LABELS`, Sidebar.jsx:19-24). */
 export const BANK_ROLE_LABELS: Record<BankPortalRole, string> = {

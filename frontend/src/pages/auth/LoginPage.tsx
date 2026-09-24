@@ -5,6 +5,7 @@ import { toast } from "react-hot-toast";
 import { BrandLogo } from "@/components/ui/BrandLogo";
 import { login as apiLogin } from "@/api/auth";
 import { useAuthStore } from "@/store/authStore";
+import { homeFor } from "@/lib/roles";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 
@@ -33,7 +34,7 @@ export default function LoginPage() {
       setTokens(data.access_token, data.refresh_token);
       setUser({ id: data.user_id, email, full_name: data.full_name, role: data.role, is_active: true });
       toast.success(`Welcome, ${data.full_name.split(" ")[0]}!`);
-      navigate(data.role === "FIELD_AGENT" ? "/agent/home" : "/manager/overview", { replace: true });
+      navigate(homeFor(data.role), { replace: true });
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       toast.error(msg ?? "Invalid email or password.");

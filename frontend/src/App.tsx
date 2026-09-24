@@ -8,7 +8,7 @@ import AgentLayout from "@/components/layout/AgentLayout";
 import ManagerLayout from "@/components/layout/ManagerLayout";
 
 import { useAuthStore } from "@/store/authStore";
-import { isBankPortalRole } from "@/bank/layout/bankRoles";
+import { AGENT_ROLES, MANAGER_ROLES, homeFor } from "@/lib/roles";
 
 // Route-level code-splitting: separate heavy bundles (RecordVisit, Analytics, Maps)
 const LandingPage = lazy(() => import("@/pages/LandingPage"));
@@ -65,9 +65,7 @@ function PageLoader() {
 function RootRedirect() {
   const { isAuthenticated, user } = useAuthStore();
   if (!isAuthenticated || !user) return <LandingPage />;
-  if (user.role === "FIELD_AGENT") return <Navigate to="/agent/home" replace />;
-  if (isBankPortalRole(user.role)) return <Navigate to="/bank" replace />;
-  return <Navigate to="/manager/overview" replace />;
+  return <Navigate to={homeFor(user.role)} replace />;
 }
 
 /**
@@ -116,7 +114,7 @@ export default function App() {
             <Route
               path="/agent/visit/:caseId"
               element={
-                <ProtectedRoute allowedRoles={["FIELD_AGENT"]}>
+                <ProtectedRoute allowedRoles={AGENT_ROLES}>
                   <div className="relative mx-auto flex min-h-svh max-w-md flex-col overflow-x-clip bg-background md:max-w-none">
                     <RecordVisitPage />
                   </div>
@@ -128,7 +126,7 @@ export default function App() {
             <Route
               path="/agent"
               element={
-                <ProtectedRoute allowedRoles={["FIELD_AGENT"]}>
+                <ProtectedRoute allowedRoles={AGENT_ROLES}>
                   <AgentLayout />
                 </ProtectedRoute>
               }
@@ -145,7 +143,7 @@ export default function App() {
             <Route
               path="/manager"
               element={
-                <ProtectedRoute allowedRoles={["AGENCY_MANAGER", "AGENCY_ADMIN"]}>
+                <ProtectedRoute allowedRoles={MANAGER_ROLES}>
                   <ManagerLayout />
                 </ProtectedRoute>
               }

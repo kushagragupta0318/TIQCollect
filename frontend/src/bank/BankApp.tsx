@@ -8,7 +8,8 @@ import api from "@/api/axios";
 import { useAuthStore } from "@/store/authStore";
 import { AnalyticsLoading } from "./components/analytics";
 import { BankLayout } from "./layout/BankLayout";
-import { BANK_ROLE_LABELS, isBankPortalRole } from "./layout/bankRoles";
+import { guardRedirect } from "@/lib/roles";
+import { BANK_PORTAL_ROLES, BANK_ROLE_LABELS, isBankPortalRole } from "./layout/bankRoles";
 import { BANK_NAV_ITEMS } from "./layout/navigation";
 import { BankPlaceholderPage } from "./pages/BankPlaceholderPage";
 
@@ -26,9 +27,10 @@ export default function BankApp() {
     });
   }, [logout, navigate]);
 
-  if (!isAuthenticated || !user) return <Navigate to="/login" replace />;
-  // Anyone else goes back to "/", which sends each role to its own home.
-  if (!isBankPortalRole(user.role)) return <Navigate to="/" replace />;
+  // The same guard decision as ProtectedRoute (lib/roles.ts): signed out →
+  // /login, another portal's role → its own home, never a second rejection.
+  const redirect = guardRedirect(user, isAuthenticated, BANK_PORTAL_ROLES);
+  if (redirect || !user || !isBankPortalRole(user.role)) return <Navigate to={redirect ?? "/login"} replace />;
 
   const persona = {
     role: BANK_ROLE_LABELS[user.role],
