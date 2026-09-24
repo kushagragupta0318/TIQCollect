@@ -25,7 +25,7 @@ from app.models.payment import Payment, PaymentMode, PaymentStatus
 import app.services.otp_service as otp_module
 from app.services.otp_service import OtpService
 from app.services.payment_service import PaymentService
-from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
+from tests._db import TEST_AGENCY_ID, create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
 
 # ── Minimal in-process fake Redis (only the commands OtpService uses) ─────────
@@ -121,12 +121,28 @@ def _force_contact_hours(monkeypatch):
 
 def _agent():
     return SimpleNamespace(
-        id=test_id("agent-1"), user_id=test_id("user-1"), current_month_collections=0.0,
+        id=test_id("agent-1"), user_id=test_id("user-1"), agency_id=TEST_AGENCY_ID, current_month_collections=0.0,
         user=SimpleNamespace(full_name="Test Agent"),
     )
 
 
 def _seed_case(db, *, target=10000.0, collected=0.0, do_not_contact=False):
+    # 2026-09-24 (v2): the case's loan and agent must exist — foreign keys are
+    # enforced in the suite now, across schemas too.
+    from app.models.agent import Agent
+    from app.models.loan import Loan, LoanType
+    from app.models.user import User, UserRole
+    db.add_all([
+        User(id=test_id("mgr-1"), email="mgr1@otp.test", phone="9810003001", full_name="Otp Manager",
+             hashed_password="x", role=UserRole.AGENCY_MANAGER),
+        User(id=test_id("user-1"), email="agent1@otp.test", phone="9810003002", full_name="Test Agent",
+             hashed_password="x", role=UserRole.FIELD_AGENT),
+    ])
+    db.flush()
+    db.add(Agent(id=test_id("agent-1"), user_id=test_id("user-1"), manager_user_id=test_id("mgr-1"),
+                 employee_code="OTP0001", id_card_number="OTP-ID-0001", base_latitude=18.5,
+                 base_longitude=73.8, territory="Pune"))
+    db.flush()
     db.add_all([
         Customer(
             id=test_id("cust-1"), customer_ref="CUST-1", full_name="Ravi Kumar",
@@ -135,6 +151,14 @@ def _seed_case(db, *, target=10000.0, collected=0.0, do_not_contact=False):
             address_line1="1 MG Road", city="Pune", state="MH", pincode="411001",
             latitude=18.5, longitude=73.8, do_not_contact=do_not_contact,
         ),
+    ])
+    db.flush()
+    db.add(Loan(id=test_id("loan-1"), loan_account_number="OTPLN0001", customer_id=test_id("cust-1"),
+                loan_type=LoanType.PERSONAL, branch_code="BR", sanctioned_amount=50000.0, disbursed_amount=50000.0,
+                outstanding_principal=40000.0, total_outstanding=42000.0, emi_amount=5000.0,
+                disbursement_date=date(2025, 1, 1), maturity_date=date(2027, 1, 1), interest_rate=14.0))
+    db.flush()
+    db.add_all([
         Case(
             id=test_id("case-1"), case_number="CASE-1", customer_id=test_id("cust-1"), loan_id=test_id("loan-1"),
             agent_id=test_id("agent-1"), target_amount=target, collected_amount=collected,
@@ -306,7 +330,11 @@ def test_collect_without_verification_stays_pending(db, fake_redis):
 def _sms(monkeypatch, result):
     """Stand in for the transport. Records the call, returns the given result."""
     calls = []
-    def fake(phone, body):
+    def fake(phone, body, *, db, case_id=None, **subject):
+        # 2026-09-24: the sender takes `db` and the subject it resolves the
+        # tenant from (audit gate 1). Asserted, so the OTP path cannot stop
+        # naming its case without this test noticing.
+        assert db is not None and case_id, "send_sms called without its tenant subject"
         calls.append((phone, body))
         return result
     monkeypatch.setattr(otp_module.NotificationService, "send_sms", staticmethod(fake))

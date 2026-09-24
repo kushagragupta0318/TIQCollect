@@ -66,7 +66,7 @@ def world():
 
     def agent(u, code, status):
         a = Agent(id=_uid(), user_id=u.id, employee_code=code, id_card_number=code + "-ID",
-                  agency_id="TIQ-DELHI-01", manager_user_id=mgr.id, gender="M",
+                  manager_user_id=mgr.id, gender="M",   # agency: the test default (v2)
                   base_latitude=28.63, base_longitude=77.21, territory="Delhi",
                   languages_spoken=["HINDI"], status=status, tier=AgentTier.TIER_1,
                   specialization=AgentSpecialization.BOTH, ranking_score=80.0)
@@ -101,7 +101,7 @@ def test_a_genuine_card_verifies_with_exactly_the_four_allowed_fields(client, wo
     body = r.json()
     assert set(body) == ALLOWED
     assert body == {"agent_name": "Arjun Mehta", "employee_code": "EMP0101",
-                    "agency": "TIQ-DELHI-01", "active": True}
+                    "agency": "Aravalli Field Services", "active": True}
 
 
 def test_no_authentication_is_needed_and_a_token_header_changes_nothing(client, world):

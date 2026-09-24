@@ -75,9 +75,8 @@ class User(Base, UUIDPrimaryKey, TimestampMixin):
         UniqueConstraint("id", "bank_id"),
         UniqueConstraint("id", "agency_id"),
         ForeignKeyConstraint(["agency_id", "bank_id"], ["tenancy.agencies.id", "tenancy.agencies.bank_id"],
-                             ondelete="RESTRICT"),
-        ForeignKeyConstraint(["scope_region_id", "bank_id"], ["tenancy.regions.id", "tenancy.regions.bank_id"],
-                             ondelete="RESTRICT"),
+                             deferrable=True, initially="DEFERRED"),
+        ForeignKeyConstraint(["scope_region_id", "bank_id"], ["tenancy.regions.id", "tenancy.regions.bank_id"]),
         # Which tenant ids each role may carry (design §4.1).
         CheckConstraint(
             "(role = 'PLATFORM_ADMIN' AND bank_id IS NULL AND agency_id IS NULL)"

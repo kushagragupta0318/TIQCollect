@@ -152,14 +152,10 @@ class Agent(Base, UUIDPrimaryKey, TimestampMixin):
         UniqueConstraint("bank_id", "id_card_number"),
         UniqueConstraint("id", "agency_id"),
         UniqueConstraint("id", "bank_id"),
-        ForeignKeyConstraint(["agency_id", "bank_id"], ["tenancy.agencies.id", "tenancy.agencies.bank_id"],
-                             ondelete="RESTRICT"),
-        ForeignKeyConstraint(["user_id", "agency_id"], ["tenancy.users.id", "tenancy.users.agency_id"],
-                             ondelete="RESTRICT"),
-        ForeignKeyConstraint(["manager_user_id", "agency_id"], ["tenancy.users.id", "tenancy.users.agency_id"],
-                             ondelete="RESTRICT"),
-        ForeignKeyConstraint(["territory_region_id", "bank_id"], ["tenancy.regions.id", "tenancy.regions.bank_id"],
-                             ondelete="RESTRICT"),
+        ForeignKeyConstraint(["agency_id", "bank_id"], ["tenancy.agencies.id", "tenancy.agencies.bank_id"]),
+        ForeignKeyConstraint(["user_id", "agency_id"], ["tenancy.users.id", "tenancy.users.agency_id"]),
+        ForeignKeyConstraint(["manager_user_id", "agency_id"], ["tenancy.users.id", "tenancy.users.agency_id"]),
+        ForeignKeyConstraint(["territory_region_id", "bank_id"], ["tenancy.regions.id", "tenancy.regions.bank_id"]),
         CheckConstraint(
             "gender IS NULL OR upper(gender) IN (" + ", ".join(repr(g) for g in AGENT_GENDER_VALUES) + ")",
             name="gender",
@@ -218,8 +214,7 @@ class AgentPerformance(Base, UUIDPrimaryKey, TimestampMixin):
         foreign_keys="[AgentPerformance.agent_id]")
 
     __table_args__ = (
-        ForeignKeyConstraint(["agent_id", "agency_id"], ["workforce.agents.id", "workforce.agents.agency_id"],
-                             ondelete="RESTRICT"),
+        ForeignKeyConstraint(["agent_id", "agency_id"], ["workforce.agents.id", "workforce.agents.agency_id"]),
         Index("ix_perf_agent_month", "agent_id", "month", unique=True),
         Index(None, "agency_id", "month"),
         {"schema": "workforce"},
@@ -252,8 +247,7 @@ class AgentDevice(Base, UUIDPrimaryKey, TimestampMixin):
 
     __table_args__ = (
         UniqueConstraint("agent_id", "device_fingerprint"),
-        ForeignKeyConstraint(["agent_id", "agency_id"], ["workforce.agents.id", "workforce.agents.agency_id"],
-                             ondelete="RESTRICT"),
+        ForeignKeyConstraint(["agent_id", "agency_id"], ["workforce.agents.id", "workforce.agents.agency_id"]),
         CheckConstraint("platform IS NULL OR platform IN ('ANDROID', 'IOS', 'WEB', 'SIMULATOR')", name="platform"),
         Index("uq_agent_devices_bound", "agent_id", unique=True,
               postgresql_where=text("is_bound"), sqlite_where=text("is_bound = 1")),

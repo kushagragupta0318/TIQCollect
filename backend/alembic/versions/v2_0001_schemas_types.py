@@ -56,22 +56,41 @@ ENUMS = (
 )
 
 
+# Set ON THE DATABASE so every client gets it — the API engine, Celery, psql,
+# pg_restore, ad-hoc scripts — and PgBouncer transaction pooling cannot lose it
+# (coordinator review 2026-09-24). `public` FIRST (audit W6): an unqualified
+# CREATE lands in public (infrastructure: demo_baseline) rather than in
+# whichever domain schema happened to lead, and unqualified reads of a domain
+# table still resolve because table names are globally unique across schemas.
+SEARCH_PATH = "public, tenancy, lending, collections, workforce, planning, ml, ai, strategy, audit, analytics"
+
+
 def _literal(v: str) -> str:
     return "'" + v.replace("'", "''") + "'"
 
 
 def upgrade() -> None:
     for s in SCHEMAS:
-        op.execute(f"CREATE SCHEMA IF NOT EXISTS {s}")
+        op.execute(f"CREATE SCHEMA {s}")   # not IF NOT EXISTS: never adopt a schema this did not create
     # btree_gist backs the EXCLUDE constraints of v2_0004 (§4); trusted since PG13.
     op.execute("CREATE EXTENSION IF NOT EXISTS btree_gist")
     op.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")      # gen_random_uuid() on PG < 13
     for name, values in ENUMS:
         op.execute(f"CREATE TYPE public.{name} AS ENUM ({', '.join(_literal(v) for v in values)})")
+    op.execute(
+        "DO $$ BEGIN "
+        f"EXECUTE format('ALTER DATABASE %I SET search_path TO {SEARCH_PATH}', current_database()); "
+        "EXECUTE format('ALTER DATABASE %I SET timezone TO ''UTC''', current_database()); "
+        "END $$"
+    )
 
 
 def downgrade() -> None:
+    op.execute("DO $$ BEGIN "
+               "EXECUTE format('ALTER DATABASE %I RESET search_path', current_database()); "
+               "EXECUTE format('ALTER DATABASE %I RESET timezone', current_database()); "
+               "END $$")
     for name, _ in reversed(ENUMS):
         op.execute(f"DROP TYPE IF EXISTS public.{name}")
     for s in reversed(SCHEMAS):
-        op.execute(f"DROP SCHEMA IF EXISTS {s} CASCADE")
+        op.execute(f"DROP SCHEMA IF EXISTS {s}")   # no CASCADE: refuses if anything else lives there

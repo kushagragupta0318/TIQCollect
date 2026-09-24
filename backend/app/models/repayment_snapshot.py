@@ -234,11 +234,9 @@ class RepaymentSnapshot(Base, UUIDPrimaryKey):
         # 19:30, the beat scored it again at 19:45" a no-op instead of a
         # duplicate, and it is why both paths are safe to leave enabled.
         UniqueConstraint("loan_id", "as_of_date", name="uq_repayment_snapshot_grain"),
-        ForeignKeyConstraint(["loan_id", "bank_id"], ["lending.loans.id", "lending.loans.bank_id"],
-                             ondelete="RESTRICT"),
-        ForeignKeyConstraint(["customer_id", "bank_id"], ["lending.customers.id", "lending.customers.bank_id"],
-                             ondelete="RESTRICT"),
-        ForeignKeyConstraint(["case_id"], ["collections.cases.id"], ondelete="RESTRICT"),
+        ForeignKeyConstraint(["loan_id", "bank_id"], ["lending.loans.id", "lending.loans.bank_id"]),
+        ForeignKeyConstraint(["customer_id", "bank_id"], ["lending.customers.id", "lending.customers.bank_id"]),
+        ForeignKeyConstraint(["case_id"], ["collections.cases.id"]),
         Index(None, "bank_id", "as_of_date"),
         Index("ix_repayment_snapshot_customer_asof", "customer_id", "as_of_date"),
         # The training pull: everything labelled, in a date window.

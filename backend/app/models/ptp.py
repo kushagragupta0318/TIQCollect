@@ -61,12 +61,9 @@ class PTP(Base, UUIDPrimaryKey, TimestampMixin):
         "Visit", back_populates="ptp", primaryjoin="PTP.visit_id == Visit.id", foreign_keys="[PTP.visit_id]")
 
     __table_args__ = (
-        ForeignKeyConstraint(["case_id", "agency_id"], ["collections.cases.id", "collections.cases.agency_id"],
-                             ondelete="RESTRICT"),
-        ForeignKeyConstraint(["visit_id", "case_id"], ["collections.visits.id", "collections.visits.case_id"],
-                             ondelete="RESTRICT"),
-        ForeignKeyConstraint(["agent_id", "agency_id"], ["workforce.agents.id", "workforce.agents.agency_id"],
-                             ondelete="RESTRICT"),
+        ForeignKeyConstraint(["case_id", "agency_id"], ["collections.cases.id", "collections.cases.agency_id"]),
+        ForeignKeyConstraint(["visit_id", "case_id"], ["collections.visits.id", "collections.visits.case_id"]),
+        ForeignKeyConstraint(["agent_id", "agency_id"], ["workforce.agents.id", "workforce.agents.agency_id"]),
         CheckConstraint("committed_amount > 0", name="committed_positive"),
         Index("ix_ptp_committed_date", "agency_id", "committed_date", "status"),
         Index("ix_ptp_agent", "agent_id", "status"),

@@ -276,7 +276,17 @@ def test_listener_resolves_a_large_flush_in_one_query_per_parent_class(session):
     assert all(v.agency_id == TEST_AGENCY_ID for v in visits)
     # One IN query for Case, one for Agent — never one per visit.
     assert len(selects) <= 4, selects[:5]
-    assert elapsed < 2.0, f"5,000-visit flush took {elapsed:.2f}s"
+
+    # The symptom, measured against the same flush with the tenant GIVEN, in
+    # the same process: the regression this guards was 36.9 s against 1.0 s
+    # (37x). A fixed ceiling (it was `< 2.0`) measured the machine as much as
+    # the listener: 0.87 s alone, 2.30 s beside two other test containers.
+    explicit = [_visit(case_id, agent_id, bank_id=TEST_BANK_ID, agency_id=TEST_AGENCY_ID) for _ in range(5000)]
+    session.add_all(explicit)
+    t0 = time.perf_counter()
+    session.flush()
+    baseline = time.perf_counter() - t0
+    assert elapsed < max(2.0, 2.5 * baseline), f"inferred {elapsed:.2f}s vs explicit {baseline:.2f}s"
 
 
 def test_mappers_configure_without_a_single_sqlalchemy_warning():

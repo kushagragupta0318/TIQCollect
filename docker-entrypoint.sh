@@ -59,22 +59,51 @@ for i in $(seq 1 60); do
 done
 echo "[entrypoint] postgres is up"
 
+# 2026-09-24 (B11, coordinator audit gates 1 and 2) — SCHEMA GENERATION.
+#   This image runs the v2 data model (ten schemas; alembic chain v2_0001..).
+#   The probe used to be `public.agents`, which does not exist on v2 (it is
+#   workforce.agents), so every restart of a POPULATED v2 database read as
+#   empty: with the fixture that crash-looped on the restore, and with
+#   SEED_FROM_FIXTURE=false it re-ran the destructive seed on every boot —
+#   data loss. The probe now names the generation:
+#     v2     workforce.agents exists       -> leave it alone
+#     v1     public.agents exists          -> REFUSE to start, with the reason.
+#            v2 code cannot run on v1, and the v1 chain is no longer on this
+#            image's upgrade path (it is alembic/versions_v1; operate a v1
+#            database with `alembic -c alembic_v1.ini`). v1 -> v2 is the
+#            transform, task B15, never an in-place upgrade.
+#     empty  neither                       -> build v2, then fill it
+#   A v1 fixture is refused the same way: it would create v1 tables in public.
+#
 # Only the API seeds. Worker and beat share this image and would otherwise race
 # each other and the API to run the same destructive script on a cold start.
 if [ "${RUN_SEED:-false}" = "true" ]; then
   export PGPASSWORD="${_creds#*:}"
-  # "agents" is created by seed_data and by nothing else, so its presence is a
-  # reliable "this database has already been seeded".
-  seeded=$(psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -tAc \
-    "SELECT to_regclass('public.agents') IS NOT NULL" 2>/dev/null || echo "f")
-  if [ "$seeded" = "t" ]; then
-    echo "[entrypoint] database already seeded — skipping (reseed deliberately with:"
-    echo "[entrypoint]   docker compose exec field-ops python -m scripts.seed_data )"
+  generation=$(psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -tAc \
+    "SELECT CASE WHEN to_regclass('workforce.agents') IS NOT NULL THEN 'v2'
+                 WHEN to_regclass('public.agents') IS NOT NULL THEN 'v1'
+                 ELSE 'empty' END" 2>/dev/null || echo "unknown")
+  if [ "$generation" = "v1" ]; then
+    echo "[entrypoint] REFUSING TO START: database ${DB_NAME} holds the v1 schema (public.agents)"
+    echo "[entrypoint] and this image runs the v2 data model. Nothing was changed."
+    echo "[entrypoint]   - v1 migrations: alembic -c alembic_v1.ini <command>"
+    echo "[entrypoint]   - moving v1 data to v2: scripts/migrate_v1_to_v2 (task B15), into a NEW database"
+    exit 1
+  elif [ "$generation" = "unknown" ]; then
+    echo "[entrypoint] could not read the database's schema generation — refusing to guess"
+    exit 1
+  elif [ "$generation" = "v2" ]; then
+    echo "[entrypoint] database already initialised (v2) — skipping"
   else
     # A committed fixture wins over the seed. SEED_FROM_FIXTURE=false forces the
-    # seed; DEMO_FIXTURE points at a different dump. Both default to the demo.
-    fixture="${DEMO_FIXTURE:-/app/fixtures/fieldops-demo.dump}"
+    # seed; DEMO_FIXTURE points at a different dump. The default is the v2
+    # demo fixture (task B18); the v1 dump is never the default any more.
+    fixture="${DEMO_FIXTURE:-/app/fixtures/fieldops-demo-v2.dump}"
     if [ "${SEED_FROM_FIXTURE:-true}" = "true" ] && [ -s "$fixture" ]; then
+      if ! pg_restore -l "$fixture" | grep -q "SCHEMA - workforce"; then
+        echo "[entrypoint] REFUSING: $fixture is not a v2 dump (no workforce schema). Nothing was changed."
+        exit 1
+      fi
       echo "[entrypoint] empty database — restoring fixture $fixture"
       # NOT `pg_restore -d ... --exit-on-error`. The image ships Postgres 17
       # client tools and the server is 16: pg_restore 17 prefixes its output
@@ -94,9 +123,15 @@ if [ "${RUN_SEED:-false}" = "true" ]; then
       alembic upgrade head
       echo "[entrypoint] restore complete"
     else
-      echo "[entrypoint] empty database — seeding (this is destructive, and runs once)"
+      # No fixture: build the v2 schema, then seed. (Until B16 replaces it,
+      # scripts.seed_data is the v1 seed and refuses to run without
+      # ALLOW_V1_SEED=true — the database is left with the v2 schema and no
+      # data, never dropped.)
+      echo "[entrypoint] empty database — creating the v2 schema"
+      alembic upgrade head
+      echo "[entrypoint] seeding (runs once, on an empty database only)"
       python -m scripts.seed_data
-      echo "[entrypoint] seed complete"
+      echo "[entrypoint] seed step complete"
     fi
     # Snapshot the showcase case while it is provably clean — straight off the
     # seed is the only moment that is guaranteed. DEMO_REHEARSAL_MODE rewinds to

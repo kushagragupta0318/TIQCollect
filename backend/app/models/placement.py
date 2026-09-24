@@ -70,13 +70,10 @@ class Placement(Base, UUIDPrimaryKey, TimestampMixin):
     __table_args__ = (
         UniqueConstraint("id", "agency_id"),
         UniqueConstraint("id", "bank_id"),
-        ForeignKeyConstraint(["agency_id", "bank_id"], ["tenancy.agencies.id", "tenancy.agencies.bank_id"],
-                             ondelete="RESTRICT"),
-        ForeignKeyConstraint(["loan_id", "bank_id"], ["lending.loans.id", "lending.loans.bank_id"],
-                             ondelete="RESTRICT"),
+        ForeignKeyConstraint(["agency_id", "bank_id"], ["tenancy.agencies.id", "tenancy.agencies.bank_id"]),
+        ForeignKeyConstraint(["loan_id", "bank_id"], ["lending.loans.id", "lending.loans.bank_id"]),
         ForeignKeyConstraint(["contract_id", "agency_id"],
-                             ["tenancy.agency_contracts.id", "tenancy.agency_contracts.agency_id"],
-                             ondelete="RESTRICT"),
+                             ["tenancy.agency_contracts.id", "tenancy.agency_contracts.agency_id"]),
         ForeignKeyConstraint(["model_prediction_id", "model_prediction_as_of"],
                              ["ml.model_predictions.id", "ml.model_predictions.as_of_date"],
                              ondelete="SET NULL"),
@@ -128,13 +125,10 @@ class SettlementOffer(Base, UUIDPrimaryKey, TimestampMixin):
     notes: Mapped[str | None] = mapped_column(Text)
 
     __table_args__ = (
-        ForeignKeyConstraint(["case_id", "agency_id"], ["collections.cases.id", "collections.cases.agency_id"],
-                             ondelete="RESTRICT"),
-        ForeignKeyConstraint(["loan_id", "bank_id"], ["lending.loans.id", "lending.loans.bank_id"],
-                             ondelete="RESTRICT"),
+        ForeignKeyConstraint(["case_id", "agency_id"], ["collections.cases.id", "collections.cases.agency_id"]),
+        ForeignKeyConstraint(["loan_id", "bank_id"], ["lending.loans.id", "lending.loans.bank_id"]),
         ForeignKeyConstraint(["placement_id", "agency_id"],
-                             ["collections.placements.id", "collections.placements.agency_id"],
-                             ondelete="RESTRICT"),
+                             ["collections.placements.id", "collections.placements.agency_id"]),
         ForeignKeyConstraint(["model_prediction_id", "model_prediction_as_of"],
                              ["ml.model_predictions.id", "ml.model_predictions.as_of_date"],
                              ondelete="SET NULL"),
@@ -183,12 +177,9 @@ class Dispute(Base, UUIDPrimaryKey, TimestampMixin):
     resolution: Mapped[str | None] = mapped_column(Text)
 
     __table_args__ = (
-        ForeignKeyConstraint(["case_id", "agency_id"], ["collections.cases.id", "collections.cases.agency_id"],
-                             ondelete="RESTRICT"),
-        ForeignKeyConstraint(["loan_id", "bank_id"], ["lending.loans.id", "lending.loans.bank_id"],
-                             ondelete="RESTRICT"),
-        ForeignKeyConstraint(["visit_id", "case_id"], ["collections.visits.id", "collections.visits.case_id"],
-                             ondelete="RESTRICT"),
+        ForeignKeyConstraint(["case_id", "agency_id"], ["collections.cases.id", "collections.cases.agency_id"]),
+        ForeignKeyConstraint(["loan_id", "bank_id"], ["lending.loans.id", "lending.loans.bank_id"]),
+        ForeignKeyConstraint(["visit_id", "case_id"], ["collections.visits.id", "collections.visits.case_id"]),
         CheckConstraint("kind IN ('DISPUTE', 'COMPLAINT')", name="kind"),
         CheckConstraint("raised_via IN ('VISIT', 'CALL', 'BANK', 'BORROWER', 'PORTAL')", name="raised_via"),
         CheckConstraint(_in("category", DISPUTE_CATEGORIES), name="category"),

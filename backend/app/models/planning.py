@@ -69,7 +69,7 @@ class PlacementDecision(Base):
     chosen_agency_id: Mapped[str | None] = mapped_column(UUIDType)
     previous_agency_id: Mapped[str | None] = mapped_column(UUIDType)
     outcome: Mapped[str] = mapped_column(
-        String(20), ForeignKey("planning.placement_outcomes.code", ondelete="RESTRICT"), nullable=False)
+        String(20), ForeignKey("planning.placement_outcomes.code"), nullable=False)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     score: Mapped[float | None] = mapped_column(Float)
     score_breakdown: Mapped[dict] = mapped_column(JsonDoc, nullable=False, default=dict)
@@ -79,12 +79,9 @@ class PlacementDecision(Base):
 
     __table_args__ = (
         UniqueConstraint("run_id", "loan_id", "plan_date"),
-        ForeignKeyConstraint(["loan_id", "bank_id"], ["lending.loans.id", "lending.loans.bank_id"],
-                             ondelete="RESTRICT"),
-        ForeignKeyConstraint(["chosen_agency_id", "bank_id"], ["tenancy.agencies.id", "tenancy.agencies.bank_id"],
-                             ondelete="RESTRICT"),
-        ForeignKeyConstraint(["previous_agency_id", "bank_id"], ["tenancy.agencies.id", "tenancy.agencies.bank_id"],
-                             ondelete="RESTRICT"),
+        ForeignKeyConstraint(["loan_id", "bank_id"], ["lending.loans.id", "lending.loans.bank_id"]),
+        ForeignKeyConstraint(["chosen_agency_id", "bank_id"], ["tenancy.agencies.id", "tenancy.agencies.bank_id"]),
+        ForeignKeyConstraint(["previous_agency_id", "bank_id"], ["tenancy.agencies.id", "tenancy.agencies.bank_id"]),
         ForeignKeyConstraint(["model_prediction_id", "model_prediction_as_of"],
                              ["ml.model_predictions.id", "ml.model_predictions.as_of_date"],
                              ondelete="SET NULL"),

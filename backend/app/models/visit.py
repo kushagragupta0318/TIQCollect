@@ -188,10 +188,8 @@ class Visit(Base, UUIDPrimaryKey, TimestampMixin):
     __table_args__ = (
         UniqueConstraint("id", "agency_id"),
         UniqueConstraint("id", "case_id"),
-        ForeignKeyConstraint(["case_id", "agency_id"], ["collections.cases.id", "collections.cases.agency_id"],
-                             ondelete="RESTRICT"),
-        ForeignKeyConstraint(["agent_id", "agency_id"], ["workforce.agents.id", "workforce.agents.agency_id"],
-                             ondelete="RESTRICT"),
+        ForeignKeyConstraint(["case_id", "agency_id"], ["collections.cases.id", "collections.cases.agency_id"]),
+        ForeignKeyConstraint(["agent_id", "agency_id"], ["workforce.agents.id", "workforce.agents.agency_id"]),
         Index(None, "agency_id", "check_in_time"),
         Index("ix_visit_agent_date", "agent_id", "check_in_time"),
         Index("ix_visit_case", "case_id", "check_in_time"),

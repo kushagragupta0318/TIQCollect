@@ -101,8 +101,7 @@ class LoanDpdHistory(Base):
     __table_args__ = (
         # No FK from loan_dpd_history to loans on the partitioned table would
         # cost a trigger per partition; the composite FK is declared and kept.
-        ForeignKeyConstraint(["loan_id", "bank_id"], ["lending.loans.id", "lending.loans.bank_id"],
-                             ondelete="RESTRICT"),
+        ForeignKeyConstraint(["loan_id", "bank_id"], ["lending.loans.id", "lending.loans.bank_id"]),
         CheckConstraint("source IN (" + ", ".join(repr(s) for s in DPD_HISTORY_SOURCES) + ")", name="source"),
         CheckConstraint("dpd >= 0", name="dpd_non_negative"),
         Index(None, "bank_id", "as_of_date"),
@@ -189,7 +188,7 @@ class BankAction(Base, UUIDPrimaryKey, CreatedAtMixin):
     case_id: Mapped[str | None] = uuid_fk("collections.cases.id", nullable=True)
     placement_id: Mapped[str | None] = uuid_fk("collections.placements.id", nullable=True)
     action_type: Mapped[str] = mapped_column(
-        String(30), ForeignKey("lending.bank_action_types.code", ondelete="RESTRICT"), nullable=False)
+        String(30), ForeignKey("lending.bank_action_types.code"), nullable=False)
     action_date: Mapped[date] = mapped_column(Date, nullable=False)
     reason: Mapped[str | None] = mapped_column(String(100))
     amount: Mapped[float | None] = mapped_column(Money)
@@ -201,8 +200,7 @@ class BankAction(Base, UUIDPrimaryKey, CreatedAtMixin):
 
     __table_args__ = (
         UniqueConstraint("loan_id", "action_type", "action_date"),
-        ForeignKeyConstraint(["loan_id", "bank_id"], ["lending.loans.id", "lending.loans.bank_id"],
-                             ondelete="RESTRICT"),
+        ForeignKeyConstraint(["loan_id", "bank_id"], ["lending.loans.id", "lending.loans.bank_id"]),
         Index(None, "bank_id", "action_date"),
         Index(None, "case_id"),
         {"schema": SCHEMA},

@@ -62,7 +62,8 @@ def _pred(db, *, case, as_of, prob, outcome=None, version=SERVING,
           odv=OUTCOME_DEFINITION_VERSION, coverage=1.0):
     row = ModelPrediction(
         id=str(uuid.uuid4()), model_name="recovery_risk", model_version=version,
-        entity_type="case", entity_id=case, case_id=case, as_of_date=as_of,
+        entity_type="case", entity_id=test_id(f"case:{case}"), case_id=None,  # v2: entity_id is a UUID; no case row exists
+        as_of_date=as_of,
         probability=prob, is_modelled=True, feature_coverage=coverage,
         features=served_vector(int(prob * 100), dpd=40.0 + (prob * 100), cibil_score=600.0,
                                ptp_kept_ratio=0.5, overdue_amount=5000.0),

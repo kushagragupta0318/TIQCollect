@@ -41,6 +41,8 @@ from app.models.case import RESOLVED_STATUSES, Case, CaseStatus
 from app.models.customer import Customer
 from app.models.ptp import PTP, PTPStatus
 from app.models.visit import Visit
+from app.core.errors import AppException, ErrorCode
+from app.services.scope import agent_case_or_404
 from app.services.media_service import MediaService
 
 logger = structlog.get_logger()
@@ -555,23 +557,11 @@ class CaseService:
             .filter(Case.id == case_id)
             .first()
         )
+        # 2026-09-24 (A03): access through the one rule, AFTER the eager load
+        # above (a refused case is the same 404 as a missing one).
         if not case:
-            raise HTTPException(status_code=404, detail="Case not found")
-
-        authorized = (case.agent_id == agent.id)
-        if not authorized:
-            beats = self.db.query(Beat).filter(Beat.agent_id == agent.id).all()
-            if any(case_id in (b.ordered_case_ids or []) for b in beats):
-                authorized = True
-            elif agent.manager_user_id and case.agent_id:
-                curr_ag = self.db.query(Agent).filter(Agent.id == case.agent_id).first()
-                if curr_ag and curr_ag.manager_user_id == agent.manager_user_id:
-                    authorized = True
-            elif case.agent_id is None:
-                authorized = True
-
-        if not authorized:
-            raise HTTPException(status_code=403, detail="Case not found or not assigned to you")
+            raise AppException(404, ErrorCode.NOT_FOUND, "Not found")
+        agent_case_or_404(self.db, agent, case_id)
 
         base = _format_case(case)
 

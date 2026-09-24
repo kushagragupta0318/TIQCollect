@@ -95,10 +95,8 @@ class LeaveRequest(Base, UUIDPrimaryKey, TimestampMixin):
     agent = relationship("Agent", foreign_keys=[agent_id], primaryjoin="LeaveRequest.agent_id == Agent.id")
 
     __table_args__ = (
-        ForeignKeyConstraint(["agent_id", "agency_id"], ["workforce.agents.id", "workforce.agents.agency_id"],
-                             ondelete="RESTRICT"),
-        ForeignKeyConstraint(["manager_user_id", "agency_id"], ["tenancy.users.id", "tenancy.users.agency_id"],
-                             ondelete="RESTRICT"),
+        ForeignKeyConstraint(["agent_id", "agency_id"], ["workforce.agents.id", "workforce.agents.agency_id"]),
+        ForeignKeyConstraint(["manager_user_id", "agency_id"], ["tenancy.users.id", "tenancy.users.agency_id"]),
         CheckConstraint("to_date >= from_date", name="dates"),
         Index("ix_leave_agent_dates", "agent_id", "from_date", "to_date"),
         Index("ix_leave_manager_status", "manager_user_id", "status"),

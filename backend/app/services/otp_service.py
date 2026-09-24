@@ -51,6 +51,7 @@ from app.models.audit_log import AuditLog, AuditAction
 from app.models.case import Case
 from app.models.payment import Payment, PaymentStatus
 from app.services.brand import brand_for
+from app.services.scope import agent_case_or_404
 from app.services.notification_service import NotificationService
 import structlog
 
@@ -231,14 +232,11 @@ class OtpService:
         # channel (UPI/RTGS/cash), so the code binds to the AMOUNT — the field
         # fraud turns on — not the mode. The deferred flow (payment_id set) pins
         # amount+mode from the existing payment below.
-        case = (
-            self.db.query(Case)
-            .options(joinedload(Case.customer), joinedload(Case.loan))
-            .filter(Case.id == case_id, Case.agent_id == agent.id)
-            .first()
-        )
-        if not case:
-            raise AppException(404, ErrorCode.CASE_NOT_FOUND, "Case not found or not assigned to you")
+        # 2026-09-24 (A03): the one access rule (services/scope). This copy was
+        # stricter than the visit path's, so a same-day handover case could
+        # record a visit but not verify its payment.
+        case = agent_case_or_404(self.db, agent, case_id,
+                                 options=(joinedload(Case.customer), joinedload(Case.loan)))
 
         customer = case.customer
         if not customer or not customer.phone_primary:

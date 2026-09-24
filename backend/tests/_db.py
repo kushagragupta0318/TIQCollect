@@ -50,6 +50,37 @@ TEST_AGENCY_ID = test_id("agency:aravalli-field-services")
 DEFAULT_TENANT = {"bank_id": TEST_BANK_ID, "agency_id": TEST_AGENCY_ID}
 
 
+def _render_cross_schema_fks_on_sqlite() -> None:
+    """SQLAlchemy's SQLite DDL compiler DROPS any foreign key whose two tables
+    are in different schemas (`if local_table.schema != remote_table.schema:
+    return None`), silently — SQLite has no cross-schema FKs. The v2 model is
+    ten schemas, so with it every FK between them (visits -> agents,
+    payments -> agents, loans -> branches ...) simply was not created in the
+    suite: measured 2026-09-24, `PRAGMA foreign_key_list(visits)` listed the
+    case FK and nothing else, and a visit joining agency A's case to agency
+    B's agent inserted cleanly. Here every schema translates to the one SQLite
+    database, so render them like same-schema FKs. Test-only; production is
+    Postgres."""
+    from sqlalchemy.dialects.sqlite.base import SQLiteDDLCompiler
+    from sqlalchemy.sql.compiler import DDLCompiler
+
+    if getattr(SQLiteDDLCompiler, "_tiq_cross_schema_fks", False):
+        return
+    original = SQLiteDDLCompiler.visit_foreign_key_constraint
+
+    def visit_foreign_key_constraint(self, constraint, **kw):
+        local = constraint.elements[0].parent.table
+        remote = constraint.elements[0].column.table
+        if local.schema != remote.schema:
+            return DDLCompiler.visit_foreign_key_constraint(self, constraint, **kw)
+        return original(self, constraint, **kw)
+
+    SQLiteDDLCompiler.visit_foreign_key_constraint = visit_foreign_key_constraint
+    SQLiteDDLCompiler._tiq_cross_schema_fks = True
+
+
+_render_cross_schema_fks_on_sqlite()
+
 # Branch codes the suite's loan fixtures use. loans carry a composite FK
 # (bank_id, branch_code) -> branches, which SQLite now enforces.
 TEST_BRANCH_CODES = ("BR", "BR1", "BR01", "B1", "DL01", "GG01", "GGN044", "NO01")

@@ -48,6 +48,7 @@ from app.models.customer import Customer
 from app.models.loan import Loan
 from app.models.payment import Payment, PaymentStatus
 from app.models.ptp import PTP, PTPStatus
+from app.services.scope import agent_case_or_404
 from app.services.ptp_lifecycle_service import verified_paid_against
 from app.services.brand import brand_for
 from app.services.notification_service import NotificationService
@@ -73,30 +74,9 @@ class PaymentService:
         return f"TIQ-{year}-{token}"
 
     def _get_accessible_case(self, agent, case_id: str) -> Case:
-        case = self.db.query(Case).filter(Case.id == case_id).first()
-        if not case:
-            raise AppException(404, ErrorCode.CASE_NOT_FOUND, "Case not found")
-
-        authorized = (case.agent_id == agent.id)
-        if not authorized:
-            from app.models.beat import Beat
-            beats = self.db.query(Beat).filter(Beat.agent_id == agent.id).all()
-            if any(case_id in (b.ordered_case_ids or []) for b in beats):
-                authorized = True
-            elif agent.manager_user_id and case.agent_id:
-                curr_ag = self.db.query(Agent).filter(Agent.id == case.agent_id).first()
-                if curr_ag and curr_ag.manager_user_id == agent.manager_user_id:
-                    authorized = True
-            elif case.agent_id is None:
-                authorized = True
-
-        if not authorized:
-            raise AppException(403, ErrorCode.FORBIDDEN, "Case not assigned to you")
-
-        if case.agent_id != agent.id:
-            case.agent_id = agent.id
-
-        return case
+        """2026-09-24 (A03): the one rule (services/scope). The old copy took
+        over any unassigned case in any tenant on the first payment."""
+        return agent_case_or_404(self.db, agent, case_id, sync_assignee=True)
 
     # -----------------------------------------------------------------
     # POST /agent/cases/{case_id}/payment
@@ -348,10 +328,19 @@ class PaymentService:
         if existing:
             return self._ptp_response(existing)
 
-        remaining_target = max(0.0, case.target_amount - case.collected_amount)
-        amt = req.committed_amount
-        if remaining_target > 0 and amt > remaining_target:
-            amt = remaining_target
+        # 2026-09-24 (coordinator audit): the cap was skipped whenever the case
+        # target was already met (remaining 0) — `if remaining > 0` — so a
+        # promise of any size, ₹9.99 crore included, was stored against a case
+        # with nothing left to collect. A promise is now capped by what the
+        # CASE still needs, else by what the LOAN still owes; with neither
+        # there is nothing to promise, and saying so beats storing fiction.
+        remaining_target = max(0.0, (case.target_amount or 0.0) - (case.collected_amount or 0.0))
+        loan = self.db.get(Loan, case.loan_id)
+        loan_owed = max(0.0, float(loan.total_outstanding or 0.0)) if loan is not None else 0.0
+        ceiling = remaining_target if remaining_target > 0 else loan_owed
+        if ceiling <= 0:
+            raise AppException(400, ErrorCode.VALIDATION_ERROR, "Nothing is outstanding on this case to promise against")
+        amt = min(float(req.committed_amount), ceiling)
 
         ptp = PTP(
             case_id=case.id,

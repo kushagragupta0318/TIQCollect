@@ -47,7 +47,9 @@ class AuditLog(Base, UUIDPrimaryKey):
     __tablename__ = "audit_logs"
 
     # Timestamps stored directly — no mixin (must be immutable)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    # 2026-09-24 (B11, lead-dev audit 3.11): no index=True here — it built a
+    # second index identical to ix_audit_created_at below.
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     # 2026-09-24 (B09): RESTRICT, was SET NULL. Users are never deleted, and the
     # immutability trigger (design §7.4) would block a SET NULL cascade anyway.

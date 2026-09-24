@@ -19,6 +19,7 @@ from __future__ import annotations
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from app.services.scope import agent_case_or_404
 from app.core import storage
 from app.core.config import settings
 from app.models.agent import Agent
@@ -38,9 +39,7 @@ class MediaService:
     def get_photo_upload_url(self, agent: Agent, case_id: str, subject: str) -> dict:
         if subject not in self._VALID_SUBJECTS:
             raise HTTPException(status_code=400, detail=f"subject must be one of: {', '.join(self._VALID_SUBJECTS)}")
-        case = self.db.query(Case).filter(Case.id == case_id, Case.agent_id == agent.id).first()
-        if not case:
-            raise HTTPException(status_code=404, detail="Case not found or not assigned to you")
+        case = agent_case_or_404(self.db, agent, case_id)   # A03: the one rule
 
         photo_type_str = self._SUBJECT_MAP[subject]
         content_type, ext = self._SUBJECT_CONTENT_TYPE.get(subject, ("image/jpeg", "jpg"))
@@ -51,22 +50,13 @@ class MediaService:
     def get_case_photos(self, agent: Agent, case_id: str) -> list[dict]:
         """Return latest geo-tagged photo per type for this case, extracted from visits."""
         from sqlalchemy.orm import joinedload
-        case = (
-            self.db.query(Case)
-            .options(joinedload(Case.visits))
-            .filter(Case.id == case_id, Case.agent_id == agent.id)
-            .first()
-        )
-        if not case:
-            raise HTTPException(status_code=404, detail="Case not found")
+        case = agent_case_or_404(self.db, agent, case_id, options=(joinedload(Case.visits),))   # A03
         return self.photos_from_visits(case.visits)
 
     def get_recording_upload_url(self, agent: Agent, case_id: str, recorder: str) -> dict:
         if recorder not in ("agent", "borrower"):
             raise HTTPException(status_code=400, detail="recorder must be 'agent' or 'borrower'")
-        case = self.db.query(Case).filter(Case.id == case_id, Case.agent_id == agent.id).first()
-        if not case:
-            raise HTTPException(status_code=404, detail="Case not found or not assigned to you")
+        case = agent_case_or_404(self.db, agent, case_id)   # A03: the one rule
 
         key = storage.recording_key(case_id, recorder, ext="webm")
         upload_url = storage.presigned_upload_url(key, content_type="audio/webm", expires_minutes=30)

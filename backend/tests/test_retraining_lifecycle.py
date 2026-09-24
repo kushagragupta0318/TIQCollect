@@ -110,9 +110,13 @@ def _report(*, verdict="retrain_recommended", reasons=("Gini has fallen 31%",),
 
 def _pred(db, *, case, as_of, features, outcome, version=SERVING,
           odv=OUTCOME_DEFINITION_VERSION, is_modelled=True, prob=0.5):
+    # 2026-09-24 (v2): entity_id is a native UUID, and case_id / loan_id are
+    # real FKs that SQLite now enforces. These fixture predictions have no case
+    # or loan row behind them and never needed one — the lifecycle reads the
+    # frozen features and the label — so they name the entity and nothing else.
     row = ModelPrediction(
         id=str(uuid.uuid4()), model_name="recovery_risk", model_version=version,
-        entity_type="case", entity_id=case, case_id=case, loan_id=test_id(f"L{case}"),
+        entity_type="case", entity_id=test_id(f"case:{case}"), case_id=None, loan_id=None,
         as_of_date=as_of, probability=prob, is_modelled=is_modelled,
         features=features, feature_coverage=1.0, outcome_horizon_days=30,
         outcome_baseline={"overdue_amount": 5000.0, "emi_amount": 2500.0,

@@ -43,11 +43,14 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def uuid_fk(target: str, *, ondelete: str = "RESTRICT", nullable: bool = False,
+def uuid_fk(target: str, *, ondelete: str | None = None, nullable: bool = False,
             index: bool = False, use_alter: bool = False, **kw):
-    """A UUID foreign-key column. RESTRICT is the default (design §2.8):
+    """A UUID foreign-key column. NO ACTION is the default (design §2.8):
     business rows are never hard-deleted, and a cascade that silently removes
-    money, evidence or who-approved-what is the failure the rule prevents."""
+    money, evidence or who-approved-what is the failure the rule prevents.
+    2026-09-24 (audit MED 7): this defaulted to RESTRICT, which refuses the
+    same deletes but cannot be DEFERRED and is checked mid-statement; NO
+    ACTION is checked at statement end (or commit, when deferrable)."""
     return mapped_column(UUIDType, ForeignKey(target, ondelete=ondelete, use_alter=use_alter),
                          nullable=nullable, index=index, **kw)
 

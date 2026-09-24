@@ -103,11 +103,9 @@ class Beat(Base, UUIDPrimaryKey, TimestampMixin):
     __table_args__ = (
         UniqueConstraint("agency_id", "beat_number"),
         UniqueConstraint("id", "agency_id"),
-        ForeignKeyConstraint(["agent_id", "agency_id"], ["workforce.agents.id", "workforce.agents.agency_id"],
-                             ondelete="RESTRICT"),
+        ForeignKeyConstraint(["agent_id", "agency_id"], ["workforce.agents.id", "workforce.agents.agency_id"]),
         ForeignKeyConstraint(["allocation_run_id", "agency_id"],
-                             ["planning.allocation_runs.id", "planning.allocation_runs.agency_id"],
-                             ondelete="RESTRICT"),
+                             ["planning.allocation_runs.id", "planning.allocation_runs.agency_id"]),
         # Name kept: planner_service quotes it to recognise the concurrent-plan
         # collision (the 409 CLAUDE.md documents).
         Index("ix_beat_agent_date", "agent_id", "beat_date", unique=True),

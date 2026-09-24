@@ -69,10 +69,8 @@ class AllocationRun(Base, UUIDPrimaryKey, TimestampMixin):
 
     __table_args__ = (
         UniqueConstraint("id", "agency_id"),
-        ForeignKeyConstraint(["agency_id", "bank_id"], ["tenancy.agencies.id", "tenancy.agencies.bank_id"],
-                             ondelete="RESTRICT"),
-        ForeignKeyConstraint(["manager_user_id", "agency_id"], ["tenancy.users.id", "tenancy.users.agency_id"],
-                             ondelete="RESTRICT"),
+        ForeignKeyConstraint(["agency_id", "bank_id"], ["tenancy.agencies.id", "tenancy.agencies.bank_id"]),
+        ForeignKeyConstraint(["manager_user_id", "agency_id"], ["tenancy.users.id", "tenancy.users.agency_id"]),
         CheckConstraint("strategy IN ('SMART', 'LEGACY')", name="strategy"),
         CheckConstraint("status IN ('PLANNED', 'APPLIED', 'ROLLED_BACK', 'FAILED')", name="status"),
         Index("ix_alloc_run_mgr_date", "manager_user_id", "plan_date"),

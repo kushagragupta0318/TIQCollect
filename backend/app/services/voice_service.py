@@ -19,8 +19,8 @@
 #       would never match; with PUBLIC_BASE_URL unset the webhook refuses
 #       everything (fail closed).
 #     - The client sends a CASE id, never a number. The number is the case's
-#       borrower's, resolved here, and only for a case assigned to the calling
-#       agent, inside RBI contact hours, not do-not-contact, and through the
+#       borrower's, resolved here, and only for a case the calling agent may
+#       act on (services/scope: assigned, or on today's beat), inside RBI contact hours, not do-not-contact, and through the
 #       same demo/tenant suppression as SMS (services/brand.tenant_of).
 #     - The caller is identified by the token identity `agent:<user>:<sid>`,
 #       and the call is refused unless that login session is still live — so
@@ -39,9 +39,11 @@ import structlog
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.errors import AppException
 from app.core.geo import is_within_contact_hours
 from app.core.ids import parse_uuid
 from app.services.notification_service import NotificationService, _real, outbound_allowed
+from app.services.scope import agent_case_or_404
 
 logger = structlog.get_logger()
 
@@ -156,11 +158,13 @@ def resolve_destination(db: Session, *, from_param: str | None, case_id: str | N
 
     cid = parse_uuid(case_id)
     agent = db.query(Agent).filter(Agent.user_id == user_id).first()
-    case = db.get(Case, cid) if cid else None
-    # Strict ownership: the case is ASSIGNED to this agent. A dialler is the
-    # wrong place for the looser "on my beat / my team's" readings.
-    if agent is None or case is None or case.agent_id != agent.id:
-        raise VoiceRefused(NOT_YOUR_CASE, user_id=user_id, case_id=cid)
+    # The one access rule (services/scope, A03): assigned to this agent, or on
+    # their beat today, inside their agency. Never a teammate's or another
+    # agency's case, never an unassigned pool case.
+    try:
+        case = agent_case_or_404(db, agent, cid)
+    except AppException:
+        raise VoiceRefused(NOT_YOUR_CASE, user_id=user_id, case_id=cid) from None
     if not is_within_contact_hours(now):
         raise VoiceRefused(OUTSIDE_CONTACT_HOURS, user_id=user_id, case_id=cid)
     customer = db.get(Customer, case.customer_id)

@@ -160,7 +160,7 @@ class Case(Base, UUIDPrimaryKey, TimestampMixin):
 
     # Bank-provided collection metadata (sent with the portfolio)
     collection_stage: Mapped[str] = mapped_column(
-        String(30), ForeignKey("collections.collection_stages.code", ondelete="RESTRICT"),
+        String(30), ForeignKey("collections.collection_stages.code"),
         default="FIELD", nullable=False,
     )
     bank_ptp_date: Mapped[date | None] = mapped_column(Date)
@@ -193,16 +193,11 @@ class Case(Base, UUIDPrimaryKey, TimestampMixin):
         UniqueConstraint("id", "agency_id"),
         UniqueConstraint("id", "bank_id"),
         ForeignKeyConstraint(["placement_id", "agency_id"],
-                             ["collections.placements.id", "collections.placements.agency_id"],
-                             ondelete="RESTRICT"),
-        ForeignKeyConstraint(["customer_id", "bank_id"], ["lending.customers.id", "lending.customers.bank_id"],
-                             ondelete="RESTRICT"),
-        ForeignKeyConstraint(["loan_id", "bank_id"], ["lending.loans.id", "lending.loans.bank_id"],
-                             ondelete="RESTRICT"),
-        ForeignKeyConstraint(["agent_id", "agency_id"], ["workforce.agents.id", "workforce.agents.agency_id"],
-                             ondelete="RESTRICT"),
-        ForeignKeyConstraint(["agency_id", "bank_id"], ["tenancy.agencies.id", "tenancy.agencies.bank_id"],
-                             ondelete="RESTRICT"),
+                             ["collections.placements.id", "collections.placements.agency_id"]),
+        ForeignKeyConstraint(["customer_id", "bank_id"], ["lending.customers.id", "lending.customers.bank_id"]),
+        ForeignKeyConstraint(["loan_id", "bank_id"], ["lending.loans.id", "lending.loans.bank_id"]),
+        ForeignKeyConstraint(["agent_id", "agency_id"], ["workforce.agents.id", "workforce.agents.agency_id"]),
+        ForeignKeyConstraint(["agency_id", "bank_id"], ["tenancy.agencies.id", "tenancy.agencies.bank_id"]),
         CheckConstraint(
             "closure_reason IS NULL OR closure_reason IN ("
             + ", ".join(repr(c.value) for c in ClosureReason) + ")",

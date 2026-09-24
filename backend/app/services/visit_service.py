@@ -50,6 +50,7 @@ from app.models.agent import Agent
 from app.models.case import Case, CaseStatus, EscalationReason
 from app.models.visit import Visit, VisitOutcome
 from app.schemas.agent import RecordVisitRequest
+from app.services.scope import agent_case_or_404
 from app.services.ai_report_service import AIReportService
 from app.services.brand import brand_for
 from app.services.notification_service import NotificationService
@@ -91,34 +92,12 @@ class VisitService:
           6. Notify the customer by SMS/WhatsApp for non-payment outcomes
              (payment outcomes are notified by collect_payment instead).
         """
-        case = (
-            self.db.query(Case)
-            .options(joinedload(Case.customer), joinedload(Case.loan))
-            .filter(Case.id == case_id)
-            .first()
-        )
-        if not case:
-            raise HTTPException(status_code=404, detail="Case not found")
-
-        authorized = (case.agent_id == agent.id)
-        if not authorized:
-            from app.models.beat import Beat
-            beats = self.db.query(Beat).filter(Beat.agent_id == agent.id).all()
-            if any(case_id in (b.ordered_case_ids or []) for b in beats):
-                authorized = True
-            elif agent.manager_user_id and case.agent_id:
-                curr_ag = self.db.query(Agent).filter(Agent.id == case.agent_id).first()
-                if curr_ag and curr_ag.manager_user_id == agent.manager_user_id:
-                    authorized = True
-            elif case.agent_id is None:
-                authorized = True
-
-        if not authorized:
-            raise HTTPException(status_code=403, detail="Case not found or not assigned to you")
-
-        # Sync case agent if working on assigned beat case
-        if case.agent_id != agent.id:
-            case.agent_id = agent.id
+        # 2026-09-24 (A03): the one access rule. The old copy here granted any
+        # unassigned case in any tenant and then RE-ASSIGNED it to the caller,
+        # so recording a visit took the case over. A stale assignee is synced
+        # only for a case on the caller's beat today, inside their agency.
+        case = agent_case_or_404(self.db, agent, case_id, sync_assignee=True,
+                                 options=(joinedload(Case.customer), joinedload(Case.loan)))
 
         if case.customer.do_not_contact:
             raise HTTPException(status_code=403, detail="Customer is marked Do Not Contact")

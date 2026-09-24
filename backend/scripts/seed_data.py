@@ -3446,4 +3446,16 @@ def seed():
     print(f"               : python -m scripts.ingest_daily --file data/incoming/bank_portfolio_*.csv")
     print("=" * 60)
 if __name__ == "__main__":
+    # 2026-09-24 (B11, coordinator audit gate 2). This is the v1 seed: it
+    # drop_all()s every table and re-creates the v1-shaped demo book, which
+    # the v2 models cannot hold. The entrypoint now reaches it only on an
+    # EMPTY database after `alembic upgrade head`, but a destructive script
+    # must not depend on its caller's probe being right — so it refuses to
+    # run unless asked by name. The v2 generator replaces it (task B16).
+    import os
+    import sys
+    if os.environ.get("ALLOW_V1_SEED") != "true":
+        print("[seed_data] this is the v1 seed; the v2 demo generator is task B16. Nothing seeded, "
+              "nothing dropped. Set ALLOW_V1_SEED=true only against a throwaway v1 database.")
+        sys.exit(0)
     seed()

@@ -90,7 +90,7 @@ class Region(Base, UUIDPrimaryKey, TimestampMixin):
         UniqueConstraint("bank_id", "level", "code"),
         UniqueConstraint("id", "bank_id"),
         ForeignKeyConstraint(["parent_id", "bank_id"], ["tenancy.regions.id", "tenancy.regions.bank_id"],
-                             ondelete="RESTRICT"),
+                             deferrable=True, initially="DEFERRED"),
         CheckConstraint(_check_in("level", REGION_LEVELS), name="level"),
         CheckConstraint("(level = 'ZONE') = (parent_id IS NULL)", name="zone_is_root"),
         Index(None, "bank_id", "level"),
@@ -114,8 +114,7 @@ class Branch(Base, UUIDPrimaryKey, TimestampMixin):
     __table_args__ = (
         UniqueConstraint("bank_id", "branch_code"),
         UniqueConstraint("id", "bank_id"),
-        ForeignKeyConstraint(["region_id", "bank_id"], ["tenancy.regions.id", "tenancy.regions.bank_id"],
-                             ondelete="RESTRICT"),
+        ForeignKeyConstraint(["region_id", "bank_id"], ["tenancy.regions.id", "tenancy.regions.bank_id"]),
         Index(None, "region_id"),
         {"schema": SCHEMA},
     )
@@ -170,9 +169,12 @@ class Agency(Base, UUIDPrimaryKey, TimestampMixin):
         ),
         # users ↔ agencies point at each other; these three are created after
         # both tables exist (use_alter).
-        ForeignKeyConstraint(["created_by"], ["tenancy.users.id"], ondelete="RESTRICT", use_alter=True),
-        ForeignKeyConstraint(["offboard_requested_by"], ["tenancy.users.id"], ondelete="RESTRICT", use_alter=True),
-        ForeignKeyConstraint(["offboard_approved_by"], ["tenancy.users.id"], ondelete="RESTRICT", use_alter=True),
+        ForeignKeyConstraint(["created_by"], ["tenancy.users.id"], use_alter=True,
+                             deferrable=True, initially="DEFERRED"),
+        ForeignKeyConstraint(["offboard_requested_by"], ["tenancy.users.id"], use_alter=True,
+                             deferrable=True, initially="DEFERRED"),
+        ForeignKeyConstraint(["offboard_approved_by"], ["tenancy.users.id"], use_alter=True,
+                             deferrable=True, initially="DEFERRED"),
         Index(None, "bank_id", "status"),
         {"schema": SCHEMA},
     )
@@ -212,10 +214,8 @@ class AgencyContract(Base, UUIDPrimaryKey, TimestampMixin):
     __table_args__ = (
         UniqueConstraint("bank_id", "contract_no"),
         UniqueConstraint("id", "agency_id"),
-        ForeignKeyConstraint(["agency_id", "bank_id"], ["tenancy.agencies.id", "tenancy.agencies.bank_id"],
-                             ondelete="RESTRICT"),
-        ForeignKeyConstraint(["agreement_document_id"], ["tenancy.agency_documents.id"],
-                             ondelete="RESTRICT", use_alter=True),
+        ForeignKeyConstraint(["agency_id", "bank_id"], ["tenancy.agencies.id", "tenancy.agencies.bank_id"]),
+        ForeignKeyConstraint(["agreement_document_id"], ["tenancy.agency_documents.id"], use_alter=True),
         CheckConstraint(_check_in("status", CONTRACT_STATUSES), name="status"),
         CheckConstraint("end_date >= start_date", name="dates"),
         Index(None, "agency_id", "status", "end_date"),
@@ -261,8 +261,7 @@ class AgencyRegion(Base, UUIDPrimaryKey, TimestampMixin):
         ForeignKeyConstraint(["contract_id", "agency_id"],
                              ["tenancy.agency_contracts.id", "tenancy.agency_contracts.agency_id"],
                              ondelete="CASCADE"),
-        ForeignKeyConstraint(["region_id", "bank_id"], ["tenancy.regions.id", "tenancy.regions.bank_id"],
-                             ondelete="RESTRICT"),
+        ForeignKeyConstraint(["region_id", "bank_id"], ["tenancy.regions.id", "tenancy.regions.bank_id"]),
         Index(None, "region_id"),
         {"schema": SCHEMA},
     )
@@ -297,8 +296,7 @@ class AgencyDocument(Base, UUIDPrimaryKey, TimestampMixin):
     rejection_reason: Mapped[str | None] = mapped_column(Text)
 
     __table_args__ = (
-        ForeignKeyConstraint(["agency_id", "bank_id"], ["tenancy.agencies.id", "tenancy.agencies.bank_id"],
-                             ondelete="RESTRICT"),
+        ForeignKeyConstraint(["agency_id", "bank_id"], ["tenancy.agencies.id", "tenancy.agencies.bank_id"]),
         CheckConstraint(_check_in("doc_type", DOC_TYPES), name="doc_type"),
         CheckConstraint(_check_in("status", DOC_STATUSES), name="status"),
         CheckConstraint(_check_in("scan_status", SCAN_STATUSES), name="scan_status"),

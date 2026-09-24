@@ -3,7 +3,8 @@
 #   - Ten domain schemas. Every model is schema-qualified. Raw SQL and the
 #     many scripts that write `FROM agents` keep resolving through a
 #     search_path covering all ten — set ON THE DATABASE by the v2 baseline
-#     migration (`ALTER DATABASE … SET search_path`), not per connection here.
+#     migration (v2_0001: `ALTER DATABASE … SET search_path`, public first),
+#     not per connection here.
 #     A session-level SET at connect is lost or leaks under PgBouncer
 #     transaction pooling, and only this engine would get it: the Celery
 #     worker, Alembic, psql, pg_restore and every script that builds its own
@@ -26,7 +27,8 @@ DOMAIN_SCHEMAS: tuple[str, ...] = (
     "tenancy", "lending", "collections", "workforce", "planning",
     "ml", "ai", "strategy", "audit", "analytics",
 )
-SEARCH_PATH = ", ".join((*DOMAIN_SCHEMAS, "public"))
+# `public` first (audit W6); the v2 baseline sets exactly this on the database.
+SEARCH_PATH = ", ".join(("public", *DOMAIN_SCHEMAS))
 
 NAMING_CONVENTION = {
     "pk": "pk_%(table_name)s",
@@ -50,8 +52,8 @@ engine = create_engine(
 @event.listens_for(engine, "connect")
 def set_pg_session_defaults(dbapi_conn, _):
     # Kept for the v1 database, which has no database-level timezone setting.
-    # v2 databases carry `timezone` and `search_path` themselves (baseline
-    # migration); this SET is then a harmless no-op repeat of the default.
+    # v2 databases carry `timezone` and `search_path` themselves (v2_0001 sets
+    # both with ALTER DATABASE); this SET is then a harmless repeat.
     with dbapi_conn.cursor() as cur:
         cur.execute("SET timezone='UTC'")
 

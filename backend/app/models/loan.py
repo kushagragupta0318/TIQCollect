@@ -145,11 +145,11 @@ class Loan(Base, UUIDPrimaryKey, TimestampMixin):
     npa_flag: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     npa_since: Mapped[date | None] = mapped_column(Date)
     legal_status: Mapped[str] = mapped_column(
-        String(30), ForeignKey("lending.legal_statuses.code", ondelete="RESTRICT"), default="NONE", nullable=False
+        String(30), ForeignKey("lending.legal_statuses.code"), default="NONE", nullable=False
     )
     # The BANK's settlement flag. Our settlement workflow is its own table.
     settlement_status: Mapped[str] = mapped_column(
-        String(30), ForeignKey("lending.settlement_statuses.code", ondelete="RESTRICT"), default="NONE",
+        String(30), ForeignKey("lending.settlement_statuses.code"), default="NONE",
         nullable=False,
     )
 
@@ -192,10 +192,8 @@ class Loan(Base, UUIDPrimaryKey, TimestampMixin):
     __table_args__ = (
         UniqueConstraint("bank_id", "loan_account_number"),
         UniqueConstraint("id", "bank_id"),
-        ForeignKeyConstraint(["customer_id", "bank_id"], ["lending.customers.id", "lending.customers.bank_id"],
-                             ondelete="RESTRICT"),
-        ForeignKeyConstraint(["bank_id", "branch_code"], ["tenancy.branches.bank_id", "tenancy.branches.branch_code"],
-                             ondelete="RESTRICT"),
+        ForeignKeyConstraint(["customer_id", "bank_id"], ["lending.customers.id", "lending.customers.bank_id"]),
+        ForeignKeyConstraint(["bank_id", "branch_code"], ["tenancy.branches.bank_id", "tenancy.branches.branch_code"]),
         CheckConstraint("dpd >= 0", name="dpd_non_negative"),
         Index(None, "bank_id", "status", "dpd_bucket"),
         Index(None, "customer_id", "status"),

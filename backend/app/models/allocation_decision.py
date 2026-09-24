@@ -51,7 +51,7 @@ class AllocationDecision(Base, UUIDPrimaryKey, TimestampMixin):
     # appeared — it never has (only ALLOCATED, BLOCKED and DEFERRED are present
     # across 26,841 rows), so the fault sat unexercised rather than fixed.
     outcome: Mapped[str] = mapped_column(
-        String(32), ForeignKey("planning.allocation_outcomes.code", ondelete="RESTRICT"), nullable=False)
+        String(32), ForeignKey("planning.allocation_outcomes.code"), nullable=False)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
 
     visit_priority_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
@@ -96,14 +96,10 @@ class AllocationDecision(Base, UUIDPrimaryKey, TimestampMixin):
 
     __table_args__ = (
         UniqueConstraint("run_id", "case_id", "plan_date"),
-        ForeignKeyConstraint(["run_id", "agency_id"], ["planning.allocation_runs.id", "planning.allocation_runs.agency_id"],
-                             ondelete="RESTRICT"),
-        ForeignKeyConstraint(["case_id", "agency_id"], ["collections.cases.id", "collections.cases.agency_id"],
-                             ondelete="RESTRICT"),
-        ForeignKeyConstraint(["previous_agent_id", "agency_id"], ["workforce.agents.id", "workforce.agents.agency_id"],
-                             ondelete="RESTRICT"),
-        ForeignKeyConstraint(["allocated_agent_id", "agency_id"], ["workforce.agents.id", "workforce.agents.agency_id"],
-                             ondelete="RESTRICT"),
+        ForeignKeyConstraint(["run_id", "agency_id"], ["planning.allocation_runs.id", "planning.allocation_runs.agency_id"]),
+        ForeignKeyConstraint(["case_id", "agency_id"], ["collections.cases.id", "collections.cases.agency_id"]),
+        ForeignKeyConstraint(["previous_agent_id", "agency_id"], ["workforce.agents.id", "workforce.agents.agency_id"]),
+        ForeignKeyConstraint(["allocated_agent_id", "agency_id"], ["workforce.agents.id", "workforce.agents.agency_id"]),
         ForeignKeyConstraint(["model_prediction_id", "model_prediction_as_of"],
                              ["ml.model_predictions.id", "ml.model_predictions.as_of_date"],
                              ondelete="SET NULL"),

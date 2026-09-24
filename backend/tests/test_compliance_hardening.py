@@ -245,8 +245,20 @@ def _configure_twilio(monkeypatch):
     _FakeTwilio.calls = []; _FakeTwilio.fail = False
 
 
+def _real_tenant(monkeypatch):
+    """2026-09-24 (audit gate 1): senders resolve the tenant from the rows and
+    suppress a demo one — and the test default bank IS a demo tenant. These
+    tests are about delivery reporting, so they stand in a real (non-demo)
+    tenant at the one resolver every send goes through."""
+    from app.services import brand
+    real = brand.Tenant(bank_id="bank", agency_id=None, bank_name="Narmada Peoples Bank", agency_name=None,
+                        upi_payee_name="NARMADA PEOPLES BANK", upi_vpa=None, sms_sender_id=None, is_demo=False)
+    monkeypatch.setattr(brand, "tenant_of", lambda db, **subject: real)
+
+
 def test_a_submitted_payment_leaves_one_row_and_reports_the_receipt_delivered(world, monkeypatch):
     _configure_twilio(monkeypatch)
+    _real_tenant(monkeypatch)
     db = TestingSession()
     agent = db.get(Agent, world["ag"].id); case = world["PAY"]
     out = ps.PaymentService(db).collect_payment(agent, case.id, CollectPaymentRequest(
@@ -286,18 +298,20 @@ def test_receipt_sent_is_false_when_there_is_nobody_to_send_to(world, monkeypatc
 
 
 def test_send_functions_report_truthfully(monkeypatch):
+    _real_tenant(monkeypatch)
+    subject = {"db": object(), "case_id": "case"}          # resolved by the stand-in above
     # Unconfigured: nothing sent, and it says so.
     monkeypatch.setattr(settings, "TWILIO_ACCOUNT_SID", "", raising=False)
-    assert ns.NotificationService.send_twilio("+911234567890", "a", "b") is False
-    assert ns.NotificationService.send_sms("+911234567890", "a") is False
+    assert ns.NotificationService.send_twilio("+911234567890", "a", "b", **subject) is False
+    assert ns.NotificationService.send_sms("+911234567890", "a", **subject) is False
     # Configured and working.
     _configure_twilio(monkeypatch)
-    assert ns.NotificationService.send_twilio("+911234567890", "a", "b") is True
-    assert ns.NotificationService.send_sms("+911234567890", "a") is True
+    assert ns.NotificationService.send_twilio("+911234567890", "a", "b", **subject) is True
+    assert ns.NotificationService.send_sms("+911234567890", "a", **subject) is True
     # Configured and broken: False, never an exception.
     _FakeTwilio.fail = True
-    assert ns.NotificationService.send_twilio("+911234567890", "a", "b") is False
-    assert ns.NotificationService.send_sms("+911234567890", "a") is False
+    assert ns.NotificationService.send_twilio("+911234567890", "a", "b", **subject) is False
+    assert ns.NotificationService.send_sms("+911234567890", "a", **subject) is False
 
 
 # ═══════════════════════════════════════════════════════════════════════════

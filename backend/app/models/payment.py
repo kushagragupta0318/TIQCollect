@@ -115,14 +115,10 @@ class Payment(Base, UUIDPrimaryKey, TimestampMixin):
 
     __table_args__ = (
         UniqueConstraint("bank_id", "receipt_number"),
-        ForeignKeyConstraint(["case_id", "agency_id"], ["collections.cases.id", "collections.cases.agency_id"],
-                             ondelete="RESTRICT"),
-        ForeignKeyConstraint(["loan_id", "bank_id"], ["lending.loans.id", "lending.loans.bank_id"],
-                             ondelete="RESTRICT"),
-        ForeignKeyConstraint(["visit_id", "case_id"], ["collections.visits.id", "collections.visits.case_id"],
-                             ondelete="RESTRICT"),
-        ForeignKeyConstraint(["agent_id", "agency_id"], ["workforce.agents.id", "workforce.agents.agency_id"],
-                             ondelete="RESTRICT"),
+        ForeignKeyConstraint(["case_id", "agency_id"], ["collections.cases.id", "collections.cases.agency_id"]),
+        ForeignKeyConstraint(["loan_id", "bank_id"], ["lending.loans.id", "lending.loans.bank_id"]),
+        ForeignKeyConstraint(["visit_id", "case_id"], ["collections.visits.id", "collections.visits.case_id"]),
+        ForeignKeyConstraint(["agent_id", "agency_id"], ["workforce.agents.id", "workforce.agents.agency_id"]),
         CheckConstraint("amount > 0", name="amount_positive"),
         CheckConstraint("mode <> 'BANK_DIRECT' OR agent_id IS NULL", name="bank_direct_unattributed"),
         CheckConstraint("mode <> 'ONLINE'", name="no_online"),

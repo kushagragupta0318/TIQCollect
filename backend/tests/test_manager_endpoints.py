@@ -335,13 +335,26 @@ def test_fraud_review_rejects_bad_verdict(client, seeded):
 
 
 def test_fraud_review_rejects_unknown_visit(client, seeded):
+    """A well-formed id nobody owns is a 404. (2026-09-24: this sent the
+    literal "nonexistent", which since body ids are validated (UUIDStr) is a
+    422 before any query — asserted separately below.)"""
+    r = client.post(
+        "/api/v1/manager/fraud-alerts/review",
+        headers=auth_headers(seeded["manager"]),
+        json={"visit_id": test_id("visit:nobody"), "finding_type": "VISIT_TOO_SHORT",
+              "verdict": "CONFIRMED"},
+    )
+    assert r.status_code == 404
+
+
+def test_fraud_review_rejects_a_malformed_visit_id_before_any_query(client, seeded):
     r = client.post(
         "/api/v1/manager/fraud-alerts/review",
         headers=auth_headers(seeded["manager"]),
         json={"visit_id": "nonexistent", "finding_type": "VISIT_TOO_SHORT",
               "verdict": "CONFIRMED"},
     )
-    assert r.status_code == 404
+    assert r.status_code == 422
 
 
 def test_fraud_review_create_then_update(client, seeded):

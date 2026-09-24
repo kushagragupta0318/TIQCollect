@@ -124,6 +124,7 @@ from app.models.ptp import PTP, PTPStatus
 from app.models.visit import Visit, VisitOutcome
 from app.models.case import EscalationReason
 from app.models.user import User
+from app.services.scope import agent_case_or_404
 from app.services.brand import brand_for
 from app.services.notification_service import NotificationService
 from app.services.media_service import MediaService
@@ -181,6 +182,8 @@ def _effective_day(agent_id: str, db) -> date:
     Falls back to today only when no beat exists at all (brand-new install).
     This lets the demo run without daily re-seeding: if the last seed was
     yesterday, the app still shows yesterday's data as "today".
+    A DISPLAY convenience only. Case ACCESS never reads it: a beat grants
+    access on today's IST date (services/scope.access_day), 2026-09-24 (A03).
     """
     row = (
         db.query(Beat.beat_date)
@@ -470,34 +473,20 @@ class PaymentLinkRequest(BaseModel):
 
 @router.post("/cases/{case_id}/payment-link", response_model=PaymentLinkResponse)
 def create_payment_link(case_id: UUIDPath, req: PaymentLinkRequest, current_user: AgentOnly, db: DbSession):
-    return PaymentService(db).create_payment_link(case_id, req.amount)
+    # 2026-09-24 (A03): this route checked NO access at all — any agent could
+    # mint a UPI QR for any case id in the database.
+    agent = _get_agent_or_404(current_user, db)
+    case = _get_accessible_case_or_404(db, agent, case_id)
+    return PaymentService(db).create_payment_link(case.id, req.amount)
 
 
 def _get_accessible_case_or_404(db: DbSession, agent: Agent, case_id: str) -> Case:
-    case = (
-        db.query(Case)
-        .options(joinedload(Case.customer), joinedload(Case.loan))
-        .filter(Case.id == case_id)
-        .first()
-    )
-    if not case:
-        raise HTTPException(status_code=404, detail="Case not found")
-
-    if case.agent_id == agent.id:
-        return case
-
-    beats = db.query(Beat).filter(Beat.agent_id == agent.id).all()
-    if any(case_id in (b.ordered_case_ids or []) for b in beats):
-        return case
-
-    if agent.manager_user_id and case.agent_id:
-        curr_ag = db.query(Agent).filter(Agent.id == case.agent_id).first()
-        if curr_ag and curr_ag.manager_user_id == agent.manager_user_id:
-            return case
-    elif case.agent_id is None:
-        return case
-
-    raise HTTPException(status_code=403, detail="Case not found or not assigned to you")
+    """2026-09-24 (A03): the one rule, services/scope.agent_case_or_404. This
+    copy granted any unassigned case in ANY tenant, any case on any beat the
+    agent ever had, and any teammate's case, and answered a foreign case with
+    a 403 beside a missing one's 404."""
+    return agent_case_or_404(db, agent, case_id,
+                             options=(joinedload(Case.customer), joinedload(Case.loan)))
 
 
 # ---------------------------------------------------------------------------

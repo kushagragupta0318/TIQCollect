@@ -25,17 +25,15 @@ class AllocationSetting(Base, UUIDPrimaryKey, TimestampMixin):
     agency_id: Mapped[str] = mapped_column(UUIDType, nullable=False)
     manager_user_id: Mapped[str | None] = mapped_column(UUIDType)
     objective: Mapped[str] = mapped_column(
-        String(30), ForeignKey("planning.allocation_objectives.code", ondelete="RESTRICT"),
+        String(30), ForeignKey("planning.allocation_objectives.code"),
         default=AllocationObjective.BALANCED.value, nullable=False)
     max_territory_radius_km: Mapped[float] = mapped_column(Float, default=16.0, nullable=False)
     max_daily_stops_per_agent: Mapped[int] = mapped_column(SmallInteger, default=12, nullable=False)
     custom_weights: Mapped[dict] = mapped_column(JsonDoc, default=dict, nullable=False)
 
     __table_args__ = (
-        ForeignKeyConstraint(["manager_user_id", "agency_id"], ["tenancy.users.id", "tenancy.users.agency_id"],
-                             ondelete="RESTRICT"),
-        ForeignKeyConstraint(["agency_id", "bank_id"], ["tenancy.agencies.id", "tenancy.agencies.bank_id"],
-                             ondelete="RESTRICT"),
+        ForeignKeyConstraint(["manager_user_id", "agency_id"], ["tenancy.users.id", "tenancy.users.agency_id"]),
+        ForeignKeyConstraint(["agency_id", "bank_id"], ["tenancy.agencies.id", "tenancy.agencies.bank_id"]),
         Index("uq_allocation_settings_manager", "manager_user_id", unique=True,
               postgresql_where=text("manager_user_id IS NOT NULL"), sqlite_where=text("manager_user_id IS NOT NULL")),
         Index("uq_allocation_settings_agency_default", "agency_id", unique=True,

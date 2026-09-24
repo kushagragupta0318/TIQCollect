@@ -93,15 +93,17 @@ class AgentLocation(Base, UUIDPrimaryKey):
         foreign_keys="[AgentLocation.agent_id]")
 
     __table_args__ = (
-        ForeignKeyConstraint(["agent_id", "agency_id"], ["workforce.agents.id", "workforce.agents.agency_id"],
-                             ondelete="RESTRICT"),
+        ForeignKeyConstraint(["agent_id", "agency_id"], ["workforce.agents.id", "workforce.agents.agency_id"]),
         CheckConstraint("battery_pct IS NULL OR (battery_pct >= 0 AND battery_pct <= 100)", name="battery"),
         # The trail query: one agent, one day, in order.
         Index("ix_agent_location_agent_time", "agent_id", "recorded_at"),
         Index(None, "agency_id", "recorded_at"),
-        # Kept on SQLite and pre-partition: retention and SOS replay. On the
-        # partitioned table the partitions ARE these indexes (design §4.4).
-        Index("ix_agent_location_recorded", "recorded_at"),
-        Index("ix_agent_location_sos", "agent_id", "is_sos", "recorded_at"),
+        # 2026-09-24 (B11, lead-dev audit 3.11): ix_agent_location_recorded
+        # (recorded_at) and ix_agent_location_sos (agent_id, is_sos,
+        # recorded_at) are gone. On Postgres the table is LIST(is_sos) then
+        # RANGE(recorded_at) by month, so retention drops whole partitions and
+        # an SOS replay reads the SOS partition through
+        # ix_agent_location_agent_time — the partitions ARE those indexes
+        # (design §4.4), and each index cost a write on ~1.1M fixes a day.
         {"schema": "workforce"},
     )

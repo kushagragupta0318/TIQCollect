@@ -207,7 +207,8 @@ def test_the_token_is_short_lived_and_bound_to_the_session(world):
     seg = body["token"].split(".")[1]
     claims = json.loads(base64.urlsafe_b64decode(seg + "=" * (-len(seg) % 4)))
     assert claims["grants"]["identity"] == voice_service.identity_for(world["user"].id, world["sid"])
-    assert claims["exp"] - claims["iat"] <= 300 + 5
+    import time
+    assert claims["exp"] - time.time() <= 300 + 5          # Twilio's JWT carries exp, not iat
 
 
 @pytest.mark.parametrize("unset", ["PUBLIC_BASE_URL", "TWILIO_API_KEY_SECRET"])

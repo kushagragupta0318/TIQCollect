@@ -141,12 +141,9 @@ class CallLog(Base, UUIDPrimaryKey, TimestampMixin):
     customer: Mapped["Customer"] = relationship("Customer", primaryjoin="CallLog.customer_id == Customer.id", foreign_keys=[customer_id], lazy="noload")  # type: ignore[name-defined]  # noqa: F821
 
     __table_args__ = (
-        ForeignKeyConstraint(["case_id", "agency_id"], ["collections.cases.id", "collections.cases.agency_id"],
-                             ondelete="RESTRICT"),
-        ForeignKeyConstraint(["agent_id", "agency_id"], ["workforce.agents.id", "workforce.agents.agency_id"],
-                             ondelete="RESTRICT"),
-        ForeignKeyConstraint(["customer_id", "bank_id"], ["lending.customers.id", "lending.customers.bank_id"],
-                             ondelete="RESTRICT"),
+        ForeignKeyConstraint(["case_id", "agency_id"], ["collections.cases.id", "collections.cases.agency_id"]),
+        ForeignKeyConstraint(["agent_id", "agency_id"], ["workforce.agents.id", "workforce.agents.agency_id"]),
+        ForeignKeyConstraint(["customer_id", "bank_id"], ["lending.customers.id", "lending.customers.bank_id"]),
         Index("ix_call_log_case_time",     "case_id",     "called_at"),
         Index("ix_call_log_agent_time",    "agent_id",    "called_at"),
         Index("ix_call_log_customer_time", "customer_id", "called_at"),
