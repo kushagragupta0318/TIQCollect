@@ -51,6 +51,7 @@ from app.models.case import Case, CaseStatus, EscalationReason
 from app.models.visit import Visit, VisitOutcome
 from app.schemas.agent import RecordVisitRequest
 from app.services.ai_report_service import AIReportService
+from app.services.brand import brand_for
 from app.services.notification_service import NotificationService
 
 logger = structlog.get_logger()
@@ -389,19 +390,20 @@ class VisitService:
         masked_acct = "XXXX" + loan.loan_account_number[-4:] if loan else "XXXXXXXX"
         outstanding = case.target_amount - case.collected_amount
         visit_date = now_utc.strftime("%d %b %Y")
+        bn = brand_for(self.db, case=case).bank_name
         e164 = "+" + NotificationService.normalize_phone(case.customer.phone_primary)
         sms_body = (
-            f"Dear {case.customer.full_name}, ABC Bank's field agent {agent.user.full_name} "
+            f"Dear {case.customer.full_name}, {bn}'s field agent {agent.user.full_name} "
             f"completed a visit on {visit_date} for loan {masked_acct}. "
-            f"No payment collected. Outstanding: Rs.{outstanding:,.0f}. - ABC Bank"
+            f"No payment collected. Outstanding: Rs.{outstanding:,.0f}. - {bn}"
         )
         wa_body = (
-            f"*Visit Completed – ABC Bank*\n\n"
+            f"*Visit Completed – {bn}*\n\n"
             f"Dear {case.customer.full_name},\n\n"
             f"Agent *{agent.user.full_name}* visited on {visit_date}.\n"
             f"Loan Account: {masked_acct}\n"
             f"Outstanding: Rs.{outstanding:,.0f}\n"
             f"Payment: none collected.\n\n"
-            f"Please contact us to resolve your dues.\n– ABC Bank"
+            f"Please contact us to resolve your dues.\n– {bn}"
         )
-        NotificationService.send_twilio(e164, sms_body, wa_body)
+        NotificationService.send_twilio(e164, sms_body, wa_body, db=self.db, case_id=case.id)

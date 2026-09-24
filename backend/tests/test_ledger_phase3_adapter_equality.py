@@ -100,7 +100,7 @@ def _adapter_rows(db, mat, panel, day):
     svc = MLScoringService(db)
     out = {}
     for lid in want.loan_id:
-        loan = db.query(Loan).filter(Loan.id == lid).first()
+        loan = db.query(Loan).filter(Loan.loan_account_number == lid).first()
         if loan is not None:
             out[lid] = svc.build_features(loan, as_of=as_of)
     return want.set_index("loan_id"), out
@@ -300,16 +300,16 @@ def test_a_payment_after_as_of_does_not_move_the_features(world):
     pay_date = CFG.start_date + timedelta(days=pay_day)
 
     mat.rewind_to(db, 150)
-    at150 = db.query(Loan).filter(Loan.id == lid).first()
+    at150 = db.query(Loan).filter(Loan.loan_account_number == lid).first()
     # The sharpest statement of the property: at as_of the ledger cannot name a
     # payment that has not happened yet.
     if at150.last_payment_date:
-        assert _date.fromisoformat(at150.last_payment_date) < pay_date
+        assert at150.last_payment_date < pay_date
 
     mat.rewind_to(db, 210)
-    at210 = db.query(Loan).filter(Loan.id == lid).first()
+    at210 = db.query(Loan).filter(Loan.loan_account_number == lid).first()
     assert at210.last_payment_date is not None
-    assert _date.fromisoformat(at210.last_payment_date) >= pay_date
+    assert at210.last_payment_date >= pay_date
 
 
 def test_a_promise_resolved_after_as_of_still_reads_as_active(world):
@@ -325,9 +325,9 @@ def test_a_promise_resolved_after_as_of_still_reads_as_active(world):
     pid = late.iloc[0].ptp_id
 
     mat.rewind_to(db, 150)
-    assert db.query(PTP).filter(PTP.id == pid).first().status is PTPStatus.ACTIVE
+    assert db.query(PTP).filter(PTP.id == Materialiser.db_id("ptp", pid)).first().status is PTPStatus.ACTIVE
     mat.rewind_to(db, 270)
-    assert db.query(PTP).filter(PTP.id == pid).first().status is not PTPStatus.ACTIVE
+    assert db.query(PTP).filter(PTP.id == Materialiser.db_id("ptp", pid)).first().status is not PTPStatus.ACTIVE
 
 
 # ---------------------------------------------------------------------------
@@ -349,10 +349,10 @@ def test_a_reversal_is_invisible_before_it_takes_effect(world):
 
     mat.rewind_to(db, int(r.payment_day) + 1)
     assert db.query(Payment).filter(
-        Payment.id == r.payment_id).first().status is PaymentStatus.VERIFIED
+        Payment.id == Materialiser.db_id("payment", r.payment_id)).first().status is PaymentStatus.VERIFIED
     mat.rewind_to(db, int(r.status_effective_day) + 1)
     assert db.query(Payment).filter(
-        Payment.id == r.payment_id).first().status is PaymentStatus.REVERSED
+        Payment.id == Materialiser.db_id("payment", r.payment_id)).first().status is PaymentStatus.REVERSED
 
 
 def test_opening_balances_reach_the_materialised_state(world):
@@ -365,7 +365,7 @@ def test_opening_balances_reach_the_materialised_state(world):
                 if ledger.loans.set_index("loan_id").loc[lid, "opening_paid"] > 0]
     assert seasoned, "no seasoned accounts in this book"
     for lid in seasoned[:20]:
-        loan = db.query(Loan).filter(Loan.id == lid).first()
+        loan = db.query(Loan).filter(Loan.loan_account_number == lid).first()
         assert abs(loan.overdue_amount - rows.loc[lid, "overdue_amount"]) <= MONEY_TOL
 
 
@@ -375,7 +375,7 @@ def test_dpd_transitions_agree_at_every_snapshot(world, day):
     mat.rewind_to(db, day)
     rows = panel[panel.month_index == day // CFG.cycle_days].set_index("loan_id")
     for lid in rows.index:
-        loan = db.query(Loan).filter(Loan.id == lid).first()
+        loan = db.query(Loan).filter(Loan.loan_account_number == lid).first()
         assert loan.dpd == rows.loc[lid, "dpd"], (day, lid)
 
 

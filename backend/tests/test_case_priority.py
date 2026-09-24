@@ -2,6 +2,7 @@
 cases.priority — one rule, re-derived nightly. 2026-09-21.
 """
 from __future__ import annotations
+from datetime import date
 
 import pathlib
 import re
@@ -62,7 +63,7 @@ def _book():
     engine = make_engine()
     create_schema(bind=engine)
     db = make_session_factory(autocommit=False, autoflush=False, bind=engine)()
-    cust = Customer(customer_ref="CP1", full_name="B", date_of_birth="1990-01-01", gender="M", pan_masked="X",
+    cust = Customer(customer_ref="CP1", full_name="B", date_of_birth=date(1990, 1, 1), gender="M", pan_masked="X",
                     aadhaar_masked="X", phone_primary="9000000001", address_line1="1", city="Delhi", state="DL",
                     pincode="110001", latitude=28.6, longitude=77.2, risk_category=RiskCategory.MEDIUM)
     db.add(cust); db.flush()
@@ -70,7 +71,7 @@ def _book():
     def loan(dpd):
         l = Loan(loan_account_number=f"CPL{dpd}-{db.query(Loan).count()}", customer_id=cust.id, loan_type=LoanType.PERSONAL,
                  branch_code="BR", sanctioned_amount=1.0, disbursed_amount=1.0, outstanding_principal=1.0, total_outstanding=1.0,
-                 overdue_amount=1.0, emi_amount=1.0, disbursement_date="2025-01-01", maturity_date="2027-01-01", dpd=dpd,
+                 overdue_amount=1.0, emi_amount=1.0, disbursement_date=date(2025, 1, 1), maturity_date=date(2027, 1, 1), dpd=dpd,
                  dpd_bucket=dpd_bucket_for(dpd), status=LoanStatus.ACTIVE, interest_rate=1.0, penal_charges=0.0)
         db.add(l); db.flush(); return l
 

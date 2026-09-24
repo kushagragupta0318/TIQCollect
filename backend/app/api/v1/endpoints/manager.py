@@ -33,7 +33,7 @@ from sqlalchemy.orm import joinedload
 
 from app.core.dependencies import DbSession, ManagerOnly
 from app.core.config import settings
-from app.core.ids import UUIDPath, UUIDQuery, UUIDQueryRequired
+from app.core.ids import UUIDPath, UUIDQuery, UUIDQueryRequired, UUIDStr
 from app.core import llm as _llm
 from app.ml import eligibility as _elig
 from app.models.agent import Agent, AgentStatus, AgentPerformance, month_start
@@ -53,6 +53,7 @@ from app.models.payment import Payment, PaymentMode, PaymentStatus
 from app.models.ptp import PTP, PTPStatus
 from app.models.user import User
 from app.models.visit import Visit, VisitOutcome
+from app.services.brand import brand_for
 from app.services.notification_service import NotificationService
 from app.services.leave_service import agent_ids_on_leave, effective_status, leave_today
 
@@ -2040,7 +2041,7 @@ from pydantic import BaseModel as _ReviewBase
 
 
 class _ReviewBody(_ReviewBase):
-    visit_id: str
+    visit_id: UUIDStr
     finding_type: str
     verdict: str                       # CONFIRMED | DISMISSED
     note: Optional[str] = None
@@ -3881,16 +3882,17 @@ def acknowledge_agent_sos(
 
     if agent.user and agent.user.phone:
         e164 = "+" + NotificationService.normalize_phone(agent.user.phone)
+        brand = brand_for(db, agent=agent)
         sms_body = (
             f"Your manager {current_user.full_name} has acknowledged your SOS and is "
-            f"responding. Stay safe. - ABC Bank"
+            f"responding. Stay safe. - {brand.agency_name or brand.bank_name}"
         )
         wa_body = (
             f"*SOS Acknowledged*\n\n"
             f"Your manager *{current_user.full_name}* has seen your SOS alert and is responding.\n"
             f"Stay where you are if it's safe to do so."
         )
-        NotificationService.send_twilio(e164, sms_body, wa_body)
+        NotificationService.send_twilio(e164, sms_body, wa_body, db=db, agent_id=agent.id)
 
     return {
         "acknowledged": True,
@@ -4468,6 +4470,40 @@ def get_ptp_outcomes(
             "definition": "kept_rate_pct = honored / (honored + broken); open promises are never in the rate"}
 
 
+# ─── Device binding — the manager's reset (2026-09-24, coordinator audit gate 3) ─
+# auth_service's header promised this action ("the manager's reset device
+# binding action (G01) unbinds") and no route existed, so an agent who lost a
+# phone was locked out until someone edited the database. It unbinds every
+# bound device, revokes every live login session of the agent (reason
+# DEVICE_RESET) so a stolen phone's refresh token dies with the binding, and
+# writes a DEVICE_RESET audit row. 404 for an agent that is not yours.
+
+@router.post("/agents/{agent_id}/reset-device")
+def reset_agent_device(agent_id: UUIDPath, current_user: ManagerOnly, db: DbSession):
+    from app.core.audit import write_audit
+    from app.models.agent import AgentDevice
+    from app.models.audit_log import AuditAction
+    from app.models.identity import UserSession
+
+    agent = _require_own_agent(db, current_user, agent_id)
+    now = datetime.now(timezone.utc)
+    devices = (db.query(AgentDevice)
+               .filter(AgentDevice.agent_id == agent.id, AgentDevice.is_bound.is_(True)).all())
+    for d in devices:
+        d.is_bound = False
+        d.unbound_at = now
+        d.unbound_by = current_user.id
+        d.unbind_reason = "Manager reset"
+    revoked = (db.query(UserSession)
+               .filter(UserSession.user_id == agent.user_id, UserSession.revoked_at.is_(None))
+               .update({UserSession.revoked_at: now, UserSession.revoked_reason: "DEVICE_RESET",
+                        UserSession.revoked_by: current_user.id}, synchronize_session=False))
+    db.commit()
+    write_audit(db, action=AuditAction.DEVICE_RESET, user_id=current_user.id, entity_type="agent",
+                entity_id=agent.id, details={"devices_unbound": len(devices), "sessions_revoked": revoked})
+    return {"agent_id": agent.id, "devices_unbound": len(devices), "sessions_revoked": revoked,
+            "reset_at": now.isoformat()}
+
 # ---------------------------------------------------------------------------
 # Leave requests — the manager's side (2026-09-21).
 # ---------------------------------------------------------------------------
@@ -5018,7 +5054,7 @@ from pydantic import BaseModel as _ReassignBase, field_validator as _reassign_va
 
 
 class _ReassignBody(_ReassignBase):
-    new_agent_id: str
+    new_agent_id: UUIDStr
     reason: str
 
     @_reassign_validator("reason")

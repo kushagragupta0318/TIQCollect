@@ -103,14 +103,14 @@ import uuid
 from datetime import datetime, date, time, timezone, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Form, File, UploadFile
+from fastapi import APIRouter, HTTPException, File, Request, UploadFile
 from fastapi.responses import Response as FastAPIResponse
 from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import joinedload
 import structlog
 
-from app.core.dependencies import DbSession, AgentOnly
+from app.core.dependencies import DbSession, AgentOnly, TokenPayload
 from app.core import llm
 from app.core.config import settings
 from app.core.ids import UUIDPath
@@ -124,6 +124,7 @@ from app.models.ptp import PTP, PTPStatus
 from app.models.visit import Visit, VisitOutcome
 from app.models.case import EscalationReason
 from app.models.user import User
+from app.services.brand import brand_for
 from app.services.notification_service import NotificationService
 from app.services.media_service import MediaService
 from app.services.payment_service import PaymentService
@@ -518,23 +519,27 @@ def notify_visit(case_id: UUIDPath, current_user: AgentOnly, db: DbSession):
 
     e164 = "+" + NotificationService.normalize_phone(customer.phone_primary)
     visit_date = datetime.now(timezone.utc).strftime("%d %b %Y")
+    bn = brand_for(db, case=case).bank_name
     sms_body = (
-        f"Dear {customer.full_name}, ABC Bank's field agent {agent.user.full_name} "
+        f"Dear {customer.full_name}, {bn}'s field agent {agent.user.full_name} "
         f"will visit you on {visit_date} regarding loan {masked_acct} (DPD: {dpd} days). "
-        f"Target: Rs.{case.target_amount:,.0f}. Please be available. - ABC Bank"
+        f"Target: Rs.{case.target_amount:,.0f}. Please be available. - {bn}"
     )
     wa_body = (
-        f"*Visit Notice – ABC Bank*\n\n"
+        f"*Visit Notice – {bn}*\n\n"
         f"Dear {customer.full_name},\n\n"
         f"Our field agent *{agent.user.full_name}* will be visiting you shortly.\n"
         f"Date: {visit_date}\n"
         f"Target Amount: Rs.{case.target_amount:,.0f}\n"
         f"Loan Account: {masked_acct}\n"
         f"⏳ DPD: {dpd} days overdue\n\n"
-        f"Please be available and keep documents ready.\n– ABC Bank"
+        f"Please be available and keep documents ready.\n– {bn}"
     )
-    NotificationService.send_twilio(e164, sms_body, wa_body)
-    return {"status": "sent"}
+    # 2026-09-24: `status` used to be "sent" whatever happened. `sent` now
+    # says whether a message reached the transport (False when suppressed,
+    # unconfigured or failed); the status string follows it.
+    sent = NotificationService.send_twilio(e164, sms_body, wa_body, db=db, case_id=case.id)
+    return {"status": "sent" if sent else "not_sent", "sent": sent}
 
 
 # ---------------------------------------------------------------------------
@@ -556,7 +561,7 @@ def notify_case(case_id: UUIDPath, req: NotifyCaseRequest, current_user: AgentOn
 
     loan = db.query(Loan).filter(Loan.id == case.loan_id).first()
     masked_acct = "XXXX" + loan.loan_account_number[-4:] if loan else "XXXXXXXX"
-    bank_name = loan.bank_name if loan else "ABC Bank"
+    bn = brand_for(db, case=case).bank_name   # A14: the case's bank, never a literal
     dpd = loan.dpd if loan else 0
 
     e164 = "+" + NotificationService.normalize_phone(customer.phone_primary)
@@ -564,19 +569,19 @@ def notify_case(case_id: UUIDPath, req: NotifyCaseRequest, current_user: AgentOn
     visit_date = datetime.now(timezone.utc).strftime("%d %b %Y")
     if req.type == "reminder":
         sms_body = (
-            f"Dear {customer.full_name}, ABC Bank's field agent {agent.user.full_name} "
+            f"Dear {customer.full_name}, {bn}'s field agent {agent.user.full_name} "
             f"will visit you on {visit_date} regarding loan {masked_acct} (DPD: {dpd} days). "
-            f"Target: Rs.{case.target_amount:,.0f}. Please be available. - ABC Bank"
+            f"Target: Rs.{case.target_amount:,.0f}. Please be available. - {bn}"
         )
         wa_body = (
-            f"*Visit Notice – ABC Bank*\n\n"
+            f"*Visit Notice – {bn}*\n\n"
             f"Dear {customer.full_name},\n\n"
             f"Our field agent *{agent.user.full_name}* will be visiting you shortly.\n"
             f"Date: {visit_date}\n"
             f"Target Amount: Rs.{case.target_amount:,.0f}\n"
             f"Loan Account: {masked_acct}\n"
             f"⏳ DPD: {dpd} days overdue\n\n"
-            f"Please be available and keep documents ready.\n– ABC Bank"
+            f"Please be available and keep documents ready.\n– {bn}"
         )
     elif req.type == "ptp":
         active_ptp = (
@@ -591,15 +596,15 @@ def notify_case(case_id: UUIDPath, req: NotifyCaseRequest, current_user: AgentOn
         sms_body = (
             f"Dear {customer.full_name}, this is a reminder for your commitment of "
             f"Rs.{active_ptp.committed_amount:,.0f} due on {ptp_date} against loan {masked_acct}. "
-            f"Please ensure timely payment. - ABC Bank"
+            f"Please ensure timely payment. - {bn}"
         )
         wa_body = (
-            f"*PTP Reminder – ABC Bank*\n\n"
+            f"*PTP Reminder – {bn}*\n\n"
             f"Dear {customer.full_name},\n\n"
             f"Committed Amount: Rs.{active_ptp.committed_amount:,.0f}\n"
             f"Due Date: {ptp_date}\n"
             f"Loan Account: {masked_acct}\n\n"
-            f"Please ensure timely payment on the committed date.\n– ABC Bank"
+            f"Please ensure timely payment on the committed date.\n– {bn}"
         )
     elif req.type == "receipt":
         last_payment = (
@@ -614,22 +619,25 @@ def notify_case(case_id: UUIDPath, req: NotifyCaseRequest, current_user: AgentOn
         sms_body = (
             f"Dear {customer.full_name}, your payment of Rs.{last_payment.amount:,.0f} "
             f"against loan {masked_acct} (Receipt: {last_payment.receipt_number}) has been received on {pay_date}. "
-            f"Thank you. - ABC Bank"
+            f"Thank you. - {bn}"
         )
         wa_body = (
-            f"*Payment Receipt – ABC Bank*\n\n"
+            f"*Payment Receipt – {bn}*\n\n"
             f"Dear {customer.full_name},\n\n"
             f"Amount Received: Rs.{last_payment.amount:,.0f}\n"
             f"Loan Account: {masked_acct}\n"
             f"Receipt No: {last_payment.receipt_number}\n"
             f"Date: {pay_date}\n\n"
-            f"Thank you for your payment.\n– ABC Bank"
+            f"Thank you for your payment.\n– {bn}"
         )
     else:
         raise HTTPException(status_code=400, detail="Invalid notification type")
 
-    NotificationService.send_twilio(e164, sms_body, wa_body)
-    return {"status": "sent"}
+    # 2026-09-24: `status` used to be "sent" whatever happened. `sent` now
+    # says whether a message reached the transport (False when suppressed,
+    # unconfigured or failed); the status string follows it.
+    sent = NotificationService.send_twilio(e164, sms_body, wa_body, db=db, case_id=case.id)
+    return {"status": "sent" if sent else "not_sent", "sent": sent}
 
 
 # ---------------------------------------------------------------------------
@@ -1039,53 +1047,72 @@ def get_availability_calendar(current_user: AgentOnly, db: DbSession):
 
 # ---------------------------------------------------------------------------
 # GET /agent/voice/token  — Twilio Voice access token for browser calling
+# POST /agent/voice/outbound — TwiML for the call (called by TWILIO, not us)
+#
+# 2026-09-24 (audit gate 2) — rebuilt; the old pair dialled any client-sent
+# number unauthenticated. Rules and reasons: services/voice_service.py.
 # ---------------------------------------------------------------------------
 
 @router.get("/voice/token")
-def get_voice_token(current_user: AgentOnly, db: DbSession):
-    if not all([settings.TWILIO_ACCOUNT_SID, settings.TWILIO_API_KEY_SID,
-                settings.TWILIO_API_KEY_SECRET, settings.TWILIO_TWIML_APP_SID]):
+def get_voice_token(current_user: AgentOnly, payload: TokenPayload, db: DbSession):
+    from app.services import voice_service as voice
+    if not voice.voice_configured():
         raise HTTPException(status_code=503, detail="Twilio Voice not configured")
+    sid = payload.get("sid")
+    if not sid:
+        # The token is bound to a login session so that ending the session
+        # ends calling. A session-less token cannot be bound, so it gets none.
+        raise HTTPException(status_code=403, detail="Voice calling needs a signed-in session")
     try:
-        from twilio.jwt.access_token import AccessToken
-        from twilio.jwt.access_token.grants import VoiceGrant
-        token = AccessToken(
-            settings.TWILIO_ACCOUNT_SID,
-            settings.TWILIO_API_KEY_SID,
-            settings.TWILIO_API_KEY_SECRET,
-            identity=str(current_user.id),
-            ttl=3600,
-        )
-        token.add_grant(VoiceGrant(
-            outgoing_application_sid=settings.TWILIO_TWIML_APP_SID,
-            incoming_allow=False,
-        ))
-        return {"token": token.to_jwt()}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return {"token": voice.mint_token(str(current_user.id), sid), "ttl_seconds": voice.VOICE_TOKEN_TTL_SECONDS}
+    except Exception as exc:  # noqa: BLE001 — never echo SDK internals to the client
+        logger.error("voice.token_failed", error_type=type(exc).__name__, exc_info=True)
+        raise HTTPException(status_code=503, detail="Twilio Voice unavailable") from exc
 
 
-# ---------------------------------------------------------------------------
-# POST /agent/voice/outbound  — TwiML for outbound calls (called by Twilio)
-# ---------------------------------------------------------------------------
+def _twiml(body) -> FastAPIResponse:
+    return FastAPIResponse(content=str(body), media_type="application/xml")
+
 
 @router.post("/voice/outbound")
-def voice_outbound(PhoneTo: str = Form(default="")):
-    # The frontend Voice SDK sends the destination as the custom param `PhoneTo`
-    # (Twilio's own `To` param is the client identity, not the dialed number).
+async def voice_outbound(request: Request, db: DbSession):
+    """Twilio's webhook for a browser call. Honoured only with a valid
+    X-Twilio-Signature, for a CASE the live session's agent is assigned; the
+    number dialled is resolved here, never taken from the request."""
+    from app.core.audit import write_audit
+    from app.models.audit_log import AuditAction
+    from app.services import voice_service as voice
+
+    form = await request.form()
+    params = {k: v for k, v in form.multi_items()}
     try:
-        from twilio.twiml.voice_response import VoiceResponse, Dial
+        from twilio.twiml.voice_response import Dial, VoiceResponse
     except ImportError:
         return FastAPIResponse(content="<Response><Say>Service unavailable</Say></Response>",
                                media_type="application/xml")
+
+    url = voice.public_url(request.url.path, request.url.query)
+    if not voice.voice_configured() or not voice.signature_ok(url, params, request.headers.get("X-Twilio-Signature")):
+        write_audit(db, action=AuditAction.VOICE_CALL_REFUSED, user_id=None, entity_type="voice_call",
+                    success=False, failure_reason=voice.BAD_SIGNATURE if url else voice.NOT_CONFIGURED,
+                    ip_address=request.client.host if request.client else None)
+        raise HTTPException(status_code=403, detail="Forbidden")
+
     resp = VoiceResponse()
-    if PhoneTo:
-        dial = Dial(caller_id=settings.TWILIO_PHONE_NUMBER)
-        dial.number(PhoneTo)
-        resp.append(dial)
-    else:
-        resp.say("No destination number provided.")
-    return FastAPIResponse(content=str(resp), media_type="application/xml")
+    try:
+        dest = voice.resolve_destination(db, from_param=params.get("From"), case_id=params.get("CaseId"))
+    except voice.VoiceRefused as refused:
+        write_audit(db, action=AuditAction.VOICE_CALL_REFUSED, user_id=refused.user_id, entity_type="case",
+                    entity_id=refused.case_id, success=False, failure_reason=refused.reason)
+        resp.say("This call cannot be placed.")
+        return _twiml(resp)
+
+    write_audit(db, action=AuditAction.VOICE_CALL_PLACED, user_id=dest.user_id, entity_type="case",
+                entity_id=dest.case_id, details={"to_last4": dest.e164[-4:]})
+    dial = Dial(caller_id=settings.TWILIO_PHONE_NUMBER)
+    dial.number(dest.e164)
+    resp.append(dial)
+    return _twiml(resp)
 
 
 # ─── Leave requests (2026-09-21) ─────────────────────────────────────────────

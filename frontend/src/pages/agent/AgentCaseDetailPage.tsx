@@ -535,7 +535,7 @@ export default function AgentCaseDetailPage() {
                 exactly that: 3 + 1. 2 on a phone, 4 in a row once there is
                 width for it; both are symmetric. */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              <ActionBtn icon={<Phone className="w-4 h-4" />} label="Call" color="bg-success-50 text-success-700 border-success-100" onClick={() => startCall(c.customer.phone_primary, c.customer.full_name)} />
+              <ActionBtn icon={<Phone className="w-4 h-4" />} label="Call" color="bg-success-50 text-success-700 border-success-100" onClick={() => startCall(c.id, c.customer.phone_primary, c.customer.full_name)} />
               <ActionBtn icon={<Navigation className="w-4 h-4" />} label="Navigate" color="bg-brand-50 text-brand-700 border-brand-100" onClick={() => window.open(`https://www.google.com/maps/dir/?api=1&destination=${c.customer.latitude},${c.customer.longitude}&travelmode=driving`, "_blank")} />
               <ActionBtn icon={<MessageCircle className="w-4 h-4" />} label="WhatsApp" color="bg-green-50 text-green-700 border-green-100" onClick={() => openWhatsApp("reminder")} />
               <ActionBtn icon={<PhoneCall className="w-4 h-4" />} label="Log Call" color="bg-brand-50 text-brand-700 border-brand-100" onClick={() => setShowCallModal(true)} />
@@ -571,7 +571,7 @@ export default function AgentCaseDetailPage() {
                 <span className="text-xs text-slate-500">Phone</span>
                 <div className="flex items-center gap-2">
                   <span className="text-xs font-medium text-slate-700 font-mono tracking-wide">{maskPhone(c.customer.phone_primary)}</span>
-                  <button onClick={() => startCall(c.customer.phone_primary, c.customer.full_name)} className="p-1.5 rounded-lg bg-success-50 text-success-700 hover:bg-success-100 active:scale-95 transition-all" title="Call">
+                  <button onClick={() => startCall(c.id, c.customer.phone_primary, c.customer.full_name)} className="p-1.5 rounded-lg bg-success-50 text-success-700 hover:bg-success-100 active:scale-95 transition-all" title="Call">
                     <Phone className="w-3.5 h-3.5" />
                   </button>
                 </div>

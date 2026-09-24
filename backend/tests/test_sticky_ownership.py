@@ -64,22 +64,22 @@ def test_existing_owner_survives_a_normal_replan():
     proximity from the centroid of the cases an agent already holds, which on
     a one-case book is the case itself, so the owner always won and the test
     passed with the gate deleted. Mutation-checked; this version fails.)"""
-    a1 = make_agent("a1", gender="F", cap=1)
-    a2 = make_agent("a2", gender="M", cap=1)
-    c_owned = make_case("c_owned", agent_id="a1")
+    a1 = make_agent(test_id("a1"), gender="F", cap=1)
+    a2 = make_agent(test_id("a2"), gender="M", cap=1)
+    c_owned = make_case("c_owned", agent_id=test_id("a1"))
     c_new = make_case("c_new", needs_female=True, target=500_000.0)
     by_agent, decisions, _ = allocate([c_owned, c_new], [a1, a2])
     got = assigned(decisions)
-    assert got.get("c_owned") in ("a1", None)
-    assert by_agent["a2"] == [], "an owned case was moved to fill a free slot"
+    assert got.get("c_owned") in (test_id("a1"), None)
+    assert by_agent[test_id("a2")] == [], "an owned case was moved to fill a free slot"
 
 
 def test_an_unowned_case_still_goes_to_the_best_agent():
     """Same geometry, no owner: the optimiser is untouched for new work."""
-    a1 = make_agent("a1", lat=BASE_LAT + 0.072, spec=AgentSpecialization.UNSECURED)
-    a2 = make_agent("a2", spec=AgentSpecialization.SECURED)
+    a1 = make_agent(test_id("a1"), lat=BASE_LAT + 0.072, spec=AgentSpecialization.UNSECURED)
+    a2 = make_agent(test_id("a2"), spec=AgentSpecialization.SECURED)
     case = make_case("c1", loan_type=LoanType.AUTO)
-    assert assigned(allocate([case], [a1, a2])[1]) == {"c1": "a2"}
+    assert assigned(allocate([case], [a1, a2])[1]) == {"c1": test_id("a2")}
 
 
 def _explore(cases, agents, *, rate):
@@ -93,8 +93,8 @@ def test_exploration_never_moves_an_owned_case():
     eligible for every case, six owned cases split between them. Before this
     change that configuration swapped pairs every time; now nothing moves and
     nothing is stamped as explored."""
-    agents = [make_agent("a1", cap=3), make_agent("a2", cap=3)]
-    cases = [make_case(f"c{i}", agent_id="a1" if i < 3 else "a2") for i in range(6)]
+    agents = [make_agent(test_id("a1"), cap=3), make_agent(test_id("a2"), cap=3)]
+    cases = [make_case(f"c{i}", agent_id=test_id("a1") if i < 3 else test_id("a2")) for i in range(6)]
     decisions = _explore(cases, agents, rate=1.0)
     got = assigned(decisions)
     assert got == {c.id: c.agent_id for c in cases}
@@ -104,7 +104,7 @@ def test_exploration_never_moves_an_owned_case():
 def test_exploration_still_randomises_unowned_cases():
     """The same book with no owners: exploration must still fire, or the
     agent-fit experiment has been switched off rather than scoped."""
-    agents = [make_agent("a1", cap=3), make_agent("a2", cap=3)]
+    agents = [make_agent(test_id("a1"), cap=3), make_agent(test_id("a2"), cap=3)]
     cases = [make_case(f"c{i}") for i in range(6)]
     decisions = _explore(cases, agents, rate=1.0)
     explored = [d for d in decisions if d.score_breakdown.get("exploration")]
@@ -116,13 +116,13 @@ def test_exploration_cannot_use_an_owned_case_as_the_other_half_of_a_swap():
     owned case across as somebody else's partner — so the partner must be
     unowned too. Three unowned cases on a1, three owned on a2: a1's cases
     have nobody legal to swap with, and stay."""
-    agents = [make_agent("a1", cap=3), make_agent("a2", cap=3)]
+    agents = [make_agent(test_id("a1"), cap=3), make_agent(test_id("a2"), cap=3)]
     cases = ([make_case(f"u{i}") for i in range(3)]
-             + [make_case(f"o{i}", agent_id="a2") for i in range(3)])
+             + [make_case(f"o{i}", agent_id=test_id("a2")) for i in range(3)])
     decisions = _explore(cases, agents, rate=1.0)
     got = assigned(decisions)
     for i in range(3):
-        assert got[f"o{i}"] == "a2"
+        assert got[f"o{i}"] == test_id("a2")
     assert not any(d.score_breakdown.get("exploration") for d in decisions)
 
 
@@ -132,9 +132,9 @@ def test_an_ineligible_owner_releases_the_case_to_deferral_not_to_another_agent(
     a manager can act on. That is the stated decision: an owner who cannot
     take the case follows the existing deferral path rather than being
     quietly replaced."""
-    a1 = make_agent("a1", lat=BASE_LAT + 0.45)          # ~50 km north
-    a2 = make_agent("a2")
-    case = make_case("c1", agent_id="a1")
+    a1 = make_agent(test_id("a1"), lat=BASE_LAT + 0.45)          # ~50 km north
+    a2 = make_agent(test_id("a2"))
+    case = make_case("c1", agent_id=test_id("a1"))
     decisions = allocate([case], [a1, a2])[1]
     assert outcomes(decisions) == {"c1": AllocationOutcome.DEFERRED.value}
     assert not assigned(decisions)
@@ -147,9 +147,9 @@ def test_ptp_fatigue_still_overrides_ownership():
     """Three broken promises to the owner bar THE OWNER. Under stickiness the
     case cannot go elsewhere either, so it defers — and does not go back to
     the agent the borrower has already promised three times."""
-    agents = [make_agent("a1", cap=1), make_agent("a2", cap=1)]
-    case = make_case("c1", agent_id="a1")
-    decisions = allocate([case], agents, ptp_fatigue={"c1": {"a1"}})[1]
+    agents = [make_agent(test_id("a1"), cap=1), make_agent(test_id("a2"), cap=1)]
+    case = make_case("c1", agent_id=test_id("a1"))
+    decisions = allocate([case], agents, ptp_fatigue={"c1": {test_id("a1")}})[1]
     assert not assigned(decisions)
     assert outcomes(decisions) == {"c1": AllocationOutcome.DEFERRED.value}
     assert decisions[0].score_breakdown["owner_unavailable"] is True
@@ -158,9 +158,9 @@ def test_ptp_fatigue_still_overrides_ownership():
 def test_ptp_fatigue_on_an_unowned_case_behaves_exactly_as_before():
     """The pre-existing test in test_global_allocator, restated with an
     explicit unowned case so the two behaviours sit side by side."""
-    agents = [make_agent("a1", cap=1), make_agent("a2", cap=1)]
-    decisions = allocate([make_case("c1")], agents, ptp_fatigue={"c1": {"a1"}})[1]
-    assert assigned(decisions) == {"c1": "a2"}
+    agents = [make_agent(test_id("a1"), cap=1), make_agent(test_id("a2"), cap=1)]
+    decisions = allocate([make_case("c1")], agents, ptp_fatigue={"c1": {test_id("a1")}})[1]
+    assert assigned(decisions) == {"c1": test_id("a2")}
 
 
 def test_capacity_is_not_silently_exceeded_by_a_sticky_owner():
@@ -168,11 +168,11 @@ def test_capacity_is_not_silently_exceeded_by_a_sticky_owner():
     five. Exactly two are allocated, all to a1; three defer; a2 gets none —
     because giving a2 an owned case merely to fill a slot is the churn this
     change exists to stop."""
-    a1, a2 = make_agent("a1", cap=2), make_agent("a2", cap=5)
-    cases = [make_case(f"c{i}", agent_id="a1") for i in range(5)]
+    a1, a2 = make_agent(test_id("a1"), cap=2), make_agent(test_id("a2"), cap=5)
+    cases = [make_case(f"c{i}", agent_id=test_id("a1")) for i in range(5)]
     by_agent, decisions, _ = allocate(cases, [a1, a2])
-    assert len(by_agent["a1"]) == 2
-    assert by_agent["a2"] == []
+    assert len(by_agent[test_id("a1")]) == 2
+    assert by_agent[test_id("a2")] == []
     got = outcomes(decisions)
     assert sum(1 for v in got.values() if v == AllocationOutcome.ALLOCATED.value) == 2
     deferred = [d for d in decisions if d.outcome == AllocationOutcome.DEFERRED.value]
@@ -181,9 +181,9 @@ def test_capacity_is_not_silently_exceeded_by_a_sticky_owner():
 
 
 def test_every_case_still_appears_in_exactly_one_decision_under_ownership():
-    a1 = make_agent("a1", cap=1)
-    cases = [make_case("c1", agent_id="a1"), make_case("c2", agent_id="a1"),
-             make_case("c3", agent_id="ghost"), make_case("c4")]
+    a1 = make_agent(test_id("a1"), cap=1)
+    cases = [make_case("c1", agent_id=test_id("a1")), make_case("c2", agent_id=test_id("a1")),
+             make_case("c3", agent_id=test_id("ghost")), make_case("c4")]
     decisions = allocate(cases, [a1])[1]
     assert sorted(d.case_id for d in decisions) == ["c1", "c2", "c3", "c4"]
     # c3's owner is not on this roster at all: deferred, never reassigned.
@@ -208,7 +208,7 @@ def test_the_shared_gate_functions_agree_with_the_matrix_loop():
     assert case_bar(make_case("c", hostile=True).customer) == "HOSTILITY"
     assert case_bar(plain.customer) is None
     # Ownership is a gate for the planner and NOT for the manager.
-    owned = make_case("c", agent_id="other")
+    owned = make_case("c", agent_id=test_id("other"))
     assert pair_bar(owned, owned.customer, make_agent("a"), dist_km=1.0,
                     territory_radius_km=16.0) == "OWNED_BY_ANOTHER_AGENT"
     assert pair_bar(owned, owned.customer, make_agent("a"), dist_km=1.0,
@@ -237,7 +237,7 @@ def _user(db, email, role, name):
 
 def _agent(db, user, code, mgr, *, gender="M", lat=28.63, lon=77.21):
     a = Agent(id=_uid(), user_id=user.id, employee_code=code, id_card_number=code + "-ID",
-              agency_id="AG1", manager_user_id=mgr.id, gender=gender,
+              manager_user_id=mgr.id, gender=gender,
               base_latitude=lat, base_longitude=lon, territory="Delhi",
               languages_spoken=["HINDI"], status=AgentStatus.ON_DUTY, tier=AgentTier.TIER_1,
               specialization=AgentSpecialization.BOTH, ranking_score=80.0, max_cases_per_day=5)
@@ -247,7 +247,7 @@ def _agent(db, user, code, mgr, *, gender="M", lat=28.63, lon=77.21):
 
 def _borrower(db, ref, *, lat=28.6315, lon=77.2167, **flags):
     c = Customer(id=_uid(), customer_ref=ref, full_name=f"Borrower {ref}",
-                 date_of_birth="1990-01-01", gender="M", pan_masked="ABCDE1234F",
+                 date_of_birth=date(1990, 1, 1), gender="M", pan_masked="ABCDE1234F",
                  aadhaar_masked="123456789012", phone_primary="98" + ref.ljust(8, "0"),
                  address_line1="Delhi", city="Delhi", state="Delhi", pincode="110001",
                  latitude=lat, longitude=lon, language_preference="HINDI", **flags)
@@ -258,7 +258,7 @@ def _borrower(db, ref, *, lat=28.6315, lon=77.2167, **flags):
                 sanctioned_amount=100000.0, disbursed_amount=100000.0,
                 outstanding_principal=50000.0, total_outstanding=50000.0,
                 overdue_amount=10000.0, emi_amount=5000.0, interest_rate=12.0,
-                disbursement_date="2022-01-01", maturity_date="2027-01-01",
+                disbursement_date=date(2022, 1, 1), maturity_date=date(2027, 1, 1),
                 dpd=45, dpd_bucket=DPDBucket.BUCKET_2, status=LoanStatus.ACTIVE)
     db.add(loan)
     db.flush()
@@ -268,7 +268,7 @@ def _borrower(db, ref, *, lat=28.6315, lon=77.2167, **flags):
 def _case(db, number, cust, loan, agent, status=CaseStatus.ASSIGNED):
     k = Case(id=_uid(), case_number=number, customer_id=cust.id, loan_id=loan.id,
              agent_id=agent.id if agent else None, status=status,
-             target_amount=20000.0, collected_amount=0.0, allocation_date=TODAY.isoformat())
+             target_amount=20000.0, collected_amount=0.0, allocation_date=TODAY)
     db.add(k)
     return k
 
@@ -310,7 +310,7 @@ def world():
         db.add(PTP(id=_uid(), case_id=fat.id, agent_id=a_female.id, committed_amount=1000.0,
                    committed_date=TODAY - timedelta(days=30 - i), status=PTPStatus.BROKEN))
     db.commit()
-    yield {"db": db, "mgr": mgr, "other": other,
+    yield {"db": db, "mgr": mgr, test_id("other"): other,
            "male": a_male, "female": a_female, "far": a_far, "not_mine": a_other,
            "plain": plain, "fem": fem, "dnc": dnc, "fat": fat, "paid": paid, "foreign": foreign,
            "unowned": unowned}
@@ -444,7 +444,7 @@ def test_tenancy_is_enforced_in_both_directions(client, world):
     r = _post(client, world, world["plain"], world["not_mine"], "outsourcing")
     assert r.status_code == 404
     # And the other manager cannot touch our case.
-    r = _post(client, world, world["plain"], world["male"], "theirs", who=world["other"])
+    r = _post(client, world, world["plain"], world["male"], "theirs", who=world[test_id("other")])
     assert r.status_code == 404
 
 

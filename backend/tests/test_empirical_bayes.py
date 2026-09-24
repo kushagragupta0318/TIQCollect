@@ -57,12 +57,12 @@ def _next() -> int:
 def make_loan(db, loan_id: str, loan_type=LoanType.PERSONAL, bucket=DPDBucket.BUCKET_2) -> Loan:
     n = _next()
     loan = Loan(
-        id=loan_id, loan_account_number=f"LN{n:06d}", customer_id="cust-1",
+        id=loan_id, loan_account_number=f"LN{n:06d}", customer_id=test_id("cust-1"),
         loan_type=loan_type, branch_code="BR01",
         sanctioned_amount=100000.0, disbursed_amount=100000.0,
         outstanding_principal=80000.0, total_outstanding=90000.0,
         overdue_amount=10000.0, emi_amount=5000.0,
-        disbursement_date="2025-01-01", maturity_date="2028-01-01",
+        disbursement_date=date(2025, 1, 1), maturity_date=date(2028, 1, 1),
         dpd=45, dpd_bucket=bucket, interest_rate=12.0,
     )
     db.add(loan)
@@ -72,7 +72,7 @@ def make_loan(db, loan_id: str, loan_type=LoanType.PERSONAL, bucket=DPDBucket.BU
 def make_case(db, case_id: str, loan_id: str, target: float) -> Case:
     n = _next()
     case = Case(
-        id=case_id, case_number=f"CASE{n:06d}", customer_id="cust-1",
+        id=case_id, case_number=f"CASE{n:06d}", customer_id=test_id("cust-1"),
         loan_id=loan_id, target_amount=target,
     )
     db.add(case)
@@ -83,7 +83,7 @@ def make_payment(db, case_id: str, agent_id: str, amount: float, when: date,
                  status=PaymentStatus.VERIFIED) -> Payment:
     n = _next()
     pay = Payment(
-        id=f"pay-{n}", case_id=case_id, agent_id=agent_id, amount=amount,
+        id=test_id(f"pay-{n}"), case_id=case_id, agent_id=agent_id, amount=amount,
         mode=PaymentMode.CASH, status=status, receipt_number=f"RCP{n:08d}",
         payment_date=datetime.combine(when, datetime.min.time()) + timedelta(hours=12),
     )

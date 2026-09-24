@@ -60,7 +60,7 @@ def _user(db, email, role, name, phone):
 
 def _agent(db, user, code, mgr):
     a = Agent(id=_uid(), user_id=user.id, employee_code=code, id_card_number=code + "-ID",
-              agency_id="AG1", manager_user_id=mgr.id, gender="M",
+              manager_user_id=mgr.id, gender="M",
               base_latitude=28.63, base_longitude=77.21, territory="Delhi",
               languages_spoken=["HINDI"], status=AgentStatus.ON_DUTY, tier=AgentTier.TIER_1,
               specialization=AgentSpecialization.BOTH, ranking_score=80.0, max_cases_per_day=5)
@@ -69,7 +69,7 @@ def _agent(db, user, code, mgr):
 
 def _case(db, agent, ref, phone="9812345678"):
     c = Customer(id=_uid(), customer_ref=ref, full_name=f"Borrower {ref}",
-                 date_of_birth="1990-01-01", gender="M", pan_masked="ABCDE1234F",
+                 date_of_birth=date(1990, 1, 1), gender="M", pan_masked="ABCDE1234F",
                  aadhaar_masked="123456789012", phone_primary=phone,
                  address_line1="Delhi", city="Delhi", state="Delhi", pincode="110001",
                  latitude=28.6315, longitude=77.2167, language_preference="HINDI")
@@ -79,12 +79,12 @@ def _case(db, agent, ref, phone="9812345678"):
                 sanctioned_amount=100000.0, disbursed_amount=100000.0,
                 outstanding_principal=50000.0, total_outstanding=50000.0,
                 overdue_amount=10000.0, emi_amount=5000.0, interest_rate=12.0,
-                disbursement_date="2022-01-01", maturity_date="2027-01-01",
+                disbursement_date=date(2022, 1, 1), maturity_date=date(2027, 1, 1),
                 dpd=45, dpd_bucket=DPDBucket.BUCKET_2, status=LoanStatus.ACTIVE)
     db.add(loan); db.flush()
     k = Case(id=_uid(), case_number="C-" + ref, customer_id=c.id, loan_id=loan.id,
              agent_id=agent.id, status=CaseStatus.ASSIGNED, target_amount=20000.0,
-             collected_amount=0.0, allocation_date=TODAY.isoformat())
+             collected_amount=0.0, allocation_date=TODAY)
     db.add(k); return k
 
 

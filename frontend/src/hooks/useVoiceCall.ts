@@ -22,7 +22,11 @@ export function useVoiceCall() {
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
   };
 
-  const startCall = useCallback(async (phone: string, customerName: string) => {
+  // 2026-09-24 (audit gate 2): the call is placed for a CASE. The server
+  // resolves the borrower's number from it (and refuses a case that is not
+  // yours, outside contact hours, do-not-contact or demo data); `phone` is
+  // display only and is never sent.
+  const startCall = useCallback(async (caseId: string, phone: string, customerName: string) => {
     try {
       setActiveCall({ customerName, phone, status: "connecting", duration: 0 });
 
@@ -37,8 +41,7 @@ export function useVoiceCall() {
         deviceRef.current = device;
       }
 
-      const e164 = phone.startsWith("+") ? phone : `+91${phone.replace(/^0+/, "")}`;
-      const call = await deviceRef.current.connect({ params: { PhoneTo: e164 } });
+      const call = await deviceRef.current.connect({ params: { CaseId: caseId } });
       callRef.current = call;
 
       setActiveCall((a) => a ? { ...a, status: "ringing" } : a);

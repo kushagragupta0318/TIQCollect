@@ -26,6 +26,7 @@ from types import SimpleNamespace
 
 from app.models.payment import PaymentMode, PaymentStatus
 from scripts.seed_data import _PTP_PAYMENT_MODES, _book_ptp_payment, _stable_rng
+from tests._db import test_id
 
 TODAY = date(2026, 8, 26)
 
@@ -48,7 +49,7 @@ def _case(target=10_000.0, collected=0.0, cid="case-1"):
 def _book(case, *, committed, due, already=0.0, today=TODAY):
     db = _Recorder()
     paid = _book_ptp_payment(
-        db, case=case, agent_id="agent-1", committed_amount=committed,
+        db, case=case, agent_id=test_id("agent-1"), committed_amount=committed,
         committed_date=due, already_collected=already, today=today,
         r=_stable_rng("test", case.id, str(due)))
     return paid, db.added

@@ -47,10 +47,10 @@ AS_OF = date(2026, 5, 1)
 
 def _loan(**over):
     base = dict(
-        id="loan-1", customer_id="cust-1", dpd=62, loan_type=LoanType.PERSONAL,
+        id=test_id("loan-1"), customer_id=test_id("cust-1"), dpd=62, loan_type=LoanType.PERSONAL,
         emi_amount=14000.0, overdue_amount=42000.0, outstanding_principal=380000.0,
         total_outstanding=421000.0, penal_charges=2100.0, last_payment_amount=8000.0,
-        last_payment_date="2026-03-02", legal_status="NONE", settlement_status="NONE",
+        last_payment_date=date(2026, 3, 2), legal_status="NONE", settlement_status="NONE",
         npa_flag=False,
     )
     base.update(over)
@@ -58,30 +58,30 @@ def _loan(**over):
 
 
 def _customer(**over):
-    base = dict(id="cust-1", cibil_score=612, customer_segment="SALARIED",
+    base = dict(id=test_id("cust-1"), cibil_score=612, customer_segment="SALARIED",
                 is_hostile=False, fraud_flag=False)
     base.update(over)
     return NS(**base)
 
 
 def _case(target=14000.0):
-    return NS(id="case-1", target_amount=target)
+    return NS(id=test_id("case-1"), target_amount=target)
 
 
 def _visit(when: date, outcome=VisitOutcome.PTP, met=True):
     return NS(check_in_time=datetime.combine(when, datetime.min.time()) + timedelta(hours=11),
-              customer_met=met, outcome=outcome, case_id="case-1")
+              customer_met=met, outcome=outcome, case_id=test_id("case-1"))
 
 
 def _ptp(committed: date, status=PTPStatus.ACTIVE, updated: date | None = None):
-    return NS(committed_date=committed, status=status, case_id="case-1",
+    return NS(committed_date=committed, status=status, case_id=test_id("case-1"),
               updated_at=(datetime.combine(updated, datetime.min.time())
                           if updated else None))
 
 
 def _payment(when: date, amount=5000.0, status=PaymentStatus.VERIFIED):
     return NS(payment_date=datetime.combine(when, datetime.min.time()) + timedelta(hours=13),
-              amount=amount, status=status, case_id="case-1")
+              amount=amount, status=status, case_id=test_id("case-1"))
 
 
 # ── 1. Borrower features are bounded by as_of ────────────────────────────────
@@ -133,7 +133,7 @@ def test_payment_recency_refuses_a_loan_column_that_post_dates_as_of():
     """Loan.last_payment_date is overwritten in place, so on any historical row
     it can name a payment that had not happened yet. It must be refused, and
     the refusal recorded rather than silently swallowed."""
-    loan = _loan(last_payment_date=str(AS_OF + timedelta(days=12)))
+    loan = _loan(last_payment_date=AS_OF + timedelta(days=12))
     feats = SVC.build_features(loan, _customer(), AS_OF,
                                cases=[_case()], visits=[], ptps=[], payments=[])
 
@@ -156,17 +156,17 @@ def db():
 
 def _seed_eb(db, payments: list[tuple[str, float, date]]):
     db.add(Loan(
-        id="loan-1", loan_account_number="LN1", customer_id="cust-1",
+        id=test_id("loan-1"), loan_account_number="LN1", customer_id=test_id("cust-1"),
         loan_type=LoanType.PERSONAL, branch_code="BR",
         sanctioned_amount=1e5, disbursed_amount=1e5, outstanding_principal=8e4,
         total_outstanding=9e4, overdue_amount=1e4, emi_amount=5e3,
-        disbursement_date="2025-01-01", maturity_date="2028-01-01",
+        disbursement_date=date(2025, 1, 1), maturity_date=date(2028, 1, 1),
         dpd=45, dpd_bucket=DPDBucket.BUCKET_2, interest_rate=12.0))
-    db.add(Case(id="case-1", case_number="C1", customer_id="cust-1",
-                loan_id="loan-1", target_amount=10000.0))
+    db.add(Case(id=test_id("case-1"), case_number="C1", customer_id=test_id("cust-1"),
+                loan_id=test_id("loan-1"), target_amount=10000.0))
     for i, (agent, amount, when) in enumerate(payments):
         db.add(Payment(
-            id=f"p{i}", case_id="case-1", agent_id=agent, amount=amount,
+            id=test_id(f"p{i}"), case_id=test_id("case-1"), agent_id=agent, amount=amount,
             mode=PaymentMode.CASH, status=PaymentStatus.VERIFIED,
             receipt_number=f"R{i:06d}",
             payment_date=datetime.combine(when, datetime.min.time()) + timedelta(hours=12)))
@@ -178,12 +178,12 @@ def test_eb_at_a_historical_date_ignores_everything_that_came_later(db):
     already contains the months after T. This is what makes eb_shrunk_win a
     legitimate training feature rather than a leak."""
     t = date(2026, 5, 1)
-    _seed_eb(db, [("agent-A", 3000.0, t - timedelta(days=20))])
+    _seed_eb(db, [(test_id("agent-A"), 3000.0, t - timedelta(days=20))])
     before = EmpiricalBayesAgentAdjuster().fit_from_db(db, as_of=t, lookback_days=180)
-    snapshot = dict(before.agent_observations[("agent-A", "PERSONAL", "BUCKET_2")])
+    snapshot = dict(before.agent_observations[(test_id("agent-A"), "PERSONAL", "BUCKET_2")])
 
     # The future arrives.
-    db.add(Payment(id="p-late", case_id="case-1", agent_id="agent-A", amount=7000.0,
+    db.add(Payment(id=test_id("p-late"), case_id=test_id("case-1"), agent_id=test_id("agent-A"), amount=7000.0,
                    mode=PaymentMode.CASH, status=PaymentStatus.VERIFIED,
                    receipt_number="R-LATE",
                    payment_date=datetime.combine(t + timedelta(days=10),
@@ -191,12 +191,12 @@ def test_eb_at_a_historical_date_ignores_everything_that_came_later(db):
     db.commit()
 
     after = EmpiricalBayesAgentAdjuster().fit_from_db(db, as_of=t, lookback_days=180)
-    assert after.agent_observations[("agent-A", "PERSONAL", "BUCKET_2")] == snapshot
+    assert after.agent_observations[(test_id("agent-A"), "PERSONAL", "BUCKET_2")] == snapshot
 
     # ...and is visible once the clock moves past it.
     later = EmpiricalBayesAgentAdjuster().fit_from_db(
         db, as_of=t + timedelta(days=30), lookback_days=180)
-    assert later.agent_observations[("agent-A", "PERSONAL", "BUCKET_2")]["recovered"] == 10000.0
+    assert later.agent_observations[(test_id("agent-A"), "PERSONAL", "BUCKET_2")]["recovered"] == 10000.0
 
 
 # ── 3. Feature window and label window do not overlap ────────────────────────
@@ -215,10 +215,10 @@ def test_the_feature_window_and_the_label_window_share_no_day():
     # Only the as_of-day payment is a feature.
     assert feats["amount_paid_in_window"] == pytest.approx(on_the_day.amount)
 
-    row = NS(as_of_date=AS_OF, loan_id="loan-1")
+    row = NS(as_of_date=AS_OF, loan_id=test_id("loan-1"))
     outcome, amount = SVC._infer_outcome(
-        row, [NS(id="case-1", target_amount=14000.0, status="ASSIGNED")],
-        {"case-1": [on_the_day, next_day]})
+        row, [NS(id=test_id("case-1"), target_amount=14000.0, status="ASSIGNED")],
+        {test_id("case-1"): [on_the_day, next_day]})
     # Only the next-day payment is a label.
     assert amount == pytest.approx(next_day.amount)
     assert horizon >= 1
@@ -228,9 +228,9 @@ def test_eb_window_uses_the_same_boundary_as_the_feature_builder(db):
     """Three components have to agree on what "as of a date" means. Two of them
     agreeing is not enough."""
     t = date(2026, 5, 1)
-    _seed_eb(db, [("agent-A", 4000.0, t), ("agent-A", 6000.0, t + timedelta(days=1))])
+    _seed_eb(db, [(test_id("agent-A"), 4000.0, t), (test_id("agent-A"), 6000.0, t + timedelta(days=1))])
     eb = EmpiricalBayesAgentAdjuster().fit_from_db(db, as_of=t, lookback_days=180)
-    obs = eb.agent_observations[("agent-A", "PERSONAL", "BUCKET_2")]
+    obs = eb.agent_observations[(test_id("agent-A"), "PERSONAL", "BUCKET_2")]
     # The as_of day itself is IN, exactly as build_features has it.
     assert obs["recovered"] == pytest.approx(4000.0)
 
@@ -250,7 +250,7 @@ def test_rebuilding_the_same_historical_date_gives_an_identical_vector():
 
 def test_eb_refits_deterministically_for_a_historical_date(db):
     t = date(2026, 5, 1)
-    _seed_eb(db, [("agent-A", 3000.0, t - timedelta(days=20)),
+    _seed_eb(db, [(test_id("agent-A"), 3000.0, t - timedelta(days=20)),
                   ("agent-B", 5000.0, t - timedelta(days=40))])
     a = EmpiricalBayesAgentAdjuster().fit_from_db(db, as_of=t, lookback_days=180)
     b = EmpiricalBayesAgentAdjuster().fit_from_db(db, as_of=t, lookback_days=180)

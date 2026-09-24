@@ -173,6 +173,19 @@ services:
       # physically at a seeded Gurugram address. DEMO_MODE re-anchors the demo
       # customers to the agent's live GPS on check-in.
       DEMO_MODE: ${DEMO_MODE:-true}
+      # The public origin Twilio calls (scheme + host). The voice webhook
+      # checks X-Twilio-Signature against it and refuses every call while it
+      # is empty — which is the right answer on a laptop Twilio cannot reach.
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+      # Two security controls, relaxed for THIS local demo stack only and by
+      # name (they used to ride on DEMO_MODE). Both default false in
+      # core/config.py, so a deployment gets them only by setting them.
+      #   DEMO_DEVICE_REBIND: the simulator and a laptop browser log in as the
+      #     same agent; a new device re-binds (audited) instead of 403.
+      #   DEMO_OTP_ECHO: with no SMS transport configured, the borrower's OTP
+      #     is shown to the agent so a payment can be verified in a demo.
+      DEMO_DEVICE_REBIND: ${DEMO_DEVICE_REBIND:-true}
+      DEMO_OTP_ECHO: ${DEMO_OTP_ECHO:-true}
       # RBI contact hours are enforced with a real 403. Left open so the app
       # works outside 08:00-19:00 IST; set 8 and 19 for true behaviour.
       CONTACT_HOUR_START: ${CONTACT_HOUR_START:-0}

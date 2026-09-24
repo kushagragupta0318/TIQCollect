@@ -74,7 +74,7 @@ def store():
 
 
 def _agent(mgr="mgr-1"):
-    return SimpleNamespace(id="agent-1", manager_user_id=mgr,
+    return SimpleNamespace(id=test_id("agent-1"), manager_user_id=mgr,
                            user=SimpleNamespace(full_name="Asha Verma"))
 
 
@@ -85,7 +85,7 @@ def test_an_event_goes_to_the_agents_manager_channel(store):
     [(channel, event)] = store.published
     assert channel == ev.manager_channel("mgr-1")
     assert event["type"] == "visit.recorded"
-    assert event["agent_id"] == "agent-1"
+    assert event["agent_id"] == test_id("agent-1")
     assert event["agent_name"] == "Asha Verma"
     assert event["data"] == {"case_id": "c1"}
     assert event["id"] and event["at"]

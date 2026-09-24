@@ -29,6 +29,7 @@ from app.models.payment import Payment, PaymentStatus
 from app.models.ptp import PTP, PTPStatus
 from app.models.user import User
 from app.models.visit import Visit
+from app.services.brand import brand_for
 from app.services.notification_service import NotificationService
 
 # Fixed offsets (as fractions of DEMO_ANCHOR_RADIUS_M) used to scatter the demo
@@ -600,9 +601,12 @@ class AgentService:
                     mins = max(1, round((age_seconds or 0) / 60))
                     where_sms = f"LAST KNOWN location ({mins} min old): {maps_link}"
                     where_wa = f"*Last known* location ({mins} min old): {maps_link}"
+            # Staff alert: signed by the AGENCY the agent works for (A14).
+            brand = brand_for(self.db, agent=agent)
+            sign = brand.agency_name or brand.bank_name
             sms_body = (
                 f"SOS ALERT: Field agent {agent.user.full_name} ({agent.employee_code}) "
-                f"triggered an emergency SOS at {alert_time} UTC. {where_sms} - ABC Bank"
+                f"triggered an emergency SOS at {alert_time} UTC. {where_sms} - {sign}"
             )
             wa_body = (
                 f"*SOS ALERT*\n\n"
@@ -611,7 +615,8 @@ class AgentService:
                 f"{where_wa}\n\n"
                 f"Please respond immediately."
             )
-            NotificationService.send_twilio(e164 := "+" + NotificationService.normalize_phone(manager.phone), sms_body, wa_body)
+            NotificationService.send_twilio(e164 := "+" + NotificationService.normalize_phone(manager.phone), sms_body, wa_body,
+                                            db=self.db, user_id=manager.id)
             notified = True
             logger.info("sos.manager_alerted", agent_id=agent.id, quality=quality,
                         age_seconds=age_seconds, to=e164[-4:])

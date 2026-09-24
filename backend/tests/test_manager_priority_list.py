@@ -58,8 +58,8 @@ def client(request):
     db = Session()
     _build(db)
     for i, case in enumerate(db.query(Case).order_by(Case.case_number).all()):
-        case.agent_id = f"ag{i % 2}"
-        case.allocation_date = TODAY.isoformat()
+        case.agent_id = test_id(f"ag{i % 2}")
+        case.allocation_date = TODAY
     db.commit()
 
     def _override():

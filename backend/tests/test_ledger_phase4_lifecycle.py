@@ -73,7 +73,7 @@ def lifecycle():
     closed = term.groupby("loan_id").day.min().to_dict()
     live = [r.loan_id for r in ledger.loans.itertuples()
             if r.opened_day <= AS_OF_DAY < closed.get(r.loan_id, 10 ** 9)]
-    cases = [c for c in (db.query(Case).filter(Case.id == f"C-{lid}").first()
+    cases = [c for c in (db.query(Case).filter(Case.id == Materialiser.db_id("case", lid)).first()
                          for lid in live) if c is not None]
     _, rows = MLScoringService(db).score_cases_and_log(cases, as_of=as_of)
     db.commit()
@@ -128,7 +128,7 @@ def test_the_frozen_baseline_is_not_the_balance_at_labelling_time(lifecycle):
     _, db, _, rows, _, _ = lifecycle
     moved = 0
     for r in rows[:200]:
-        loan = db.query(Loan).filter(Loan.id == r.loan_id).first()
+        loan = db.query(Loan).filter(Loan.loan_account_number == r.loan_id).first()
         if abs(float(loan.overdue_amount) -
                float(r.outcome_baseline["overdue_amount"])) > 1.0:
             moved += 1

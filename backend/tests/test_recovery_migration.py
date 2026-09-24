@@ -151,7 +151,7 @@ def legacy_db():
     metadata.create_all(engine)
     with engine.begin() as conn:
         conn.execute(table.insert().values(
-            id="snap-1", loan_id="loan-1", customer_id="cust-1",
+            id=test_id("snap-1"), loan_id=test_id("loan-1"), customer_id=test_id("cust-1"),
             as_of_date=date(2026, 8, 1), likelihood=61.5, outcome=None,
         ))
     return engine
@@ -188,8 +188,8 @@ def test_existing_rows_survive_with_null_recovery_fields(legacy_db, migration):
             " recovery_labelled_through_days FROM repayment_score_snapshots"
         )).mappings().one()
 
-    assert row["id"] == "snap-1"
-    assert row["loan_id"] == "loan-1"
+    assert row["id"] == test_id("snap-1")
+    assert row["loan_id"] == test_id("loan-1")
     assert row["likelihood"] == 61.5
     for field in ("recovery_potential", "recovery_rate_30", "recovery_rate_60",
                   "recovery_rate_90", "recovered_amount_30"):
@@ -225,7 +225,7 @@ def test_downgrade_keeps_the_data(legacy_db, migration):
     with legacy_db.connect() as conn:
         row = conn.execute(sa.text(
             "SELECT id, likelihood FROM repayment_score_snapshots")).mappings().one()
-    assert row["id"] == "snap-1" and row["likelihood"] == 61.5
+    assert row["id"] == test_id("snap-1") and row["likelihood"] == 61.5
 
 
 def test_downgrade_is_idempotent(legacy_db, migration):

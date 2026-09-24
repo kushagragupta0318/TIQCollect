@@ -45,6 +45,14 @@
 #       else is suppressed and logged — never sent.
 #   Suppression returns False like any other non-send, so callers' existing
 #   "receipt_sent / sms_sent" reporting stays truthful.
+# 2026-09-24 (later, coordinator audit gate 1, HIGH) — the demo-TENANT half of
+#   the above was dead code. It took `demo_tenant: bool = False` and no caller
+#   passed it, so with DEMO_MODE off a demo tenant's invented borrowers were
+#   texted. The flag is gone. Both senders now REQUIRE `db` and a subject
+#   (case_id / agent_id / user_id / agency_id / bank_id — no default) and
+#   resolve the tenant themselves through services/brand.tenant_of, reading
+#   Bank.is_demo / Agency.is_demo from the rows. A subject that does not
+#   resolve is treated as a demo tenant: FAIL CLOSED, allowlist only.
 # ───────────────────────────────────────────────────────────────────────────
 """
 SMS/WhatsApp notification via Twilio.
@@ -83,15 +91,25 @@ def demo_allowlist() -> set[str]:
     return {NotificationService.normalize_phone(p) for p in raw if p and p.strip()}
 
 
-def outbound_allowed(phone_e164: str, *, demo_tenant: bool = False) -> bool:
-    """The one gate every send passes. Suppressed sends are logged, masked."""
+def outbound_allowed(phone_e164: str, tenant) -> bool:
+    """The one gate every send passes. `tenant` is a services.brand.Tenant or
+    None; None (nothing resolved) is treated as demo — fail closed.
+    Suppressed sends are logged, masked."""
+    demo_tenant = tenant is None or tenant.is_demo
     if not (settings.DEMO_MODE or demo_tenant):
         return True
     if _digits(phone_e164) in demo_allowlist():
         return True
     logger.info("notification.suppressed_demo", to_last4=_digits(phone_e164)[-4:],
-                demo_mode=settings.DEMO_MODE, demo_tenant=demo_tenant)
+                demo_mode=settings.DEMO_MODE, demo_tenant=demo_tenant, tenant_resolved=tenant is not None)
     return False
+
+
+def _tenant(db, subject: dict):
+    from app.services.brand import tenant_of
+    if db is None or not any(subject.values()):
+        return None
+    return tenant_of(db, **{k: v for k, v in subject.items() if v})
 
 
 class NotificationService:
@@ -125,7 +143,9 @@ class NotificationService:
         return cc + digits.lstrip("0")
 
     @staticmethod
-    def send_twilio(phone_e164: str, sms_body: str, wa_body: str, *, demo_tenant: bool = False) -> bool:
+    def send_twilio(phone_e164: str, sms_body: str, wa_body: str, *, db, case_id: str | None = None,
+                    agent_id: str | None = None, user_id: str | None = None, agency_id: str | None = None,
+                    bank_id: str | None = None) -> bool:
         """Send SMS + WhatsApp via Twilio. Best-effort — exceptions are swallowed.
 
         Returns whether at least one message was handed to the transport.
@@ -139,7 +159,9 @@ class NotificationService:
         try:
             if not twilio_configured():
                 return False
-            if not outbound_allowed(phone_e164, demo_tenant=demo_tenant):
+            tenant = _tenant(db, dict(case_id=case_id, agent_id=agent_id, user_id=user_id,
+                                      agency_id=agency_id, bank_id=bank_id))
+            if not outbound_allowed(phone_e164, tenant):
                 return False
             from twilio.rest import Client
             client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
@@ -158,7 +180,8 @@ class NotificationService:
             return False
 
     @staticmethod
-    def send_sms(phone_e164: str, sms_body: str, *, demo_tenant: bool = False) -> bool:
+    def send_sms(phone_e164: str, sms_body: str, *, db, case_id: str | None = None, agent_id: str | None = None,
+                 user_id: str | None = None, agency_id: str | None = None, bank_id: str | None = None) -> bool:
         """Send an SMS only (no WhatsApp) via Twilio. Best-effort — exceptions
         are swallowed. Used for borrower payment-verification OTPs, whose
         delivery channel is SMS. When Twilio is unconfigured this is a no-op,
@@ -170,7 +193,9 @@ class NotificationService:
         try:
             if not twilio_configured():
                 return False
-            if not outbound_allowed(phone_e164, demo_tenant=demo_tenant):
+            tenant = _tenant(db, dict(case_id=case_id, agent_id=agent_id, user_id=user_id,
+                                      agency_id=agency_id, bank_id=bank_id))
+            if not outbound_allowed(phone_e164, tenant):
                 return False
             from twilio.rest import Client
             client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)

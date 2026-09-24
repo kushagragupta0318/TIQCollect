@@ -40,7 +40,7 @@ want = panel[panel.month_index == DAY // CFG.cycle_days].set_index("loan_id")
 svc = MLScoringService(db)
 vectors = {}
 for lid in want.index[:250]:
-    loan = db.query(Loan).filter(Loan.id == lid).first()
+    loan = db.query(Loan).filter(Loan.loan_account_number == lid).first()
     if loan is not None:
         vectors[lid] = svc.build_features(loan, as_of=as_of)
 print("adapter rows", len(vectors))

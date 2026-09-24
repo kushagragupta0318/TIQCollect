@@ -69,7 +69,7 @@ def world(db):
 
     def _agent(u, code):
         return Agent(id=_uid(), user_id=u.id, employee_code=code,
-                     id_card_number=code + "-ID", agency_id="AG1",
+                     id_card_number=code + "-ID", 
                      manager_user_id=mgr.id, base_latitude=28.63, base_longitude=77.21,
                      territory="Delhi", languages_spoken=["HINDI"],
                      status=AgentStatus.ON_DUTY, tier=AgentTier.TIER_1,
@@ -83,7 +83,7 @@ def world(db):
     # time is slower than reusing a construction that already works.
     cust = Customer(
         id=_uid(), customer_ref="C1", full_name="Borrower",
-        date_of_birth="1990-01-01", gender="M", pan_masked="ABCDE1234F",
+        date_of_birth=date(1990, 1, 1), gender="M", pan_masked="ABCDE1234F",
         aadhaar_masked="123456789012", phone_primary="9800000000",
         address_line1="Connaught Place, Delhi", city="Delhi", state="Delhi",
         pincode="110001", latitude=28.6315, longitude=77.2167,
@@ -97,7 +97,7 @@ def world(db):
         sanctioned_amount=500000.0, disbursed_amount=500000.0,
         outstanding_principal=250000.0, total_outstanding=250000.0,
         overdue_amount=50000.0, emi_amount=15000.0, interest_rate=12.5,
-        disbursement_date="2022-01-01", maturity_date="2027-01-01",
+        disbursement_date=date(2022, 1, 1), maturity_date=date(2027, 1, 1),
         dpd=45, dpd_bucket=DPDBucket.BUCKET_2, status=LoanStatus.ACTIVE,
     )
     db.add(loan)
@@ -107,13 +107,13 @@ def world(db):
     on_beat = Case(id=_uid(), case_number="ONBEAT", customer_id=cust.id, loan_id=loan.id,
                    agent_id=a1.id, status=CaseStatus.IN_PROGRESS,
                    target_amount=10000.0, collected_amount=0.0,
-                   allocation_date=TODAY.isoformat())
+                   allocation_date=TODAY)
     # This one a1 visited last week and took a promise on; it has since been
     # reassigned to a2 by the nightly plan, and is NOT on a1's beat today.
     moved_on = Case(id=_uid(), case_number="MOVEDON", customer_id=cust.id, loan_id=loan.id,
                     agent_id=a2.id, status=CaseStatus.IN_PROGRESS,
                     target_amount=8590.0, collected_amount=0.0,
-                    allocation_date=TODAY.isoformat())
+                    allocation_date=TODAY)
     db.add_all([on_beat, moved_on])
     db.flush()
 
@@ -215,7 +215,7 @@ def _paid_earlier(db, world, *, status=CaseStatus.PAID, collected=10000.0, targe
     settled = Case(id=_uid(), case_number="SETTLED", customer_id=src.customer_id,
                    loan_id=src.loan_id, agent_id=a1.id, status=status,
                    target_amount=target, collected_amount=collected,
-                   allocation_date=TODAY.isoformat())
+                   allocation_date=TODAY)
     db.add(settled)
     db.flush()
     beat = db.query(Beat).filter(Beat.agent_id == a1.id, Beat.beat_date == TODAY).one()

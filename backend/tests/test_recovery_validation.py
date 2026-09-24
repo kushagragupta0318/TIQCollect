@@ -21,6 +21,7 @@
 from types import SimpleNamespace as NS
 
 import pytest
+from tests._db import test_id
 
 from app.ml.recovery_validation import (
     ADMISSIBLE, BACKFILL, CENSORED, IMMATURE, MIN_ADMISSIBLE_PER_BAND,
@@ -37,7 +38,7 @@ VERSION = EXPECTED_VERSION
 def row(**over):
     """A snapshot row that IS admissible at 30 days, unless overridden."""
     base = dict(
-        loan_id="l1", recovery_potential="HIGH",
+        loan_id=test_id("l1"), recovery_potential="HIGH",
         recovery_model_version=VERSION, is_backfill=False,
         recovery_labelled_through_days=30, outcome="NO_PAYMENT",
         recovery_rate_30=0.25, recovery_rate_60=0.40, recovery_rate_90=0.60,

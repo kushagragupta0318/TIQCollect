@@ -67,7 +67,7 @@ class World:
         self.db.add(u); self.db.flush(); return u
 
     def _agent(self, code, user, mgr):
-        a = Agent(user_id=user.id, employee_code=code, id_card_number=code + "-ID", agency_id="AG1",
+        a = Agent(user_id=user.id, employee_code=code, id_card_number=code + "-ID", 
                   base_latitude=28.6, base_longitude=77.2, tier=AgentTier.TIER_2, specialization=AgentSpecialization.BOTH,
                   status=AgentStatus.ON_DUTY, territory="Delhi", languages_spoken=["HINDI"], ranking_score=50.0,
                   manager_user_id=mgr.id)
@@ -76,18 +76,18 @@ class World:
     def case(self, agent):
         self._n += 1
         if not hasattr(self, "cust"):
-            self.cust = Customer(customer_ref="LVC", full_name="B", date_of_birth="1990-01-01", gender="M", pan_masked="X",
+            self.cust = Customer(customer_ref="LVC", full_name="B", date_of_birth=date(1990, 1, 1), gender="M", pan_masked="X",
                                  aadhaar_masked="X", phone_primary="9000000001", address_line1="1", city="Delhi", state="DL",
                                  pincode="110001", latitude=28.6, longitude=77.2, risk_category=RiskCategory.MEDIUM)
             self.db.add(self.cust); self.db.flush()
             self.loan = Loan(loan_account_number="LVL", customer_id=self.cust.id, loan_type=LoanType.PERSONAL,
                              branch_code="BR", sanctioned_amount=1.0, disbursed_amount=1.0, outstanding_principal=1.0,
-                             total_outstanding=1.0, overdue_amount=1.0, emi_amount=1.0, disbursement_date="2025-01-01",
-                             maturity_date="2027-01-01", dpd=45, dpd_bucket=DPDBucket.BUCKET_2, status=LoanStatus.ACTIVE,
+                             total_outstanding=1.0, overdue_amount=1.0, emi_amount=1.0, disbursement_date=date(2025, 1, 1),
+                             maturity_date=date(2027, 1, 1), dpd=45, dpd_bucket=DPDBucket.BUCKET_2, status=LoanStatus.ACTIVE,
                              interest_rate=1.0, penal_charges=0.0)
             self.db.add(self.loan); self.db.flush()
         c = Case(case_number=f"LV-{self._n}", customer_id=self.cust.id, loan_id=self.loan.id, agent_id=agent.id,
-                 status=CaseStatus.ASSIGNED, target_amount=1000.0, collected_amount=0.0, allocation_date=TODAY.isoformat())
+                 status=CaseStatus.ASSIGNED, target_amount=1000.0, collected_amount=0.0, allocation_date=TODAY)
         self.db.add(c); self.db.flush(); return c
 
     def planned_beat(self, agent, d, cases):

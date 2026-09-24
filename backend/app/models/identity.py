@@ -27,6 +27,7 @@ SCHEMA = "tenancy"
 
 SESSION_REVOKE_REASONS = (
     "LOGOUT", "ADMIN_REVOKED", "REUSE_DETECTED", "PASSWORD_CHANGED", "USER_DEACTIVATED", "EXPIRED",
+    "DEVICE_RESET",   # 2026-09-24 (audit gate 3): a manager unbound the agent's phone
 )
 
 

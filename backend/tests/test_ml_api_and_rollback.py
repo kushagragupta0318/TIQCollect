@@ -25,6 +25,7 @@ from app.models.model_prediction import ModelPrediction
 from app.services.planner_service import PlannerService
 
 from app.core.security import create_access_token
+from tests._db import test_id
 from tests.test_planner_service import (  # noqa: F401
     client, db_session, setup_db, test_data,
 )
@@ -260,7 +261,7 @@ def test_rollback_refuses_a_run_that_is_not_the_managers(
         client, auth, db_session, ml_plan):
     """A rollback is destructive; tenancy must hold on it."""
     other = AllocationRun(
-        id="run-someone-else", manager_user_id="another-manager",
+        id=test_id("run-someone-else"), manager_user_id=test_id("another-manager"),
         plan_date=date.today(), strategy="SMART", status="PLANNED",
         total_cases_evaluated=0, total_cases_allocated=0,
         total_cases_deferred=0, total_cases_blocked=0,
@@ -270,7 +271,7 @@ def test_rollback_refuses_a_run_that_is_not_the_managers(
     db_session.commit()
 
     r = client.post("/api/v1/manager/allocation/rollback",
-                    json={"run_id": "run-someone-else"}, headers=auth)
+                    json={"run_id": test_id("run-someone-else")}, headers=auth)
     # 400 "not found" is the scoped lookup refusing to see it, which is the
     # right shape: the endpoint does not confirm another agency's run exists.
     assert r.status_code in (400, 403, 404), (
@@ -278,5 +279,5 @@ def test_rollback_refuses_a_run_that_is_not_the_managers(
     assert "not found" in r.text.lower() or r.status_code in (403, 404)
     # And it is genuinely untouched.
     still = db_session.query(AllocationRun).filter(
-        AllocationRun.id == "run-someone-else").one()
+        AllocationRun.id == test_id("run-someone-else")).one()
     assert still.status == "PLANNED"

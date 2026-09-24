@@ -45,7 +45,7 @@ from pydantic import AfterValidator
 
 from app.core.errors import AppException, ErrorCode
 
-__all__ = ["UUIDPath", "UUIDQuery", "UUIDQueryRequired", "parse_uuid", "parse_uuid_or_404", "is_uuid"]
+__all__ = ["UUIDPath", "UUIDQuery", "UUIDQueryRequired", "UUIDStr", "parse_uuid", "parse_uuid_or_404", "is_uuid"]
 
 _NOT_FOUND_MESSAGE = "Not found"
 
@@ -87,3 +87,16 @@ def _optional_or_404(value):
 UUIDPath = Annotated[str, Path(), AfterValidator(parse_uuid_or_404)]
 UUIDQuery = Annotated[Optional[str], Query(), AfterValidator(_optional_or_404)]
 UUIDQueryRequired = Annotated[str, Query(), AfterValidator(parse_uuid_or_404)]
+
+def _uuid_or_value_error(value):
+    parsed = parse_uuid(value)
+    if parsed is None:
+        raise ValueError("not a valid id")
+    return parsed
+
+
+# For ids inside a request BODY (audit LOW, 2026-09-24): a malformed one is a
+# 422 before any query runs — never a Postgres DataError 500. A body is not an
+# existence probe the way a path is (the resource being addressed is the
+# path's), so the ordinary validation answer is the right one here.
+UUIDStr = Annotated[str, AfterValidator(_uuid_or_value_error)]

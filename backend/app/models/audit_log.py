@@ -35,6 +35,11 @@ class AuditAction(str, enum.Enum):
     MODEL_CANDIDATE_APPROVED = "MODEL_CANDIDATE_APPROVED"
     MODEL_CANDIDATE_REJECTED = "MODEL_CANDIDATE_REJECTED"
     MODEL_PROMOTED = "MODEL_PROMOTED"
+    # 2026-09-24 (audit gates 2 and 3) — browser calling and device resets.
+    # Declared only with their write sites (voice_outbound, reset_agent_device).
+    VOICE_CALL_PLACED = "VOICE_CALL_PLACED"
+    VOICE_CALL_REFUSED = "VOICE_CALL_REFUSED"
+    DEVICE_RESET = "DEVICE_RESET"
 
 
 class AuditLog(Base, UUIDPrimaryKey):

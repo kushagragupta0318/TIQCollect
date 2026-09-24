@@ -49,6 +49,7 @@ from app.models.loan import Loan
 from app.models.payment import Payment, PaymentStatus
 from app.models.ptp import PTP, PTPStatus
 from app.services.ptp_lifecycle_service import verified_paid_against
+from app.services.brand import brand_for
 from app.services.notification_service import NotificationService
 
 
@@ -275,23 +276,24 @@ class PaymentService:
         masked_phone = "XXXXXX" + e164[-4:]
         masked_acct = "XXXX" + loan.loan_account_number[-4:] if loan else "XXXXXXXX"
         pay_date = payment.payment_date.strftime("%d %b %Y")
+        bn = brand_for(self.db, case=case).bank_name
         mode_label = {"CASH": "Cash", "UPI": "UPI", "CHEQUE": "Cheque", "NEFT": "NEFT", "RTGS": "RTGS"}.get(str(req.mode), str(req.mode))
         sms_body = (
-            f"Dear {customer.full_name}, ABC Bank's agent {agent.user.full_name} visited on {pay_date}. "
+            f"Dear {customer.full_name}, {bn}'s agent {agent.user.full_name} visited on {pay_date}. "
             f"Rs.{req.amount:,.0f} received via {mode_label} for loan {masked_acct}. "
-            f"Receipt: {payment.receipt_number}. Mobile: {masked_phone}. - ABC Bank"
+            f"Receipt: {payment.receipt_number}. Mobile: {masked_phone}. - {bn}"
         )
         wa_body = (
-            f"*Visit Completed & Payment Received – ABC Bank*\n\n"
+            f"*Visit Completed & Payment Received – {bn}*\n\n"
             f"Dear {customer.full_name},\n\n"
             f"Agent *{agent.user.full_name}* visited on {pay_date}.\n"
             f"Rs.{req.amount:,.0f} received via *{mode_label}*\n"
             f"Loan Account: {masked_acct}\n"
             f"Receipt No: {payment.receipt_number}\n"
             f"Mobile: {masked_phone}\n\n"
-            f"Thank you for your payment.\n– ABC Bank"
+            f"Thank you for your payment.\n– {bn}"
         )
-        return NotificationService.send_twilio(e164, sms_body, wa_body)
+        return NotificationService.send_twilio(e164, sms_body, wa_body, db=self.db, case_id=case.id)
 
     @staticmethod
     def _payment_response(payment: Payment, case: Case, *, receipt_sent: bool = False) -> dict:
@@ -327,7 +329,7 @@ class PaymentService:
         client = razorpay.Client(auth=(settings.RAZORPAY_TEST_API, settings.RAZORPAY_TEST_KEY_SECRET))
         qr = client.qrcode.create({
             "type": "upi_qr",
-            "name": "ABC Bank",
+            "name": brand_for(self.db, case=case).upi_payee_name,
             "usage": "single_use",
             "fixed_amount": True,
             "payment_amount": int(amount * 100),

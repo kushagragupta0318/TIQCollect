@@ -50,6 +50,7 @@ from app.core.geo import is_within_contact_hours
 from app.models.audit_log import AuditLog, AuditAction
 from app.models.case import Case
 from app.models.payment import Payment, PaymentStatus
+from app.services.brand import brand_for
 from app.services.notification_service import NotificationService
 import structlog
 
@@ -289,10 +290,11 @@ class OtpService:
 
         e164 = "+" + NotificationService.normalize_phone(customer.phone_primary)
         ttl_min = max(1, settings.OTP_TTL_SECONDS // 60)
+        bn = brand_for(self.db, case=case).bank_name
         sms_body = (
-            f"ABC Bank: {code} is your OTP to confirm Rs.{amount:,.0f} collected against your loan. "
+            f"{bn}: {code} is your OTP to confirm Rs.{amount:,.0f} collected against your loan. "
             f"Valid {ttl_min} min. Share it ONLY with the visiting agent to confirm YOUR own payment. "
-            f"Never share otherwise. - ABC Bank"
+            f"Never share otherwise. - {bn}"
         )
         # 2026-09-11 — the result was discarded, so this method answered 200
         # whether or not the borrower could ever receive the code, and the
@@ -301,7 +303,7 @@ class OtpService:
         # way: a borrower who is told the code by another route can still
         # confirm with it, the throttle and cap still apply, and nothing
         # about verification changes. What changes is that the caller is told.
-        sms_sent = NotificationService.send_sms(e164, sms_body)
+        sms_sent = NotificationService.send_sms(e164, sms_body, db=self.db, case_id=case.id)
         if not sms_sent:
             # send_sms has already logged a real transport failure at ERROR.
             # This is the OTP-specific consequence, and it fires for the
@@ -320,7 +322,10 @@ class OtpService:
             # (demo/dev, where demo_otp below carries the code instead).
             "sms_sent": bool(sms_sent),
         }
-        if getattr(settings, "DEMO_MODE", False) or getattr(settings, "ENVIRONMENT", "") == "development":
+        # 2026-09-24 (audit MED 7): its own flag, not DEMO_MODE and not an
+        # ENVIRONMENT string — echoing the borrower's code to the agent defeats
+        # the control, so it happens only where someone switched it on by name.
+        if settings.DEMO_OTP_ECHO:
             ret["demo_otp"] = code
         return ret
 

@@ -112,7 +112,7 @@ def _pred(db, *, case, as_of, features, outcome, version=SERVING,
           odv=OUTCOME_DEFINITION_VERSION, is_modelled=True, prob=0.5):
     row = ModelPrediction(
         id=str(uuid.uuid4()), model_name="recovery_risk", model_version=version,
-        entity_type="case", entity_id=case, case_id=case, loan_id=f"L{case}",
+        entity_type="case", entity_id=case, case_id=case, loan_id=test_id(f"L{case}"),
         as_of_date=as_of, probability=prob, is_modelled=is_modelled,
         features=features, feature_coverage=1.0, outcome_horizon_days=30,
         outcome_baseline={"overdue_amount": 5000.0, "emi_amount": 2500.0,

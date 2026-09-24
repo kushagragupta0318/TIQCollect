@@ -14,6 +14,7 @@ from app.models.agent import AgentSpecialization, AgentTier
 from app.models.loan import DPDBucket, LoanType
 from app.services.global_allocator import GlobalAllocator
 from app.models.allocation_decision import AllocationOutcome
+from tests._db import test_id
 
 BASE_LAT, BASE_LON = 28.6139, 77.2090
 
@@ -33,7 +34,7 @@ def make_case(case_id, *, lat=BASE_LAT, lon=BASE_LON, target=50_000.0,
               language="HINDI", loan_type=LoanType.PERSONAL,
               bucket=DPDBucket.BUCKET_2, agent_id=None):
     customer = SimpleNamespace(
-        id=f"cust-{case_id}", latitude=lat, longitude=lon, do_not_contact=dnc,
+        id=test_id(f"cust-{case_id}"), latitude=lat, longitude=lon, do_not_contact=dnc,
         is_hostile=hostile, requires_female_agent=needs_female,
         language_preference=language)
     return SimpleNamespace(

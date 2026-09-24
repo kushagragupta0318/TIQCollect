@@ -39,6 +39,7 @@
 #   prototype_to_product/30.07.md and /changelog.md.
 # ───────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
+from app.core.ids import UUIDStr
 from pydantic import BaseModel, ConfigDict, Field
 from datetime import date, datetime
 from typing import Optional
@@ -111,7 +112,7 @@ class RecordVisitRequest(BaseModel):
 class CollectPaymentRequest(BaseModel):
     amount: float = Field(gt=0)
     mode: PaymentMode
-    visit_id: Optional[str] = None           # link payment to the visit that triggered it
+    visit_id: Optional[UUIDStr] = None       # link payment to the visit that triggered it
     upi_reference: Optional[str] = None
     cheque_number: Optional[str] = None
     cheque_date: Optional[str] = None        # ISO date, for post-dated cheques
@@ -247,7 +248,7 @@ class OtpSendRequest(BaseModel):
     mode: Optional[PaymentMode] = None
     # Present → deferred flow: re-verify an already-created PENDING payment.
     # Absent  → pre-collection flow: verify first, then collect.
-    payment_id: Optional[str] = None
+    payment_id: Optional[UUIDStr] = None
 
 
 class OtpSendResponse(BaseModel):

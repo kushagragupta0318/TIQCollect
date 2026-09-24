@@ -166,6 +166,17 @@ class Settings(BaseSettings):
     # listed here (comma-separated, any format). Every other recipient is
     # invented demo data and is suppressed, never contacted.
     DEMO_NOTIFY_ALLOWLIST: str = ""
+    # 2026-09-24 (coordinator audit MED 7) — two SECURITY controls used to be
+    # switched off by DEMO_MODE as a side effect, and docker-compose defaults
+    # DEMO_MODE to true. Each now has its own flag, default OFF, set
+    # explicitly where a demo needs it:
+    #   DEMO_DEVICE_REBIND — an agent logging in from a new device re-binds
+    #     (recorded as DEVICE_MISMATCH success=True) instead of being refused.
+    #   DEMO_OTP_ECHO — the borrower's payment OTP is returned to the AGENT
+    #     in the API response (`demo_otp`), i.e. the second factor is shown
+    #     to the person it exists to check.
+    DEMO_DEVICE_REBIND: bool = False
+    DEMO_OTP_ECHO: bool = False
     # customer_ref of that showcase customer. Also what _sync_demo_contact()
     # renames on startup, so the name/phone and the anchoring agree by
     # construction instead of by two copies of the same literal.
@@ -516,6 +527,12 @@ class Settings(BaseSettings):
     TWILIO_API_KEY_SID: str = ""
     TWILIO_API_KEY_SECRET: str = ""
     TWILIO_TWIML_APP_SID: str = ""
+    # 2026-09-24 (audit gate 2) — the PUBLIC origin Twilio calls webhooks on,
+    # e.g. https://fieldops.example.in. X-Twilio-Signature is computed over
+    # that exact URL; behind a proxy the app sees an internal http host, so
+    # the signature can only be checked against this. Unset => the voice
+    # webhook refuses every call (fail closed).
+    PUBLIC_BASE_URL: str = ""
 
     # Borrower payment-verification OTP (see services/otp_service.py)
     OTP_LENGTH: int = 4                       # product decision: 4-digit code

@@ -26,6 +26,20 @@
 #   (static, bank-reported), and `Customer.is_hostile` on REWIND — it is a
 #   flag event with a day, overwritten in place in the live schema like `dpd`,
 #   so "was it raised before as_of" is a rewind question.
+# 2026-09-24 (standalone v2, coordinator audit items 11/12) — ids, dates and
+#   tenancy for the v2 schema.
+#     - Ledger ids ("L000123", "P...", "C-L000123") are not UUIDs, and v2 ids
+#       are native UUIDs: SQLite stores such a literal mangled and raises on
+#       read. Every row now gets `uuid5(namespace, "<kind>:<ledger id>")` —
+#       deterministic, so a rerun is identical — and `db_id()` /
+#       `ledger_loan_id()` translate both ways. The ledger itself is
+#       untouched: its ids key the panel and every committed artifact.
+#     - The world brings its own tenant: one synthetic bank (is_demo, so
+#       nothing is ever sent), one agency and a branch for every branch code
+#       the ledger uses. It used to write `agency_id="AG"` and
+#       `bank_name="HDFC"` (a real bank's name, on a synthetic book).
+#     - DATE columns get dates, not `strftime` strings (Postgres would coerce
+#       them and SQLite refuses them, so the harness and production diverged).
 # ───────────────────────────────────────────────────────────────────────────
 """Load a `Ledger` into the production schema and rewind it to a past date.
 
@@ -41,6 +55,7 @@ it touches ONLY the columns the real schema overwrites in place.
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import date, datetime, time, timedelta, timezone
 
 import numpy as np
@@ -58,6 +73,7 @@ from app.models.loan import DPDBucket, Loan, LoanStatus, LoanType, dpd_bucket_fo
 from app.models.payment import Payment, PaymentMode, PaymentStatus
 from app.models.call_log import BorrowerDisposition
 from app.models.ptp import PTP, PTPStatus
+from app.models.tenancy import Agency, Bank, Branch
 from app.models.user import User, UserRole
 from app.models.visit import DefaultReason, Visit, VisitOutcome
 
@@ -94,6 +110,15 @@ def _dt(start: date, day: int) -> datetime:
                             tzinfo=timezone.utc)
 
 
+#: Namespace for the ledger -> UUID mapping. Fixed: changing it changes every
+#: materialised id, which is harmless but pointless.
+_ID_NS = uuid.UUID("5b3f0c2e-8d4a-4e61-9f7b-2a6c1d0e9b44")
+
+#: The synthetic world's own tenant. is_demo: nothing here is ever contacted.
+SIM_BANK_CODE = "LEDGER-SIM"
+SIM_AGENCY_CODE = "LEDGER-SIM-AGENCY"
+
+
 class Materialiser:
     """Writes a ledger into the real schema, and rewinds mutable state."""
 
@@ -102,6 +127,42 @@ class Materialiser:
         self.cfg = cfg
         self.start = cfg.start_date
         self._loan_ids: list[str] = []
+        self.bank_id = self.db_id("bank", SIM_BANK_CODE)
+        self.agency_id = self.db_id("agency", SIM_AGENCY_CODE)
+        self._loan_back: dict[str, str] = {}
+
+    # ── ids ─────────────────────────────────────────────────────────────────
+    @staticmethod
+    def db_id(kind: str, ledger_id) -> str:
+        """The UUID a ledger object is stored under. Kinds: bank, agency,
+        user, agent, customer, loan, case, payment, visit, call, ptp."""
+        return str(uuid.uuid5(_ID_NS, f"{kind}:{ledger_id}"))
+
+    def loan(self, ledger_loan_id: str) -> str:
+        return self.db_id("loan", ledger_loan_id)
+
+    def case(self, ledger_loan_id: str) -> str:
+        """One case per loan, so a case is named by its loan."""
+        return self.db_id("case", ledger_loan_id)
+
+    def ledger_loan_id(self, db_loan_id: str) -> str | None:
+        return self._loan_back.get(str(db_loan_id))
+
+    def _tenant(self, db: Session, branch_codes) -> None:
+        if db.get(Bank, self.bank_id) is None:
+            db.add(Bank(id=self.bank_id, code=SIM_BANK_CODE, legal_name="Ledger Simulation Bank (synthetic)",
+                        display_name="Ledger Simulation Bank", brand={}, status="ACTIVE", is_demo=True))
+            db.flush()
+        if db.get(Agency, self.agency_id) is None:
+            db.add(Agency(id=self.agency_id, bank_id=self.bank_id, code=SIM_AGENCY_CODE,
+                          legal_name="Ledger Simulation Agency (synthetic)", trade_name="Ledger Simulation Agency",
+                          status="ACTIVE", contacts=[], is_demo=True))
+            db.flush()
+        known = {c for (c,) in db.query(Branch.branch_code).filter(Branch.bank_id == self.bank_id)}
+        for code in sorted(set(branch_codes) - known):
+            db.add(Branch(id=self.db_id("branch", code), bank_id=self.bank_id, branch_code=code,
+                          name=f"Simulated branch {code}"))
+        db.flush()
 
     # ── one-time load ───────────────────────────────────────────────────────
     def load(self, db: Session, *, limit_loans: int | None = None) -> list[str]:
@@ -110,23 +171,26 @@ class Materialiser:
         loans = led.loans if limit_loans is None else led.loans.head(limit_loans)
         keep = set(loans.loan_id)
         self._loan_ids = list(loans.loan_id)
+        self._loan_back = {self.loan(lid): lid for lid in self._loan_ids}
+        self._tenant(db, loans.branch_code)
+        tenant = {"bank_id": self.bank_id, "agency_id": self.agency_id}
 
-        mgr = User(id="u-mgr", email="m@ledger.test", phone="9800000001",
+        mgr = User(id=self.db_id("user", "mgr"), email="m@ledger.test", phone="9800000001",
                    full_name="M", hashed_password="h",
-                   role=UserRole.AGENCY_MANAGER, is_active=True, is_verified=True)
+                   role=UserRole.AGENCY_MANAGER, is_active=True, is_verified=True, **tenant)
         db.add(mgr)
         db.flush()
 
         agent_ids = {}
         for i, row in led.agents.iterrows():
-            usr = User(id=f"u-{row.agent_id}", email=f"{row.agent_id}@ledger.test",
+            usr = User(id=self.db_id("user", row.agent_id), email=f"{row.agent_id}@ledger.test",
                        phone=f"97{i:08d}", full_name=row.agent_id,
                        hashed_password="h", role=UserRole.FIELD_AGENT,
-                       is_active=True, is_verified=True)
+                       is_active=True, is_verified=True, **tenant)
             db.add(usr)
             db.flush()
-            ag = Agent(id=row.agent_id, user_id=usr.id, employee_code=row.agent_id,
-                       id_card_number=f"IC{i:04d}", agency_id="AG",
+            ag = Agent(id=self.db_id("agent", row.agent_id), user_id=usr.id, employee_code=row.agent_id,
+                       id_card_number=f"IC{i:04d}", **tenant,
                        manager_user_id=mgr.id, gender="M",
                        base_latitude=28.4, base_longitude=77.0,
                        territory="Gurugram", languages_spoken=["HINDI"],
@@ -135,7 +199,7 @@ class Materialiser:
                        tier=AgentTier.TIER_1, ranking_score=50.0,
                        lifetime_collection_rate=0.5)
             db.add(ag)
-            agent_ids[row.agent_id] = row.agent_id
+            agent_ids[row.agent_id] = ag.id
         db.flush()
 
         borrowers = led.borrowers.set_index("borrower_id")
@@ -144,12 +208,11 @@ class Materialiser:
             b = borrowers.loc[r.borrower_id]
             if r.borrower_id not in seen_cust:
                 db.add(Customer(
-                    id=r.borrower_id, customer_ref=r.borrower_id,
-                    full_name=r.borrower_id,
+                    id=self.db_id("customer", r.borrower_id), bank_id=self.bank_id,
+                    customer_ref=r.borrower_id, full_name=r.borrower_id,
                     # A REAL date of birth, so the adapter's age arithmetic has
                     # something to work from. `dob_day` is a ledger fact.
-                    date_of_birth=(self.start + timedelta(days=int(b.dob_day))
-                                   ).strftime("%Y-%m-%d"),
+                    date_of_birth=self.start + timedelta(days=int(b.dob_day)),
                     gender="M", pan_masked="A1234B", aadhaar_masked="1111",
                     phone_primary="9900000001", address_line1="x",
                     city=b.city, state="HR", pincode="122001",
@@ -162,9 +225,10 @@ class Materialiser:
                 seen_cust.add(r.borrower_id)
 
             db.add(Loan(
-                id=r.loan_id, customer_id=r.borrower_id,
+                id=self.loan(r.loan_id), bank_id=self.bank_id,
+                customer_id=self.db_id("customer", r.borrower_id),
                 loan_account_number=r.loan_id, loan_type=LoanType(r.loan_type),
-                bank_name="HDFC", branch_code=r.branch_code,
+                branch_code=r.branch_code,
                 sanctioned_amount=float(r.sanction_amount),
                 disbursed_amount=float(r.sanction_amount),
                 outstanding_principal=0.0, total_outstanding=0.0,
@@ -172,11 +236,9 @@ class Materialiser:
                 interest_rate=float(r.interest_rate),
                 tenure_months=int(r.tenure_months),
                 # ONE origination fact, shared with the panel's months_on_book.
-                disbursement_date=(self.start + timedelta(days=int(r.origination_day))
-                                   ).strftime("%Y-%m-%d"),
-                maturity_date=(self.start + timedelta(
-                    days=int(r.origination_day) + cfg.cycle_days * int(r.tenure_months))
-                    ).strftime("%Y-%m-%d"),
+                disbursement_date=self.start + timedelta(days=int(r.origination_day)),
+                maturity_date=self.start + timedelta(
+                    days=int(r.origination_day) + cfg.cycle_days * int(r.tenure_months)),
                 dpd=0, dpd_bucket=DPDBucket.CURRENT, status=LoanStatus.ACTIVE,
             ))
             # ONE case per loan. The adapter aggregates over every case of a
@@ -184,8 +246,8 @@ class Materialiser:
             # would not be a ledger fact, and inventing one to exercise the
             # union would be testing the fixture, not the adapter.
             db.add(Case(
-                id=f"C-{r.loan_id}", case_number=f"C-{r.loan_id}",
-                customer_id=r.borrower_id, loan_id=r.loan_id,
+                id=self.case(r.loan_id), case_number=f"C-{r.loan_id}", **tenant,
+                customer_id=self.db_id("customer", r.borrower_id), loan_id=self.loan(r.loan_id),
                 status=CaseStatus.ASSIGNED, priority=CasePriority.MEDIUM,
                 target_amount=float(r.emi_amount), collected_amount=0.0,
             ))
@@ -195,8 +257,8 @@ class Materialiser:
             if p.loan_id not in keep:
                 continue
             db.add(Payment(
-                id=p.payment_id, case_id=f"C-{p.loan_id}",
-                agent_id=led.agents.agent_id.iloc[0],
+                id=self.db_id("payment", p.payment_id), case_id=self.case(p.loan_id),
+                agent_id=agent_ids[led.agents.agent_id.iloc[0]],
                 amount=float(p.amount), mode=PaymentMode.CASH,
                 status=PaymentStatus.VERIFIED,      # rewound below
                 receipt_number=p.receipt_number,
@@ -219,7 +281,7 @@ class Materialiser:
                        (VisitOutcome.PTP if v.met else VisitOutcome.NOT_AVAILABLE))
             reason = getattr(v, "default_reason", None)
             db.add(Visit(
-                id=v.visit_id, case_id=f"C-{v.loan_id}", agent_id=v.agent_id,
+                id=self.db_id("visit", v.visit_id), case_id=self.case(v.loan_id), agent_id=agent_ids[v.agent_id],
                 check_in_latitude=28.4, check_in_longitude=77.0,
                 check_in_time=_dt(self.start, v.day),
                 distance_from_customer_metres=50.0,
@@ -231,7 +293,7 @@ class Materialiser:
             ))
         calls = getattr(led, "calls", None)
         if calls is not None and len(calls):
-            loan_borrower = dict(zip(loans.loan_id, loans.borrower_id))
+            loan_borrower = {lid: self.db_id("customer", bid) for lid, bid in zip(loans.loan_id, loans.borrower_id)}
             has_disp_c = "disposition" in calls.columns
             for k in calls.itertuples():
                 if k.loan_id not in keep:
@@ -241,7 +303,7 @@ class Materialiser:
                 cdisp = (BorrowerDisposition(cdisp)
                          if isinstance(cdisp, str) and cdisp else None)
                 db.add(CallLog(
-                    id=k.call_id, case_id=f"C-{k.loan_id}", agent_id=k.agent_id,
+                    id=self.db_id("call", k.call_id), case_id=self.case(k.loan_id), agent_id=agent_ids[k.agent_id],
                     customer_id=loan_borrower[k.loan_id],
                     called_at=_dt(self.start, k.day),
                     outcome=CallOutcome(k.outcome),
@@ -264,9 +326,11 @@ class Materialiser:
         for t in led.ptps.itertuples():
             if t.loan_id not in keep:
                 continue
-            row = PTP(id=t.ptp_id, case_id=f"C-{t.loan_id}",
-                      agent_id=led.agents.agent_id.iloc[0],
-                      committed_amount=float(t.committed_amount),
+            row = PTP(id=self.db_id("ptp", t.ptp_id), case_id=self.case(t.loan_id),
+                      agent_id=agent_ids[led.agents.agent_id.iloc[0]],
+                      # Rounded here, as NUMERIC(14,2) rounds on Postgres:
+                      # unrounded, the SQLite harness and production differed.
+                      committed_amount=round(float(t.committed_amount), 2),
                       committed_date=self.start + timedelta(days=int(t.committed_day)),
                       status=PTPStatus.ACTIVE)
             db.add(row)
@@ -306,7 +370,7 @@ class Materialiser:
         status_now = np.where(pays.status_effective_day < day,
                               pays.final_status, pays.initial_status)
         for pid, st in zip(pays.payment_id, status_now):
-            db.query(Payment).filter(Payment.id == pid).update(
+            db.query(Payment).filter(Payment.id == self.db_id("payment", pid)).update(
                 {"status": PAYMENT_STATUS[st]}, synchronize_session=False)
 
         # ── PTP status as at `day` ──────────────────────────────────────────
@@ -314,7 +378,7 @@ class Materialiser:
         for t in ptps.itertuples():
             resolved = t.resolved_day is not None and 0 <= t.resolved_day < day
             st = PTP_STATUS[t.resolved_status] if resolved else PTPStatus.ACTIVE
-            db.query(PTP).filter(PTP.id == t.ptp_id).update(
+            db.query(PTP).filter(PTP.id == self.db_id("ptp", t.ptp_id)).update(
                 {"status": st}, synchronize_session=False)
 
         # ── loan state as at `day` ──────────────────────────────────────────
@@ -339,7 +403,7 @@ class Materialiser:
         last_pay = verified.groupby("loan_id").payment_day.max().reindex(loans.index)
         for i, lid in enumerate(loans.index):
             lp = last_pay.iloc[i]
-            db.query(Loan).filter(Loan.id == lid).update({
+            db.query(Loan).filter(Loan.id == self.loan(lid)).update({
                 "dpd": int(dpd[i]),
                 "dpd_bucket": dpd_bucket_for(int(dpd[i])),
                 "overdue_amount": round(float(overdue[i]), 2),
@@ -348,8 +412,7 @@ class Materialiser:
                 "total_outstanding": round(
                     float(principal[i] + overdue[i] + penal[i]), 2),
                 "last_payment_date": (
-                    None if pd.isna(lp)
-                    else (self.start + timedelta(days=int(lp))).strftime("%Y-%m-%d")),
+                    None if pd.isna(lp) else self.start + timedelta(days=int(lp))),
             }, synchronize_session=False)
 
         # ── lifecycle as at `day` ───────────────────────────────────────────
@@ -364,19 +427,19 @@ class Materialiser:
         life = life[life.loan_id.isin(keep) & (life.event != "OPENED")
                     & (life.day < day)]
         for ev in life.itertuples():
-            cid = f"C-{ev.loan_id}"
+            cid = self.case(ev.loan_id)
             if ev.event == "WRITTEN_OFF":
                 db.query(Case).filter(Case.id == cid).update(
                     {"status": CaseStatus.WRITTEN_OFF}, synchronize_session=False)
-                db.query(Loan).filter(Loan.id == ev.loan_id).update(
+                db.query(Loan).filter(Loan.id == self.loan(ev.loan_id)).update(
                     {"status": LoanStatus.WRITTEN_OFF}, synchronize_session=False)
             elif ev.event == "SETTLED":
-                db.query(Loan).filter(Loan.id == ev.loan_id).update(
+                db.query(Loan).filter(Loan.id == self.loan(ev.loan_id)).update(
                     {"status": LoanStatus.SETTLED}, synchronize_session=False)
             elif ev.event == "CLOSED":
                 db.query(Case).filter(Case.id == cid).update(
                     {"status": CaseStatus.CLOSED}, synchronize_session=False)
-                db.query(Loan).filter(Loan.id == ev.loan_id).update(
+                db.query(Loan).filter(Loan.id == self.loan(ev.loan_id)).update(
                     {"status": LoanStatus.CLOSED}, synchronize_session=False)
             elif ev.event == "RECALLED":
                 db.query(Case).filter(Case.id == cid).update(
@@ -384,7 +447,7 @@ class Materialiser:
                      f"{self.start + timedelta(days=int(ev.day))}"},
                     synchronize_session=False)
             elif ev.event == "DECEASED":
-                loan = db.query(Loan).filter(Loan.id == ev.loan_id).first()
+                loan = db.query(Loan).filter(Loan.id == self.loan(ev.loan_id)).first()
                 if loan is not None:
                     db.query(Customer).filter(
                         Customer.id == loan.customer_id).update(
@@ -402,7 +465,7 @@ class Materialiser:
             raised = set(fl.loan_id)
         for lid in loans.index:
             db.query(Customer).filter(
-                Customer.id == loans.loc[lid, "borrower_id"]).update(
+                Customer.id == self.db_id("customer", loans.loc[lid, "borrower_id"])).update(
                 {"is_hostile": lid in raised}, synchronize_session=False)
 
         # ── bureau score as at `day` ────────────────────────────────────────
@@ -414,6 +477,6 @@ class Materialiser:
         for lid in loans.index:
             score = latest.get(lid, loans.loc[lid, "opening_cibil"])
             db.query(Customer).filter(
-                Customer.id == loans.loc[lid, "borrower_id"]).update(
+                Customer.id == self.db_id("customer", loans.loc[lid, "borrower_id"])).update(
                 {"cibil_score": int(round(float(score)))}, synchronize_session=False)
         db.commit()

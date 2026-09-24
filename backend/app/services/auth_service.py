@@ -21,6 +21,7 @@
 #   - Tokens carry bank_id / agency_id (the request context, A02) and sid.
 # ───────────────────────────────────────────────────────────────────────────
 from datetime import datetime, timedelta, timezone
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from fastapi import HTTPException, status, Request
 
@@ -95,8 +96,8 @@ def _open_session(db: Session, user: User, device_id: str, request: Request) -> 
 
 
 def _enforce_device_binding(db: Session, user: User, device_id: str, request: Request) -> None:
-    """A09. First login binds; a different device is refused (or, in DEMO_MODE,
-    re-bound with a record of it)."""
+    """A09. First login binds; a different device is refused (or, with
+    DEMO_DEVICE_REBIND on, re-bound with a record of it)."""
     if user.role != UserRole.FIELD_AGENT:
         return
     agent = db.query(Agent).filter(Agent.user_id == user.id).first()
@@ -110,17 +111,17 @@ def _enforce_device_binding(db: Session, user: User, device_id: str, request: Re
         bound.last_seen_at = now
         return
     if bound is not None:
-        if not settings.DEMO_MODE:
+        if not settings.DEMO_DEVICE_REBIND:
             _log(db, AuditAction.DEVICE_MISMATCH, user.id, request, success=False,
                  failure_reason="Device mismatch")
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                                 detail="Device not authorized. Contact your manager.")
         bound.is_bound = False
         bound.unbound_at = now
-        bound.unbind_reason = "DEMO_MODE re-bind on login from a new device"
+        bound.unbind_reason = "DEMO_DEVICE_REBIND re-bind on login from a new device"
         db.flush()
         _log(db, AuditAction.DEVICE_MISMATCH, user.id, request, success=True,
-             details={"rebound": True, "demo_mode": True, "previous_device_id": bound.id})
+             details={"rebound": True, "demo_device_rebind": True, "previous_device_id": bound.id})
     device = (db.query(AgentDevice)
               .filter(AgentDevice.agent_id == agent.id, AgentDevice.device_fingerprint == fp).first())
     if device is None:
@@ -174,7 +175,18 @@ def login(db: Session, email: str, password: str, device_id: str, request: Reque
     user.last_login_at = datetime.now(timezone.utc)
 
     tokens = _open_session(db, user, device_id, request)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # 2026-09-24 (audit gate 8) — two FIRST logins racing: both saw no
+        # bound device and both bound one, and the one-bound-device-per-agent
+        # index refused the second as an unaudited 500. It is a device
+        # mismatch, and is answered and recorded as one.
+        db.rollback()
+        _log(db, AuditAction.DEVICE_MISMATCH, user.id, request, success=False,
+             failure_reason="Concurrent first login from another device")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="Device not authorized. Contact your manager.")
 
     _log(db, AuditAction.LOGIN, user.id, request)
     return _login_response(user, tokens)
@@ -204,6 +216,12 @@ def quick_login(db: Session, token: str, request: Request) -> dict:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired link")
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account deactivated")
+    if user.role == UserRole.FIELD_AGENT:
+        # 2026-09-24 (audit LOW) — a quick-login link skips device binding, so
+        # an agent must never be signed in by one.
+        _log(db, AuditAction.LOGIN_FAILED, user.id, request, success=False,
+             failure_reason="Quick-login refused for a field agent")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Field agents sign in on their own device")
 
     exp = payload.get("exp")
     db.add(UsedQuickLoginToken(
@@ -258,10 +276,31 @@ def refresh_tokens(db: Session, refresh_token: str, request: Request) -> dict:
     new_access = create_access_token(user.id, user.role.value, device_id, sid=session.id,
                                      bank_id=user.bank_id, agency_id=user.agency_id)
     new_refresh = create_refresh_token(user.id, device_id, sid=session.id)
-    session.refresh_token_sha256 = token_sha256(new_refresh)
-    session.refresh_jti = decode_token(new_refresh)["jti"]
-    session.last_used_at = now
-    session.ip_last = _client_ip(request)
+    # 2026-09-24 (coordinator audit gate 6) — rotate with a COMPARE-AND-SWAP.
+    # Read-then-write let two concurrent refreshes with the same token both
+    # succeed, so a thief racing the real device was never detected. The
+    # UPDATE matches only while the row still holds the token presented; on
+    # Postgres the loser blocks on the row lock, re-reads, matches 0 rows and
+    # is treated exactly as a replay.
+    rotated = (db.query(UserSession)
+               .filter(UserSession.id == session.id,
+                       UserSession.refresh_token_sha256 == token_sha256(refresh_token),
+                       UserSession.revoked_at.is_(None))
+               .update({UserSession.refresh_token_sha256: token_sha256(new_refresh),
+                        UserSession.refresh_jti: decode_token(new_refresh)["jti"],
+                        UserSession.last_used_at: now,
+                        UserSession.ip_last: _client_ip(request)},
+                       synchronize_session=False))
+    if rotated != 1:
+        db.rollback()
+        (db.query(UserSession)
+         .filter(UserSession.id == session.id, UserSession.revoked_at.is_(None))
+         .update({UserSession.revoked_at: now, UserSession.revoked_reason: "REUSE_DETECTED"},
+                 synchronize_session=False))
+        db.commit()
+        _log(db, AuditAction.TOKEN_REFRESH, user.id, request, entity_id=session.id, success=False,
+             failure_reason="REUSE_DETECTED (concurrent refresh)")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token reuse detected. Login again.")
     db.commit()
 
     _log(db, AuditAction.TOKEN_REFRESH, user.id, request)

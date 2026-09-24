@@ -97,7 +97,7 @@ def test_every_id_path_parameter_on_the_routers_is_validated():
     for f in sorted(endpoints.glob("*.py")):
         src = f.read_text(encoding="utf-8")
         for fn in ast.walk(ast.parse(src)):
-            if not isinstance(fn, ast.FunctionDef):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):   # async routes too (audit LOW)
                 continue
             path = next((d.args[0].value for d in fn.decorator_list
                          if isinstance(d, ast.Call) and d.args and isinstance(d.args[0], ast.Constant)

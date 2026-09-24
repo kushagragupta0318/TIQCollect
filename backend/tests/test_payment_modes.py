@@ -43,7 +43,7 @@ def _user(db, email, role, name):
 
 
 def _agent(db, code, user, mgr):
-    a = Agent(user_id=user.id, employee_code=code, id_card_number=code + "-ID", agency_id="AG1",
+    a = Agent(user_id=user.id, employee_code=code, id_card_number=code + "-ID", 
               base_latitude=28.6, base_longitude=77.2, tier=AgentTier.TIER_1,
               specialization=AgentSpecialization.BOTH, status=AgentStatus.ON_DUTY,
               territory="Delhi", languages_spoken=["HINDI"], ranking_score=80.0, manager_user_id=mgr.id)
@@ -58,7 +58,7 @@ def book():
     other = _user(db, "pm_other@t.in", UserRole.AGENCY_MANAGER, "Other")
     ag = _agent(db, "PM001", _user(db, "pm_a1@t.in", UserRole.FIELD_AGENT, "A1"), mgr)
     ag_o = _agent(db, "PM002", _user(db, "pm_a2@t.in", UserRole.FIELD_AGENT, "A2"), other)
-    cust = Customer(customer_ref="PMC1", full_name="B", date_of_birth="1990-01-01", gender="M",
+    cust = Customer(customer_ref="PMC1", full_name="B", date_of_birth=date(1990, 1, 1), gender="M",
                     pan_masked="X", aadhaar_masked="X", phone_primary="9000000002", address_line1="1",
                     city="Delhi", state="DL", pincode="110001", latitude=28.6, longitude=77.2,
                     risk_category=RiskCategory.MEDIUM)
@@ -66,15 +66,15 @@ def book():
     loan = Loan(loan_account_number="PML1", customer_id=cust.id, loan_type=LoanType.PERSONAL,
                 branch_code="BR", sanctioned_amount=1.0, disbursed_amount=1.0,
                 outstanding_principal=1.0, total_outstanding=1.0, overdue_amount=1.0, emi_amount=1.0,
-                disbursement_date="2025-01-01", maturity_date="2027-01-01", dpd=45,
+                disbursement_date=date(2025, 1, 1), maturity_date=date(2027, 1, 1), dpd=45,
                 dpd_bucket=DPDBucket.BUCKET_2, status=LoanStatus.ACTIVE, interest_rate=1.0, penal_charges=0.0)
     db.add(loan); db.flush()
     c = Case(case_number="PM-1", customer_id=cust.id, loan_id=loan.id, agent_id=ag.id,
              status=CaseStatus.IN_PROGRESS, target_amount=100000.0, collected_amount=0.0,
-             allocation_date=date.today().isoformat())
+             allocation_date=date.today())
     co = Case(case_number="PM-X", customer_id=cust.id, loan_id=loan.id, agent_id=ag_o.id,
               status=CaseStatus.IN_PROGRESS, target_amount=100000.0, collected_amount=0.0,
-              allocation_date=date.today().isoformat())
+              allocation_date=date.today())
     db.add_all([c, co]); db.flush()
 
     def pay(case, agent, mode, amt, when, status=PaymentStatus.VERIFIED, n=[0]):

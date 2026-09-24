@@ -51,7 +51,7 @@ def _user(db, email, role, name):
 
 
 def _agent(db, code, user, mgr):
-    a = Agent(user_id=user.id, employee_code=code, id_card_number=code + "-ID", agency_id="AG1",
+    a = Agent(user_id=user.id, employee_code=code, id_card_number=code + "-ID", 
               base_latitude=28.6, base_longitude=77.2, tier=AgentTier.TIER_1, specialization=AgentSpecialization.BOTH,
               status=AgentStatus.ON_DUTY, territory="Delhi", languages_spoken=["HINDI"], ranking_score=80.0,
               manager_user_id=mgr.id)
@@ -67,21 +67,21 @@ def book():
     a1 = _agent(db, "PO001", _user(db, "po_a1@t.in", UserRole.FIELD_AGENT, "A1"), mgr)
     a2 = _agent(db, "PO002", _user(db, "po_a2@t.in", UserRole.FIELD_AGENT, "A2"), mgr)
     ax = _agent(db, "PO003", _user(db, "po_ax@t.in", UserRole.FIELD_AGENT, "X"), other)
-    cust = Customer(customer_ref="POC1", full_name="B", date_of_birth="1990-01-01", gender="M", pan_masked="X",
+    cust = Customer(customer_ref="POC1", full_name="B", date_of_birth=date(1990, 1, 1), gender="M", pan_masked="X",
                     aadhaar_masked="X", phone_primary="9000000001", address_line1="1", city="Delhi", state="DL",
                     pincode="110001", latitude=28.6, longitude=77.2, risk_category=RiskCategory.MEDIUM)
     db.add(cust); db.flush()
     loan = Loan(loan_account_number="POL1", customer_id=cust.id, loan_type=LoanType.PERSONAL,
                 branch_code="BR", sanctioned_amount=1.0, disbursed_amount=1.0, outstanding_principal=1.0,
-                total_outstanding=1.0, overdue_amount=1.0, emi_amount=1.0, disbursement_date="2025-01-01",
-                maturity_date="2027-01-01", dpd=45, dpd_bucket=DPDBucket.BUCKET_2, status=LoanStatus.ACTIVE,
+                total_outstanding=1.0, overdue_amount=1.0, emi_amount=1.0, disbursement_date=date(2025, 1, 1),
+                maturity_date=date(2027, 1, 1), dpd=45, dpd_bucket=DPDBucket.BUCKET_2, status=LoanStatus.ACTIVE,
                 interest_rate=1.0, penal_charges=0.0)
     db.add(loan); db.flush()
 
     def case(agent):
         c = Case(case_number=f"PO-{agent.employee_code}-{db.query(Case).count()}", customer_id=cust.id, loan_id=loan.id,
                  agent_id=agent.id, status=CaseStatus.PTP_SET, target_amount=10000.0, collected_amount=0.0,
-                 allocation_date=TODAY.isoformat())
+                 allocation_date=TODAY)
         db.add(c); db.flush(); return c
 
     def ptp(agent, due, status, amount=1000.0, paid=0.0):

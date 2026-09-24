@@ -78,7 +78,7 @@ def book(db):
     db.flush()
     agent = Agent(
         id=str(uuid.uuid4()), user_id=usr.id, employee_code="EMPML",
-        id_card_number="TIQML", agency_id="AG01", manager_user_id=mgr.id,
+        id_card_number="TIQML", manager_user_id=mgr.id,
         gender="F", base_latitude=28.4595, base_longitude=77.0266,
         territory="Gurugram", languages_spoken=["HINDI"],
         specialization=AgentSpecialization.UNSECURED, max_cases_per_day=10,
@@ -90,7 +90,7 @@ def book(db):
 
     cust = Customer(
         id=str(uuid.uuid4()), customer_ref="CUSTML", full_name="Meena Iyer",
-        date_of_birth="1988-04-12", gender="F", pan_masked="ZZZZZ1111A",
+        date_of_birth=date(1988, 4, 12), gender="F", pan_masked="ZZZZZ1111A",
         aadhaar_masked="111122223333", phone_primary="9900001111",
         address_line1="Sector 29, Gurugram", city="Gurugram", state="Haryana",
         pincode="122001", latitude=28.4595, longitude=77.0266,
@@ -103,8 +103,8 @@ def book(db):
         outstanding_principal=180000.0, total_outstanding=205000.0,
         overdue_amount=24000.0, penal_charges=1200.0, emi_amount=8000.0,
         interest_rate=16.5, tenure_months=36,
-        disbursement_date="2022-01-15", maturity_date="2025-01-15",
-        last_payment_date="2026-06-01",
+        disbursement_date=date(2022, 1, 15), maturity_date=date(2025, 1, 15),
+        last_payment_date=date(2026, 6, 1),
         dpd=62, dpd_bucket=DPDBucket.BUCKET_3, status=LoanStatus.ACTIVE,
     )
     case = Case(

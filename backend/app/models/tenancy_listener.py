@@ -170,14 +170,33 @@ def _apply_test_defaults(obj: Any, defaults: dict) -> None:
             setattr(obj, attr, defaults[attr])
 
 
+def _tenant_changed(obj: Any) -> bool:
+    """A persistent object whose tenant column or parent FK is being changed
+    in this flush. (2026-09-24, audit LOW: the check ran on INSERT only, so
+    moving a visit onto another agency's case surfaced as a Postgres FK
+    error — a 500 — instead of the named refusal an insert gets.)"""
+    specs = list(_specs(obj))
+    if not specs:
+        return False
+    state = inspect(obj)
+    watched = {fk for fk, _, _ in specs} | {a for a in INHERITED_ATTRS if a in state.attrs}
+    return any(state.attrs[a].history.has_changes() for a in watched if a in state.attrs)
+
+
 @event.listens_for(Session, "before_flush")
 def fill_tenant_columns(session: Session, flush_context, instances) -> None:  # noqa: ARG001
     new = list(session.new)
-    if not new:
+    changed = [o for o in session.dirty if _tenant_changed(o)]
+    if not new and not changed:
         return
     defaults = session.info.get("default_tenant")
     with session.no_autoflush:
-        resolver = _Resolver(session, new)
+        resolver = _Resolver(session, new + changed)
+        seen_changed: set[int] = set()
+        for obj in changed:
+            _fill(resolver, obj, seen_changed)
+        if not new:
+            return
         if defaults:
             # Roots first, so children inherit the defaulted tenant.
             for obj in new:

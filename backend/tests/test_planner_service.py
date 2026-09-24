@@ -94,7 +94,7 @@ def test_data(db_session):
     db_session.add(u1)
     ag1 = Agent(
         id=str(uuid.uuid4()), user_id=u1.id, employee_code="EMP001",
-        id_card_number="TIQ001", agency_id="AG01", manager_user_id=mgr.id,
+        id_card_number="TIQ001", manager_user_id=mgr.id,
         gender="M", base_latitude=28.6139, base_longitude=77.2090, territory="Delhi",
         languages_spoken=["HINDI", "ENGLISH"], specialization=AgentSpecialization.SECURED,
         max_cases_per_day=3, status=AgentStatus.ON_DUTY, tier=AgentTier.TIER_1,
@@ -111,7 +111,7 @@ def test_data(db_session):
     db_session.add(u2)
     ag2 = Agent(
         id=str(uuid.uuid4()), user_id=u2.id, employee_code="EMP002",
-        id_card_number="TIQ002", agency_id="AG01", manager_user_id=mgr.id,
+        id_card_number="TIQ002", manager_user_id=mgr.id,
         gender="F", base_latitude=28.4595, base_longitude=77.0266, territory="Gurugram",
         languages_spoken=["HINDI", "PUNJABI"], specialization=AgentSpecialization.UNSECURED,
         max_cases_per_day=3, status=AgentStatus.ON_DUTY, tier=AgentTier.TIER_2,
@@ -122,7 +122,7 @@ def test_data(db_session):
     # Customer 1: Normal Auto Loan (near Delhi)
     c1 = Customer(
         id=str(uuid.uuid4()), customer_ref="CUST01", full_name="Aarav Sharma",
-        date_of_birth="1990-01-01", gender="M", pan_masked="ABCDE1234F", aadhaar_masked="123456789012",
+        date_of_birth=date(1990, 1, 1), gender="M", pan_masked="ABCDE1234F", aadhaar_masked="123456789012",
         phone_primary="9900000001", address_line1="Connaught Place, Delhi", city="Delhi", state="Delhi",
         pincode="110001", latitude=28.6315, longitude=77.2167, language_preference="HINDI",
     )
@@ -132,7 +132,7 @@ def test_data(db_session):
         loan_type=LoanType.AUTO, branch_code="DL01",
         sanctioned_amount=500000.0, disbursed_amount=500000.0, outstanding_principal=250000.0,
         total_outstanding=250000.0, overdue_amount=50000.0, emi_amount=15000.0, interest_rate=12.5,
-        disbursement_date="2022-01-01", maturity_date="2027-01-01",
+        disbursement_date=date(2022, 1, 1), maturity_date=date(2027, 1, 1),
         dpd=45, dpd_bucket=DPDBucket.BUCKET_2, status=LoanStatus.ACTIVE,
     )
     db_session.add(l1)
@@ -146,7 +146,7 @@ def test_data(db_session):
     # Customer 2: Requires Female Agent (Gurugram)
     c2 = Customer(
         id=str(uuid.uuid4()), customer_ref="CUST02", full_name="Sunita Devi",
-        date_of_birth="1992-05-15", gender="F", pan_masked="ABCDE5678G", aadhaar_masked="987654321098",
+        date_of_birth=date(1992, 5, 15), gender="F", pan_masked="ABCDE5678G", aadhaar_masked="987654321098",
         phone_primary="9900000002", address_line1="Sector 44, Gurugram", city="Gurugram", state="Haryana",
         pincode="122003", latitude=28.4551, longitude=77.0716, language_preference="HINDI",
         requires_female_agent=True,
@@ -157,7 +157,7 @@ def test_data(db_session):
         loan_type=LoanType.PERSONAL, branch_code="GG01",
         sanctioned_amount=200000.0, disbursed_amount=200000.0, outstanding_principal=120000.0,
         total_outstanding=120000.0, overdue_amount=35000.0, emi_amount=8000.0, interest_rate=14.0,
-        disbursement_date="2023-01-01", maturity_date="2026-01-01",
+        disbursement_date=date(2023, 1, 1), maturity_date=date(2026, 1, 1),
         dpd=80, dpd_bucket=DPDBucket.BUCKET_3, status=LoanStatus.ACTIVE,
     )
     db_session.add(l2)
@@ -171,7 +171,7 @@ def test_data(db_session):
     # Customer 3: Do-Not-Contact
     c3 = Customer(
         id=str(uuid.uuid4()), customer_ref="CUST03", full_name="Blocked Borrower",
-        date_of_birth="1985-11-20", gender="M", pan_masked="ABCDE9999Z", aadhaar_masked="112233445566",
+        date_of_birth=date(1985, 11, 20), gender="M", pan_masked="ABCDE9999Z", aadhaar_masked="112233445566",
         phone_primary="9900000003", address_line1="Noida Sector 18", city="Noida", state="Uttar Pradesh",
         pincode="201301", latitude=28.5677, longitude=77.3285, do_not_contact=True, language_preference="HINDI",
     )
@@ -181,7 +181,7 @@ def test_data(db_session):
         loan_type=LoanType.PERSONAL, branch_code="NO01",
         sanctioned_amount=100000.0, disbursed_amount=100000.0, outstanding_principal=80000.0,
         total_outstanding=80000.0, overdue_amount=25000.0, emi_amount=5000.0, interest_rate=15.0,
-        disbursement_date="2023-06-01", maturity_date="2025-06-01",
+        disbursement_date=date(2023, 6, 1), maturity_date=date(2025, 6, 1),
         dpd=95, dpd_bucket=DPDBucket.NPA, status=LoanStatus.ACTIVE,
     )
     db_session.add(l3)

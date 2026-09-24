@@ -208,6 +208,41 @@ def test_the_database_refuses_a_cross_agency_visit_even_without_the_listener(ses
     session.commit()
 
 
+def test_the_database_refuses_another_agencys_agent_on_a_visit(session):
+    """The OTHER composite FK: (agent_id, agency_id) -> agents(id, agency_id).
+    Case and agency agree (A); the agent is agency B's. Without this FK the
+    row would go in — the case-side test above cannot see it."""
+    from sqlalchemy import insert
+    from sqlalchemy.exc import IntegrityError
+
+    mgr, au, agent, cust, loan, case = _graph(session)
+    case_id = case.id
+    session.commit()
+    agent_b = _agency_b_agent(session)
+    session.commit()
+    row = {"id": test_id("visit:cross-agent"), "case_id": case_id, "agent_id": agent_b,
+           "bank_id": TEST_BANK_ID, "agency_id": TEST_AGENCY_ID,
+           "check_in_latitude": 28.46, "check_in_longitude": 77.08,
+           "check_in_time": datetime.now(timezone.utc), "distance_from_customer_metres": 1.0,
+           "customer_met": False, "outcome": VisitOutcome.NOT_AVAILABLE.value}
+    with pytest.raises(IntegrityError, match="FOREIGN KEY"):
+        session.execute(insert(Visit.__table__), [row])
+    session.rollback()
+
+
+def test_moving_a_row_onto_another_agencys_parent_is_refused_on_update(session):
+    """The listener used to check INSERTs only; an UPDATE that re-pointed a
+    visit at agency B's agent reached Postgres as an FK error (a 500)."""
+    mgr, au, agent, cust, loan, case = _graph(session)
+    visit = _visit(case, agent)
+    session.add(visit)
+    session.commit()
+    agent_b = _agency_b_agent(session)
+    session.commit()
+    visit.agent_id = agent_b
+    with pytest.raises(TenantMismatchError, match="agency_id"):
+        session.flush()
+
 def test_listener_resolves_a_large_flush_in_one_query_per_parent_class(session):
     """Coordinator audit item 1. The first listener scanned session.new per
     child and issued a SELECT per parent: 8,000 new visits took 36.9 s against
