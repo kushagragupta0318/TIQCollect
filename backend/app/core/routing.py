@@ -172,8 +172,6 @@ class RouteResult:
         return int(round(self.total_seconds / 60.0))
 
 
-
-
 # ---------------------------------------------------------------------------
 # Travel-time matrix
 # ---------------------------------------------------------------------------
@@ -297,15 +295,6 @@ def fetch_osrm_route(coords: Sequence[tuple[float, float]]) -> tuple[str | None,
 
 
 # Backwards-compatible aliases used by existing call sites.
-def _haversine_seconds(lat1: float, lon1: float, lat2: float, lon2: float,
-                       avg_speed_kmh: float = _FALLBACK_SPEED_KMH) -> int:
-    return _haversine_pair(lat1, lon1, lat2, lon2)[0]
-
-
-def _haversine_matrix(coords: Sequence[tuple[float, float]]) -> list[list[int]]:
-    return _haversine_table(coords).durations
-
-
 # ---------------------------------------------------------------------------
 # Solver parameters — determinism lives here
 # ---------------------------------------------------------------------------

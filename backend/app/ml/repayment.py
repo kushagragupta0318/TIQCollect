@@ -21,7 +21,7 @@
 """Which tier produced this score — and never letting a caller forget."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import structlog
@@ -77,30 +77,6 @@ class ScorerResolution:
     @property
     def degraded(self) -> bool:
         return self.status != OK
-
-
-@dataclass
-class RepaymentScore:
-    """A score plus its provenance. Never an exception."""
-    likelihood: float
-    risk_score: float
-    band: str
-    risk_category: str
-    evidence_coverage: float
-    source: str
-    model_version: str
-    status: str = OK
-    factors: list[dict[str, Any]] = field(default_factory=list)
-    reason: str | None = None
-
-    @property
-    def is_modelled(self) -> bool:
-        return self.source == SOURCE_MODEL
-
-    @property
-    def is_confident(self) -> bool:
-        """Whether enough evidence spoke to show a NUMBER rather than a band."""
-        return self.evidence_coverage >= settings.REPAYMENT_MIN_COVERAGE_TO_SHOW
 
 
 def resolved_scorer() -> ScorerResolution:
