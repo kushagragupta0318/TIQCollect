@@ -872,12 +872,13 @@ def transcribe_audio(current_user: AgentOnly, db: DbSession, audio: UploadFile =
 
 @router.post("/cases/{case_id}/visit-extraction", response_model=VisitExtractionResponse)
 def extract_visit_fields(case_id: str, body: VisitExtractionRequest, current_user: AgentOnly, db: DbSession):
-    # TODO(A02): take RequestContext once it exists. Scoped today through
-    # _get_accessible_case_or_404, the helper the case-detail and
-    # visit-strategy routes use. (This read "the same case-access check every
-    # other agent case route uses" until the audit of a4c834b: false —
-    # media_service and otp_service require a strict agent_id match, and this
-    # helper is the looser one A03 is replacing.)
+    # TODO(A02): take RequestContext once it exists. Scoped STRICTLY: the case
+    # must be assigned to the caller (visit_report_extraction.own_case), the
+    # rule media_service, otp_service and the voice webhook use. (Until the
+    # audit of 5d70298 this used _get_accessible_case_or_404, the looser helper
+    # A03 is replacing, which also admits a teammate's or an unassigned case;
+    # and before a4c834b's audit its comment claimed that helper was "the same
+    # case-access check every other agent case route uses" — false.)
     # TODO(B02): at the rebase onto standalone-p1, type case_id as
     # app.core.ids.UUIDPath and delete this check (43's AST tripwire fails on a
     # bare str *_id). Ids become native UUIDs, and on Postgres a malformed one
@@ -888,7 +889,9 @@ def extract_visit_fields(case_id: str, body: VisitExtractionRequest, current_use
     except ValueError:
         raise HTTPException(status_code=404, detail="Case not found")
     agent = _get_agent_or_404(current_user, db)
-    case = _get_accessible_case_or_404(db, agent, case_id)
+    case = visit_report_extraction.own_case(db, agent.id, case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="Case not found")
     # The same figure PaymentService.set_ptp clamps a promise to.
     remaining = max(0.0, (case.target_amount or 0.0) - (case.collected_amount or 0.0))
     return visit_report_extraction.extract(body.transcript, remaining_amount=remaining).as_dict()

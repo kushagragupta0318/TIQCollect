@@ -36,6 +36,30 @@
 #   hour); max_tokens 1200 like the other JSON call sites (config.py warns
 #   500 truncates a reasoning model's JSON); and a provider's raw error text
 #   never reaches the device — only a generic reason does.
+#
+# 2026-09-24 (round 2) — extraction 1.2.0, after the audit of 5d70298 found
+#   1.1.0's fixes held on the RULES path only, and four more wrong answers:
+#   - "He had promised to pay on 1st July but did not" suggested a PTP dated
+#     1 July NEXT year: no past-tense reading, and any date >60 days back
+#     rolled forward. A promise in the past perfect is now "past" (nothing
+#     suggested), "... but did not" makes it BROKEN_PTP, a year rolls only
+#     past 180 days, and a promise whose date has passed yields no PTP.
+#   - the date was searched over the whole sentence when none followed the
+#     verb: "Met the borrower today, he will pay Rs 5,000" was dated today,
+#     "the 2nd visit" became the 2nd of next month. Only after the verb now.
+#   - the MODEL path skipped negation and position entirely: its PTP with
+#     evidence "going to pay Rs 5000 on Friday" for "He is NOT going to pay…"
+#     passed. The model's promise, amount and date must now sit in a sentence
+#     with a live promise, at or after its verb (promise_not_supported).
+#   - evidence matched as a raw substring: "pay 600" was "in" "pay 6000",
+#     "5th November" in "15th November". Whole words now.
+#   Also: negation is read backwards across auxiliaries and adverbs only, so
+#   "Not only will he pay" and "did not pay today will pay tomorrow" are
+#   promises (the fixed three-word window over-matched); the note is escaped
+#   (< > &) instead of a single-pass case-sensitive "</note>" strip; the LLM
+#   call has a hard 25 s deadline (main's client retries inside llm's own
+#   loop); and the route checks the case STRICTLY (own_case), not through the
+#   permissive helper.
 # ───────────────────────────────────────────────────────────────────────────
 """Voice note transcript → suggested visit-form values.
 
@@ -87,7 +111,7 @@ logger = structlog.get_logger()
 
 # Stamped on every result. A prompt, rule or validation change is a change to
 # what this returns for the same words: bump it.
-EXTRACTION_VERSION = "visit-extraction-1.1.0"
+EXTRACTION_VERSION = "visit-extraction-1.2.0"
 
 MAX_TRANSCRIPT_CHARS = 5_000
 
@@ -164,6 +188,16 @@ class ExtractionResult:
         }
 
 
+# ── Access ───────────────────────────────────────────────────────────────────
+def own_case(db, agent_id: str, case_id: str):
+    """The case, only if it is ASSIGNED to this agent; else None. Strict, like
+    media_service, otp_service and the voice webhook — not the looser
+    _get_accessible_case_or_404 (team's and unassigned cases), which A03
+    replaces. "Not yours" and "no such case" are the same None."""
+    from app.models.case import Case
+    return db.query(Case).filter(Case.id == case_id, Case.agent_id == agent_id).first()
+
+
 # ── Public entry point ───────────────────────────────────────────────────────
 def extract(transcript: str, *, today: date | None = None,
             remaining_amount: float | None = None) -> ExtractionResult:
@@ -205,7 +239,11 @@ _SYSTEM = (
 
 
 def _prompt(text: str, today: date) -> str:
-    safe = text.replace("</note>", "")          # the note cannot close its own delimiter
+    # Escape, not strip: a single-pass, case-sensitive "</note>" removal let
+    # "</NOTE>" or "<</note>/note>" through. With < and > escaped the note
+    # cannot contain a tag at all. (Borrower speech has no angle brackets; an
+    # escaped one in the model's evidence would not be found and is rejected.)
+    safe = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     return (
         f"Today is {today.isoformat()} ({today.strftime('%A')}).\n"
         "Return a JSON object with any of these keys that the note supports:\n"
@@ -223,13 +261,34 @@ def _prompt(text: str, today: date) -> str:
     )
 
 
+LLM_DEADLINE_SECONDS = 25.0
+_POOL = None
+
+
 def _ask_llm(text: str, today: date) -> llm.LLMResult:
     """The only LLM call in this module. Not cached: the prompt is verbatim
-    borrower speech, and an hour in Redis buys nothing for a one-off note."""
-    return llm.complete(
-        _prompt(text, today), purpose="visit_extraction", system=_SYSTEM,
+    borrower speech, and an hour in Redis buys nothing for a one-off note.
+
+    A hard deadline: on main, core/llm.py builds the OpenAI client without
+    max_retries, so the SDK's own 2 retries sit inside llm's retry loop and a
+    rate limit can honour Retry-After up to 60 s — far past the page's wait.
+    Past LLM_DEADLINE_SECONDS the answer is abandoned (the worker thread is
+    left to finish on its own) and the rules answer instead. F01's
+    max_retries=0 makes the inner retries go away at merge; the deadline stays.
+    """
+    global _POOL
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+    if _POOL is None:
+        _POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="visit-extraction-llm")
+    fut = _POOL.submit(
+        llm.complete, _prompt(text, today), purpose="visit_extraction", system=_SYSTEM,
         json_mode=True, max_tokens=1200, temperature=0.0, cache_ttl=0,
     )
+    try:
+        return fut.result(timeout=LLM_DEADLINE_SECONDS)
+    except FutureTimeout:
+        logger.warning("visit_extraction.llm_deadline", seconds=LLM_DEADLINE_SECONDS)
+        return llm.LLMResult(status=llm.TIMEOUT, failure_reason="deadline")
 
 
 def _from_llm_payload(data: dict) -> list[tuple[str, Any, str]] | None:
@@ -256,7 +315,7 @@ def _validate(candidates: list[tuple[str, Any, str]], text: str, today: date,
     for fld, raw, evidence in candidates:
         value, code, reason = _check_value(fld, raw, today, remaining_amount)
         if code is None:
-            code, reason = _check_evidence(fld, value, evidence, haystack, today, strict=strict)
+            code, reason = _check_evidence(fld, value, evidence, haystack, today, strict=strict, text=text)
         if code is None and fld in taken:
             code, reason = "superseded", f"another {fld} was found first ({taken[fld]})"
         if code is not None:
@@ -302,13 +361,40 @@ def _check_value(fld: str, raw: Any, today: date,
     return None, "unknown_field", "unknown field"
 
 
+def _find_words(needle_folded: str, hay_folded: str) -> re.Match | None:
+    """Whole-word match on folded text: "pay 600" is not in "pay 6000", and
+    "5th november" is not in "15th november"."""
+    return re.search(rf"(?<!\w){re.escape(needle_folded)}(?!\w)", hay_folded)
+
+
+def _promise_supports(evidence: str, text: str) -> bool:
+    """The model's evidence for a promise must sit in a sentence that makes a
+    live (not negated, not past) promise, and an amount or date must sit at or
+    after the promising verb — the same position rule the keyword path uses."""
+    ev = _fold(evidence)
+    for sentence in _sentences(text):
+        found = _find_words(ev, _fold(sentence))
+        if found is None:
+            continue
+        verb, state = _promise_in(sentence)
+        if verb is None or state != "promise":
+            continue
+        verb_at = len(_fold(sentence[:verb.start()]))
+        if found.end() > verb_at:           # at, after, or overlapping the verb
+            return True
+    return False
+
+
 def _check_evidence(fld: str, value: Any, evidence: str, haystack: str, today: date,
-                    *, strict: bool) -> tuple[str | None, str | None]:
+                    *, strict: bool, text: str = "") -> tuple[str | None, str | None]:
     ev = _fold(evidence)
     if not ev:
         return "no_evidence", "no supporting words given"
-    if ev not in haystack:
+    if _find_words(ev, haystack) is None:
         return "evidence_not_in_note", "supporting words are not in the transcript"
+    if strict and (fld in ("ptp_amount", "ptp_date") or (fld == "outcome" and value == VisitOutcome.PTP.value)):
+        if not _promise_supports(evidence, text):
+            return "promise_not_supported", "the note does not make this promise"
     if fld == "ptp_amount":
         if not any(abs(a - value) < 0.5 for a in _amounts_in(evidence)):
             return "evidence_mismatch", "the supporting words do not state this amount"
@@ -425,28 +511,78 @@ _REL_TO_PERSON = {
 
 _MULT = {"k": 1_000, "thousand": 1_000, "lakh": 100_000, "lakhs": 100_000, "lac": 100_000, "lacs": 100_000}
 
-# A negation in the verb itself ("will not pay") or in the three words before
-# it, within the same clause ("is not going to pay", "has not agreed to pay",
-# "never promised to pay" — but not "refused at first, but will pay").
-# Bare "no" is not one: "has no money but will pay 2,000" is still a promise.
+# Negation, read backwards from the promising verb across only auxiliaries,
+# pronouns and adverbs: "is not going to pay", "has not agreed to pay",
+# "never promised to pay" are refusals; "Not only will he pay", "did not pay
+# today, will pay tomorrow" and "initially refused then agreed to pay" are
+# promises — a content word or a clause break stops the scan. (1.1.0 used a
+# fixed three-word window, which over-matched all three.) Bare "no" is not a
+# negation: "has no money but will pay 2,000" is still a promise.
 _NEGATION = re.compile(r"\b(?:not|never|cannot|refuses?|refused|refusing|declined|denied)\b|n't\b", re.I)
-_CLAUSE_BREAK = re.compile(r"[,:]|\b(?:but|however|though|although|yet)\b", re.I)
-_LOOKBACK_WORDS = 3
+_NEG_WORD = re.compile(r"(?:not|never|cannot|refuses?|refused|refusing|declined|denied|\w+n't)", re.I)
+_CLAUSE_BREAK = re.compile(r"[,:;]|\b(?:but|however|though|although|yet|then|so|and|now)\b", re.I)
+_SKIPPABLE = frozenset(
+    "is was are am were be been being has have does do did will would can could shall should may might must "
+    "he she they it i we you borrower customer really definitely surely certainly actually still even just "
+    "probably possibly ever also".split())
+# "He had promised to pay ... but did not": a past promise, and a broken one.
+_BROKEN_AFTER = re.compile(
+    r"\bbut\s+(?:(?:he|she|they|the borrower|the customer)\s+)?(?:did\s*(?:not|n't)|didn't|never|failed)\b", re.I)
+
+
+def _promise_in(sentence: str) -> tuple[re.Match | None, str]:
+    """The first promising phrase in the sentence and its state: "promise"
+    (live), "past" ("had promised"), "broken" ("... but did not"), or None
+    when every phrase is negated."""
+    for m in _COMMIT.finditer(sentence):
+        if _NEGATION.search(m.group(0)):
+            continue
+        clause = _CLAUSE_BREAK.split(sentence[:m.start()])[-1]
+        negated = past = False
+        for w in reversed(clause.split()):
+            word = w.strip("\"'.").lower()
+            if _NEG_WORD.fullmatch(word):
+                negated = True
+                break
+            if word == "had":
+                past = True
+                continue
+            if word in _SKIPPABLE:
+                continue
+            break
+        if negated:
+            continue
+        if _BROKEN_AFTER.search(sentence, m.end()):
+            return m, "broken"
+        return m, "past" if past else "promise"
+    return None, "none"
 
 
 def _rules(text: str, today: date) -> list[tuple[str, Any, str]]:
     found: list[tuple[str, Any, str]] = []
+    broken: tuple[str, Any, str] | None = None
 
     for sentence in _sentences(text):
-        verb = _commit_match(sentence)
+        verb, state = _promise_in(sentence)
         if verb is None:
             continue
-        # Only what follows the promise can be its amount: in "Rs 48,500 is
-        # overdue, he will pay tomorrow" the 48,500 is the arrears.
+        if state == "broken":
+            cue = _BROKEN_AFTER.search(sentence, verb.end())
+            broken = broken or ("outcome", VisitOutcome.BROKEN_PTP.value, cue.group(0))
+            continue
+        if state == "past":
+            continue                     # a promise that was, not one that is
+        # Only what follows the promise can be its amount or date: in "Rs 48,500
+        # is overdue, he will pay tomorrow" the 48,500 is the arrears, and in
+        # "Met the borrower today, he will pay" today is when he was met.
         amt = _AMOUNT.search(sentence, verb.start())
         dt_match, dt = _first_date(sentence[verb.start():], today)
-        if dt is None:
-            dt_match, dt = _first_date(sentence, today)
+        if dt is not None and dt < today:
+            # "promised to pay on 20/09", said on the 24th: a promise whose day
+            # has passed is not a promise to suggest. The date is still offered
+            # to the validator, which rejects it as past, so the agent sees why.
+            found.append(("ptp_date", dt.isoformat(), dt_match))
+            continue
         if amt or dt:
             found.append(("outcome", VisitOutcome.PTP.value, verb.group(0)))
             if amt:
@@ -454,6 +590,8 @@ def _rules(text: str, today: date) -> list[tuple[str, Any, str]]:
             if dt:
                 found.append(("ptp_date", dt.isoformat(), dt_match))
             break
+    if broken:
+        found.append(broken)             # after any live promise: that one wins
 
     for value, pat in _OUTCOME_RULES:
         m = pat.search(text)
@@ -473,18 +611,6 @@ def _rules(text: str, today: date) -> list[tuple[str, Any, str]]:
         if rel in _REL_TO_PERSON:
             found.append(("person_met", _REL_TO_PERSON[rel], m.group(0)))
     return found
-
-
-def _commit_match(sentence: str) -> re.Match | None:
-    """The first promise-to-pay phrase that is not negated, in the phrase or
-    in the few words before it. A refusal is RTP's to read, not a promise."""
-    for m in _COMMIT.finditer(sentence):
-        clause = _CLAUSE_BREAK.split(sentence[:m.start()])[-1]
-        before = clause.split()[-_LOOKBACK_WORDS:]
-        if _NEGATION.search(m.group(0)) or _NEGATION.search(" ".join(before)):
-            continue
-        return m
-    return None
 
 
 def _amount_value(m: re.Match) -> float:
@@ -514,9 +640,11 @@ def _first_date(sentence: str, today: date) -> tuple[str, date | None]:
 def _this_or_next_year(today: date, month: int, day: int) -> date:
     """A date said without a year. "5 January" in December is next year; "20/09"
     said on 24 September is four days ago — kept in the past so the validator
-    rejects it, rather than rolled a year forward into a promise nobody made."""
+    rejects it, rather than rolled a year forward into a promise nobody made.
+    The roll needs 180 days: at 60, "had promised to pay on 1st July", said in
+    late September, became 1 July NEXT year (the audit of 5d70298)."""
     d = date(today.year, month, day)
-    if d < today and (today - d).days > 60:
+    if d < today and (today - d).days > 180:
         return date(today.year + 1, month, day)
     return d
 

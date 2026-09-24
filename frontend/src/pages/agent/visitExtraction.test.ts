@@ -208,3 +208,18 @@ describe("the label says who produced the suggestions", () => {
     expect(sourceLabel({ ...PROMISE, source: "none", suggestions: [] }).title).toBe("Nothing to read");
   });
 });
+
+describe("the payment outcomes are the backend's own set", () => {
+  it("matches visit_service._PAYMENT_OUTCOMES exactly", async () => {
+    // A restated rule is a tripwire's job: this fails the day either side
+    // changes without the other (audit of 5d70298).
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const src = readFileSync(join(__dirname, "..", "..", "..", "..", "backend", "app", "services", "visit_service.py"), "utf8");
+    const m = src.match(/^_PAYMENT_OUTCOMES\s*=\s*\{([^}]*)\}/m);
+    expect(m).not.toBeNull();
+    const backend = new Set([...m![1].matchAll(/VisitOutcome\.(\w+)/g)].map((x) => x[1]));
+    const { PAYMENT_OUTCOMES } = await import("./visitExtraction");
+    expect([...PAYMENT_OUTCOMES].sort()).toEqual([...backend].sort());
+  });
+});

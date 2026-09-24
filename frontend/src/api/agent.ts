@@ -177,12 +177,11 @@ export interface VisitExtraction {
   version: string;
 }
 
-// 90 s, not 60: the server's LLM leg can take 20 s a try with two retries on
-// a rate limit (~61.5 s worst case). A shorter client timeout showed the
-// agent an error in exactly the case where the server was about to answer
-// with its keyword fallback.
+// 45 s: the server abandons the LLM at a hard 25 s deadline and answers with
+// its keyword fallback (extraction 1.2.0), so this only has to outlast that
+// plus the request. (It was 90 s while the server's worst case was ~61.5 s.)
 export async function extractVisitFields(caseId: string, transcript: string): Promise<VisitExtraction> {
-  const { data } = await api.post(`/agent/cases/${caseId}/visit-extraction`, { transcript }, { timeout: 90000 });
+  const { data } = await api.post(`/agent/cases/${caseId}/visit-extraction`, { transcript }, { timeout: 45000 });
   return data as VisitExtraction;
 }
 
