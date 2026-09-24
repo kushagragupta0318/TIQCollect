@@ -233,6 +233,7 @@ days of pilot data. **Dropped** means removed at integration, with the reason re
 | **P6:** H01–H13, H15–H18 | **Pause** | Each needs real outcomes: the first 30-day labels mature from 2026-10-08, 90-day from 2026-11-22. Scored against the generator's ground truth, they only prove the generator. H14 (voice → report) continues. |
 | **H06** next-best-action bandit | **Drop** | A bandit with no outcome data. If needed, a transparent rules table comes first. |
 | **UI06** pixel-parity harness | **Drop** | Buyers do not compare the bank portal to Command Center screenshot by screenshot. |
+| Multi-vehicle CVRPTW `plan_fleet` (feature #5, never wired) | **Deleted** (owner's D7, 2026-09-24; `879dcb3`, tag `archive/plan-fleet-2026-09`) | Not wired into the nightly run, and the pilot plan does not wire it. The nightly planner keeps its per-agent sequencing with time windows (`plan_route`). |
 
 ## 3. Order, from the engineering side
 
