@@ -174,6 +174,12 @@ services:
       # physically at a seeded Gurugram address. DEMO_MODE re-anchors the demo
       # customers to the agent's live GPS on check-in.
       DEMO_MODE: ${DEMO_MODE:-true}
+      # Pairs with the web's VITE_DEMO_UPI_AUTOCONFIRM below (hotfix PAY-1
+      # round 3, 2026-09-24): the demo auto-confirm records a DEMO-UPI-
+      # reference, and the server accepts one only with this flag. DEMO_MODE
+      # does not admit it. DEV ONLY: the prod image and the platform compose
+      # never set it, and it defaults to false in config.py.
+      DEMO_UPI_ACCEPT: "true"
       # RBI contact hours are enforced with a real 403. Left open so the app
       # works outside 08:00-19:00 IST; set 8 and 19 for true behaviour.
       CONTACT_HOUR_START: ${CONTACT_HOUR_START:-0}

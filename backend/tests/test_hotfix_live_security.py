@@ -385,6 +385,18 @@ def test_the_payee_settings_have_no_default():
     assert Settings.model_fields["UPI_VPA"].default == ""
     assert Settings.model_fields["UPI_PAYEE_NAME"].default == ""
     assert Settings.model_fields["PUBLIC_BASE_URL"].default == ""
+    assert Settings.model_fields["DEMO_UPI_ACCEPT"].default is False
+    assert Settings.model_fields["BORROWER_HELPLINE"].default == ""
+
+
+def test_only_the_dev_compose_admits_a_demo_upi_reference():
+    """The dev web auto-confirms, so the dev api accepts; the prod image sets
+    neither (the frontend test checks the web half of the Dockerfile)."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2]
+    compose = (root / "docker-compose.yml").read_text(encoding="utf-8")
+    assert 'DEMO_UPI_ACCEPT: "true"' in compose and 'VITE_DEMO_UPI_AUTOCONFIRM: "1"' in compose
+    assert "DEMO_UPI_ACCEPT" not in (root / "Dockerfile").read_text(encoding="utf-8")
 
 
 # ── PL-1: a payment link only for the caller's own case ──────────────────────
