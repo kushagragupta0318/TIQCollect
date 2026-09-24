@@ -24,7 +24,11 @@ ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 MPLCONFIGDIR=/tmp/matplotlib
 RUN apt-get update && apt-get install -y --no-install-recommends \
       libgomp1 postgresql-client \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --system --uid 10001 --home-dir /app --shell /usr/sbin/nologin app
+    && useradd --system --uid 10001 --home-dir /app --shell /usr/sbin/nologin app \
+    && chown app:app /app
+# /app itself (not only what is copied into it) belongs to the app user: Celery
+# beat writes its schedule file into the working directory, and the demo scripts
+# create docs/rollback/ under it at run time.
 
 COPY backend/requirements.txt ./
 # faster-whisper only serves TRANSCRIPTION_PROVIDER=local and is the heaviest
