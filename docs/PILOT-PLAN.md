@@ -8,6 +8,62 @@ pilot-first decision, relayed by tiqcollect-64. The business lead (tiqcollect-fb
 business wording. The commercial reasoning is in the business lead's `docs/business/PRIORITIES.md`
 and `ECONOMICS.md`. The engineering sequencing is in [RESTRUCTURE-PLAN.md](RESTRUCTURE-PLAN.md).
 
+## Milestone — paused 2026-09-24 (owner offline), tiqcollect-bb
+
+**Branches and heads.**
+- `lead-structure` **f11ef83** (C:\dev	iq\lead): 38 commits on c75053a.
+- `hotfix/live-security-2` **b1caf04** (C:\dev	iq\hotfix2).
+- `ci/test-env` **e8f41f7** (C:\dev	iq\ci). It is merged into TIQCollect-app as 9deb0e4
+  up to 8b0c209; e8f41f7 (pyarrow) is not yet merged.
+- Local archive tags: `archive/research-2026-09`, `archive/field-ops-contract-2026-09`,
+  `archive/plan-fleet-2026-09`. The owner pushes them.
+
+**Wave 1 done** (RESTRUCTURE-PLAN §2):
+- 1.1: tests/conftest.py, no .env and no network.
+- 1.2: CI.
+- 1.3: dead scripts.
+- 1.4: gam shim.
+- 1.5: frontend dead code, date-fns.
+- 1.6: backend dead code in unowned files.
+- 1.7a: hardened non-root prod Dockerfile, .dockerignore, backend/Dockerfile deleted (D3).
+- 1.9: Celery time limits.
+- 1.10: lint 7 -> 4, with the first component tests (D11).
+- 1.11: 8 ADRs, CLAUDE.md at 231 lines, D8 docs.
+- D4: /api/field-ops deleted.
+- D5: research and one-offs deleted, with a scope correction.
+- D7: plan_fleet deleted.
+- BL-3: geocoding capped.
+- BL-2: backend half.
+- /ready answers 503.
+- requirements-dev.txt.
+
+**Wave 1 pending:**
+- 1.5b: lazy voice SDK, after d4's hotfix merges.
+- 1.7b: requirements split and image size cut, after the d4/ce requirements appends.
+- 1.8: limiter counts in Redis.
+- 1.15: the exploration eligibility test (it uses tests/test_global_allocator fixtures).
+- The deferred dead code in lane files (listed in 178afc1).
+
+**Audit status.**
+- lead-structure through a5672c4: audited, CLEAN.
+- lead-structure after that (508361c..f11ef83): not yet audited.
+- Still to run, under the lock:
+  - (B): the full suite with --network none and a hostile backend/.env, plus the
+    tiq-prod-check:lead image and its size;
+  - (C): the non-root proof on a throwaway postgres. That is the full entrypoint, a
+    registry.promote round-trip as uid 10001, and a beat start-up.
+- hotfix-2 b1caf04: audit CLOSED (5 gates). Still needed: the prod image build and compose
+  config under the lock, and a green GitHub pytest leg once e8f41f7 (pyarrow) is merged.
+
+**Next step on resume.**
+1. Ask the coordinator for the lock order: ce's run held it from 15:58.
+2. Run (A): the hotfix2 image + compose config, ~5 min, then release.
+3. After d4's hotfix-1: run (B) + (C). The script is kept in the author's scratchpad as
+   verify_bb.sh, part (A) removed.
+4. Send the numbers, then rebase lead-structure onto TIQCollect-app after the hotfix merges.
+
+---
+
 `docs/STANDALONE-TASKS.md` is **not** edited on this branch (board rule). The task ids below
 (N01–N09) and the pause and drop list are applied to it once, at integration.
 
