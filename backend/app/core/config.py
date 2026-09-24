@@ -25,6 +25,7 @@
 #   not a like-for-like swap. Wiring the nightly task must not be what makes
 #   either of them live.
 # ───────────────────────────────────────────────────────────────────────────
+import os
 from functools import lru_cache
 from typing import List
 from pydantic import field_validator
@@ -33,7 +34,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        # TIQ_ENV_FILE="" reads no file: tests/conftest.py sets it so a developer's
+        # backend/.env cannot change what the suite sees.
+        env_file=os.environ.get("TIQ_ENV_FILE", ".env") or None,
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
