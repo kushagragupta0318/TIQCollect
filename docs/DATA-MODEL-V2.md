@@ -1,9 +1,17 @@
 # TIQCollect Data Model v2 — schema design (task B01)
 
-**Status:** design for review, 2026-09-24. **No code, model or migration has
-changed.** This document implements [STANDALONE-PRODUCT-PLAN.md](STANDALONE-PRODUCT-PLAN.md)
-§2 (roles, tenancy), §3 (identity) and §4 (data platform). No migration for
-B02–B21 is written until this document is agreed.
+**Status:** agreed 2026-09-24, and the ORM half is BUILT on branch
+`standalone-p1` (B02–B10). Where the build departs from this design, §0.1
+lists it. No Alembic migration exists yet (B11): the models run on SQLite in
+the test suite and nowhere else. This document implements
+[STANDALONE-PRODUCT-PLAN.md](STANDALONE-PRODUCT-PLAN.md) §2 (roles, tenancy),
+§3 (identity) and §4 (data platform).
+
+*(This paragraph read "design for review … **No code, model or migration has
+changed.** … No migration for B02–B21 is written until this document is
+agreed." It was true when written and stopped being true the same day. It is
+corrected rather than deleted, because a reader who trusts "no code changed"
+will look for the old schema and not find it.)*
 
 **How it was built.** Every statement about today's schema comes from one of these:
 - the model files in `backend/app/models/`, cited as `file.py:line`;
@@ -75,6 +83,64 @@ appears, and each is also an open question in §10.
 - **`placement_decisions` is partition-ready but not partitioned.** It is
   designed with the partition key in its PK, but the plan's partition list does
   not include it (Q9).
+
+### 0.1 Where the build departs from this design (B02–B10, 2026-09-24)
+
+Each item is decided, built and tested on `standalone-p1`. Items marked
+DEFERRED are not built and are tracked as tasks.
+
+- **Branch FK is a natural key.** `lending.loans` keeps `branch_code` and
+  carries a composite FK `(bank_id, branch_code) → tenancy.branches(bank_id,
+  branch_code)`, instead of the surrogate `branch_id` + read-only
+  `branch_code` property proposed in §4.2. Same integrity; every reader of
+  `branch_code` (the ML adapter among them) is untouched. A feed row naming an
+  unknown branch is QUARANTINED (`lending.bank_feed_rows`), never inserted.
+- **`cases.placement_id` is nullable in P1.** A case must still have an
+  agency (`agency_id NOT NULL`), and every new case is opened through
+  `services/placement_service.py`, which opens one only on a placement made
+  against a contract in force. The nullable column carries v1 cases through
+  the transform; B15 decides whether it becomes NOT NULL.
+- **The tenant listener refuses, it does not only fill.** §2.5 is implemented
+  in `models/tenancy_listener.py`: it fills a child's tenant columns from the
+  first declared parent and raises `TenantMismatchError` when ANY declared
+  parent disagrees, on INSERT and on an UPDATE that changes a tenant column or
+  a parent FK. One IN query per parent class per flush (5,000 visits: 0.87 s,
+  against 0.76 s with the tenant given).
+- **Relationships over composite FKs join on `id` only.** Inferred joins
+  compared the tenant column too, which made `loan.customer` silently `None`
+  on a mismatch. Pinned: `configure_mappers()` raises zero SAWarnings.
+- **Two FK cycles use `use_alter`:** `cases.closed_by_bank_action_id` and
+  `ml.model_predictions.case_id`.
+- **SQLite enforces foreign keys in the suite** (`PRAGMA foreign_keys=ON` in
+  `tests/_db.make_engine`); the test bank carries the branch codes fixtures use.
+- **Ids from outside are validated in one place,** `app/core/ids.py`:
+  `UUIDPath`/`UUIDQuery` answer a malformed path/query id with the same 404 a
+  missing row gets; `UUIDStr` makes a malformed body id a 422. No malformed id
+  reaches Postgres as a `DataError` 500.
+- **Sessions:** `tenancy.user_sessions.revoked_reason` gains `DEVICE_RESET`
+  (the manager's reset, audit gate 3). Refresh rotation is a compare-and-swap
+  UPDATE.
+- **`audit_action_enum` gains** `VOICE_CALL_PLACED`, `VOICE_CALL_REFUSED` and
+  `DEVICE_RESET`, each with a write site.
+- **Placement quarantine reasons** (`bank_feed_rows.dq_errors[].reason`):
+  `NO_AGENCY`, `AGENCY_NOT_ACTIVE`, `NO_CONTRACT_IN_FORCE`, `NOT_AUTHORISED`,
+  `CONTRACT_FULL`, `PLACED_ELSEWHERE`, `UNKNOWN_BRANCH`.
+- **`strategy.simulation_runs` carries the engine's honesty fields** (E02,
+  engine `mc-1.1.0`): `calibrated_by_backtest BOOLEAN`, `synthetic_inputs
+  BOOLEAN`, `synthetic_warning TEXT NULL` (`SYNTHETIC: …` / `UNCALIBRATED: …`),
+  `calibration JSONB NULL` (engine_version, origin, horizon_months, nominal,
+  coverage, passes, synthetic), `assumptions JSONB` (list), `numpy_version`,
+  `chunk_paths`. The warning clears only for a passing, non-synthetic
+  backtest on the same engine version.
+- **DEFERRED (B23):** `customer_addresses` / `customer_contacts`,
+  `visit_media`, `beat_stops`, `attendance` (and the leave move),
+  `escalations`, `case_assignments`, and `fcm_token` → `agent_devices`. The
+  columns stay where v1 had them until their ~50 readers move, so there is
+  never a second source of truth for one address.
+- **Correction pending in §9.2/§9.3/Q1/Q4:** those sections still name the
+  transform's output tenant "ABC Bank"/"ABC Collections". Appendix C is the
+  decision (invented, realistic names; no placeholders); B15 follows
+  Appendix C.
 
 ---
 
