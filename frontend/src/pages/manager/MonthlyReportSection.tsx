@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { toast } from "react-hot-toast";
 import { Brain, Loader2 } from "lucide-react";
 import { getMonthlyReport } from "@/api/manager";
@@ -17,13 +17,22 @@ export function MonthlyReportSection({ months, selectedAgent, preSelectedMonth }
     aiGenerated?: boolean; aiStatus?: string; model?: string | null;
   } | null>(null);
 
-  useEffect(() => { setReport(null); }, [selectedAgent?.agent_id]);
-  useEffect(() => {
+  // A report belongs to one agent and one month: a new agent, or a month the
+  // page pre-selects, clears it. Adjusted during render rather than in effects.
+  const agentId = selectedAgent?.agent_id;
+  const [reportAgent, setReportAgent] = useState(agentId);
+  if (reportAgent !== agentId) {
+    setReportAgent(agentId);
+    setReport(null);
+  }
+  const [appliedPreselect, setAppliedPreselect] = useState<string | undefined>(undefined);
+  if (appliedPreselect !== preSelectedMonth) {
+    setAppliedPreselect(preSelectedMonth);
     if (preSelectedMonth && months.includes(preSelectedMonth)) {
       setMonth(preSelectedMonth);
       setReport(null);
     }
-  }, [preSelectedMonth]);
+  }
 
   async function generate() {
     setLoading(true);

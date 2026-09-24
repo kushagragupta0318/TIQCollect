@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Calendar } from "lucide-react";
 import type { AgentAvailabilityCalendar, AgentCalendarDay } from "@/api/manager";
 import { CAL_MUTED } from "./calendarTheme";
@@ -11,11 +11,14 @@ export function DutyCalendarCard({ cal, loading, jumpToMonth }: { cal: AgentAvai
     monthsAvailable[monthsAvailable.length - 1] ?? ""
   );
 
-  useEffect(() => {
-    if (!jumpToMonth) return;
-    const available = [...new Set(cal.calendar.map((d) => d.date.slice(0, 7)))].sort();
-    if (available.includes(jumpToMonth)) setVisibleMonth(jumpToMonth);
-  }, [jumpToMonth, cal]);
+  // Follow the page's jumpToMonth, re-applied when the jump or the calendar
+  // changes. Adjusted during render rather than in an effect, so the card never
+  // paints the old month first.
+  const [synced, setSynced] = useState<{ jump?: string; cal?: AgentAvailabilityCalendar }>({});
+  if (synced.jump !== jumpToMonth || synced.cal !== cal) {
+    setSynced({ jump: jumpToMonth, cal });
+    if (jumpToMonth && monthsAvailable.includes(jumpToMonth)) setVisibleMonth(jumpToMonth);
+  }
 
   const monthIdx   = monthsAvailable.indexOf(visibleMonth);
   const canPrev    = monthIdx > 0;
