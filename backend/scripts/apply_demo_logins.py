@@ -98,7 +98,16 @@ def apply(db: Session, *, password: str | None, accounts_raw: str | None, demo_m
     emails = parse_accounts(accounts_raw)
     if len(emails) != len(REQUIRED_ROLES) or len(set(emails)) != len(emails):
         return Outcome(applied=False, reason=f"DEMO_MASTER_ACCOUNTS must name exactly {len(REQUIRED_ROLES)} distinct emails")
-    users = {u.email.lower(): u for u in db.query(User).all()}
+    everyone = db.query(User).all()
+    # User.email is case-sensitive in the schema and nothing normalises it, so
+    # "A@x.in" and "a@x.in" can both exist. Keyed by lower case, one of them
+    # would drop out of the dict and keep whatever password it had — possibly
+    # a published one — while the run reported success. Refuse instead.
+    lowered = [(u.email or "").strip().lower() for u in everyone]
+    clashes = sorted({e for e in lowered if e and lowered.count(e) > 1})
+    if clashes:
+        return Outcome(applied=False, reason=f"accounts differ only by letter case: {', '.join(clashes)}")
+    users = {key or f"<no email:{u.id}>": u for key, u in zip(lowered, everyone)}
     missing = [e for e in emails if e not in users]
     if missing:
         return Outcome(applied=False, reason=f"DEMO_MASTER_ACCOUNTS names unknown users: {', '.join(missing)}")

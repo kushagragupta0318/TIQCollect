@@ -56,6 +56,10 @@ from app.models.case import Case, CaseStatus
 from app.models.customer import Customer
 from app.models.loan import Loan
 from app.models.payment import Payment, PaymentMode, PaymentStatus
+
+# The prefix the demo auto-confirm writes (frontend upiPayment.ts). Upper-case
+# compare, so a hand-typed variant is caught too.
+DEMO_UPI_REFERENCE_PREFIX = "DEMO-UPI-"
 from app.models.ptp import PTP, PTPStatus
 from app.services.ptp_lifecycle_service import verified_paid_against
 from app.services.notification_service import NotificationService
@@ -121,6 +125,14 @@ class PaymentService:
             raise AppException(
                 422, ErrorCode.UPI_REFERENCE_REQUIRED,
                 "A UPI payment needs its transaction reference (UTR) from the payment confirmation.",
+            )
+        # The demo auto-confirm writes DEMO-UPI-<ms>. Accepted only on a demo
+        # box: a production bundle built with the demo flag by mistake must not
+        # be able to record a fake UPI payment.
+        if (req.upi_reference or "").strip().upper().startswith(DEMO_UPI_REFERENCE_PREFIX) and not settings.DEMO_MODE:
+            raise AppException(
+                422, ErrorCode.UPI_REFERENCE_REQUIRED,
+                "A demo UPI reference is not accepted outside demo mode.",
             )
         case = self._get_accessible_case(agent, case_id)
 
@@ -349,13 +361,19 @@ class PaymentService:
         import razorpay
         if not settings.RAZORPAY_TEST_API or not settings.RAZORPAY_TEST_KEY_SECRET:
             raise AppException(503, ErrorCode.VALIDATION_ERROR, "Razorpay not configured")
+        # The name on the gateway QR is the payee's, from settings — the same
+        # UPI_PAYEE_NAME the static QR uses (PAY-2). It was "ABC Bank",
+        # hardcoded, which review of 4dcd9dc found surviving here.
+        payee = (settings.UPI_PAYEE_NAME or "").strip()
+        if not payee or payee.startswith("${"):
+            raise AppException(503, ErrorCode.VALIDATION_ERROR, "UPI payee not configured")
 
         close_at = int((datetime.now(timezone.utc) + timedelta(hours=2)).timestamp())
 
         client = razorpay.Client(auth=(settings.RAZORPAY_TEST_API, settings.RAZORPAY_TEST_KEY_SECRET))
         qr = client.qrcode.create({
             "type": "upi_qr",
-            "name": "ABC Bank",
+            "name": payee,
             "usage": "single_use",
             "fixed_amount": True,
             "payment_amount": int(amount * 100),

@@ -204,3 +204,36 @@ def test_a_refused_master_login_does_not_stop_the_api(tmp_path):
                           text=True, cwd=tmp_path)
     assert proc.returncode == 0, proc.stderr
     assert "api-started" in proc.stdout and "NOT applied" in proc.stdout
+
+
+def _boot(tmp_path, command: list[str], env: dict) -> tuple[subprocess.CompletedProcess, list[str]]:
+    """Boot the entrypoint with a real service command (the api's uvicorn, the
+    worker's celery), against a database that is already seeded."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    log = tmp_path / "calls.log"
+    for name in ("pg_isready", "pg_restore", "alembic", "python", "uvicorn", "celery"):
+        _stub(bindir, name)
+    _stub(bindir, "psql", "echo t")
+    e = {**os.environ, "PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}", "STUB_LOG": str(log),
+         "DATABASE_URL": "postgresql+psycopg2://u:p@db:5432/fieldops", **env}
+    proc = subprocess.run([BASH, str(ENTRYPOINT), *command], env=e, capture_output=True, text=True, cwd=tmp_path)
+    return proc, (log.read_text().splitlines() if log.exists() else [])
+
+
+def test_the_api_applies_the_master_login_on_restart_even_without_run_seed(tmp_path):
+    """The dev compose runs the api with RUN_SEED=false — only the one-shot seed
+    container has it true. Inside the RUN_SEED gate the step ran once, at first
+    bring-up, and never on the restart that deploys it (review of 4dcd9dc)."""
+    proc, calls = _boot(tmp_path, ["uvicorn", "app.main:app"],
+                        {"RUN_SEED": "false", "DEMO_MASTER_PASSWORD": _SECRET})
+    assert proc.returncode == 0, proc.stderr
+    assert "python -m scripts.apply_demo_logins" in calls
+    assert calls[-1].startswith("uvicorn"), "the API still starts, after the step"
+
+
+def test_celery_never_runs_the_master_login(tmp_path):
+    proc, calls = _boot(tmp_path, ["celery", "-A", "app.workers.celery_app", "worker"],
+                        {"RUN_SEED": "false", "DEMO_MASTER_PASSWORD": _SECRET})
+    assert proc.returncode == 0, proc.stderr
+    assert not any("apply_demo_logins" in c for c in calls)

@@ -187,3 +187,16 @@ def test_main_never_prints_the_password(db, monkeypatch, capsys):
     out = capsys.readouterr()
     for secret in (MASTER, "tiny-secret-9"):
         assert secret not in out.out and secret not in out.err
+
+
+def test_accounts_that_differ_only_by_case_are_refused(db):
+    """Review of 4dcd9dc: keyed by lower-cased email, one of two such rows
+    dropped out and kept its published password while the run said success."""
+    db.add(User(id=str(uuid.uuid4()), email="Agent001@tiqcollect.in", phone="9000000299", full_name="Dup",
+                hashed_password=hash_password("Agent@123"), role=UserRole.FIELD_AGENT, is_active=True,
+                is_verified=True))
+    db.commit()
+    before = _hashes(db)
+    out = _apply(db)
+    assert not out.applied and "letter case" in out.reason
+    assert _hashes(db) == before

@@ -1090,8 +1090,17 @@ async def voice_outbound(request: Request, db: DbSession):
     from app.core.audit import write_audit
     from app.services import voice_service as voice
 
-    form = await request.form()
-    params = {k: v for k, v in form.multi_items()}
+    try:
+        form = await request.form()
+        params = {k: v for k, v in form.multi_items()}
+    except Exception:  # noqa: BLE001 — a body the parser cannot read is not Twilio's
+        params = None
+    if params is None:
+        write_audit(db, action=_voice_refusal_action(voice.BAD_SIGNATURE), user_id=None, entity_type="voice_call",
+                    entity_id=f"{request.method} {request.url.path}", success=False,
+                    failure_reason=voice.BAD_SIGNATURE,
+                    ip_address=request.client.host if request.client else None)
+        raise HTTPException(status_code=403, detail="Forbidden")
     try:
         from twilio.twiml.voice_response import Dial, VoiceResponse
     except ImportError:

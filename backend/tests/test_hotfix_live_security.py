@@ -363,8 +363,11 @@ def test_the_ownership_check_runs_before_anything_else(client, world, monkeypatc
 def test_a_payment_link_for_the_callers_own_case_is_created(client, world, monkeypatch):
     import razorpay
 
+    sent = {}
+
     class _QR:
         def create(self, body):
+            sent.update(body)
             return {"image_url": "https://rzp.example/qr.png", "id": "qr_test_1"}
 
     class _Client:
@@ -373,6 +376,53 @@ def test_a_payment_link_for_the_callers_own_case_is_created(client, world, monke
 
     monkeypatch.setattr(settings, "RAZORPAY_TEST_API", "rzp_test_key")
     monkeypatch.setattr(settings, "RAZORPAY_TEST_KEY_SECRET", "rzp_test_secret")
+    monkeypatch.setattr(settings, "UPI_PAYEE_NAME", "Example Recovery Desk")
     monkeypatch.setattr(razorpay, "Client", _Client)
     r = client.post(f"/api/v1/agent/cases/{world['own'].id}/payment-link", headers=_agent_hdr(world), json={"amount": 500})
     assert r.status_code == 200 and r.json()["qr_id"] == "qr_test_1"
+    assert sent["name"] == "Example Recovery Desk"      # the payee from settings, not "ABC Bank"
+
+
+@pytest.mark.parametrize("payee", ["", "${UPI_PAYEE_NAME}"])
+def test_no_gateway_qr_without_a_configured_payee(client, world, monkeypatch, payee):
+    monkeypatch.setattr(settings, "RAZORPAY_TEST_API", "rzp_test_key")
+    monkeypatch.setattr(settings, "RAZORPAY_TEST_KEY_SECRET", "rzp_test_secret")
+    monkeypatch.setattr(settings, "UPI_PAYEE_NAME", payee)
+    r = client.post(f"/api/v1/agent/cases/{world['own'].id}/payment-link", headers=_agent_hdr(world), json={"amount": 500})
+    assert r.status_code == 503
+
+
+@pytest.mark.parametrize("ref", ["DEMO-UPI-1727164800000", "demo-upi-1"])
+def test_a_demo_upi_reference_is_refused_outside_demo_mode(world, monkeypatch, ref):
+    monkeypatch.setattr(settings, "DEMO_MODE", False)
+    db = TestingSession()
+    agent = db.get(Agent, world["ag"].id)
+    before = db.query(Payment).count()
+    with pytest.raises(AppException) as e:
+        ps.PaymentService(db).collect_payment(agent, world["pay"].id,
+                                              CollectPaymentRequest(amount=100.0, mode=PaymentMode.UPI, upi_reference=ref))
+    assert e.value.code == ErrorCode.UPI_REFERENCE_REQUIRED
+    assert db.query(Payment).count() == before
+    db.close()
+
+
+def test_a_demo_upi_reference_is_accepted_on_a_demo_box(world, monkeypatch):
+    monkeypatch.setattr(settings, "DEMO_MODE", True)
+    monkeypatch.setattr(ps.NotificationService, "send_twilio", staticmethod(lambda *a, **k: False))
+    db = TestingSession()
+    agent = db.get(Agent, world["ag"].id)
+    ps.PaymentService(db).collect_payment(agent, world["pay"].id,
+                                          CollectPaymentRequest(amount=100.0, mode=PaymentMode.UPI,
+                                                                upi_reference="DEMO-UPI-1727164800000"))
+    db.close()
+
+
+def test_a_body_the_form_parser_cannot_read_is_403_not_500(client, world, configured):
+    """Review of 4dcd9dc: request.form() on a body the parser rejects raised
+    before the signature check. (The review expected a 500; measured, Starlette
+    turns it into a 400 — with no audit row, unlike every other refusal here.)
+    Now it is refused like a bad signature: 403, audited."""
+    broken_multipart = b"--broken" + bytes([13, 10]) + b"Content-Disposition: form-data" + bytes([13, 10, 13, 10]) + b"no-end"
+    r = client.post(PATH, content=broken_multipart,
+                    headers={"Content-Type": "multipart/form-data; boundary=broken", "X-Twilio-Signature": "x"})
+    assert r.status_code == 403
