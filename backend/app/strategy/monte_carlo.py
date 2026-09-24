@@ -121,6 +121,54 @@
 #   preset, in ASSUMPTIONS, and as an E05/E08 recalibration item, and
 #   test_sector_shock_calibration_is_declared_not_tuned pins those numbers so
 #   the recalibration has to change a test on purpose.
+#
+# 2026-09-24 (later still) — MEASURED the GNPA shift a prior report claimed
+#   for "GATES FIXED 2" (SUB -> DOUBTFUL as a 12-month rule instead of a
+#   random monthly hazard): it had said p50 GNPA at the horizon moved
+#   11.92 -> 14.98, cited in no commit or file, and a second auditor re-
+#   verifying 66f3bb9 could not reproduce it and expected a smaller effect.
+#
+#   scripts/research/mc_gnpa_shift.py runs the SAME synthetic benchmark book,
+#   same seed, same everything else, once under this engine and once under
+#   daadc17's (mc-1.0.0, extracted with `git show` into a temp directory and
+#   run in a separate subprocess, since both define `app.strategy.monte_carlo`
+#   and a same-process import would hand the second one the first's cached
+#   module):
+#
+#       cd backend && python -m scripts.research.mc_gnpa_shift
+#       book: synthetic_book(n_accounts=50_000), n_paths=1_000,
+#             horizon_months=12, seed=0, scenario=PRESETS["adverse"]
+#       python 3.14.2, numpy 2.4.0 (this host — see the note below on why
+#       the version is recorded)
+#
+#       old (daadc17, mc-1.0.0, random 1/12 hazard):        GNPA p50 = 11.922
+#       new (66f3bb9.., mc-1.1.0, deterministic 12-month rule): GNPA p50 = 14.979
+#
+#   This REPRODUCES the prior report almost exactly (11.92 -> 14.98 rounded).
+#   The mechanism is real, not a coincidence: under the random hazard, a
+#   Sub-standard account has an 8.3%/month chance of jumping early into
+#   Doubtful, which exits NPA (write-off + resolve) faster than Sub-standard
+#   does — so some of the book reaches that faster exit route well inside the
+#   12-month horizon. Under the deterministic rule, EVERY account is held to
+#   the slower Sub-standard exit rate for the full 12 months before it can
+#   ever reach Doubtful's faster one — which, at this benchmark's 12-month
+#   horizon, means only accounts already Sub-standard at month 0 ever reach
+#   Doubtful at all (at the very last step), and the rest of the book sits
+#   the whole run at the slower rate. Given the benchmark's own 12-month
+#   window, that raising the GNPA balance rather than lowering it is the
+#   expected direction and a magnitude of this order is not implausible;
+#   this file draws no stronger conclusion than what was measured.
+#
+#   So the prior report's number was NOT fabricated — it reproduces on this
+#   host — and the auditor's non-reproduction is best explained by
+#   `simulate`'s own documented caveat a few lines below: numpy does not
+#   promise its Generator distributions are stable across versions, and the
+#   fieldops-test image this repo tests in ships numpy 2.2 (see the "guide
+#   table" note under THE MODEL above) against 2.4 here. A different numpy
+#   version can legitimately draw a different sequence from the same seed,
+#   which would move BOTH figures, not just one. Anyone who wants this
+#   number under a specific numpy version should re-run the script under it;
+#   the two figures above are exactly what this host measured and no other.
 # ───────────────────────────────────────────────────────────────────────────
 """Account-level Monte Carlo for a collections book (plan §7.1, task E02).
 

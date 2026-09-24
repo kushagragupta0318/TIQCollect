@@ -22,6 +22,26 @@
 #   Mass conservation now uses array_equal on the counts, not allclose.
 #   The panel generator applies the same 12-month rule the engine does,
 #   written independently.
+#
+# 2026-09-24 (later still) — A second audit, of 66f3bb9 itself, asked for
+#   three more things, all closed here or in monte_carlo.py:
+#   - test_dpd_range_agrees_with_dpd_bucket_for swept 0..400 DPD only; it now
+#     pins dpd_bucket_for(-1) / portfolio_state(-1) as CURRENT explicitly and
+#     sweeps -10..400.
+#   - Two cases move() handles only by design, previously untested: a
+#     write-off policy shorter than 12 months derecognises the account
+#     before it can ever age into Doubtful
+#     (test_write_off_before_twelve_months_never_reaches_doubtful), and a
+#     cure-then-relapse gets a FRESH NPA entry month, so promotion is judged
+#     on the re-entry date, not the original one
+#     (test_cure_then_reenter_gets_a_fresh_npa_entry_month). Both execute the
+#     engine on small deterministic-or-searched inputs; neither inspects
+#     source text.
+#   - The GNPA p50 shift a prior report attributed to the deterministic
+#     12-month rule (claimed 11.92 -> 14.98, unreproducible by the auditor)
+#     is now measured by scripts/research/mc_gnpa_shift.py, which runs
+#     daadc17's engine (mc-1.0.0, the random 1/12 hazard) against this one
+#     from a temp checkout; see monte_carlo.py's CHANGELOG for the number.
 # ───────────────────────────────────────────────────────────────────────────
 from dataclasses import replace
 from datetime import date
@@ -105,15 +125,21 @@ def test_an_npa_status_wins_over_the_bucket_until_regularised():
 def test_dpd_range_agrees_with_dpd_bucket_for():
     # DPD_RANGE restates 30/60/90 because importing models.loan would pull the
     # DB engine into a DB-free package; this is what keeps the copy honest.
-    from app.models.loan import dpd_bucket_for
+    # Extended 2026-09-24 (audit of 66f3bb9) to negative DPD, a real input
+    # shape (e.g. a payment posted after the as-of date can leave a loan's
+    # DPD computed as negative): dpd_bucket_for clamps it to CURRENT, and so
+    # must portfolio_state — pinned explicitly, then swept in the loop below.
+    from app.models.loan import DPDBucket, dpd_bucket_for
+    assert dpd_bucket_for(-1) == DPDBucket.CURRENT
+    assert portfolio_state(dpd_bucket_for(-1)) == "CURRENT"
     sma = (SMA_0, SMA_1, SMA_2)
-    for d in range(0, 401):
+    for d in range(-10, 401):
         s = STATE_INDEX[portfolio_state(dpd_bucket_for(d))]
         hits = [st for st in sma if DPD_RANGE[st][0] <= d <= DPD_RANGE[st][1]]
         if s in sma:
             assert hits == [s], d
         elif s == CURRENT:
-            assert hits == [] and d == 0, d
+            assert hits == [] and d <= 0, d
         else:
             assert s == NPA_SUB and hits == [] and d >= DPD_RANGE[NPA_SUB][0], d
 
@@ -302,6 +328,83 @@ def test_doubtful_is_reached_by_age_and_only_by_age():
     r = simulate(old, mx, n_paths=4, horizon_months=1, seed=0, config=cfg)
     assert np.all(r.paths.state_count[:, 0, NPA_DOUBTFUL] == 1)
     assert r.diagnostics["npa_sub_reclassified_doubtful_at_start"] == 1
+
+
+def test_write_off_before_twelve_months_never_reaches_doubtful():
+    # Audit of 66f3bb9 (2026-09-24): pin the two cases move() handles only by
+    # design, per its own bookkeeping (entry_f / promote_f), rather than by
+    # source-text inspection. First: a write-off policy shorter than the
+    # 12-month NPA age rule must win the race — the account is derecognised
+    # before it can ever be aged into Doubtful, and WRITTEN_OFF is absorbing,
+    # so it must never subsequently show up anywhere else either.
+    #
+    # The matrix puts the entire NPA_SUB row on staying NPA_SUB (no cure, no
+    # drift to any other state), so — with a write-off policy set, which
+    # REPLACES the observed NPA write-off hazard with the deterministic rule
+    # (see the "GATES FIXED" note above) — the only thing that can move this
+    # account at all is the age-based write-off check itself.
+    counts = np.zeros((1, N_STATES, N_STATES))
+    counts[0, NPA_SUB, NPA_SUB] = 10_000
+    mx = SegmentMatrices(("x",), counts, loan_types=("PERSONAL",))
+    n = 200
+    pf = Portfolio(state=np.full(n, NPA_SUB), balance=np.full(n, 1e5), segment=np.zeros(n, dtype=int),
+                   npa_age_months=np.zeros(n))  # a fresh NPA entry, as of month 0
+    cfg = replace(FAST, prior_strength=0.0, prior_floor=0.0)
+    res = simulate(pf, mx, levers=Levers(writeoff_policy_months=6), n_paths=8, horizon_months=13,
+                   seed=3, config=cfg)
+    cnt = res.paths.state_count
+    assert np.all(cnt[:, :6, NPA_SUB] == n)          # still Sub-standard through month 5
+    assert np.all(cnt[:, 6:, WRITTEN_OFF] == n)      # written off at exactly the 6-month policy age...
+    assert np.all(cnt[:, :, NPA_DOUBTFUL] == 0)      # ...and NEVER aged into Doubtful: absorbed first
+    assert np.all(cnt[:, 12:, WRITTEN_OFF] == n)     # ...and stays written off past the 12-month mark
+
+
+def test_cure_then_reenter_gets_a_fresh_npa_entry_month():
+    # Audit of 66f3bb9 (2026-09-24), second pinned case: an account that
+    # LEAVES NPA (cures to CURRENT) and LATER RE-ENTERS must be judged on the
+    # RE-ENTRY month, not the one it started with — move()'s "entering"
+    # branch (`entry_f[fe] = t + 1`) overwrites unconditionally, with no
+    # special case for a first-ever entry versus a later one, and this is
+    # what checks that the overwrite actually happens at runtime.
+    #
+    # A matrix that lets an NPA_SUB account cure 15%/month and a CURRENT
+    # account relapse 30%/month is not deterministic account-by-account, but
+    # every account starts life with a real "first entry" (month 0, whose
+    # naive promotion date would be month 12) — so ANY account that cures,
+    # relapses, and then holds Sub-standard for a full 12 months after the
+    # SECOND entry is a witness: it must promote exactly 12 months after the
+    # re-entry, and it must not have been promoted at month 12 (the first
+    # entry's date) instead. With 200 independent accounts (their own segment
+    # each, so per-account trajectories are readable off the aggregate
+    # counts) over 30 months, this happens often enough to check on every run.
+    S = 200
+    counts = np.zeros((S, N_STATES, N_STATES))
+    counts[:, NPA_SUB, NPA_SUB], counts[:, NPA_SUB, CURRENT] = 850.0, 150.0
+    counts[:, CURRENT, CURRENT], counts[:, CURRENT, NPA_SUB] = 700.0, 300.0
+    mx = SegmentMatrices(tuple(f"seg{i}" for i in range(S)), counts)
+    pf = Portfolio(state=np.full(S, NPA_SUB), balance=np.full(S, 1e5),
+                   segment=np.arange(S, dtype=int), npa_age_months=np.zeros(S))
+    cfg = EngineConfig(prior_strength=0.0, prior_floor=0.0, parameter_uncertainty=False,
+                       shock_sigma=0.0, n_workers=2)
+    P, T = 5, 30
+    res = simulate(pf, mx, n_paths=P, horizon_months=T, seed=42, config=cfg)
+    states_ts = np.argmax(res.paths.seg_state_count, axis=-1)  # (P, T+1, S): the one account's state
+
+    witnesses = 0
+    for p in range(P):
+        for s in range(S):
+            seq = states_ts[p, :, s]
+            for k2 in range(1, T + 1):
+                if not (seq[k2 - 1] == CURRENT and seq[k2] == NPA_SUB):
+                    continue                          # not a re-entry (CURRENT -> NPA_SUB) event
+                if k2 + 12 > T or not np.all(seq[k2:k2 + 12] == NPA_SUB):
+                    continue                           # no clean 12-month hold to check after it
+                if seq[k2 + 12] != NPA_DOUBTFUL:
+                    continue                           # cured again in the very same month it was
+                                                        # due (a real race, not this case: skip it)
+                witnesses += 1
+                assert seq[12] != NPA_DOUBTFUL, (p, s, k2)  # not promoted on the FIRST entry's date
+    assert witnesses > 0, "no account produced a cure -> relapse -> 12-month-hold cycle to check"
 
 
 def test_the_run_carries_its_caveats_until_a_real_backtest_passes(book, base_run):
