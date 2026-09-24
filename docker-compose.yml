@@ -163,7 +163,6 @@ services:
       SECRET_KEY: ${SECRET_KEY:-dev_only_secret_change_me_openssl_rand_hex_32}
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-fieldops_minio}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-fieldops_minio_secret}
-      COMMAND_CENTRE_API_KEY: ${COMMAND_CENTRE_API_KEY:-dev_only_command_centre_key}
       # Pre-signed upload URLs carry this host in the signature, so it has to be
       # one the BROWSER can reach — minio:9000 only resolves inside the compose
       # network. Set explicitly because backend/.env may still point at the

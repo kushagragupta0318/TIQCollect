@@ -79,7 +79,6 @@ def _resolve_database_url() -> str:
 
 os.environ["DATABASE_URL"] = _resolve_database_url()
 os.environ.setdefault("SECRET_KEY", "demo-script")
-os.environ.setdefault("COMMAND_CENTRE_API_KEY", "demo-script")
 
 from sqlalchemy import func                                             # noqa: E402
 from app.core.geo import IST, is_within_contact_hours

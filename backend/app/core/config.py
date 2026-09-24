@@ -119,16 +119,6 @@ class Settings(BaseSettings):
     def allowed_origins_list(self) -> List[str]:
         return [o.strip() for o in self.ALLOWED_ORIGINS.split(",")]
 
-    # Bank Command Centre
-    COMMAND_CENTRE_API_KEY: str
-
-    # Gate the /api/field-ops/* contract endpoints behind COMMAND_CENTRE_API_KEY.
-    # Off by default so a local Command Centre works with no configuration —
-    # its proxy sends no auth header. Turn on in any deployment reachable
-    # beyond localhost: those endpoints expose live agent GPS and collections
-    # figures. See api/v1/endpoints/field_ops.py.
-    FIELD_OPS_REQUIRE_API_KEY: bool = False
-
     # OpenAI (Whisper transcription)
     OPENAI_API_KEY: str = ""
 
