@@ -197,6 +197,66 @@ def test_a_january_date_said_in_december_is_next_year(no_llm):
     assert _by_field(res)["ptp_date"] == "2027-01-05"
 
 
+# ── H14-2, the audit of 759dfa8: the month is never dropped ─────────────────
+@pytest.mark.parametrize("said", [
+    "15th November", "15 November", "the 15th of November", "15th, November",    # 1.2.0: "15th, November" -> 15 Oct
+    "the 15th, November", "November 15", "November 15th", "Nov 15", "Nov. 15",   # 1.2.0: "Nov. 15" -> no date
+    "15th Nov", "15-11", "15/11", "15-11-2026",
+])
+def test_a_day_and_a_month_are_read_together(no_llm, said):
+    assert _by_field(vre.extract(f"He will pay Rs 4,000 on {said}.", today=TODAY))["ptp_date"] == "2026-11-15"
+
+
+@pytest.mark.parametrize("said", ["15th Novmber", "15th Novembr", "the 15th, Novmber", "15th of Nove"])
+def test_a_misheard_month_gives_no_date_rather_than_next_months(no_llm, said):
+    """1.2.0 read each of these as the next 15th — 15 OCTOBER — with full
+    confidence. Whisper mishears months; a bare day beside anything month-like
+    is not a date at all. The promise and the amount still stand."""
+    fields = _by_field(vre.extract(f"He will pay Rs 4,000 on {said}.", today=TODAY))
+    assert "ptp_date" not in fields
+    assert fields["outcome"] == "PTP" and fields["ptp_amount"] == 4000.0
+
+
+def test_may_be_is_not_the_month_of_may(no_llm):
+    fields = _by_field(vre.extract("He will pay Rs 4,000 on the 15th, may be earlier.", today=TODAY))
+    assert fields.get("ptp_date") != "2027-05-15" and fields.get("ptp_date") != "2026-05-15"
+
+
+def test_a_decimal_amount_is_not_a_dotted_date(no_llm):
+    fields = _by_field(vre.extract("He will pay 12.5 lakh next month.", today=TODAY))
+    assert "ptp_date" not in fields or not fields["ptp_date"].endswith("-05-12")
+
+
+@pytest.mark.parametrize("said", ["15th January", "15th, January", "Jan 15", "Jan. 15", "15-01", "15/01"])
+def test_across_the_year_boundary_january_said_in_december_is_next_year(no_llm, said):
+    res = vre.extract(f"He will pay Rs 4,000 on {said}.", today=date(2026, 12, 20))
+    assert _by_field(res)["ptp_date"] == "2027-01-15"
+
+
+@pytest.mark.parametrize("said", ["15th November", "Nov 15", "15-11", "the 15th, November"])
+def test_across_the_year_boundary_november_said_in_january_is_past_not_next_year(no_llm, said):
+    """Said on 5 January 2027, "15th November" is 51 days ago: rejected as past,
+    never rolled to November 2027, and never read as 15 January."""
+    res = vre.extract(f"He will pay Rs 4,000 on {said}.", today=date(2027, 1, 5))
+    assert "ptp_date" not in _by_field(res)
+    assert _codes(res, "ptp_date") == ["in_the_past"]
+
+
+@pytest.mark.parametrize("evidence,value,ok", [
+    ("15th, November", "2026-11-15", True),
+    ("Nov. 15", "2026-11-15", True),
+    ("15th Novmber", "2026-10-15", False),      # the model guessing October is not supported by the words
+    ("15th Novmber", "2026-11-15", False),      # nor is November: the words do not say it
+])
+def test_the_models_date_is_held_to_the_same_reading(llm_says, evidence, value, ok):
+    note = f"He will pay Rs 4,000 on {evidence}."
+    llm_says(_ok({"ptp_date": value, "evidence": {"ptp_date": evidence}}))
+    res = vre.extract(note, today=TODAY)
+    assert (_by_field(res).get("ptp_date") == value) is ok
+    if not ok:
+        assert _codes(res, "ptp_date") == ["evidence_mismatch"]
+
+
 @pytest.mark.parametrize("said", ["1st July", "1st June", "15th April"])      # 85, 115, 162 days back
 def test_a_date_months_back_is_not_rolled_into_next_year(no_llm, said):
     """Round 2 (1.2.0): the roll needs 180 days. At 60 — 1.1.0's threshold —

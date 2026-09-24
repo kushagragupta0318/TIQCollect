@@ -60,6 +60,15 @@
 #   call has a hard 25 s deadline (main's client retries inside llm's own
 #   loop); and the route checks the case STRICTLY (own_case), not through the
 #   permissive helper.
+#
+# 2026-09-24 (round 3) — extraction 1.3.0, the audit of 759dfa8 (H14-2): the
+#   month could still be dropped. "the 15th, November" and a misheard
+#   "15th Novmber" both read as 15 OCTOBER. A comma may now sit between day
+#   and month, "Nov. 15" reads (the sentence split no longer cuts at "Nov."),
+#   and a bare day next to anything month-like is not a date at all (see
+#   _DATE). And across a year boundary: "15th November" said on 5 January
+#   read as November NEXT year, 314 days ahead; a date more than 180 days
+#   ahead is now last year's, and rejected as past.
 # ───────────────────────────────────────────────────────────────────────────
 """Voice note transcript → suggested visit-form values.
 
@@ -111,7 +120,7 @@ logger = structlog.get_logger()
 
 # Stamped on every result. A prompt, rule or validation change is a change to
 # what this returns for the same words: bump it.
-EXTRACTION_VERSION = "visit-extraction-1.2.0"
+EXTRACTION_VERSION = "visit-extraction-1.3.0"
 
 MAX_TRANSCRIPT_CHARS = 5_000
 
@@ -438,16 +447,28 @@ _WEEKDAY_ALT = "|".join(_WEEKDAYS)
 # Order matters where two alternatives could start at the same place; and no
 # alternative may start EARLIER than another that describes more of the date
 # ("on 15th November" once matched as "on 15th", dropping the month).
+#
+# 1.3.0 (the audit of 759dfa8, H14-2) — the month could still be lost. "the
+# 15th, November" (a comma, as Whisper often writes it) and "15th Novmber" (a
+# misheard month) both fell through to the bare-day alternative and came back
+# as 15 OCTOBER, the next 15th: a confident date one month wrong. Now a comma
+# may sit between day and month, "Nov." may carry its full stop, and a bare
+# day followed by anything that looks like a month name is not a date at all:
+# no suggestion beats a wrong one. "the 15th may be" is not 15 May. (A dotted
+# "15.11" stays unread on purpose — the same pattern would read "12.5 lakh" as
+# 12 May; and no comma after a month-first date, or "he may, 20 days later"
+# would be 20 May.)
+_MONTH_LIKE = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*"
 _DATE = re.compile(
     r"\b(?P<dat>day after tomorrow)\b"
     r"|\b(?P<tom>tomorrow)\b"
     r"|\b(?P<tod>today|tonight)\b"
     r"|\bin\s+(?P<ndays>\d{1,2})\s+days?\b"
-    rf"|\b(?P<d1>\d{{1,2}})(?:st|nd|rd|th)?\s+(?:of\s+)?(?P<mon1>{_MONTH_ALT})\b"
-    rf"|\b(?P<mon2>{_MONTH_ALT})\s+(?P<d2>\d{{1,2}})(?:st|nd|rd|th)?\b"
+    rf"|\b(?P<d1>\d{{1,2}})(?:st|nd|rd|th)?,?\s+(?:of\s+)?(?P<mon1>{_MONTH_ALT})\b(?!\s+be\b)"
+    rf"|\b(?P<mon2>{_MONTH_ALT})\.?\s+(?P<d2>\d{{1,2}})(?:st|nd|rd|th)?\b"
     r"|\b(?P<d3>\d{1,2})[/-](?P<m3>\d{1,2})(?:[/-](?P<y3>\d{2,4}))?\b"
     rf"|\b(?:next\s+|this\s+)?(?P<wd>{_WEEKDAY_ALT})\b"
-    r"|\b(?P<dom>\d{1,2})(?:st|nd|rd|th)\b",
+    rf"|\b(?P<dom>\d{{1,2}})(?:st|nd|rd|th)\b(?!,?\s+(?:of\s+)?{_MONTH_LIKE}\b)",
     re.I,
 )
 
@@ -642,10 +663,17 @@ def _this_or_next_year(today: date, month: int, day: int) -> date:
     said on 24 September is four days ago — kept in the past so the validator
     rejects it, rather than rolled a year forward into a promise nobody made.
     The roll needs 180 days: at 60, "had promised to pay on 1st July", said in
-    late September, became 1 July NEXT year (the audit of 5d70298)."""
+    late September, became 1 July NEXT year (the audit of 5d70298).
+
+    And back (1.3.0, H14-2): "15th November" said on 5 January is the
+    November just gone, 51 days ago, not the one 314 days ahead — so more than
+    180 days AHEAD reads as last year, and the validator rejects it as past.
+    The nearest reading within half a year either way wins."""
     d = date(today.year, month, day)
     if d < today and (today - d).days > 180:
         return date(today.year + 1, month, day)
+    if d > today and (d - today).days > 180:
+        return date(today.year - 1, month, day)
     return d
 
 
@@ -699,6 +727,20 @@ def _fold(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+# A full stop after one of these does not end a sentence: "Rs. 5000", and
+# (1.3.0) "Nov. 15", which used to split the date off from its promise.
+_NO_SPLIT_BEFORE_DOT = frozenset(
+    "rs jan feb mar apr jun jul aug sep sept oct nov dec".split())
+
+
 def _sentences(text: str) -> list[str]:
-    # Split on sentence punctuation, but not on the dot in "Rs. 5000".
-    return [p for p in re.split(r"(?<!\brs)(?<!\bRs)(?<!\bRS)[.!?;]\s+|\n+", text) if p.strip()]
+    out, start = [], 0
+    for m in re.finditer(r"[.!?;]\s+|\n+", text):
+        if m.group(0).startswith("."):
+            word = re.search(r"(\w+)$", text[start:m.start()])
+            if word and word.group(1).lower() in _NO_SPLIT_BEFORE_DOT:
+                continue
+        out.append(text[start:m.start()])
+        start = m.end()
+    out.append(text[start:])
+    return [p for p in out if p.strip()]
