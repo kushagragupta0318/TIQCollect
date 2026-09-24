@@ -846,3 +846,117 @@ def test_use_fake_never_touches_the_real_store():
         assert isinstance(llm._store, llm._MemoryStore) and llm._store is not before
         llm.complete("p", purpose="fk")
     assert llm._store is before
+
+
+# ── second audit fix-up (A-E, G) ─────────────────────────────────────────────
+class _APITimeoutError(Exception):
+    """Stands in for the real anthropic/openai SDK timeout exception classes —
+    _classify matches on the CLASS NAME containing "timeout", not on the
+    concrete type, exactly so a stub like this one exercises the real path."""
+
+
+# -- A: only an ai_generated fallback result is ever served ------------------
+def test_fallback_bad_response_does_not_hide_the_primarys_failure(monkeypatch):
+    """Before this fix, a fallback that failed in a CALLER-shaped way (here:
+    non-JSON for a json_mode request) was returned as though it had answered,
+    silently dropping the primary's NOT_CONFIGURED — the failure that
+    actually needed fixing."""
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "")
+    monkeypatch.setattr(settings, "LLM_FALLBACK_PROVIDER", "groq")
+    groq = _openai(monkeypatch, _oresp("not json at all"))
+    r = llm.complete("p", purpose="fbcaller", json_mode=True, cache_ttl=0)
+    assert r.status == llm.NOT_CONFIGURED and r.provider == "none"
+    assert r.ai_generated is False
+    assert r.fallback_failure == {"provider": "groq", "status": llm.BAD_RESPONSE,
+                                  "failure_reason": "Model did not return valid JSON"}
+    assert len(groq.calls) == 1                      # the fallback WAS tried
+
+
+def test_chat_fallback_refused_does_not_hide_the_primarys_failure(monkeypatch):
+    """Same defect, in chat(): a REFUSED fallback (groq's content_filter) must
+    not be served in place of the primary's own failure."""
+    monkeypatch.setattr(settings, "LLM_FALLBACK_PROVIDER", "groq")
+    _anthropic(monkeypatch, _http_err(503))
+    groq = _openai(monkeypatch, _oresp("", finish="content_filter"))
+    r = llm.chat([{"role": "user", "content": "q"}], purpose="fbcallerchat")
+    assert r.status == llm.UPSTREAM_ERROR and r.provider == "anthropic"
+    assert r.ai_generated is False
+    assert r.fallback_failure["provider"] == "groq"
+    assert r.fallback_failure["status"] == llm.REFUSED
+    assert len(groq.calls) == 1
+
+
+# -- B: chat() never falls back on TIMEOUT; complete() still does ------------
+def test_chat_does_not_fall_back_on_timeout_but_complete_does(monkeypatch):
+    monkeypatch.setattr(settings, "LLM_FALLBACK_PROVIDER", "groq")
+    _anthropic(monkeypatch, _APITimeoutError("simulated timeout"))
+    groq = _openai(monkeypatch, _oresp("from groq"))
+
+    r = llm.chat([{"role": "user", "content": "q"}], purpose="timeoutchat")
+    assert r.status == llm.TIMEOUT and r.provider == "anthropic"
+    assert groq.calls == []                           # never even tried
+
+    r2 = llm.complete("p", purpose="timeoutcomplete", cache_ttl=0)
+    assert r2.status == llm.OK and r2.provider == "groq"
+    assert r2.fallback_from == "anthropic"
+    assert len(groq.calls) == 1
+
+
+# -- C: a FALLBACK attempt's status records under its own dimension ----------
+def test_fallback_failure_is_counted_under_its_own_dimension(monkeypatch):
+    """A fallback FAILURE used to share the primary's counter key, so a
+    struggling fallback and a struggling primary were indistinguishable in
+    the same count."""
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "")
+    monkeypatch.setattr(settings, "LLM_FALLBACK_PROVIDER", "groq")
+    _openai(monkeypatch, _http_err(503))
+    llm.complete("p", purpose="ctrboth", cache_ttl=0)
+    assert llm.stats()["ctrboth"] == {llm.NOT_CONFIGURED: 1, "FALLBACK_UPSTREAM_ERROR": 1}
+
+
+# -- D: _cache_key hardening ---------------------------------------------------
+def test_a_lone_surrogate_in_the_prompt_does_not_raise_or_invalidate(monkeypatch):
+    """A bare .encode() on a lone surrogate raises UnicodeEncodeError, which
+    the call site used to catch and misreport as an unserialisable SCHEMA —
+    wrong, since there may be no schema at all. errors="surrogatepass" makes
+    the prompt harmless to the key computation."""
+    _anthropic(monkeypatch, _amsg([_text("ok")]))
+    r = llm.complete("bad \ud800 prompt", purpose="surrogate", cache_ttl=0)
+    assert r.status == llm.OK
+    assert r.status != llm.INVALID_REQUEST
+
+
+def test_a_deeply_nested_schema_is_invalid_request_not_a_raise(monkeypatch):
+    """json.dumps on a ~5000-level schema raises RecursionError, which the old
+    guard (TypeError, ValueError) did not catch — it would have propagated out
+    of complete() as an unhandled exception, breaking the "never raises"
+    contract this whole module exists to hold."""
+    schema: dict = {"type": "object"}
+    node = schema
+    for _ in range(5000):
+        child: dict = {"type": "object"}
+        node["properties"] = {"x": child}
+        node = child
+    anth = _anthropic(monkeypatch, _amsg([_text("{}")]))
+    r = llm.complete("p", purpose="deepschema", json_schema=schema, cache_ttl=0)
+    assert r.status == llm.INVALID_REQUEST
+    assert anth.calls == []                            # never reached the SDK
+
+
+# -- E: _sdk_missing distinguishes "not installed" from "installed but broken"
+def test_an_sdk_present_but_broken_on_import_is_distinguished_from_missing(monkeypatch):
+    """find_spec only proves the package is ON DISK. A package present but
+    broken on import (an incompatible dependency, a bad upgrade) used to read
+    as usable and fail later, misclassified as a provider outage."""
+    real_import_module = llm.importlib.import_module
+
+    def broken(name, *a, **kw):
+        if name == "anthropic":
+            raise RuntimeError("boom")
+        return real_import_module(name, *a, **kw)
+
+    monkeypatch.setattr(llm.importlib, "import_module", broken)
+    h = llm.health()
+    assert h["usable"] is False and h["primary_usable"] is False
+    assert "failed to import" in h["unusable_reason"]
+    assert "RuntimeError" in h["unusable_reason"] and "boom" in h["unusable_reason"]

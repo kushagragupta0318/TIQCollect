@@ -100,6 +100,59 @@
 #     serves (primary_usable / unusable_reason say why the primary does not).
 #   - use_fake() swaps in an in-process store, so tests run in the api
 #     container no longer write counters into the real Redis.
+#   - Also true on groq/openai, not just Anthropic — visible here because it
+#     was missed the first time round: HTTP 402 is now BILLING and not
+#     retried (was UPSTREAM_ERROR, retried up to 3x); HTTP 413 and a
+#     TypeError from the SDK call are now INVALID_REQUEST and not retried
+#     (were UPSTREAM_ERROR, retried); and a reply the PARSE stage cannot read
+#     is now BAD_RESPONSE, not retried (was UPSTREAM_ERROR, retried, and then
+#     quietly served by the fallback, since UPSTREAM_ERROR is a fallback
+#     trigger). `_classify` and the three-stage split are shared by every
+#     provider; the earlier bullets above illustrated them with Anthropic
+#     examples only, which read as if groq/openai were unaffected.
+#
+# 2026-09-24 — Second fix-up, from auditing the fix-up above:
+#   - `_settle` still dropped the PRIMARY's failure whenever the fallback
+#     failed with a caller-shaped status (BAD_RESPONSE / INVALID_REQUEST /
+#     REFUSED) — only a provider-shaped fallback failure got attached to the
+#     primary as `fallback_failure`; anything else silently returned the
+#     fallback's OWN failure instead, hiding the one that needed fixing. Now:
+#     any fallback result that is not `ai_generated` is attached to the
+#     primary as `fallback_failure` and the primary is returned; only an
+#     `ai_generated` fallback result is ever served.
+#   - chat() no longer falls back on TIMEOUT. A 120 s agent turn timing out
+#     mid tool loop must not switch provider under it — the loop's state
+#     (tool calls already issued against a specific model's tool-calling
+#     format) belongs to the provider that started it. `_CHAT_FALLBACK_ON`
+#     is `_FALLBACK_ON` minus TIMEOUT, used only by chat()'s own loop.
+#     complete() has no loop and is unaffected — it still falls back on
+#     TIMEOUT.
+#   - Counters: a FALLBACK attempt's status now records under its OWN
+#     dimension, `FALLBACK_<STATUS>` — generalising FALLBACK_OK, which
+#     already existed for a fallback SUCCESS but let a fallback FAILURE share
+#     the primary's counter key, so "the primary is failing" and "the
+#     fallback is failing" were indistinguishable in the same count.
+#   - `_cache_key`: a lone surrogate in the PROMPT (e.g. "\ud800") raised
+#     UnicodeEncodeError from a bare `.encode()`, which the call site caught
+#     as "json_schema is not JSON-serialisable" — wrong, and misleading,
+#     since the prompt was at fault and there may be no schema at all.
+#     `.encode()` now passes `errors="surrogatepass"`, so the prompt can
+#     never break key computation. A pathologically deep schema's
+#     `json.dumps` can raise RecursionError, which the old guard did not
+#     catch; now guarded alongside TypeError/ValueError, and the call site
+#     logs a warning whenever it returns INVALID_REQUEST from here.
+#   - `_sdk_missing` used `importlib.util.find_spec`, which only proves the
+#     package is ON DISK — a package that is present but broken on import (an
+#     incompatible dependency, a bad upgrade) read as usable and then failed
+#     deeper in the call, misclassified as a provider outage rather than a
+#     broken image. It now imports the module and distinguishes "not
+#     installed" (ImportError/ModuleNotFoundError) from "installed but failed
+#     to import: <ExcType>: <msg>".
+#   - main.py's SPA catch-all: a missing hashed asset (`*.js`,
+#     case-insensitive) now 404s instead of serving index.html with a 200
+#     `text/html` — a stale client or service worker asking for an old chunk
+#     (or `/sw.js` after a rollback) got HTML where it expected JavaScript.
+#     Not this module; see the CHANGELOG block in app/main.py.
 # ───────────────────────────────────────────────────────────────────────────
 """One LLM entry point for the whole product.
 
@@ -130,7 +183,7 @@ Neutral message format for chat() — the same dicts work for every provider:
 from __future__ import annotations
 
 import hashlib
-import importlib.util
+import importlib
 import json
 import time
 from contextlib import contextmanager
@@ -170,6 +223,12 @@ _RETRYABLE = {RATE_LIMITED, UPSTREAM_ERROR}
 # sending the same thing elsewhere hides the problem instead of fixing it.
 _FALLBACK_ON = {NOT_CONFIGURED, AUTH_FAILED, BILLING, RATE_LIMITED,
                 MODEL_NOT_FOUND, TIMEOUT, UPSTREAM_ERROR}
+
+# chat()-only: TIMEOUT never triggers the fallback. A 120 s agent turn timing
+# out is not evidence the OTHER provider would do better, and switching mid
+# tool loop hands a stateful conversation to a model that did not start it.
+# complete() has no loop and keeps TIMEOUT in _FALLBACK_ON.
+_CHAT_FALLBACK_ON = _FALLBACK_ON - {TIMEOUT}
 
 _PROVIDERS = ("groq", "openai", "anthropic")
 _SDK_MODULE = {"groq": "openai", "openai": "openai", "anthropic": "anthropic"}
@@ -294,17 +353,25 @@ def _norm(name: str | None) -> str:
 
 
 def _sdk_missing(name: str) -> str | None:
-    """Why this provider's SDK cannot be used, or None when it can."""
+    """Why this provider's SDK cannot be used, or None when it can.
+
+    Actually IMPORTS the module rather than asking find_spec for one: a spec
+    only proves the package is on disk, so a package that is present but
+    broken on import (an incompatible dependency, a syntax error from a bad
+    upgrade) used to read as usable and fail later, deeper in the call —
+    misclassified as a provider outage instead of a broken image. Two
+    distinct reasons now, so a reader is told which one they are looking at.
+    """
     mod = _SDK_MODULE.get(name)
     if mod is None:
         return None
     try:
-        missing = importlib.util.find_spec(mod) is None
-    except (ImportError, ValueError):
-        missing = True
-    if missing:
+        importlib.import_module(mod)
+    except ImportError:
         return (f"the {mod} SDK is not installed in this image — rebuild it from "
                 f"backend/requirements.txt")
+    except Exception as exc:
+        return f"the {mod} SDK is installed but failed to import: {type(exc).__name__}: {exc}"
     return None
 
 
@@ -577,10 +644,26 @@ def _cache_key(purpose: str, model: str, prompt: str, system: str | None,
     raw = f"{model}\x00{system or ''}\x00{prompt}"
     if schema is not None:
         # A schema changes the answer, so it is part of the question. Omitted
-        # when absent so every pre-existing key is unchanged.
+        # when absent so every pre-existing key is unchanged. May raise
+        # TypeError/ValueError (not JSON-serialisable) or RecursionError (a
+        # pathologically deep schema) — the caller decides what that means.
         raw += "\x00" + json.dumps(schema, sort_keys=True)
-    digest = hashlib.sha256(raw.encode()).hexdigest()[:32]
+    # errors="surrogatepass": a lone surrogate in the PROMPT (never the
+    # schema) raises UnicodeEncodeError from a bare .encode(), which used to
+    # be caught by the caller and misreported as a schema problem. The key is
+    # only ever hashed, never decoded, so a lossy-but-non-raising encoding of
+    # a surrogate is harmless here.
+    digest = hashlib.sha256(raw.encode(errors="surrogatepass")).hexdigest()[:32]
     return f"llm:cache:{purpose}:{digest}"
+
+
+def _fallback_key(status: str, is_fallback: bool) -> str:
+    """The counter key for one provider attempt. A FALLBACK attempt's status
+    is recorded under its own dimension (FALLBACK_<STATUS>) rather than the
+    primary's — FALLBACK_OK already existed for a fallback SUCCESS; this
+    generalises it so a fallback FAILURE cannot be mistaken for the primary's
+    own failure rate in the same counter."""
+    return f"FALLBACK_{status}" if is_fallback else status
 
 
 def _record(purpose: str, status: str) -> None:
@@ -665,24 +748,34 @@ def _parse_failed(purpose: str, provider: str, model: str, exc: Exception) -> st
 
 
 def _settle(purpose: str, tried: list[tuple[str, Any]], call: str):
-    """Pick what the caller sees from the primary's and (maybe) the fallback's result."""
+    """Pick what the caller sees from the primary's and (maybe) the fallback's
+    result.
+
+    Only an `ai_generated` fallback result is ever served. Anything else —
+    a provider-shaped failure (RATE_LIMITED, NOT_CONFIGURED, ...) or a
+    caller-shaped one (BAD_RESPONSE, INVALID_REQUEST, REFUSED) — means the
+    fallback did not actually answer, so the PRIMARY's result is returned
+    with the fallback's attempt attached as `fallback_failure`. Deciding this
+    on `ai_generated` rather than membership in _FALLBACK_ON is deliberate:
+    the earlier version returned the fallback's own caller-shaped failure
+    (e.g. its BAD_RESPONSE) as if it had served the request, silently
+    dropping the primary's failure — the one that actually needed fixing.
+    """
     primary_name, primary = tried[0]
     if len(tried) == 1:
         return primary
     fb_name, fb = tried[-1]
-    if fb.status in _FALLBACK_ON:
-        # Both failed on the provider side. The primary's failure is the one
-        # that needs fixing; the fallback's rides along instead of hiding it.
-        primary.fallback_failure = {"provider": fb_name, "status": fb.status,
-                                    "failure_reason": fb.failure_reason}
-        logger.warning("llm.fallback_failed", purpose=purpose, call=call,
-                       primary=primary_name, primary_status=primary.status,
-                       fallback=fb_name, fallback_status=fb.status)
-        return primary
-    fb.fallback_from = primary_name
-    logger.warning("llm.fallback_used", purpose=purpose, call=call, failed=primary_name,
-                   primary_status=primary.status, served_by=fb_name, status=fb.status)
-    return fb
+    if fb.ai_generated:
+        fb.fallback_from = primary_name
+        logger.warning("llm.fallback_used", purpose=purpose, call=call, failed=primary_name,
+                       primary_status=primary.status, served_by=fb_name, status=fb.status)
+        return fb
+    primary.fallback_failure = {"provider": fb_name, "status": fb.status,
+                                "failure_reason": fb.failure_reason}
+    logger.warning("llm.fallback_failed", purpose=purpose, call=call,
+                   primary=primary_name, primary_status=primary.status,
+                   fallback=fb_name, fallback_status=fb.status)
+    return primary
 
 
 # ── complete(): one-shot text or JSON ────────────────────────────────────────
@@ -816,7 +909,7 @@ def _complete_one(name, provider, model, api_key, prompt, *, purpose, system, wa
         return int((time.monotonic() - started) * 1000)
 
     def fail(status: str, reason: str | None, **extra) -> LLMResult:
-        _record(purpose, status)
+        _record(purpose, _fallback_key(status, is_fallback))
         return LLMResult(status=status, provider=provider, model=model,
                          failure_reason=reason, latency_ms=elapsed(), **extra)
 
@@ -824,13 +917,18 @@ def _complete_one(name, provider, model, api_key, prompt, *, purpose, system, wa
         reason = _unusable_reason(name)
         logger.warning("llm.not_configured", purpose=purpose, configured_provider=name,
                        reason=reason)
-        _record(purpose, NOT_CONFIGURED)
+        _record(purpose, _fallback_key(NOT_CONFIGURED, is_fallback))
         return LLMResult(status=NOT_CONFIGURED, provider="none", failure_reason=reason)
 
     try:
         key = _cache_key(purpose, model, prompt, system, json_schema)
-    except (TypeError, ValueError) as exc:
-        return fail(INVALID_REQUEST, f"json_schema is not JSON-serialisable: {exc}")
+    except (TypeError, ValueError, RecursionError) as exc:
+        # The prompt itself can no longer reach here (see _cache_key) — only
+        # json.dumps(json_schema) can still raise, so this reason is accurate.
+        reason = f"json_schema is not JSON-serialisable: {exc}"
+        logger.warning("llm.invalid_request", purpose=purpose, provider=provider,
+                       model=model, error=reason)
+        return fail(INVALID_REQUEST, reason)
 
     ttl = settings.LLM_CACHE_TTL_SECONDS if cache_ttl is None else cache_ttl
     if ttl > 0:
@@ -840,7 +938,7 @@ def _complete_one(name, provider, model, api_key, prompt, *, purpose, system, wa
             hit = None
         if hit:
             payload = json.loads(hit)
-            _record(purpose, CACHED)
+            _record(purpose, _fallback_key(CACHED, is_fallback))
             return LLMResult(
                 status=CACHED, text=payload.get("text", ""), data=payload.get("data") or {},
                 provider=provider, model=model, cached=True, latency_ms=elapsed(),
@@ -898,7 +996,7 @@ def _complete_one(name, provider, model, api_key, prompt, *, purpose, system, wa
             _get_store().setex(key, ttl, json.dumps({"text": text, "data": data}))
         except Exception:
             pass
-    _record(purpose, FALLBACK_OK if is_fallback else OK)
+    _record(purpose, _fallback_key(OK, is_fallback))
     logger.info("llm.ok", purpose=purpose, provider=provider, model=model,
                 latency_ms=elapsed(), attempt=attempt, stop_reason=stop, cached=False,
                 fallback=is_fallback)
@@ -1101,7 +1199,7 @@ def chat(
                       effort=effort, temperature=temperature, started=started,
                       is_fallback=i > 0)
         tried.append((name, r))
-        if r.status not in _FALLBACK_ON:
+        if r.status not in _CHAT_FALLBACK_ON:
             break
     return _settle(purpose, tried, "chat")
 
@@ -1115,7 +1213,7 @@ def _chat_one(name, provider, model, api_key, *, purpose, system, messages, tool
         reason = _unusable_reason(name)
         logger.warning("llm.not_configured", purpose=purpose, configured_provider=name,
                        reason=reason, call="chat")
-        _record(purpose, NOT_CONFIGURED)
+        _record(purpose, _fallback_key(NOT_CONFIGURED, is_fallback))
         return ChatResult(status=NOT_CONFIGURED, provider="none", failure_reason=reason)
 
     attempt = 0
@@ -1144,7 +1242,7 @@ def _chat_one(name, provider, model, api_key, *, purpose, system, messages, tool
                                          "tool call was cut off")
 
     result.latency_ms = elapsed()
-    _record(purpose, FALLBACK_OK if (is_fallback and result.status == OK) else result.status)
+    _record(purpose, _fallback_key(result.status, is_fallback))
     log = logger.info if result.status == OK else logger.warning
     log("llm.chat", purpose=purpose, provider=provider, model=model, status=result.status,
         stop_reason=result.stop_reason, tool_calls=len(result.tool_calls), attempt=attempt,
