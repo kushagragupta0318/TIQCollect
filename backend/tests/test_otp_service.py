@@ -406,3 +406,23 @@ def test_the_code_is_echoed_only_when_the_echo_is_switched_on(db, fake_redis, mo
     monkeypatch.setattr(settings, "DEMO_OTP_ECHO", True)
     res = OtpService(db).generate_and_send(_agent(), "case-1", 5000.0)
     assert res["demo_otp"] == "2468"
+
+
+# The echo switch never takes the API down. `docker run --env-file` passes a
+# literal "${DEMO_OTP_ECHO}", and a bool field would refuse it at start-up.
+
+@pytest.mark.parametrize("raw, expected", [
+    (None, False), ("", False), ("   ", False), ("${DEMO_OTP_ECHO}", False),
+    ("false", False), ("true", True), ("1", True),
+])
+def test_the_echo_switch_reads_unset_or_unexpanded_values_as_off(monkeypatch, raw, expected):
+    from app.core.config import Settings
+    for name, value in (("SECRET_KEY", "k" * 32), ("DATABASE_URL", "sqlite://"),
+                        ("MINIO_ACCESS_KEY", "a"), ("MINIO_SECRET_KEY", "b"),
+                        ("COMMAND_CENTRE_API_KEY", "c")):
+        monkeypatch.setenv(name, value)
+    if raw is None:
+        monkeypatch.delenv("DEMO_OTP_ECHO", raising=False)
+    else:
+        monkeypatch.setenv("DEMO_OTP_ECHO", raw)
+    assert Settings(_env_file=None).DEMO_OTP_ECHO is expected

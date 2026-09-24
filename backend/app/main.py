@@ -12,7 +12,13 @@
 # The prod container runs plain uvicorn, which believes X-Forwarded-For only
 # from 127.0.0.1, while Caddy reaches it from another container. Every request
 # therefore carried Caddy's address, and the per-client auth limit (10/min)
-# was one bucket shared by every user of the deployment.
+# was one bucket shared by every user of the deployment. The default trusts
+# loopback only (fail-safe); the deployment pins the proxy's address.
+# Knock-on: request.client is now the real client, so the login audit row's
+# ip_address and auth_service's device_fingerprint (sha256 of user-agent and
+# IP) change meaning, from "the proxy" to "the client". Device binding is
+# dormant (registered_device_fingerprint is never written), and A09 takes the
+# IP out of device identity.
 import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, status

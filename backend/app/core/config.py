@@ -27,6 +27,7 @@
 # ───────────────────────────────────────────────────────────────────────────
 from functools import lru_cache
 from typing import List
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -161,6 +162,15 @@ class Settings(BaseSettings):
     # transport. It lets an agent confirm a payment without the borrower, so it is
     # its own switch: a public deployment running DEMO_MODE must not get it too.
     DEMO_OTP_ECHO: bool = False
+
+    @field_validator("DEMO_OTP_ECHO", mode="before")
+    @classmethod
+    def _unset_echo_is_off(cls, v):
+        # Empty, or a literal "${DEMO_OTP_ECHO}" (`docker run --env-file` does not
+        # interpolate), means "not set". That is off, not a start-up failure.
+        if v is None or (isinstance(v, str) and (not v.strip() or v.strip().startswith("${"))):
+            return False
+        return v
     # The showcase customer (DEMO0003). Swap the phone to your CEO's / manager's
     # number here — no reseed, no rebuild; a backend restart applies it.
     DEMO_CONTACT_NAME: str = "Balraj Singh"
@@ -496,15 +506,17 @@ class Settings(BaseSettings):
 
     RATE_LIMIT_PER_MINUTE: int = 60
     AUTH_RATE_LIMIT_PER_MINUTE: int = 10
-    # Peers whose X-Forwarded-For is believed: IPs or CIDRs, uvicorn's
-    # FORWARDED_ALLOW_IPS format. The limiter keys on the client address, and
-    # behind a reverse proxy every request arrives from the proxy, so without
-    # this every user shares one bucket. The default trusts loopback and private
-    # networks only. In the platform deployment the API port is reachable only
-    # from the Docker network, so an internet client cannot choose its own
-    # address. Narrow this to the proxy's address wherever the port is exposed
-    # on a LAN.
-    FORWARDED_ALLOW_IPS: str = "127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+    # Peers whose X-Forwarded-For is believed: IPs or CIDRs, in uvicorn's
+    # FORWARDED_ALLOW_IPS format. uvicorn's own server-level check reads the
+    # same variable, so the two always agree. The limiter keys on the client
+    # address. Behind a reverse proxy, set this to the PROXY'S OWN ADDRESS, so
+    # each user gets their own bucket (deploy step: docs/MERGING-INTO-PLATFORM.md).
+    # The default is loopback only, which fails safe: a proxy nobody configured
+    # means one shared bucket, not a bypass. Never a whole range, and never "*".
+    # A NATted client arriving from a private address could then write its own
+    # X-Forwarded-For, and with every entry trusted uvicorn takes the leftmost,
+    # client-controlled one.
+    FORWARDED_ALLOW_IPS: str = "127.0.0.1"
 
     # Razorpay
     RAZORPAY_TEST_API: str = ""
