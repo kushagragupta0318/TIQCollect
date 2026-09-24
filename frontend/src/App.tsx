@@ -8,6 +8,7 @@ import AgentLayout from "@/components/layout/AgentLayout";
 import ManagerLayout from "@/components/layout/ManagerLayout";
 
 import { useAuthStore } from "@/store/authStore";
+import { isBankPortalRole } from "@/bank/layout/bankRoles";
 
 // Route-level code-splitting: separate heavy bundles (RecordVisit, Analytics, Maps)
 const LandingPage = lazy(() => import("@/pages/LandingPage"));
@@ -39,6 +40,11 @@ const SIMULATOR_ENABLED =
   import.meta.env.DEV || import.meta.env.VITE_ENABLE_SIMULATOR === "1";
 const SimulatorPage = lazy(() => import("@/pages/simulator/SimulatorPage"));
 
+// Bank portal (standalone plan §2.4–2.5, tasks UI02–UI05). One lazy module
+// owns the whole /bank/* tree — its role guard, the Command Center shell and
+// the scoped bank.css — so none of it is in the agency or agent bundles.
+const BankApp = lazy(() => import("@/bank/BankApp"));
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: { staleTime: 30_000, retry: 1 },
@@ -60,6 +66,7 @@ function RootRedirect() {
   const { isAuthenticated, user } = useAuthStore();
   if (!isAuthenticated || !user) return <LandingPage />;
   if (user.role === "FIELD_AGENT") return <Navigate to="/agent/home" replace />;
+  if (isBankPortalRole(user.role)) return <Navigate to="/bank" replace />;
   return <Navigate to="/manager/overview" replace />;
 }
 
@@ -152,6 +159,10 @@ export default function App() {
               <Route path="analytics" element={<ManagerAnalyticsPage />} />
               <Route path="compliance" element={<ManagerCompliancePage />} />
             </Route>
+
+            {/* Bank portal — roles BANK_ADMIN / BANK_ANALYST / BANK_TECHOPS /
+                PLATFORM_ADMIN, guarded inside BankApp. */}
+            <Route path="/bank/*" element={<BankApp />} />
 
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
