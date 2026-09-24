@@ -334,14 +334,21 @@ class PaymentService:
     # -----------------------------------------------------------------
     # POST /agent/cases/{case_id}/payment-link  (Razorpay UPI QR)
     # -----------------------------------------------------------------
-    def create_payment_link(self, case_id: str, amount: float) -> dict:
+    def create_payment_link(self, agent, case_id: str, amount: float) -> dict:
+        # 2026-09-24 (hotfix PL-1) — this had NO access check: any agent could
+        # mint a UPI payment QR for any case in the database. Now the case must
+        # be ASSIGNED to the caller (strict agent_id, the rule media/otp and
+        # the voice webhook use), checked before anything else, and "not
+        # yours" is the same 404 as "no such case".
+        case = (self.db.query(Case)
+                .filter(Case.id == case_id, Case.agent_id == agent.id)
+                .first())
+        if not case:
+            raise AppException(404, ErrorCode.CASE_NOT_FOUND, "Case not found")
+
         import razorpay
         if not settings.RAZORPAY_TEST_API or not settings.RAZORPAY_TEST_KEY_SECRET:
             raise AppException(503, ErrorCode.VALIDATION_ERROR, "Razorpay not configured")
-
-        case = self.db.query(Case).filter(Case.id == case_id).first()
-        if not case:
-            raise AppException(404, ErrorCode.CASE_NOT_FOUND, "Case not found")
 
         close_at = int((datetime.now(timezone.utc) + timedelta(hours=2)).timestamp())
 

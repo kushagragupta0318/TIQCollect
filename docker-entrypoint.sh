@@ -108,6 +108,19 @@ if [ "${RUN_SEED:-false}" = "true" ]; then
       echo "[entrypoint] demo baseline not captured (fine unless you are running the demo)"
     fi
   fi
+  # 2026-09-24 (hotfix DEMO-LOGIN) — on EVERY boot, after any restore or seed:
+  # the three DEMO_MASTER_ACCOUNTS log in with DEMO_MASTER_PASSWORD and every
+  # other account's password becomes unusable, which retires the published
+  # seed passwords. The password reaches the script through the environment
+  # only — never on this command line. Never fatal: a refusal (short password,
+  # DEMO_MODE off, wrong accounts) is logged and the API still starts.
+  if [ -n "${DEMO_MASTER_PASSWORD:-}" ]; then
+    if python -m scripts.apply_demo_logins; then
+      echo "[entrypoint] demo master login applied"
+    else
+      echo "[entrypoint] demo master login NOT applied — see the error above; nothing was changed"
+    fi
+  fi
   unset PGPASSWORD
 fi
 

@@ -20,7 +20,32 @@ A database that already has `public.agents` is never touched either way.
 | Not in it | MinIO objects (no visit in this book references a photo), Redis, `.env` |
 | Size | 14.9 MB |
 | sha256 | `1f452da44cb805d1…` (first 16; verify with `sha256sum`) |
-| Logins | as the seed: `manager1@tiqcollect.in / Manager@123`; agents per `scripts/seed_data.py` |
+| Logins | the demo master login — see below. *(This row read "as the seed: manager1 / Manager@123" until 2026-09-24; those seed passwords are published and are retired on any box that sets `DEMO_MASTER_PASSWORD`.)* |
+
+### The demo master login (2026-09-24)
+
+One password, three accounts — one per role v1 has. Set both in the API's
+environment (e.g. `backend/.env`); `docker-entrypoint.sh` applies them on every
+boot through `scripts/apply_demo_logins.py`:
+
+```
+DEMO_MASTER_ACCOUNTS=admin@tiqcollect.in,manager1@tiqcollect.in,agent002@tiqcollect.in
+DEMO_MASTER_PASSWORD=          # ask the team; at least 16 characters
+```
+
+| Role | Account |
+|---|---|
+| AGENCY_ADMIN | `admin@tiqcollect.in` |
+| AGENCY_MANAGER | `manager1@tiqcollect.in` |
+| FIELD_AGENT | `agent002@tiqcollect.in` |
+
+**Password: ask the team.** It is not in this repository, the UI, the logs or
+any compose default, and it must not be. With it set, every *other* account's
+password is made unusable, so the seed's published passwords stop working;
+with it unset nothing changes — and those published passwords still work,
+which is why a shared or public box must set it. The script refuses (and
+changes nothing) if `DEMO_MODE` is off, the password is under 16 characters, or
+the three accounts are not one of each role.
 
 **It is a snapshot, and it is date-anchored.** Plans exist up to 2026-09-22 and
 every DPD is as of that date. Brought up weeks later it reads as a system that

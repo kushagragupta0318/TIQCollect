@@ -159,3 +159,48 @@ def test_the_committed_fixture_exists_and_is_a_custom_format_dump():
     assert f.is_file(), "backend/fixtures/fieldops-demo.dump is what the entrypoint restores"
     assert f.stat().st_size > 1_000_000
     assert f.read_bytes()[:5] == b"PGDMP", "pg_dump custom-format magic"
+
+
+# ── 2026-09-24 (hotfix DEMO-LOGIN) — the master login on every boot ──────────
+_SECRET = "correct-horse-battery-staple-2026"
+
+
+@pytest.mark.parametrize("seeded", [True, False])
+def test_the_master_login_is_applied_on_every_boot_when_set(tmp_path, seeded):
+    proc, calls = _run(tmp_path, seeded=seeded, fixture=True, env={"DEMO_MASTER_PASSWORD": _SECRET})
+    assert proc.returncode == 0, proc.stderr
+    assert "python -m scripts.apply_demo_logins" in calls
+    # after any restore or seed, never before it
+    idx = calls.index("python -m scripts.apply_demo_logins")
+    assert all(i < idx for i, c in enumerate(calls) if c.startswith(("pg_restore", "alembic")) or "seed_data" in c)
+
+
+def test_the_master_login_is_not_touched_when_unset(tmp_path):
+    proc, calls = _run(tmp_path, seeded=True, fixture=True, env={"DEMO_MASTER_PASSWORD": ""})
+    assert proc.returncode == 0, proc.stderr
+    assert not any("apply_demo_logins" in c for c in calls)
+
+
+def test_the_password_never_appears_on_a_command_line(tmp_path):
+    proc, calls = _run(tmp_path, seeded=True, fixture=True, env={"DEMO_MASTER_PASSWORD": _SECRET})
+    assert not any(_SECRET in c for c in calls)
+    assert _SECRET not in proc.stdout and _SECRET not in proc.stderr
+
+
+def test_a_refused_master_login_does_not_stop_the_api(tmp_path):
+    """The script exits 1 on a refusal (short password, DEMO_MODE off, wrong
+    accounts). The container must still start."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    log = tmp_path / "calls.log"
+    for name in ("pg_isready", "pg_restore", "alembic"):
+        _stub(bindir, name)
+    _stub(bindir, "psql", "echo t")
+    _stub(bindir, "python", 'case "$*" in *apply_demo_logins*) exit 1;; esac')
+    e = {**os.environ, "PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}", "STUB_LOG": str(log),
+         "DATABASE_URL": "postgresql+psycopg2://u:p@db:5432/fieldops", "RUN_SEED": "true",
+         "DEMO_MASTER_PASSWORD": _SECRET}
+    proc = subprocess.run([BASH, str(ENTRYPOINT), "echo", "api-started"], env=e, capture_output=True,
+                          text=True, cwd=tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    assert "api-started" in proc.stdout and "NOT applied" in proc.stdout

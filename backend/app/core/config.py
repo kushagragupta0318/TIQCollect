@@ -157,6 +157,11 @@ class Settings(BaseSettings):
     # contact (DEMO0003) name/phone is synced from the vars below on startup.
     # Leave false in real deployments — none of this touches non-demo data.
     DEMO_MODE: bool = False
+    # 2026-09-24 (hotfix DEMO-LOGIN) — the demo's ONE master login. Read only
+    # by scripts/apply_demo_logins.py at boot; never logged, printed or
+    # defaulted. Unset = nothing changes. See that script for the rules.
+    DEMO_MASTER_PASSWORD: str = ""
+    DEMO_MASTER_ACCOUNTS: str = ""        # three emails, comma-separated: one admin, one manager, one agent
     # The showcase customer (DEMO0003). Swap the phone to your CEO's / manager's
     # number here — no reseed, no rebuild; a backend restart applies it.
     DEMO_CONTACT_NAME: str = "Balraj Singh"

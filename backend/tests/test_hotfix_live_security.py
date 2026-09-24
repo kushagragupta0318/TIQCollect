@@ -341,3 +341,38 @@ def test_the_payee_settings_have_no_default():
     assert Settings.model_fields["UPI_VPA"].default == ""
     assert Settings.model_fields["UPI_PAYEE_NAME"].default == ""
     assert Settings.model_fields["PUBLIC_BASE_URL"].default == ""
+
+
+# ── PL-1: a payment link only for the caller's own case ──────────────────────
+@pytest.mark.parametrize("which", ["peer", "pool", "missing"])
+def test_a_payment_link_for_a_case_not_assigned_to_the_caller_is_the_same_404(client, world, which):
+    case_id = str(uuid.uuid4()) if which == "missing" else world[which].id
+    r = client.post(f"/api/v1/agent/cases/{case_id}/payment-link", headers=_agent_hdr(world), json={"amount": 500})
+    assert r.status_code == 404
+    assert r.json()["detail"] == "Case not found"       # "not yours" reads exactly like "no such case"
+
+
+def test_the_ownership_check_runs_before_anything_else(client, world, monkeypatch):
+    """Own case, Razorpay unconfigured: the 503 proves the ownership check
+    passed and came first — a foreign case never learns the gateway state."""
+    monkeypatch.setattr(settings, "RAZORPAY_TEST_API", "")
+    r = client.post(f"/api/v1/agent/cases/{world['own'].id}/payment-link", headers=_agent_hdr(world), json={"amount": 500})
+    assert r.status_code == 503
+
+
+def test_a_payment_link_for_the_callers_own_case_is_created(client, world, monkeypatch):
+    import razorpay
+
+    class _QR:
+        def create(self, body):
+            return {"image_url": "https://rzp.example/qr.png", "id": "qr_test_1"}
+
+    class _Client:
+        def __init__(self, auth):
+            self.qrcode = _QR()
+
+    monkeypatch.setattr(settings, "RAZORPAY_TEST_API", "rzp_test_key")
+    monkeypatch.setattr(settings, "RAZORPAY_TEST_KEY_SECRET", "rzp_test_secret")
+    monkeypatch.setattr(razorpay, "Client", _Client)
+    r = client.post(f"/api/v1/agent/cases/{world['own'].id}/payment-link", headers=_agent_hdr(world), json={"amount": 500})
+    assert r.status_code == 200 and r.json()["qr_id"] == "qr_test_1"

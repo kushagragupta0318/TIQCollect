@@ -476,7 +476,9 @@ class PaymentLinkRequest(BaseModel):
 
 @router.post("/cases/{case_id}/payment-link", response_model=PaymentLinkResponse)
 def create_payment_link(case_id: str, req: PaymentLinkRequest, current_user: AgentOnly, db: DbSession):
-    return PaymentService(db).create_payment_link(case_id, req.amount)
+    # 2026-09-24 (hotfix PL-1): scoped to the caller's own case — see the service.
+    agent = _get_agent_or_404(current_user, db)
+    return PaymentService(db).create_payment_link(agent, case_id, req.amount)
 
 
 def _get_accessible_case_or_404(db: DbSession, agent: Agent, case_id: str) -> Case:
