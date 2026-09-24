@@ -256,6 +256,29 @@ class Settings(BaseSettings):
     # limits are tight, and the same question was previously billed every time.
     LLM_CACHE_TTL_SECONDS: int = 3600
 
+    # ── Anthropic provider (2026-09-24, F01) ─────────────────────────────
+    # LLM_PROVIDER="anthropic" selects it. Two tiers, because the product makes
+    # two kinds of call: short single-shot extraction/briefing prompts (the
+    # six existing features, llm.complete) and multi-step tool-using agents
+    # (llm.chat, for the agent runtime of §8.1). A cheap fast model for the
+    # first and a stronger one for the second, each configuration rather than
+    # a literal, for the same reason LLM_MODEL is.
+    ANTHROPIC_API_KEY: str = ""
+    # Ids as the plan names them (§8.1): Haiku pinned to its dated snapshot so
+    # a high-volume path does not move under an alias; Sonnet 5 has no dated id.
+    LLM_MODEL_ANTHROPIC: str = "claude-haiku-4-5-20251001"
+    LLM_MODEL_ANTHROPIC_AGENT: str = "claude-sonnet-5"
+    # Thinking depth for agent turns on models that accept `effort`
+    # (low | medium | high | xhigh | max). "medium" rather than the API's own
+    # default of "high": these agents read KPI tables and draft briefs, and an
+    # agent that needs more can pass effort= per call. Empty = API default.
+    LLM_AGENT_EFFORT: str = "medium"
+    # A second provider tried once when the first is unusable or fails on its
+    # side (no key, auth, rate limit, timeout, outage) — e.g. "groq" behind
+    # "anthropic". Never tried for a caller-shaped failure (bad JSON, invalid
+    # request, refusal): another model would not make those right. Empty = off.
+    LLM_FALLBACK_PROVIDER: str = ""
+
     # Fraud / anomaly detection (2026-08-19)
     # Thresholds are deliberately conservative. A detector that cries wolf is
     # worse than none: it teaches the manager to dismiss the panel, and then the

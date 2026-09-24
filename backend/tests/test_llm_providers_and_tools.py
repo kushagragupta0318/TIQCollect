@@ -1,0 +1,580 @@
+# ─── CHANGELOG (prototype → product) ───
+# New file, 2026-09-24 (F01). Covers what core/llm.py gained beside complete():
+# the Anthropic provider, chat() tool turns for both wire formats, the fallback
+# provider, FakeLLM, and the max_retries=0 fix. tests/test_llm.py is untouched
+# and still pins the groq/openai behaviour every existing caller relies on.
+#
+# Two layers. Most tests stub the SDK client so each branch is cheap to reach.
+# The last section runs the REAL anthropic and openai SDKs against an in-process
+# mock HTTP transport, because a stub cannot tell us that a parameter name is
+# wrong — the SDK's own serialisation and response parsing can. No network, no
+# key, no database.
+import json
+from types import SimpleNamespace as NS
+
+import pytest
+
+from app.core import llm
+from app.core.config import settings
+
+
+@pytest.fixture(autouse=True)
+def _isolate(monkeypatch):
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "anthropic")
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setattr(settings, "LLM_MODEL_ANTHROPIC", "claude-haiku-4-5")
+    monkeypatch.setattr(settings, "LLM_MODEL_ANTHROPIC_AGENT", "claude-sonnet-5")
+    monkeypatch.setattr(settings, "LLM_AGENT_EFFORT", "medium")
+    monkeypatch.setattr(settings, "LLM_REASONING_EFFORT", "low")
+    monkeypatch.setattr(settings, "LLM_FALLBACK_PROVIDER", "")
+    monkeypatch.setattr(settings, "GROQ_API_KEY", "gsk-test")
+    monkeypatch.setattr(settings, "LLM_MODEL", "groq-model")
+    monkeypatch.setattr(settings, "LLM_MAX_RETRIES", 2)
+    monkeypatch.setattr(settings, "LLM_CACHE_TTL_SECONDS", 60)
+    monkeypatch.setattr(llm, "_store", llm._MemoryStore())
+    monkeypatch.setattr(llm.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(llm, "_fake", None)
+    yield
+    llm._store = None
+
+
+# ── stub SDK clients ─────────────────────────────────────────────────────────
+def _text(t):
+    return NS(type="text", text=t)
+
+
+def _tool_use(id_, name, inp):
+    return NS(type="tool_use", id=id_, name=name, input=inp)
+
+
+def _amsg(blocks, stop="end_turn", usage=None, stop_details=None):
+    return NS(content=blocks, stop_reason=stop, stop_details=stop_details,
+              usage=usage or NS(input_tokens=11, output_tokens=7,
+                                cache_read_input_tokens=0, cache_creation_input_tokens=0))
+
+
+class _AnthropicStub:
+    def __init__(self, behaviour):
+        self._b = behaviour
+        self.calls: list[dict] = []
+        self.messages = self
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        out = self._b(kwargs, len(self.calls)) if callable(self._b) else self._b
+        if isinstance(out, Exception):
+            raise out
+        return out
+
+
+def _anthropic(monkeypatch, behaviour):
+    stub = _AnthropicStub(behaviour)
+    monkeypatch.setattr(llm, "_anthropic_client", lambda *_a, **_k: stub)
+    return stub
+
+
+class _OpenAIStub:
+    def __init__(self, behaviour):
+        self._b = behaviour
+        self.calls: list[dict] = []
+        self.chat = NS(completions=self)
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        out = self._b(kwargs, len(self.calls)) if callable(self._b) else self._b
+        if isinstance(out, Exception):
+            raise out
+        return out
+
+
+def _oresp(content=None, tool_calls=None, finish="stop"):
+    return NS(choices=[NS(message=NS(content=content, tool_calls=tool_calls),
+                          finish_reason=finish)],
+              usage=NS(prompt_tokens=5, completion_tokens=3))
+
+
+def _openai(monkeypatch, behaviour):
+    stub = _OpenAIStub(behaviour)
+    monkeypatch.setattr(llm, "_client", lambda *_a, **_k: stub)
+    return stub
+
+
+def _http_err(code):
+    exc = Exception(f"simulated {code}")
+    exc.response = NS(status_code=code, headers={})
+    return exc
+
+
+# ── provider resolution ──────────────────────────────────────────────────────
+def test_anthropic_has_a_fast_and_an_agent_model():
+    assert llm.resolved_provider() == ("anthropic", "claude-haiku-4-5", "sk-ant-test")
+    assert llm.resolved_provider("agent") == ("anthropic", "claude-sonnet-5", "sk-ant-test")
+
+
+def test_groq_answers_both_tiers_with_its_one_model(monkeypatch):
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "groq")
+    assert llm.resolved_provider("fast")[1] == llm.resolved_provider("agent")[1] == "groq-model"
+
+
+def test_anthropic_without_a_key_is_not_configured(monkeypatch):
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "")
+    r = llm.complete("p", purpose="x")
+    assert r.status == llm.NOT_CONFIGURED and r.ai_generated is False
+
+
+# ── complete() on Anthropic ──────────────────────────────────────────────────
+def test_anthropic_plain_completion_joins_text_blocks(monkeypatch):
+    _anthropic(monkeypatch, _amsg([_text("first "), _text("second")]))
+    r = llm.complete("prompt", purpose="report")
+    assert r.status == llm.OK and r.text == "first second"
+    assert r.provider == "anthropic" and r.model == "claude-haiku-4-5"
+    assert r.stop_reason == "end_turn"
+
+
+def test_haiku_gets_temperature_and_no_effort(monkeypatch):
+    """Haiku 4.5 accepts sampling parameters and REJECTS output_config.effort
+    with a 400 — the opposite of Sonnet 5 below. Temperature travels in
+    extra_body because the 1.x SDK removed the keyword."""
+    stub = _anthropic(monkeypatch, _amsg([_text("ok")]))
+    llm.complete("p", purpose="x", system="sys", max_tokens=400, temperature=0.3)
+    sent = stub.calls[0]
+    assert sent["extra_body"] == {"temperature": 0.3}
+    assert "temperature" not in sent
+    assert "output_config" not in sent
+    assert sent["max_tokens"] == 400
+    assert sent["system"] == "sys"
+    assert sent["messages"] == [{"role": "user", "content": "p"}]
+
+
+def test_sonnet5_gets_effort_and_headroom_but_no_temperature(monkeypatch):
+    """Sonnet 5 returns 400 on temperature, and thinks by default — so a 400
+    token answer budget would be spent before the answer began."""
+    monkeypatch.setattr(settings, "LLM_MODEL_ANTHROPIC", "claude-sonnet-5")
+    stub = _anthropic(monkeypatch, _amsg([_text("ok")]))
+    llm.complete("p", purpose="x", max_tokens=400)
+    sent = stub.calls[0]
+    assert "temperature" not in sent and "extra_body" not in sent
+    assert sent["output_config"] == {"effort": "low"}
+    assert sent["max_tokens"] == 400 + llm.THINKING_HEADROOM_TOKENS
+
+
+@pytest.mark.parametrize("model,temperature,effort,thinks", [
+    ("claude-haiku-4-5", True, False, False),
+    ("claude-haiku-4-5-20251001", True, False, False),
+    ("claude-sonnet-4-6", True, True, False),
+    ("claude-opus-4-6", True, True, False),
+    ("claude-opus-4-8", False, True, False),
+    ("claude-sonnet-5", False, True, True),
+    ("claude-opus-5", False, True, True),
+    ("claude-opus-5-5", False, True, True),
+    ("claude-fable-5-1", False, True, True),
+])
+def test_request_shape_per_model_family(model, temperature, effort, thinks):
+    assert llm.anthropic_caps(model) == {
+        "temperature": temperature, "effort": effort, "thinks_by_default": thinks}
+
+
+def test_anthropic_json_mode_instructs_and_parses_a_fenced_reply(monkeypatch):
+    stub = _anthropic(monkeypatch, _amsg([_text('```json\n{"signal": "UP"}\n```')]))
+    r = llm.complete("p", purpose="insight", system="be brief", json_mode=True)
+    assert r.status == llm.OK and r.data == {"signal": "UP"}
+    assert stub.calls[0]["system"].startswith("be brief")
+    assert "JSON" in stub.calls[0]["system"]
+
+
+def test_anthropic_json_mode_non_json_is_bad_response(monkeypatch):
+    _anthropic(monkeypatch, _amsg([_text("sure, here you go")]))
+    r = llm.complete("p", purpose="x", json_mode=True)
+    assert r.status == llm.BAD_RESPONSE and r.text == "sure, here you go"
+
+
+def test_json_schema_uses_structured_outputs_on_anthropic(monkeypatch):
+    schema = {"type": "object", "properties": {"amount": {"type": "number"}},
+              "required": ["amount"], "additionalProperties": False}
+    stub = _anthropic(monkeypatch, _amsg([_text('{"amount": 5000}')]))
+    r = llm.complete("p", purpose="extract", json_schema=schema)
+    assert r.data == {"amount": 5000}
+    assert stub.calls[0]["output_config"]["format"] == {"type": "json_schema", "schema": schema}
+    assert "JSON" not in (stub.calls[0].get("system") or "")   # no belt-and-braces prose
+
+
+def test_json_schema_on_openai_compatible_rides_in_the_system_prompt(monkeypatch):
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "groq")
+    stub = _openai(monkeypatch, _oresp('{"amount": 1}'))
+    schema = {"type": "object", "properties": {"amount": {"type": "number"}}}
+    r = llm.complete("p", purpose="extract", system="sys", json_schema=schema)
+    assert r.data == {"amount": 1}
+    sent = stub.calls[0]
+    assert sent["response_format"] == {"type": "json_object"}
+    assert sent["messages"][0]["role"] == "system"
+    assert json.dumps(schema) in sent["messages"][0]["content"]
+
+
+def test_schema_is_part_of_the_cache_key_and_absent_schema_keeps_old_keys():
+    old = "llm:cache:p:" + __import__("hashlib").sha256(
+        "m\x00s\x00q".encode()).hexdigest()[:32]
+    assert llm._cache_key("p", "m", "q", "s") == old
+    assert llm._cache_key("p", "m", "q", "s", {"type": "object"}) != old
+
+
+def test_anthropic_400_is_invalid_request_and_not_retried(monkeypatch):
+    stub = _anthropic(monkeypatch, _http_err(400))
+    r = llm.complete("p", purpose="x")
+    assert r.status == llm.INVALID_REQUEST
+    assert len(stub.calls) == 1
+
+
+def test_402_is_billing(monkeypatch):
+    _anthropic(monkeypatch, _http_err(402))
+    assert llm.complete("p", purpose="x").status == llm.BILLING
+
+
+def test_overloaded_529_is_retried(monkeypatch):
+    stub = _anthropic(monkeypatch, lambda _k, n: _http_err(529) if n == 1 else _amsg([_text("ok")]))
+    assert llm.complete("p", purpose="x").status == llm.OK
+    assert len(stub.calls) == 2
+
+
+def test_refusal_is_named_not_cached_and_not_ai_generated(monkeypatch):
+    stub = _anthropic(monkeypatch, _amsg([], stop="refusal",
+                                         stop_details=NS(category="cyber", explanation="")))
+    r = llm.complete("p", purpose="x")
+    assert r.status == llm.REFUSED and r.ai_generated is False
+    assert "cyber" in r.failure_reason
+    llm.complete("p", purpose="x")
+    assert len(stub.calls) == 2                      # never served from cache
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "groq"])
+def test_budget_spent_before_any_answer_is_bad_response(monkeypatch, provider):
+    monkeypatch.setattr(settings, "LLM_PROVIDER", provider)
+    if provider == "anthropic":
+        _anthropic(monkeypatch, _amsg([], stop="max_tokens"))
+    else:
+        _openai(monkeypatch, _oresp("", finish="length"))
+    r = llm.complete("p", purpose="x")
+    assert r.status == llm.BAD_RESPONSE and r.stop_reason == "max_tokens"
+
+
+# ── the openai path is byte-compatible for existing callers ─────────────────
+def test_existing_json_mode_call_sends_exactly_what_it_did(monkeypatch):
+    """H14 and the six original features call complete(json_mode=True) on groq.
+    The request they produce must not gain or lose a key."""
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "groq")
+    stub = _openai(monkeypatch, _oresp('{"a": 1}'))
+    llm.complete("user text", purpose="x", system="sys", json_mode=True,
+                 max_tokens=300, temperature=0.2)
+    assert stub.calls[0] == {
+        "model": "groq-model",
+        "messages": [{"role": "system", "content": "sys"},
+                     {"role": "user", "content": "user text"}],
+        "max_tokens": 300, "temperature": 0.2,
+        "response_format": {"type": "json_object"},
+        "extra_body": {"reasoning_effort": "low"},
+    }
+
+
+# ── the SDKs no longer retry underneath the seam ─────────────────────────────
+def test_every_sdk_client_is_built_without_its_own_retries(monkeypatch):
+    """Both SDKs default to max_retries=2. Under this module's own two retries
+    that made up to 9 requests per call, six of them invisible to it."""
+    import anthropic
+    import openai
+    built = []
+    monkeypatch.setattr(openai, "OpenAI", lambda **kw: built.append(("openai", kw)))
+    monkeypatch.setattr(anthropic, "Anthropic", lambda **kw: built.append(("anthropic", kw)))
+    llm._client("groq", "k")
+    llm._client("openai", "k")
+    llm._anthropic_client("k")
+    assert [kw["max_retries"] for _, kw in built] == [0, 0, 0]
+
+
+# ── the fallback provider ────────────────────────────────────────────────────
+def test_fallback_serves_when_the_primary_has_no_key(monkeypatch):
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "")
+    monkeypatch.setattr(settings, "LLM_FALLBACK_PROVIDER", "groq")
+    _openai(monkeypatch, _oresp("from groq"))
+    r = llm.complete("p", purpose="fb1")
+    assert r.status == llm.OK and r.provider == "groq"
+    assert r.fallback_from == "anthropic"
+    assert llm.stats()["fb1"] == {llm.NOT_CONFIGURED: 1, llm.OK: 1}
+
+
+def test_fallback_serves_when_the_primary_fails_on_its_side(monkeypatch):
+    monkeypatch.setattr(settings, "LLM_FALLBACK_PROVIDER", "groq")
+    _anthropic(monkeypatch, _http_err(401))
+    _openai(monkeypatch, _oresp("from groq"))
+    r = llm.complete("p", purpose="fb2")
+    assert r.provider == "groq" and r.fallback_from == "anthropic"
+
+
+def test_no_fallback_on_a_caller_shaped_failure(monkeypatch):
+    """Bad JSON is the request's problem. Trying another model would bury it."""
+    monkeypatch.setattr(settings, "LLM_FALLBACK_PROVIDER", "groq")
+    _anthropic(monkeypatch, _amsg([_text("not json")]))
+    groq = _openai(monkeypatch, _oresp('{"a": 1}'))
+    r = llm.complete("p", purpose="fb3", json_mode=True)
+    assert r.status == llm.BAD_RESPONSE and r.provider == "anthropic"
+    assert groq.calls == []
+
+
+def test_fallback_equal_to_primary_is_not_tried_twice(monkeypatch):
+    monkeypatch.setattr(settings, "LLM_FALLBACK_PROVIDER", "anthropic")
+    stub = _anthropic(monkeypatch, _http_err(401))
+    llm.complete("p", purpose="fb4")
+    assert len(stub.calls) == 1
+
+
+# ── chat() on Anthropic ──────────────────────────────────────────────────────
+TOOLS = [llm.ToolSpec("get_kpi", "Read one KPI by id",
+                      {"type": "object", "properties": {"kpi_id": {"type": "string"}},
+                       "required": ["kpi_id"], "additionalProperties": False},
+                      strict=True),
+         llm.ToolSpec("list_agencies", "List agencies", {"type": "object", "properties": {}})]
+
+
+def test_anthropic_tool_turn(monkeypatch):
+    thinking = NS(type="thinking", thinking="", signature="sig-abc")
+    stub = _anthropic(monkeypatch, _amsg(
+        [thinking, _text("Checking."), _tool_use("tu_1", "get_kpi", {"kpi_id": "npa_pct"})],
+        stop="tool_use"))
+    r = llm.chat([{"role": "user", "content": "What is NPA?"}], purpose="copilot",
+                 system="You are the portfolio copilot.", tools=TOOLS)
+    assert r.status == llm.OK and r.wants_tools
+    assert r.tool_calls == [llm.ToolCall("tu_1", "get_kpi", {"kpi_id": "npa_pct"})]
+    assert r.text == "Checking." and r.stop_reason == "tool_use"
+    assert r.model == "claude-sonnet-5"
+    assert r.usage.input_tokens == 11 and r.usage.output_tokens == 7
+    assert r.provider_content[0] == {"type": "thinking", "thinking": "", "signature": "sig-abc"}
+
+    sent = stub.calls[0]
+    assert sent["system"] == "You are the portfolio copilot."
+    assert sent["tools"][0] == {"name": "get_kpi", "description": "Read one KPI by id",
+                                "input_schema": TOOLS[0].parameters, "strict": True}
+    assert "strict" not in sent["tools"][1]
+    assert sent["output_config"] == {"effort": "medium"}
+    assert "temperature" not in sent and "extra_body" not in sent
+
+
+def test_effort_can_be_overridden_per_call(monkeypatch):
+    stub = _anthropic(monkeypatch, _amsg([_text("done")]))
+    llm.chat([{"role": "user", "content": "q"}], purpose="x", effort="high")
+    assert stub.calls[0]["output_config"] == {"effort": "high"}
+
+
+def test_a_full_turn_round_trips_in_anthropic_format(monkeypatch):
+    """The assistant turn goes back verbatim (thinking signature included), and
+    both tool results go back in ONE user message."""
+    first = _amsg([NS(type="thinking", thinking="", signature="s1"),
+                   _tool_use("a", "get_kpi", {"kpi_id": "x"}),
+                   _tool_use("b", "list_agencies", {})], stop="tool_use")
+    stub = _anthropic(monkeypatch, lambda _k, n: first if n == 1 else _amsg([_text("NPA is 4%")]))
+    history = [{"role": "user", "content": "q"}]
+    r1 = llm.chat(history, purpose="x", tools=TOOLS)
+    history += [r1.assistant_message(),
+                llm.tool_result(r1.tool_calls[0], "4.0"),
+                llm.tool_result(r1.tool_calls[1], "timeout", is_error=True)]
+    r2 = llm.chat(history, purpose="x", tools=TOOLS)
+    assert r2.text == "NPA is 4%" and not r2.wants_tools
+
+    msgs = stub.calls[1]["messages"]
+    assert [m["role"] for m in msgs] == ["user", "assistant", "user"]
+    assert msgs[1]["content"][0] == {"type": "thinking", "thinking": "", "signature": "s1"}
+    assert msgs[2]["content"] == [
+        {"type": "tool_result", "tool_use_id": "a", "content": "4.0"},
+        {"type": "tool_result", "tool_use_id": "b", "content": "timeout", "is_error": True},
+    ]
+
+
+def test_an_assistant_turn_from_another_provider_is_rebuilt_as_blocks():
+    msgs = llm._to_anthropic([
+        {"role": "user", "content": "q"},
+        {"role": "assistant", "content": "looking", "provider": "groq",
+         "tool_calls": [llm.ToolCall("c1", "get_kpi", {"kpi_id": "x"})]},
+        llm.tool_result("c1", "1"),
+    ])
+    assert msgs[1]["content"] == [
+        {"type": "text", "text": "looking"},
+        {"type": "tool_use", "id": "c1", "name": "get_kpi", "input": {"kpi_id": "x"}},
+    ]
+
+
+def test_chat_is_never_cached(monkeypatch):
+    stub = _anthropic(monkeypatch, _amsg([_text("a")]))
+    for _ in range(2):
+        llm.chat([{"role": "user", "content": "same"}], purpose="x")
+    assert len(stub.calls) == 2
+
+
+def test_chat_retries_a_rate_limit(monkeypatch):
+    stub = _anthropic(monkeypatch, lambda _k, n: _http_err(429) if n == 1 else _amsg([_text("ok")]))
+    assert llm.chat([{"role": "user", "content": "q"}], purpose="x").status == llm.OK
+    assert len(stub.calls) == 2
+
+
+def test_chat_not_configured_and_refused(monkeypatch):
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "")
+    assert llm.chat([{"role": "user", "content": "q"}], purpose="x").status == llm.NOT_CONFIGURED
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "k")
+    _anthropic(monkeypatch, _amsg([], stop="refusal", stop_details=NS(category=None)))
+    r = llm.chat([{"role": "user", "content": "q"}], purpose="x")
+    assert r.status == llm.REFUSED and not r.ai_generated and not r.wants_tools
+
+
+def test_chat_falls_back_to_groq(monkeypatch):
+    monkeypatch.setattr(settings, "LLM_FALLBACK_PROVIDER", "groq")
+    _anthropic(monkeypatch, _http_err(503))
+    _openai(monkeypatch, _oresp("from groq"))
+    r = llm.chat([{"role": "user", "content": "q"}], purpose="x")
+    assert r.provider == "groq" and r.fallback_from == "anthropic" and r.text == "from groq"
+
+
+# ── chat() on OpenAI-compatible providers ────────────────────────────────────
+def _otc(id_, name, args):
+    return NS(id=id_, type="function", function=NS(name=name, arguments=args))
+
+
+def test_openai_tool_turn_and_translation(monkeypatch):
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "groq")
+    stub = _openai(monkeypatch, _oresp(None, [_otc("c1", "get_kpi", '{"kpi_id": "npa"}'),
+                                              _otc("c2", "list_agencies", "{not json")],
+                                       finish="tool_calls"))
+    r = llm.chat([{"role": "user", "content": "q"},
+                  {"role": "assistant", "content": "", "tool_calls": [llm.ToolCall("p1", "get_kpi", {"kpi_id": "a"})]},
+                  llm.tool_result("p1", "boom", is_error=True)],
+                 purpose="x", system="sys", tools=TOOLS)
+    assert r.stop_reason == "tool_use"
+    assert r.tool_calls[0] == llm.ToolCall("c1", "get_kpi", {"kpi_id": "npa"})
+    assert r.tool_calls[1].arguments == {} and "not valid JSON" in r.tool_calls[1].arguments_error
+    assert r.usage.input_tokens == 5 and r.usage.output_tokens == 3
+
+    sent = stub.calls[0]
+    assert sent["tools"][0] == {"type": "function", "function": {
+        "name": "get_kpi", "description": "Read one KPI by id", "parameters": TOOLS[0].parameters}}
+    m = sent["messages"]
+    assert m[0] == {"role": "system", "content": "sys"}
+    assert m[2]["tool_calls"][0]["function"] == {"name": "get_kpi", "arguments": '{"kpi_id": "a"}'}
+    assert m[3] == {"role": "tool", "tool_call_id": "p1", "content": "ERROR: boom"}
+
+
+# ── FakeLLM ──────────────────────────────────────────────────────────────────
+def test_fake_serves_complete_through_the_real_seam():
+    with llm.use_fake(["plain", {"k": 1}, llm.FakeLLM.call("unused")]) as fake:
+        a = llm.complete("p1", purpose="f")
+        b = llm.complete("p2", purpose="f", json_mode=True)
+        assert (a.status, a.text, a.provider) == (llm.OK, "plain", "fake")
+        assert b.data == {"k": 1}
+        assert [c["kind"] for c in fake.calls] == ["complete", "complete"]
+    assert llm.resolved_provider()[0] == "anthropic"      # uninstalled on exit
+
+
+def test_fake_exceptions_are_classified_and_retried():
+    with llm.use_fake([_http_err(429), "recovered"]) as fake:
+        assert llm.complete("p", purpose="f2", cache_ttl=0).status == llm.OK
+        assert len(fake.calls) == 2
+
+
+def test_fake_drives_a_tool_loop():
+    """The shape F02's runtime will run: call, execute, answer, repeat."""
+    script = [llm.FakeLLM.call("get_kpi", {"kpi_id": "npa"}), "NPA is 4.0%"]
+    with llm.use_fake(script) as fake:
+        history = [{"role": "user", "content": "q"}]
+        while True:
+            r = llm.chat(history, purpose="loop", tools=TOOLS)
+            if not r.wants_tools:
+                break
+            history.append(r.assistant_message())
+            history += [llm.tool_result(c, "4.0") for c in r.tool_calls]
+    assert r.text == "NPA is 4.0%"
+    assert fake.calls[1]["messages"][-1] == {"role": "tool", "tool_call_id": "call_get_kpi",
+                                             "content": "4.0", "is_error": False}
+
+
+def test_an_exhausted_script_fails_the_test_loudly():
+    """Swallowed into UPSTREAM_ERROR it would read as a flaky provider."""
+    with llm.use_fake([]):
+        with pytest.raises(llm.FakeScriptExhausted):
+            llm.complete("p", purpose="f3", cache_ttl=0)
+
+
+# ── health ───────────────────────────────────────────────────────────────────
+def test_health_names_both_tiers_and_the_fallback_without_the_key(monkeypatch):
+    monkeypatch.setattr(settings, "LLM_FALLBACK_PROVIDER", "groq")
+    h = llm.health()
+    assert h["active_provider"] == "anthropic"
+    assert (h["model"], h["agent_model"]) == ("claude-haiku-4-5", "claude-sonnet-5")
+    assert h["fallback_provider"] == "groq" and h["fallback_usable"] is True
+    assert "sk-ant-test" not in json.dumps(h) and "gsk-test" not in json.dumps(h)
+
+
+# ── the real SDKs, through a mock HTTP transport ─────────────────────────────
+def test_real_anthropic_sdk_accepts_the_request_and_parses_the_reply(monkeypatch):
+    """A stub cannot catch a misspelt parameter; the SDK's own serialiser and
+    response models can. Runs complete(json_schema) and a chat tool turn."""
+    import anthropic
+    import httpx2
+
+    seen: list[dict] = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        seen.append(body)
+        if body.get("tools"):
+            content = [{"type": "thinking", "thinking": "", "signature": "sig"},
+                       {"type": "tool_use", "id": "toolu_1", "name": "get_kpi",
+                        "input": {"kpi_id": "npa_pct"}}]
+            stop = "tool_use"
+        else:
+            content = [{"type": "text", "text": '{"amount": 2500}'}]
+            stop = "end_turn"
+        return httpx2.Response(200, json={
+            "id": "msg_1", "type": "message", "role": "assistant", "model": body["model"],
+            "content": content, "stop_reason": stop, "stop_sequence": None,
+            "usage": {"input_tokens": 20, "output_tokens": 9}})
+
+    def client(api_key):
+        return anthropic.Anthropic(api_key=api_key, max_retries=0,
+                                   http_client=httpx2.Client(transport=httpx2.MockTransport(handler)))
+
+    monkeypatch.setattr(llm, "_anthropic_client", client)
+    schema = {"type": "object", "properties": {"amount": {"type": "number"}},
+              "required": ["amount"], "additionalProperties": False}
+    r = llm.complete("PTP of 2500 on Friday", purpose="extract", json_schema=schema)
+    assert r.status == llm.OK and r.data == {"amount": 2500}
+
+    c = llm.chat([{"role": "user", "content": "npa?"}], purpose="copilot", tools=TOOLS)
+    assert c.status == llm.OK and c.tool_calls[0].arguments == {"kpi_id": "npa_pct"}
+    assert c.provider_content[0]["signature"] == "sig"
+
+    assert seen[0]["output_config"] == {"format": {"type": "json_schema", "schema": schema}}
+    assert seen[0]["temperature"] == 0.3        # Haiku: extra_body lands top-level
+    assert seen[1]["tools"][0]["input_schema"] == TOOLS[0].parameters
+    assert seen[1]["output_config"] == {"effort": "medium"}
+    assert "temperature" not in seen[1]         # Sonnet 5 would 400 on it
+
+
+def test_real_openai_sdk_accepts_the_tool_request(monkeypatch):
+    import httpx
+    import openai
+
+    seen: list[dict] = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={
+            "id": "c1", "object": "chat.completion", "created": 0, "model": "groq-model",
+            "choices": [{"index": 0, "finish_reason": "tool_calls", "message": {
+                "role": "assistant", "content": None,
+                "tool_calls": [{"id": "call_1", "type": "function",
+                                "function": {"name": "get_kpi", "arguments": '{"kpi_id": "npa"}'}}]}}],
+            "usage": {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6}})
+
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "groq")
+    monkeypatch.setattr(llm, "_client", lambda provider, key: openai.OpenAI(
+        api_key=key, base_url="http://groq.test/v1", max_retries=0,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler))))
+    r = llm.chat([{"role": "user", "content": "npa?"}], purpose="copilot", tools=TOOLS)
+    assert r.tool_calls == [llm.ToolCall("call_1", "get_kpi", {"kpi_id": "npa"})]
+    assert seen[0]["tools"][0]["function"]["name"] == "get_kpi"
+    # The SDK merges extra_body into the top level of the JSON body.
+    assert seen[0]["reasoning_effort"] == "low"
