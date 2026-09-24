@@ -13,6 +13,11 @@
 #
 #   Everything built here carries `synthetic=True`, which the result
 #   propagates, per the repo's SYNTHETIC_WARNING convention.
+#
+# 2026-09-24 (later) — The 1/12 Sub -> Doubtful cell stays in the reference
+#   rows (it is what an observed matrix would contain), but since mc-1.1.0
+#   the engine folds it into staying put and applies the 12-month rule
+#   itself, so it no longer moves anyone in a simulation.
 # ───────────────────────────────────────────────────────────────────────────
 """Synthetic transition counts and books. Never evidence about real borrowers."""
 from __future__ import annotations

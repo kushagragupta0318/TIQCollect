@@ -71,6 +71,56 @@
 #   fitted; `SimulationResult.assumptions` lists them on every run so a
 #   figure never travels without its caveats. backtest.py is what makes the
 #   bands checkable.
+#
+# 2026-09-24 (later) — mc-1.1.0, after the coordinator's audit of daadc17.
+#   Numbers change, so the version moves (a rule change is a model change).
+#
+#   RULED DEVIATIONS — each differs from CC's RiskSimulator on purpose:
+#   - GNPA % differs from CC's RiskSimulator because CC divided NPA +
+#     WRITTEN-OFF by the WHOLE state vector including RESOLVED
+#     (routers/simulate.py:109); the RBI ratio is NPA over the live book.
+#   - ECL differs from CC's RiskSimulator because CC's was share x "LGD" x
+#     exposure with no PD (stress_simulator.py:288); here it is PD (first
+#     passage into default) x LGD x EAD.
+#   - Recovered cash differs from CC's RiskSimulator because CC had none —
+#     its "recovery rate" was the RESOLVED share (simulate.py:112-115); here
+#     cash is counted only on exits from delinquency into CURRENT or
+#     RESOLVED, so roll-backs short of CURRENT are not cash.
+#   - Parallelism differs from CC's RiskSimulator because CC looped paths in
+#     Python on one core; here chunks run on THREADS, not processes, since
+#     Celery's prefork workers are daemonic and cannot start child
+#     processes. Results do not depend on the thread count.
+#
+#   GATES FIXED:
+#   1. WRITTEN_OFF was in IFRS-9 stage 3 (states.IFRS9_STAGE, copied from
+#      CC's STAGE_STATES at stress_simulator.py:64 under a comment that
+#      wrongly credited the brief). ECL therefore double-counted WRITE_OFFS
+#      and rose with a harsher write-off policy. Written-off balances are now
+#      derecognised: no EAD, no ECL. test_write_offs_leave_the_ecl_base.
+#   2. NPA_SUB -> NPA_DOUBTFUL was a random monthly hazard (the observed
+#      matrix cell, 1/12 in the synthetic book) while states.py called it a
+#      REGULATORY 12-month rule. The engine now keeps each account's NPA
+#      entry month on every path and moves it at exactly 12 months; matrix
+#      mass between the two NPA states is folded into staying put, and entry
+#      into NPA from outside is always Sub-standard.
+#      test_doubtful_is_reached_by_age_and_only_by_age.
+#   3. Synthetic honesty. `synthetic` flipped to False the moment real counts
+#      arrived, while every elasticity, LGD and Beta mean was still unfitted,
+#      and headline() / to_records() dropped the caveats. The run now carries
+#      `calibrated_by_backtest`, `synthetic_inputs`, `synthetic_warning` and
+#      `assumptions` in headline() and run_record(), and every to_records()
+#      row carries `calibrated_by_backtest` and `synthetic_warning`. The
+#      warning clears only when `simulate(calibration=...)` is handed a
+#      PASSING backtest on real (non-synthetic) history for this engine
+#      version — never because of where the counts came from.
+#
+#   DECLARED, NOT TUNED: the Sector Shock preset. On CC's sector loadings it
+#   is harsher than Severely Adverse for HOME (+2.11 log-odds vs +1.905) and
+#   GOLD (+2.44 vs +1.725), and milder than Adverse for PERSONAL (+0.1225 vs
+#   +0.271). That is CC's calibration, not a finding. It is recorded in the
+#   preset, in ASSUMPTIONS, and as an E05/E08 recalibration item, and
+#   test_sector_shock_calibration_is_declared_not_tuned pins those numbers so
+#   the recalibration has to change a test on purpose.
 # ───────────────────────────────────────────────────────────────────────────
 """Account-level Monte Carlo for a collections book (plan §7.1, task E02).
 
@@ -99,6 +149,10 @@ THE MODEL, month by month, for every account on every path
     zero at the status-quo levers. A settlement programme then adds a
     monthly acceptance hazard h on NPA rows, as a ninth outcome that lands in
     RESOLVED at (1 - discount) of the balance.
+    NPA_SUB -> NPA_DOUBTFUL is NOT in the matrix: every account's NPA entry
+    month is tracked on every path and the move happens at exactly 12 months
+    (the RBI rule, states.DOUBTFUL_AFTER_MONTHS). Matrix mass between the two
+    NPA states is folded into staying put; a new NPA always enters as Sub.
 
 4.  Each account draws its next state by inverse CDF. The lookup is a
     Chen–Asau guide table: one table read settles ~97% of draws (measured
@@ -140,11 +194,12 @@ from app.strategy.states import (
     RESOLVED, STATE_INDEX, STATES, WRITTEN_OFF,
 )
 
-ENGINE_VERSION = "mc-1.0.0"
+ENGINE_VERSION = "mc-1.1.0"  # mc-1.0.0 = daadc17; see CHANGELOG for what moved
 PERCENTILES = (5, 10, 50, 90, 95)
 _N_OUT = N_STATES + 1  # 8 states + SETTLED (a ninth outcome that lands in RESOLVED)
 _SETTLED = N_STATES
 _BETTER = (DIRECTION == -1).astype(np.float64)
+_NEVER = np.int16(np.iinfo(np.int16).max)  # "no Doubtful promotion pending"
 
 # ── Macro scenarios ──────────────────────────────────────────────────────────
 
@@ -161,6 +216,12 @@ class MacroScenario:
 
 
 # CC's regulatory-style presets, values unchanged (RiskSimulator.jsx:8-13).
+# RECALIBRATION DUE (E05/E08), declared rather than tuned by eye: on
+# MACRO_SENSITIVITY, "sector_shock" shifts HOME by +2.11 and GOLD by +2.44 —
+# harsher than "severely_adverse" (+1.905, +1.725) — and PERSONAL by +0.1225,
+# milder than "adverse" (+0.271). A secured-heavy book therefore reads the
+# sector preset as its worst case. Pinned by
+# test_sector_shock_calibration_is_declared_not_tuned.
 PRESETS: dict[str, MacroScenario] = {
     "baseline": MacroScenario("Baseline"),
     "adverse": MacroScenario("Adverse", gdp=-1.5, cpi=1.2, repo_bps=50, unemployment=1.0, sector=-2.0),
@@ -430,7 +491,26 @@ ASSUMPTIONS: tuple[str, ...] = (
     "Recovery fractions are Beta assumptions per from-state unless RecoveryParams was fitted.",
     "Balances are total_outstanding at the start (EAD) and are not amortised over the horizon.",
     "Roll-backs short of CURRENT are not counted as cash, so recovered cash is conservative.",
-    "IFRS-9 stage-2 PD uses a fixed 36-month horizon as a lifetime proxy; WRITTEN_OFF sits in stage 3.",
+    "IFRS-9 stage-2 PD uses a fixed 36-month horizon as a lifetime proxy; written-off and resolved"
+    " balances are derecognised (no EAD, no ECL), so WRITE_OFFS is the loss line for them.",
+    "LGD per IFRS-9 stage (Ifrs9Params) is an unsecured-retail assumption, not fitted.",
+    "Sector Shock preset is CC's calibration and is due for recalibration (E05/E08): it shifts HOME"
+    " +2.11 and GOLD +2.44, harsher than Severely Adverse, and PERSONAL +0.12, milder than Adverse.",
+    "A passing backtest validates state-share dynamics under the status quo only; lever"
+    " elasticities, LGDs and recovery fractions are not tested by it.",
+)
+
+# The run-level caveat. It clears ONLY when simulate() is handed a passing
+# backtest on real history for this engine version (see _calibration_status);
+# never because the transition counts happen to be real.
+UNCALIBRATED_WARNING = (
+    "UNCALIBRATED: no backtest on this book's own history has passed for engine " + ENGINE_VERSION + ". "
+    "Shock volatility, lever elasticities, LGDs and recovery fractions are assumptions; read the bands "
+    "as scenario arithmetic, not a forecast."
+)
+SYNTHETIC_WARNING = (
+    "SYNTHETIC: the book or its transition counts are generated, not observed; not evidence about any "
+    "real borrower. " + UNCALIBRATED_WARNING
 )
 
 
@@ -731,7 +811,10 @@ class SimulationResult:
     summary: dict[str, Band]
     ifrs9: dict[str, dict[str, Band]]
     elapsed_seconds: float
-    synthetic: bool
+    synthetic_inputs: bool          # the book or its counts are generated
+    calibrated_by_backtest: bool    # a PASSING backtest on real history was supplied
+    synthetic_warning: str | None   # None only when calibrated and inputs are real
+    calibration: dict | None        # the backtest the run was calibrated by, if any
     assumptions: tuple[str, ...]
     diagnostics: dict
 
@@ -743,28 +826,47 @@ class SimulationResult:
     def per_path(self, metric: str) -> np.ndarray:
         return _per_path_metrics(self.paths)[metric]
 
+    def run_record(self) -> dict:
+        """Run-level fields for strategy.simulation_runs: reproducibility and
+        the caveats that must travel with every number the run produced."""
+        return {
+            "engine_version": self.engine_version, "seed": self.seed, "n_paths": self.n_paths,
+            "horizon_months": self.horizon_months, "numpy_version": self.diagnostics.get("numpy_version"),
+            "chunk_paths": self.config.chunk_paths, "subsampled": self.subsampled,
+            "synthetic_inputs": self.synthetic_inputs,
+            "calibrated_by_backtest": self.calibrated_by_backtest,
+            "synthetic_warning": self.synthetic_warning,
+            "calibration": self.calibration,
+            "assumptions": list(self.assumptions),
+        }
+
     def headline(self) -> dict:
-        """Horizon values, JSON-friendly. The numbers a memo may quote."""
+        """Horizon values, JSON-friendly. The numbers a memo may quote — with
+        the run's caveats beside them, never without."""
         h = {m: b.at(-1) for m, b in self.summary.items() if m != "STATE_SHARE"}
         h["STATE_SHARE"] = {code: self.summary["STATE_SHARE"].at((-1, i)) for i, code in enumerate(STATES)}
         return {
-            "engine_version": self.engine_version, "seed": self.seed, "n_paths": self.n_paths,
-            "horizon_months": self.horizon_months, "scenario": asdict(self.scenario),
-            "synthetic": self.synthetic, "subsampled": self.subsampled,
+            **self.run_record(), "scenario": asdict(self.scenario),
             "metrics": h, "recovery_at_risk": self.recovery_at_risk,
             "ifrs9": {stage: {k: b.at(-1) for k, b in parts.items()} for stage, parts in self.ifrs9.items()},
         }
 
     def to_records(self, include_segments: bool = False) -> list[dict]:
-        """Rows shaped for strategy.simulation_results (DATA-MODEL-V2 §4.8)."""
+        """Rows shaped for strategy.simulation_results (DATA-MODEL-V2 §4.8).
+
+        Every row carries `calibrated_by_backtest` and `synthetic_warning`, so
+        a row read on its own is not mistaken for a calibrated forecast; the
+        assumptions list is run-level (run_record)."""
         rows: list[dict] = []
+        caveat = {"calibrated_by_backtest": self.calibrated_by_backtest,
+                  "synthetic_warning": self.synthetic_warning}
 
         def emit(metric, band: Band, segment_key="ALL", segment_state=None, index=None):
             for t in range(self.horizon_months + 1):
                 ix = t if index is None else (t, index)
                 rows.append({"metric": metric, "period_index": t, "segment_key": segment_key,
                              "segment_state": segment_state, "unit": METRIC_UNITS[metric],
-                             **band.at(ix)})
+                             **band.at(ix), **caveat})
 
         for metric, band in self.summary.items():
             if metric == "STATE_SHARE":
@@ -1034,6 +1136,17 @@ def _run_chunk(ctx: _Context, p0: int, p1: int, ss: np.random.SeedSequence, out:
     else:
         base = np.array(np.broadcast_to(ctx.alpha_mean, (pc, S, N_STATES, N_STATES)))
     base[:, ctx.identity_rows] = eye[np.nonzero(ctx.identity_rows)[1]]
+    # NPA_SUB -> NPA_DOUBTFUL is the 12-month AGE RULE (states.py), applied in
+    # the month loop below, never a matrix hazard. So: mass between the two
+    # NPA states means "still an NPA" (folded into staying put), and entry
+    # into NPA from outside is always Sub-standard.
+    base[..., NPA_SUB, NPA_SUB] += base[..., NPA_SUB, NPA_DOUBTFUL]
+    base[..., NPA_SUB, NPA_DOUBTFUL] = 0.0
+    base[..., NPA_DOUBTFUL, NPA_DOUBTFUL] += base[..., NPA_DOUBTFUL, NPA_SUB]
+    base[..., NPA_DOUBTFUL, NPA_SUB] = 0.0
+    outside = [i for i in range(N_STATES) if i not in NPA]
+    base[..., outside, NPA_SUB] += base[..., outside, NPA_DOUBTFUL]
+    base[..., outside, NPA_DOUBTFUL] = 0.0
     if ctx.writeoff_months is not None:
         # The policy REPLACES the observed NPA write-off hazard (no double count).
         for i in NPA:
@@ -1052,7 +1165,9 @@ def _run_chunk(ctx: _Context, p0: int, p1: int, ss: np.random.SeedSequence, out:
     shift = ctx.mu[None, None, :] + cfg.shock_sigma * (math.sqrt(ws) * z[:, :, None] + math.sqrt(1.0 - ws) * eta)
 
     # 3. IFRS-9 PD per path: the path's matrix under the scenario mean (no
-    #    random shock), default states made absorbing, first passage.
+    #    random shock), default states made absorbing, first passage. Reaching
+    #    WRITTEN_OFF counts as default here even though a written-off balance
+    #    carries no ECL afterwards (derecognised, states.IFRS9_STAGE).
     m9 = _tilt(base, np.broadcast_to(ctx.mu, (pc, S)), ctx.better, ctx.settle_h_rows)
     m8 = m9[..., :N_STATES].copy()
     m8[..., RESOLVED] += m9[..., _SETTLED]
@@ -1079,11 +1194,15 @@ def _run_chunk(ctx: _Context, p0: int, p1: int, ss: np.random.SeedSequence, out:
     del rows0, rowbase
     out.seg_state_balance[p0:p1, 0] = cur_bal.reshape(pc, S, N_STATES)
     out.seg_state_count[p0:p1, 0] = cur_cnt.reshape(pc, S, N_STATES)
-    # Write-off policy: the month the current NPA spell was first seen at a
-    # month end (age = now - entry). Initial ages count back from month 0.
-    entry = None if ctx.writeoff_months is None else np.tile(-ctx.age0, (pc, 1)).astype(np.int16)
+    # NPA age, per account per path. `entry` = the month end at which the
+    # current NPA spell was first seen (age = now - entry; initial ages count
+    # back from month 0). `promote` = the month end at which a Sub-standard
+    # account turns Doubtful (entry + 12), or _NEVER — one equality test a
+    # month finds exactly the accounts due, instead of re-deriving every age.
+    entry = np.tile(-ctx.age0, (pc, 1)).astype(np.int16)
+    promote = np.where(state == NPA_SUB, entry + DOUBTFUL_AFTER_MONTHS, _NEVER).astype(np.int16)
     state_f, idxk_f = state.reshape(-1), idxk.reshape(-1)
-    entry_f = None if entry is None else entry.reshape(-1)
+    entry_f, promote_f = entry.reshape(-1), promote.reshape(-1)
     buf = _Buffers((pc, n))
     ti = _TableIndex(R, K)
     bw_flat = np.tile(ctx.bw, pc)
@@ -1109,9 +1228,15 @@ def _run_chunk(ctx: _Context, p0: int, p1: int, ss: np.random.SeedSequence, out:
             cur_cnt[:] += np.bincount(rows, weights=np.concatenate((-wa, wa)), minlength=R)
         state_f[flat] = s_to
         idxk_f[flat] = row_to * K
-        if entry_f is not None:
-            entering = ((s_to == NPA_SUB) | (s_to == NPA_DOUBTFUL)) & (s_from != NPA_SUB) & (s_from != NPA_DOUBTFUL)
-            entry_f[flat[entering]] = t + 1
+        # NPA age: a new spell starts Sub-standard at this month end (the
+        # matrix can no longer produce any other entry — see the fold above);
+        # anything that is not Sub-standard now has no promotion pending.
+        entering = (s_to == NPA_SUB) & (s_from != NPA_SUB) & (s_from != NPA_DOUBTFUL)
+        promote_f[flat] = _NEVER
+        if entering.any():
+            fe = flat[entering]
+            entry_f[fe] = t + 1
+            promote_f[fe] = t + 1 + DOUBTFUL_AFTER_MONTHS
 
         ev = _EVENTS.take(s_from * np.int8(_N_OUT) + outcome)
         e = np.flatnonzero(ev)
@@ -1149,7 +1274,12 @@ def _run_chunk(ctx: _Context, p0: int, p1: int, ss: np.random.SeedSequence, out:
         mv = np.flatnonzero(buf.mask)
         if mv.size:
             move(mv, outcome.reshape(-1)[mv], t)
-        if entry is not None:
+        # The age rule: Sub-standard for 12 months -> Doubtful, deterministically.
+        np.equal(promote, t + 1, out=buf.mask)
+        aged = np.flatnonzero(buf.mask)
+        if aged.size:
+            move(aged, np.full(aged.size, NPA_DOUBTFUL, dtype=np.int8), t)
+        if ctx.writeoff_months is not None:
             in_npa = (state == NPA_SUB) | (state == NPA_DOUBTFUL)
             due = np.flatnonzero(in_npa & (entry <= t + 1 - ctx.writeoff_months))
             if due.size:
@@ -1188,6 +1318,7 @@ def simulate(
     config: EngineConfig | None = None,
     max_accounts: int | None = None,
     progress: Callable[[float], None] | None = None,
+    calibration=None,
 ) -> SimulationResult:
     """Run the Monte Carlo. Reproducible from (seed, inputs, config.chunk_paths)
     under one numpy version — numpy does not promise its Generator
@@ -1198,6 +1329,11 @@ def simulate(
     very large books; the full book is simulated by default. `progress` is
     called with the completed fraction after each chunk (for the Celery job,
     task E03).
+
+    `calibration` is a backtest.BacktestReport for THIS book's history. Only
+    a passing one, on non-synthetic history, run by this engine version,
+    sets `calibrated_by_backtest` and clears `synthetic_warning`; anything
+    else leaves the run marked uncalibrated (see _calibration_status).
 
     Memory: the per-path outputs are two (n_paths, horizon+1, segments, 8)
     float64 arrays — 1,000 paths x 13 months x 24 segments is ~40 MB, and
@@ -1237,19 +1373,26 @@ def simulate(
         loan_types.append(lt)
     mu = np.array([macro_shift(scenario, lt, config.sensitivity_scale) for lt in loan_types])
 
+    # NPA age at the start, reconciled with the 12-month rule. Unknown ages
+    # take the state's lower bound (DATA-MODEL-V2 §9.5): Sub 0, Doubtful 12.
+    # A known age that contradicts the state is resolved in favour of the
+    # rule and counted, never silently: Sub-standard at 12+ months is
+    # Doubtful; Doubtful under 12 months is read as exactly 12.
+    state0 = book.state.copy()
+    raw = np.full(book.n, -1.0) if book.npa_age_months is None else np.nan_to_num(book.npa_age_months, nan=-1.0)
+    known = raw >= 0
+    sub_aged = (state0 == NPA_SUB) & known & (raw >= DOUBTFUL_AFTER_MONTHS)
+    doubtful_young = (state0 == NPA_DOUBTFUL) & known & (raw < DOUBTFUL_AFTER_MONTHS)
+    state0[sub_aged] = NPA_DOUBTFUL
+    lower = np.where(state0 == NPA_DOUBTFUL, DOUBTFUL_AFTER_MONTHS, 0)
+    age0 = np.where(known, np.maximum(raw, lower), lower)
+    age0 = np.where(np.isin(state0, NPA), age0, 0).astype(np.int16)
+
     alpha, no_evidence = matrices.dirichlet_alpha(config)
     alpha_mean = alpha / alpha.sum(axis=2, keepdims=True)
     held = np.zeros((S, N_STATES), dtype=bool)
-    np.logical_or.at(held, (book.segment, book.state), True)
+    np.logical_or.at(held, (book.segment, state0), True)
     rows_held_in_place = [(matrices.keys[s], STATES[i]) for s, i in zip(*np.nonzero(no_evidence & held))]
-
-    if book.npa_age_months is not None:
-        age0 = np.nan_to_num(book.npa_age_months, nan=-1.0)
-    else:
-        age0 = np.full(book.n, -1.0)
-    # Unknown NPA age: the lower bound of the state (DATA-MODEL-V2 §9.5).
-    lower = np.where(book.state == NPA_DOUBTFUL, DOUBTFUL_AFTER_MONTHS, 0)
-    age0 = np.where(age0 < 0, lower, age0).astype(np.int16)
 
     settle_h = levers.settlement_hazard()
     settle_rows = np.zeros(N_STATES)
@@ -1257,7 +1400,7 @@ def simulate(
     ca, cb, ra, rb = recovery.arrays()
     w = book.weights
     ctx = _Context(
-        n=book.n, S=S, T=horizon_months, seg=book.segment, state0=book.state, age0=age0,
+        n=book.n, S=S, T=horizon_months, seg=book.segment, state0=state0, age0=age0,
         bw=book.balance * w, w=w, unit_weights=book.weight is None,
         alpha=alpha, alpha_mean=alpha_mean, identity_rows=no_evidence | _absorbing_mask(S),
         mu=mu, better=lever_log_odds(levers, config), settle_h_rows=settle_rows,
@@ -1328,17 +1471,28 @@ def simulate(
             "PD": Band.of(cov / lgd_stage[k]) if lgd_stage[k] > 0 else Band.of(np.full_like(cov, np.nan)),
         }
 
+    synthetic_inputs = bool(portfolio.synthetic or matrices.synthetic)
+    calibrated, calibration_ref = _calibration_status(calibration)
+    if synthetic_inputs:
+        warning = SYNTHETIC_WARNING
+    elif not calibrated:
+        warning = UNCALIBRATED_WARNING
+    else:
+        warning = None
     elapsed = time.perf_counter() - t_start
     return SimulationResult(
         engine_version=ENGINE_VERSION, seed=seed, n_paths=P, horizon_months=T,
         n_accounts=n_original, n_simulated_accounts=book.n, subsampled=book is not portfolio,
         segment_keys=matrices.keys, segment_loan_type=tuple(loan_types), segment_region=seg_region,
         scenario=scenario, levers=levers, config=config, paths=out, summary=summary, ifrs9=staging,
-        elapsed_seconds=elapsed, synthetic=bool(portfolio.synthetic or matrices.synthetic),
+        elapsed_seconds=elapsed, synthetic_inputs=synthetic_inputs,
+        calibrated_by_backtest=calibrated, synthetic_warning=warning, calibration=calibration_ref,
         assumptions=ASSUMPTIONS,
         diagnostics={
             "recovery_source": recovery.source,
             "numpy_version": np.__version__,
+            "npa_sub_reclassified_doubtful_at_start": int(sub_aged.sum()),
+            "npa_doubtful_age_raised_to_12_at_start": int(doubtful_young.sum()),
             "rows_held_in_place": rows_held_in_place,
             "segments_without_loan_type": [matrices.keys[s] for s, lt in enumerate(loan_types) if lt is None],
             "macro_shift_by_segment": dict(zip(matrices.keys, mu.round(6).tolist())),
@@ -1348,6 +1502,23 @@ def simulate(
             "account_steps": int(book.n) * P * T,
         },
     )
+
+
+def _calibration_status(report) -> tuple[bool, dict | None]:
+    """(calibrated_by_backtest, reference) for a backtest.BacktestReport.
+
+    Calibrated means: a PASSING backtest, on NON-synthetic history, run by
+    THIS engine version. The source of the transition counts plays no part —
+    real counts under unfitted elasticities are still uncalibrated.
+    """
+    if report is None:
+        return False, None
+    ref = {"engine_version": report.engine_version, "origin": report.origin,
+           "horizon_months": report.horizon_months, "nominal": report.nominal,
+           "coverage": report.coverage, "passes": bool(report.passes()),
+           "synthetic": bool(report.synthetic)}
+    ok = ref["passes"] and not ref["synthetic"] and report.engine_version == ENGINE_VERSION
+    return bool(ok), ref
 
 
 def _absorbing_mask(S: int) -> np.ndarray:

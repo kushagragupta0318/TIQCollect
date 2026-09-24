@@ -17,6 +17,21 @@
 #   The shock volatility is FITTED from the pre-origin window by default
 #   (`estimate_shock_sigma`), so the backtest validates the engine as it
 #   would be run, not CC's hand-set 0.2.
+#
+# 2026-09-24 (later) — The cohort was chosen with LOOK-AHEAD. It kept only
+#   accounts observed at EVERY month end of the horizon, so what the future
+#   panel happened to contain decided who was scored — the thing the fit
+#   window is careful never to do. The cohort is now every account observed
+#   at the origin. After it, an absorbing state (WRITTEN_OFF, RESOLVED) is
+#   carried forward through gaps, since a closed loan legitimately stops
+#   reporting; a live account with no reading that month is excluded from
+#   that month's actual shares, and the share excluded is reported per month
+#   with `exclusion_high` set above EXCLUSION_FLAG_SHARE, because the
+#   simulated shares still describe the whole cohort.
+#   The engine also needs each NPA's age at the origin now (the 12-month
+#   Doubtful rule is deterministic in mc-1.1.0), so it is derived from the
+#   panel's own run of NPA month ends — a lower bound, counted, where the run
+#   reaches back to the panel's first month or a gap.
 # ───────────────────────────────────────────────────────────────────────────
 """Backtest the Monte Carlo engine against a historical monthly panel.
 
@@ -33,10 +48,13 @@ import numpy as np
 from app.strategy.monte_carlo import (
     BASELINE, ENGINE_VERSION, EngineConfig, Portfolio, RecoveryParams, SegmentMatrices, simulate,
 )
-from app.strategy.states import DIRECTION, LIVE, N_STATES, STATES
+from app.strategy.states import ABSORBING, DIRECTION, LIVE, N_STATES, NPA, STATES
 
 _WORSE = (DIRECTION == 1)
 _BETTER = (DIRECTION == -1)
+# Above this share of the cohort unreadable in a month, the actual shares and
+# the simulated ones describe visibly different populations: flag it.
+EXCLUSION_FLAG_SHARE = 0.05
 
 
 @dataclass(frozen=True)
@@ -133,6 +151,35 @@ def estimate_shock_sigma(panel: HistoricalPanel, start: int, stop: int, min_move
     return float(math.sqrt(max(num / den, 0.0)))
 
 
+
+
+def npa_age_at(panel: HistoricalPanel, origin: int) -> tuple[np.ndarray, np.ndarray]:
+    """Whole months each account has been an NPA at month end `origin`.
+
+    The age is the length of the unbroken run of NPA month ends ending at the
+    origin, minus one (entered this month end = 0), exactly as `npa_since`
+    defines the spell (DATA-MODEL-V2 §9.5). Returns (age, lower_bound):
+    age is -1 for accounts not in NPA at the origin; lower_bound marks runs
+    that reach back to the panel's first month or to an unobserved month,
+    where the true age can only be larger.
+    """
+    n = panel.state.shape[0]
+    in_npa = np.isin(panel.state[:, :origin + 1], NPA)
+    age = np.full(n, -1, dtype=np.int64)
+    lower_bound = np.zeros(n, dtype=bool)
+    running = in_npa[:, origin].copy()
+    length = running.astype(np.int64)
+    for m in range(origin - 1, -1, -1):
+        still = running & in_npa[:, m]
+        ended = running & ~in_npa[:, m]
+        lower_bound |= ended & (panel.state[:, m] < 0)   # the run met a gap, not a non-NPA reading
+        length += still
+        running = still
+    lower_bound |= running                               # the run reaches the panel's first month
+    age[in_npa[:, origin]] = length[in_npa[:, origin]] - 1
+    return age, lower_bound & in_npa[:, origin]
+
+
 @dataclass(frozen=True)
 class BacktestReport:
     engine_version: str
@@ -145,8 +192,11 @@ class BacktestReport:
     n_cells: int
     n_covered: int
     n_degenerate: int
-    cohort_accounts: int
-    excluded_accounts: int
+    cohort_accounts: int                        # observed at the origin: nothing later decides this
+    excluded_share_by_month: tuple[float, ...]  # live accounts with no reading, per horizon month
+    max_excluded_share: float
+    exclusion_high: bool                        # max_excluded_share > EXCLUSION_FLAG_SHARE
+    npa_age_lower_bound_accounts: int
     fit_window: tuple[int, int]
     transitions_used: int
     shock_sigma_used: float
@@ -157,8 +207,9 @@ class BacktestReport:
     cells: tuple[dict, ...]
 
     def passes(self, tolerance: float = 0.15) -> bool:
-        """Observed coverage within `tolerance` of nominal."""
-        return abs(self.coverage - self.nominal) <= tolerance
+        """Observed coverage within `tolerance` of nominal, on a population
+        close enough to the simulated one to be comparable."""
+        return abs(self.coverage - self.nominal) <= tolerance and not self.exclusion_high
 
     def summary(self) -> dict:
         return {"engine_version": self.engine_version, "origin": self.origin,
@@ -166,9 +217,12 @@ class BacktestReport:
                 "nominal": self.nominal, "coverage": self.coverage,
                 "coverage_by_month": list(self.coverage_by_month), "n_cells": self.n_cells,
                 "n_degenerate": self.n_degenerate, "cohort_accounts": self.cohort_accounts,
-                "excluded_accounts": self.excluded_accounts, "fit_window": list(self.fit_window),
-                "shock_sigma_used": self.shock_sigma_used, "sigma_estimated": self.sigma_estimated,
-                "synthetic": self.synthetic}
+                "excluded_share_by_month": list(self.excluded_share_by_month),
+                "max_excluded_share": self.max_excluded_share, "exclusion_high": self.exclusion_high,
+                "npa_age_lower_bound_accounts": self.npa_age_lower_bound_accounts,
+                "fit_window": list(self.fit_window), "shock_sigma_used": self.shock_sigma_used,
+                "sigma_estimated": self.sigma_estimated, "synthetic": self.synthetic,
+                "passes": self.passes()}
 
 
 def backtest(panel: HistoricalPanel, *, horizon_months: int = 6, origin: int | None = None,
@@ -180,10 +234,12 @@ def backtest(panel: HistoricalPanel, *, horizon_months: int = 6, origin: int | N
     Baseline with status-quo levers, and score the p-band coverage of the
     actual state shares, month by month.
 
-    The cohort is every account observed at the origin and at every month end
-    of the horizon; accounts that drop out are excluded and counted, never
-    imputed. A cell whose band is a single point that the actual equals (a
-    state nobody can reach, both sides 0) is degenerate and not scored.
+    The cohort is every account observed at the origin — nothing after the
+    origin decides who is in it. Later, an absorbing state is carried forward
+    through missing months; a live account with no reading is left out of
+    that month's actual shares and counted in `excluded_share_by_month`. A
+    cell whose band is a single point that the actual equals (a state nobody
+    can reach, both sides 0) is degenerate and not scored.
     """
     M = panel.n_months
     origin = M - 1 - horizon_months if origin is None else origin
@@ -205,14 +261,14 @@ def backtest(panel: HistoricalPanel, *, horizon_months: int = 6, origin: int | N
         config = replace(config, shock_sigma=estimate_shock_sigma(panel, start, origin))
         sigma_estimated = True
 
-    window = panel.state[:, origin:origin + horizon_months + 1]
-    at_origin = window[:, 0] >= 0
-    cohort = at_origin & np.all(window >= 0, axis=1)
-    idx = np.flatnonzero(cohort)
+    idx = np.flatnonzero(panel.state[:, origin] >= 0)
     if idx.size == 0:
-        raise ValueError("no account is observed through the whole backtest window")
+        raise ValueError("no account is observed at the origin")
+    age, age_lower = npa_age_at(panel, origin)
     portfolio = Portfolio(state=panel.state[idx, origin], balance=panel.balance_at(origin)[idx],
-                          segment=panel.segment[idx], synthetic=panel.synthetic)
+                          segment=panel.segment[idx],
+                          npa_age_months=np.where(age[idx] >= 0, age[idx], np.nan),
+                          synthetic=panel.synthetic)
     res = simulate(portfolio, matrices, scenario=BASELINE, n_paths=n_paths,
                    horizon_months=horizon_months, seed=seed, config=config, recovery=recovery)
 
@@ -221,10 +277,16 @@ def backtest(panel: HistoricalPanel, *, horizon_months: int = 6, origin: int | N
     lo = np.percentile(sim_share, lo_q, axis=0)
     hi = np.percentile(sim_share, hi_q, axis=0)
     p50 = np.percentile(sim_share, 50, axis=0)
-    cells, by_month = [], []
+    cells, by_month, excluded = [], [], []
     n_cov = n_deg = 0
+    current = panel.state[idx, origin].astype(np.int64)
     for k in range(1, horizon_months + 1):
-        actual = np.bincount(panel.state[idx, origin + k], minlength=N_STATES) / idx.size
+        obs = panel.state[idx, origin + k].astype(np.int64)
+        carried = np.isin(current, ABSORBING)                   # a closed loan stops reporting
+        current = np.where(obs >= 0, obs, np.where(carried, current, -1))
+        known = current >= 0
+        excluded.append(float(1.0 - known.mean()))
+        actual = np.bincount(current[known], minlength=N_STATES) / max(int(known.sum()), 1)
         cov_k = n_k = 0
         for s in range(N_STATES):
             degenerate = lo[k, s] == hi[k, s] == actual[s]
@@ -240,11 +302,14 @@ def backtest(panel: HistoricalPanel, *, horizon_months: int = 6, origin: int | N
         by_month.append(cov_k / n_k if n_k else float("nan"))
         n_cov += cov_k
     n_cells = len(cells) - n_deg
+    max_excl = max(excluded)
     return BacktestReport(
         engine_version=ENGINE_VERSION, origin=origin, horizon_months=horizon_months, band=(lo_q, hi_q),
         nominal=(hi_q - lo_q) / 100.0, coverage=n_cov / n_cells if n_cells else float("nan"),
         coverage_by_month=tuple(by_month), n_cells=n_cells, n_covered=n_cov, n_degenerate=n_deg,
-        cohort_accounts=int(idx.size), excluded_accounts=int(at_origin.sum() - idx.size),
+        cohort_accounts=int(idx.size), excluded_share_by_month=tuple(excluded),
+        max_excluded_share=max_excl, exclusion_high=bool(max_excl > EXCLUSION_FLAG_SHARE),
+        npa_age_lower_bound_accounts=int(age_lower[idx].sum()),
         fit_window=(start, origin), transitions_used=int(counts.sum()),
         shock_sigma_used=float(config.shock_sigma), sigma_estimated=sigma_estimated,
         n_paths=n_paths, seed=seed, synthetic=panel.synthetic, cells=tuple(cells),

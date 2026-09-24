@@ -25,6 +25,33 @@
 #   are `str` enums, so `DPDBucket.NPA == "NPA"`), and
 #   tests/test_monte_carlo.py asserts every member of both enums maps here, so
 #   a renamed or added member fails a test instead of falling through quietly.
+#
+# 2026-09-24 (later) — Four corrections from the coordinator's audit of daadc17.
+#
+#   1. WRITTEN_OFF IS DERECOGNISED, not stage 3. IFRS9_STAGE put it in stage 3
+#      under a comment saying "as the brief specifies (task E02)". That comment
+#      was false: the mapping is CC's STAGE_STATES (models/stress_simulator.py
+#      :64, `3: [4, 5, 6]`), copied without checking it. A write-off removes
+#      the asset from the books (IFRS 9 5.4.4), so keeping its balance in
+#      stage-3 EAD made ECL double-count the WRITE_OFFS line and made a harsher
+#      write-off policy RAISE provisions. It is stage 0 now, beside RESOLVED;
+#      WRITE_OFFS is the loss line. It stays in DEFAULT_STATES — reaching it is
+#      still a default for first-passage PD.
+#   2. SUB -> DOUBTFUL IS THE AGE RULE, NOT A HAZARD. The engine now moves an
+#      account at exactly 12 months of NPA age and folds any matrix mass
+#      between the two NPA states into staying put (monte_carlo._run_chunk).
+#      REACHABLE therefore no longer offers DOUBTFUL -> SUB, and no longer
+#      offers NPA -> SMA: under RBI's 12 Nov 2021 IRAC clarification an NPA is
+#      upgraded only when the ENTIRE arrears are paid, i.e. to CURRENT.
+#   3. LoanStatus.NPA WINS over the bucket. A part-paid NPA whose DPD fell to
+#      45 mapped to SMA_1; the bank still carries it as an NPA until it is
+#      regularised, so it is NPA_SUB / NPA_DOUBTFUL by npa_since.
+#   4. DPD_RANGE restates 30/60/90 — an eighth copy of the DPD -> bucket rule.
+#      It cannot import models/loan.dpd_bucket_for: importing app.models runs
+#      app.core.database, which builds the SQLAlchemy engine from Settings and
+#      needs the DB env and driver, and this package must stay DB-free. So it
+#      is pinned instead: test_dpd_range_agrees_with_dpd_bucket_for checks
+#      agreement over 0..400 DPD.
 # ───────────────────────────────────────────────────────────────────────────
 """The 8-state portfolio space used by the Monte Carlo engine and the backtest.
 
@@ -61,19 +88,22 @@ ABSORBING = (WRITTEN_OFF, RESOLVED)
 # IFRS-9's rebuttable presumption: default = 90 DPD. Written-off is default too.
 DEFAULT_STATES = (NPA_SUB, NPA_DOUBTFUL, WRITTEN_OFF)
 
-# IFRS-9 stage per state. RESOLVED has left the book (derecognised): stage 0.
-# WRITTEN_OFF sits in stage 3 as the brief specifies (task E02); note that the
-# engine's WRITE_OFFS metric reports the same balance, so the two overlap.
-IFRS9_STAGE: tuple[int, ...] = (1, 1, 2, 2, 3, 3, 3, 0)
+# IFRS-9 stage per state. RESOLVED and WRITTEN_OFF have left the book
+# (derecognised, IFRS 9 5.4.4): stage 0, no EAD, no ECL. WRITE_OFFS is their
+# loss line. (WRITTEN_OFF read stage 3 until 2026-09-24, see CHANGELOG 1.)
+IFRS9_STAGE: tuple[int, ...] = (1, 1, 2, 2, 3, 3, 0, 0)
 
 # NPA -> DOUBTFUL after this many months as an NPA (RBI Master Circular on
 # IRAC norms: "remained in the sub-standard category for a period of 12
-# months"). REGULATORY, not an assumption.
+# months"). REGULATORY, not an assumption — and applied as a rule, at exactly
+# this age, by the engine; never as a monthly probability.
 DOUBTFUL_AFTER_MONTHS = 12
 
 # DPD range per delinquent state, used by the legal-threshold lever to ask how
 # much of a state's DPD range lies beyond the threshold. NPA_SUB spans 91 DPD
 # to 91 + 12 months; NPA_DOUBTFUL is open-ended.
+# THIS RESTATES models/loan.dpd_bucket_for's 30/60/90 (see CHANGELOG 4); the
+# two are held together by test_dpd_range_agrees_with_dpd_bucket_for.
 DPD_RANGE: dict[int, tuple[float, float]] = {
     SMA_0: (1.0, 30.0),
     SMA_1: (31.0, 60.0),
@@ -108,9 +138,14 @@ def _reachable_matrix() -> np.ndarray:
 
     Used ONLY to place the Dirichlet prior's floor mass; observed counts in any
     cell are always kept. DPD rises by at most ~31 days a month, so forward
-    moves are one rung; improvements can jump any distance (a borrower can
-    clear all arrears at once); RESOLVED is reachable from every live state;
-    WRITTEN_OFF only from NPA.
+    moves are one rung; a performing-side improvement can jump any distance
+    (a borrower can clear all arrears at once); RESOLVED is reachable from
+    every live state; WRITTEN_OFF only from NPA.
+
+    An NPA leaves only to CURRENT (upgraded when the ENTIRE arrears are paid,
+    RBI IRAC clarification of 12 Nov 2021), WRITTEN_OFF or RESOLVED — never to
+    an SMA state, and never DOUBTFUL -> SUB. SUB -> DOUBTFUL is the 12-month
+    age rule, which the engine applies itself.
     """
     r = np.zeros((N_STATES, N_STATES), dtype=bool)
     for i in LIVE:
@@ -119,7 +154,7 @@ def _reachable_matrix() -> np.ndarray:
         if i + 1 in LIVE:
             r[i, i + 1] = True
         for j in LIVE:
-            if j < i:
+            if j < i and not (i in NPA and j != CURRENT):
                 r[i, j] = True
     for i in NPA:
         r[i, WRITTEN_OFF] = True
@@ -146,7 +181,10 @@ TERMINAL_STATUS_TO_STATE: dict[str, int] = {
     "CLOSED": RESOLVED,
     "SETTLED": RESOLVED,
 }
-NON_TERMINAL_STATUSES: frozenset[str] = frozenset({"ACTIVE", "NPA"})
+# An NPA status also wins over the bucket: the account stays an NPA until it
+# is regularised, whatever its DPD has fallen to (CHANGELOG 3).
+NPA_STATUS = "NPA"
+NON_TERMINAL_STATUSES: frozenset[str] = frozenset({"ACTIVE", NPA_STATUS})
 
 
 def _value(x) -> str | None:
@@ -179,7 +217,9 @@ def portfolio_state(dpd_bucket, loan_status=None, npa_since: date | None = None,
 
     - A terminal `loan_status` wins: WRITTEN_OFF -> WRITTEN_OFF,
       CLOSED / SETTLED -> RESOLVED.
-    - Otherwise the DPD bucket decides; NPA splits at 12 whole months of
+    - An NPA `loan_status` wins over the bucket: a part-paid NPA stays an NPA
+      until regularised (RBI), whatever its DPD now reads.
+    - Otherwise the DPD bucket decides. NPA splits at 12 whole months of
       `npa_since` (REGULATORY). With no `npa_since` an NPA reads as
       NPA_SUB — a lower bound, the same one DATA-MODEL-V2 §9.5 records for
       loans whose NPA spell starts at the earliest observation.
@@ -193,7 +233,7 @@ def portfolio_state(dpd_bucket, loan_status=None, npa_since: date | None = None,
     bucket = _value(dpd_bucket)
     if bucket not in BUCKET_TO_STATE:
         raise ValueError(f"unknown dpd_bucket {bucket!r}")
-    state = BUCKET_TO_STATE[bucket]
+    state = NPA_SUB if status == NPA_STATUS else BUCKET_TO_STATE[bucket]
     if state == NPA_SUB and npa_since is not None:
         if as_of is None:
             raise ValueError("npa_since given without as_of")
@@ -218,20 +258,23 @@ def states_from_buckets(dpd_buckets: Iterable, npa_age_months: Sequence | np.nda
     unknown = ~np.isin(buckets, list(BUCKET_TO_STATE))
     if unknown.any():
         raise ValueError(f"unknown dpd_bucket values: {sorted(set(buckets[unknown]))!r}")
+    status = None
+    if loan_status is not None:
+        status = np.asarray([_value(s) for s in loan_status], dtype=object)
+        if status.shape != (n,):
+            raise ValueError("loan_status must have one entry per account")
+        known = set(TERMINAL_STATUS_TO_STATE) | set(NON_TERMINAL_STATUSES) | {None}
+        bad = {s for s in set(status.tolist()) if s not in known}
+        if bad:
+            raise ValueError(f"unknown loan_status values: {sorted(bad)!r}")
+        out[status == NPA_STATUS] = NPA_SUB          # NPA status wins over the bucket
     if npa_age_months is not None:
         age = np.asarray(npa_age_months, dtype=float)
         if age.shape != (n,):
             raise ValueError("npa_age_months must have one entry per account")
         doubtful = (out == NPA_SUB) & (np.nan_to_num(age, nan=-1.0) >= DOUBTFUL_AFTER_MONTHS)
         out[doubtful] = NPA_DOUBTFUL
-    if loan_status is not None:
-        status = np.asarray([_value(s) for s in loan_status], dtype=object)
-        if status.shape != (n,):
-            raise ValueError("loan_status must have one entry per account")
+    if status is not None:
         for code, s in TERMINAL_STATUS_TO_STATE.items():
-            out[status == code] = s
-        known = set(TERMINAL_STATUS_TO_STATE) | set(NON_TERMINAL_STATUSES) | {None}
-        bad = {s for s in set(status.tolist()) if s not in known}
-        if bad:
-            raise ValueError(f"unknown loan_status values: {sorted(bad)!r}")
+            out[status == code] = s                  # terminal statuses win over everything
     return out
