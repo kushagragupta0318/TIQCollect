@@ -12,7 +12,7 @@ against Rs 96,39,996 already collected, 47 of the 214 cases having been paid off
 in full and still sitting in the beat. The most that can ever be collected is
 the Rs 80,20,496 of headroom; paying more would mean writing money against debts
 that do not exist, which breaks collected <= target, breaks
-collected == SUM(VERIFIED), fails scripts/audit_all_cases_financials.py, and is
+collected == SUM(VERIFIED), and is
 refused outright by PaymentService.collect_payment (payment_service.py:150).
 
 So the share is taken against the REMAINING TARGET this morning -- assigned
