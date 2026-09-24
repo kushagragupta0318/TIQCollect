@@ -8,7 +8,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, TIQCollect-app]
 
 jobs:
   backend:
@@ -16,6 +16,32 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    # Settings with no default in core/config.py stop the app importing, so pytest
+    # failed at collection until these were supplied. All values are fake. The
+    # contact window is the code default (a demo .env's 0/24 fails six tests), and
+    # every provider credential is empty, so no test can reach Twilio, Razorpay,
+    # an LLM or Whisper.
+    env:
+      SECRET_KEY: ci-test-secret-key-not-real-0123456789abcdef
+      DATABASE_URL: postgresql+psycopg2://nobody:nothing@127.0.0.1:1/none
+      MINIO_ACCESS_KEY: test
+      MINIO_SECRET_KEY: test-secret
+      COMMAND_CENTRE_API_KEY: test
+      CONTACT_HOUR_START: "8"
+      CONTACT_HOUR_END: "19"
+      LLM_PROVIDER: none
+      GROQ_API_KEY: ""
+      OPENAI_API_KEY: ""
+      GOOGLE_MAPS_API_KEY: ""
+      TWILIO_ACCOUNT_SID: ""
+      TWILIO_AUTH_TOKEN: ""
+      TWILIO_PHONE_NUMBER: ""
+      TWILIO_WHATSAPP_FROM: ""
+      TWILIO_API_KEY_SID: ""
+      TWILIO_API_KEY_SECRET: ""
+      TWILIO_TWIML_APP_SID: ""
+      RAZORPAY_TEST_API: ""
+      RAZORPAY_TEST_KEY_SECRET: ""
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -30,7 +56,7 @@ jobs:
       - name: Compile check
         run: python -m compileall app
       - name: Run tests
-        run: python -m pytest -q
+        run: python -m pytest -q -p no:cacheprovider
 
   frontend:
     runs-on: ubuntu-latest
