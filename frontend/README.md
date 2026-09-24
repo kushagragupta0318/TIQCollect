@@ -12,10 +12,15 @@ To install on a phone on the same Wi-Fi:
 1. Create the LAN certificate once — the `openssl` command in the comment at
    the top of `vite.config.ts` writes `certs/dev-{key,cert}.pem` for your LAN IP.
 2. `npm run build`
-3. `HTTPS=1 npm run preview -- --port 5473` — `vite preview` inherits the dev
-   server's HTTPS certificate, `host: true` and `/api` proxy, so the phone
-   talks to one origin exactly as it does in development.
-4. On the phone, open `https://<your-lan-ip>:5473`, trust the certificate,
+3. `HTTPS=1 npm run preview` — on **port 4173, never the dev port 5473**.
+   `vite preview` inherits the dev server's HTTPS certificate, `host: true`
+   and `/api` proxy, so the phone talks to one origin as it does in
+   development. The port matters: a service worker belongs to its origin, so a
+   preview on 5473 would install one that the dev server (and the Docker `web`
+   container, same port) never replaces, and dev would go on serving the
+   preview's old code. The dev build removes any worker it finds on its own
+   origin, but only once it loads.
+4. On the phone, open `https://<your-lan-ip>:4173`, trust the certificate,
    then **Add to Home screen** (Android Chrome: ⋮ menu; iOS Safari: Share).
 
 **The certificate has to be trusted on the phone**, not just clicked past: a
@@ -24,8 +29,18 @@ has not accepted, and the app then runs as an ordinary web page, uninstalled.
 
 The worker never touches `/api` (the SSE stream included), `/ws`, `/docs`,
 `/redoc` or `/openapi.json`, and caches no API response — offline data is a
-separate task (I02). When a new build is deployed, a toast offers **Reload**;
-nothing reloads until it is tapped, so a half-filled visit form is never lost.
+separate task (I02).
+
+**Updates.** An open tab looks for a new build hourly and whenever it comes
+back to the foreground. When one is waiting, a toast offers **Reload**, and
+only the tab where Reload is tapped reloads. Any other open tab — the other
+frame of the simulator, say — shows "updated in another tab" and keeps its
+page until its user reloads, so a half-filled visit form is never lost.
+
+**Rolling back.** Removing the plugin does not uninstall the worker from
+phones that have it. Ship one build with `selfDestroying: true` in
+`src/lib/pwaConfig.ts` (the worker unregisters itself and clears its caches
+on the next visit), then remove the plugin.
 
 ---
 

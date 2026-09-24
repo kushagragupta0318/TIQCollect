@@ -27,7 +27,17 @@
 //
 //   Off in `vite dev` (devOptions.enabled false): the dev server, HMR and the
 //   /simulator iframes behave exactly as before; the SW exists only in a
-//   build.
+//   build. A `vite preview` must therefore run on its OWN port (4173, see
+//   frontend/README.md): on the dev port it would install a worker that dev
+//   never replaces. registerServiceWorker removes any it finds there.
+//
+//   ROLLBACK. Removing this plugin does not remove an installed worker: every
+//   phone that installed it keeps serving the cached shell. To withdraw it,
+//   ship ONE build with `selfDestroying: true` added to pwaOptions — the
+//   generated sw.js then unregisters itself and clears its caches on the next
+//   visit — and only after that remove the plugin. main.py answers a missing
+//   *.js with 404 (not index.html), so a stale worker's update check fails
+//   cleanly instead of "updating" to an HTML page.
 //
 //   Colours are the app's own, not a new palette: theme_color is index.html's
 //   <meta name="theme-color"> (the TransOrg blue beside the icon), and
@@ -78,10 +88,15 @@ export const pwaOptions: Partial<VitePWAOptions> = {
     ],
   },
   workbox: {
-    // The app shell: the built JS/CSS/HTML, plus the icons above (added by
-    // the plugin). Not the static dashboard in public/.
-    globPatterns: ["**/*.{js,css,html}"],
-    globIgnores: ["collection_dashboard/**"],
+    // The app shell: the built JS/CSS/HTML, the build's own images and fonts
+    // under assets/ (the TransOrg logo on the login page, 58 KiB — without it
+    // the offline shell showed a broken image), plus the icons above (added
+    // by the plugin). Not the static dashboard in public/, and not the three
+    // screenshots public/assets/ copies into assets/ (408 KiB, unhashed, no
+    // page shell needs them). Largest chunk measured 366 KiB, far under
+    // Workbox's 2 MiB per-file limit, so nothing is silently skipped.
+    globPatterns: ["**/*.{js,css,html}", "assets/**/*.{svg,png,webp,woff2}"],
+    globIgnores: ["collection_dashboard/**", "assets/Screenshot*"],
     navigateFallback: "index.html",
     navigateFallbackDenylist: SW_NAVIGATION_DENYLIST,
     // Deliberately empty: no API response is ever cached. Offline data is

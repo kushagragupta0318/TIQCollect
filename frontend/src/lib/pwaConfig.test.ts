@@ -98,8 +98,18 @@ describe("runtime caching", () => {
   });
 
   it("precaches the app shell and not the static dashboard beside it", () => {
-    expect(workbox.globPatterns).toEqual(["**/*.{js,css,html}"]);
+    expect(workbox.globPatterns).toEqual(["**/*.{js,css,html}", "assets/**/*.{svg,png,webp,woff2}"]);
     expect(workbox.globIgnores).toContain("collection_dashboard/**");
+  });
+
+  it("does not precache the screenshots public/assets copies into assets/", () => {
+    expect(workbox.globIgnores).toContain("assets/Screenshot*");
+  });
+
+  it("has not been shipped as a self-destroying worker by accident", () => {
+    // selfDestroying is the ROLLBACK switch (see pwaConfig.ts); a build that
+    // carries it uninstalls the app from every phone on its next visit.
+    expect(pwaOptions.selfDestroying).toBeUndefined();
   });
 });
 
