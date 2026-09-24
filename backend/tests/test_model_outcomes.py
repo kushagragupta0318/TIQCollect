@@ -82,7 +82,7 @@ def world(db):
                     language_preference="HINDI")
     loan = Loan(id=str(uuid.uuid4()), customer_id=cust.id,
                 loan_account_number="L1", loan_type=LoanType.PERSONAL,
-                bank_name="HDFC", branch_code="B1", sanctioned_amount=200000.0,
+                branch_code="B1", sanctioned_amount=200000.0,
                 disbursed_amount=200000.0, outstanding_principal=150000.0,
                 total_outstanding=170000.0, overdue_amount=24000.0,
                 emi_amount=8000.0, interest_rate=15.0, tenure_months=36,

@@ -11,16 +11,15 @@ from __future__ import annotations
 
 from datetime import date
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
-
-from app.core.database import Base
 from app.models.case import Case
 from app.models.customer import Customer
+from app.models.lending import BankFeedBatch, BankFeedRow
 from app.models.loan import Loan, dpd_bucket_for
+from app.models.placement import Placement
 from app.workers.tasks import demo_daily_feed as feed
-from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
+from tests._db import (  # noqa: F401
+    TEST_AGENCY_ID, TEST_BANK_ID, create_schema, drop_schema, make_engine, make_session_factory, test_id,
+)
 
 
 def _db():
@@ -29,8 +28,27 @@ def _db():
     return make_session_factory(autocommit=False, autoflush=False, bind=engine)()
 
 
+def _contract(db, *, start=date(2026, 4, 1), end=date(2027, 3, 31), status="ACTIVE", cap=None):
+    """The default test agency's contract with the default test bank."""
+    from app.models.tenancy import AgencyContract
+    c = AgencyContract(bank_id=TEST_BANK_ID, agency_id=TEST_AGENCY_ID, contract_no="MTB/FCA/2026-27/014",
+                       start_date=start, end_date=end, status=status, max_placed_cases=cap,
+                       sla_first_visit_days=5)
+    db.add(c)
+    db.commit()
+    return c
+
+
+def _ready(db):
+    """A placeable world: agents with bases, and a contract in force."""
+    bases = _roster(db)
+    _contract(db)
+    return bases
+
+
 def test_seed_day_creates_a_pool_batch_with_consistent_buckets():
     db = _db()
+    _ready(db)
     # Runs the real thing, rescore included: the point is that the whole
     # morning path executes, not that any one step is mocked out of it.
     created = feed._seed_day(db, date(2026, 9, 18))
@@ -42,13 +60,48 @@ def test_seed_day_creates_a_pool_batch_with_consistent_buckets():
         assert loan.dpd_bucket == dpd_bucket_for(loan.dpd)
 
 
+def test_every_new_case_stands_on_a_placement_of_its_own_agency():
+    """2026-09-24 (v2): a case is an agency's work item on a placement the
+    bank made — services/placement_service.py opens it, never the feed."""
+    db = _db()
+    _ready(db)
+    created = feed._seed_day(db, date(2026, 9, 18))
+    cases = db.query(Case).all()
+    assert len(cases) == created > 0
+    placements = {p.id: p for p in db.query(Placement).all()}
+    for c in cases:
+        p = placements[c.placement_id]
+        assert (p.agency_id, p.bank_id, p.loan_id) == (c.agency_id, c.bank_id, c.loan_id)
+        assert p.source == "FEED" and p.status == "ACTIVE"
+        assert p.sla_first_visit_due == date(2026, 9, 23)          # placed_on + the contract's 5 days
+        assert p.dpd_at_placement == db.get(Loan, c.loan_id).dpd
+
+
+def test_without_a_contract_in_force_every_row_is_quarantined_and_no_case_is_opened():
+    """Never an unowned case: the loan (a bank fact) lands, the case does not,
+    and the row waits in quarantine with the reason."""
+    db = _db()
+    _roster(db)
+    _contract(db, start=date(2025, 4, 1), end=date(2026, 3, 31))     # expired before the feed day
+    created = feed._seed_day(db, date(2026, 9, 18))
+    assert created == 0
+    assert db.query(Case).count() == 0
+    loans = db.query(Loan).count()
+    held = db.query(BankFeedRow).all()
+    assert loans > 0 and len(held) == loans
+    assert {r.status for r in held} == {"QUARANTINED"}
+    assert {e["reason"] for r in held for e in r.dq_errors} == {"NO_CONTRACT_IN_FORCE"}
+    batch = db.query(BankFeedBatch).one()
+    assert (batch.status, batch.rows_quarantined, batch.received_via) == ("PARTIAL", loans, "DEMO")
+
+
 def test_seed_day_is_idempotent_per_calendar_day():
     db = _db()
+    _ready(db)
     first = feed._seed_day(db, date(2026, 9, 18))
     assert first > 0
     assert feed._seed_day(db, date(2026, 9, 18)) == 0
     assert db.query(Case).count() == first
-
 
 def test_core_hands_seed_day_every_name_it_uses():
     """Structural: every name `_seed_day` unpacks from `_core()` is returned by
@@ -86,7 +139,7 @@ def _roster(db):
         u = User(email=f"{code}@t.in", phone="9" + code.ljust(9, "0"), full_name=code, hashed_password="x",
                  role=UserRole.FIELD_AGENT, is_active=True, is_verified=True)
         db.add(u); db.flush()
-        a = Agent(user_id=u.id, employee_code=code, id_card_number=code + "-ID", agency_id="AG1", base_latitude=la,
+        a = Agent(user_id=u.id, employee_code=code, id_card_number=code + "-ID", base_latitude=la,
                   base_longitude=lo, tier=AgentTier.TIER_2, specialization=AgentSpecialization.BOTH,
                   status=AgentStatus.ON_DUTY, territory=terr, languages_spoken=["HINDI"], ranking_score=50.0)
         db.add(a); out.append((la, lo, terr))
@@ -96,7 +149,7 @@ def _roster(db):
 
 def test_new_cases_are_spread_across_every_agents_territory():
     db = _db()
-    bases = _roster(db)
+    bases = _ready(db)
     created = feed._seed_day(db, date(2026, 9, 21))
     custs = db.query(Customer).filter(Customer.customer_ref.like("DAILY20260921%")).all()
     assert len(custs) == created
@@ -115,9 +168,14 @@ def test_new_cases_are_spread_across_every_agents_territory():
     assert all(c.state == "Uttar Pradesh" for c in noida) and {c.pincode for c in noida} <= {"201301", "201310"}
 
 
-def test_with_no_agent_bases_the_feed_falls_back_to_the_old_gurugram_box():
+def test_with_no_agent_bases_the_feed_creates_nothing():
+    """2026-09-24 — this test used to be `..._falls_back_to_the_old_gurugram_box`
+    and asserted every borrower landed in a fixed Gurugram box when no agent
+    had a base. In v2 a new case belongs to the agency whose territory it
+    lands in, and an agency is known here only through its agents: with none,
+    the box would have produced cases nobody owns. The feed now logs
+    `demo_daily_feed.skip_no_agents` and creates nothing."""
     db = _db()
-    created = feed._seed_day(db, date(2026, 9, 21))
-    custs = db.query(Customer).filter(Customer.customer_ref.like("DAILY20260921%")).all()
-    assert len(custs) == created and {c.city for c in custs} == {"Gurugram"}
-    assert all(feed._GGN_LAT[0] <= c.latitude <= feed._GGN_LAT[1] for c in custs)
+    _contract(db)
+    assert feed._seed_day(db, date(2026, 9, 21)) == 0
+    assert db.query(Customer).count() == 0 and db.query(Case).count() == 0

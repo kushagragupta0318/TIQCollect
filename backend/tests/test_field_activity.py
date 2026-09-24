@@ -203,7 +203,7 @@ def book():
                     risk_category=RiskCategory.MEDIUM)
     db.add(cust); db.flush()
     loan = Loan(loan_account_number="FAL1", customer_id=cust.id, loan_type=LoanType.PERSONAL,
-                bank_name="B", branch_code="BR", sanctioned_amount=1.0, disbursed_amount=1.0,
+                branch_code="BR", sanctioned_amount=1.0, disbursed_amount=1.0,
                 outstanding_principal=1.0, total_outstanding=1.0, overdue_amount=1.0, emi_amount=1.0,
                 disbursement_date="2025-01-01", maturity_date="2027-01-01", dpd=45,
                 dpd_bucket=DPDBucket.BUCKET_2, status=LoanStatus.ACTIVE, interest_rate=1.0, penal_charges=0.0)

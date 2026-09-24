@@ -157,7 +157,7 @@ def db():
 def _seed_eb(db, payments: list[tuple[str, float, date]]):
     db.add(Loan(
         id="loan-1", loan_account_number="LN1", customer_id="cust-1",
-        loan_type=LoanType.PERSONAL, bank_name="B", branch_code="BR",
+        loan_type=LoanType.PERSONAL, branch_code="BR",
         sanctioned_amount=1e5, disbursed_amount=1e5, outstanding_principal=8e4,
         total_outstanding=9e4, overdue_amount=1e4, emi_amount=5e3,
         disbursement_date="2025-01-01", maturity_date="2028-01-01",

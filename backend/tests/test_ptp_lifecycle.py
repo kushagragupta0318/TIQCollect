@@ -69,7 +69,7 @@ class World:
                              risk_category=RiskCategory.MEDIUM, cibil_score=650)
         db.add(self.cust); db.flush()
         self.loan = Loan(loan_account_number="L1", customer_id=self.cust.id, loan_type=LoanType.PERSONAL,
-                         bank_name="B", branch_code="BR", sanctioned_amount=100000.0, disbursed_amount=100000.0,
+                         branch_code="BR", sanctioned_amount=100000.0, disbursed_amount=100000.0,
                          outstanding_principal=50000.0, total_outstanding=52000.0, overdue_amount=12000.0,
                          emi_amount=4000.0, disbursement_date="2025-01-01", maturity_date="2027-01-01", dpd=45,
                          dpd_bucket=DPDBucket.BUCKET_2, status=LoanStatus.ACTIVE, interest_rate=12.0, penal_charges=0.0)

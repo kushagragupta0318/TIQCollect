@@ -254,7 +254,7 @@ def _borrower(db, ref, *, lat=28.6315, lon=77.2167, **flags):
     db.add(c)
     db.flush()
     loan = Loan(id=_uid(), customer_id=c.id, loan_account_number="L" + ref,
-                loan_type=LoanType.PERSONAL, bank_name="HDFC", branch_code="DL01",
+                loan_type=LoanType.PERSONAL, branch_code="DL01",
                 sanctioned_amount=100000.0, disbursed_amount=100000.0,
                 outstanding_principal=50000.0, total_outstanding=50000.0,
                 overdue_amount=10000.0, emi_amount=5000.0, interest_rate=12.0,

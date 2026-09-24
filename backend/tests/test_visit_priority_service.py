@@ -57,7 +57,7 @@ def _customer(db, i, *, dnc=False, needs_female=False):
 
 def _loan(db, i, *, dpd, outstanding):
     ln = Loan(id=f"ln{i}", customer_id=f"cu{i}", loan_account_number=f"LN{i:06d}",
-              loan_type=LoanType.PERSONAL, bank_name="HDFC", branch_code="BR1",
+              loan_type=LoanType.PERSONAL, branch_code="BR1",
               sanctioned_amount=outstanding * 1.4, disbursed_amount=outstanding * 1.3,
               outstanding_principal=outstanding * 0.9,
               outstanding_interest=outstanding * 0.1, penal_charges=500.0,

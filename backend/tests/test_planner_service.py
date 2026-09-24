@@ -129,7 +129,7 @@ def test_data(db_session):
     db_session.add(c1)
     l1 = Loan(
         id=str(uuid.uuid4()), customer_id=c1.id, loan_account_number="LN001",
-        loan_type=LoanType.AUTO, bank_name="HDFC Bank", branch_code="DL01",
+        loan_type=LoanType.AUTO, branch_code="DL01",
         sanctioned_amount=500000.0, disbursed_amount=500000.0, outstanding_principal=250000.0,
         total_outstanding=250000.0, overdue_amount=50000.0, emi_amount=15000.0, interest_rate=12.5,
         disbursement_date="2022-01-01", maturity_date="2027-01-01",
@@ -154,7 +154,7 @@ def test_data(db_session):
     db_session.add(c2)
     l2 = Loan(
         id=str(uuid.uuid4()), customer_id=c2.id, loan_account_number="LN002",
-        loan_type=LoanType.PERSONAL, bank_name="ICICI Bank", branch_code="GG01",
+        loan_type=LoanType.PERSONAL, branch_code="GG01",
         sanctioned_amount=200000.0, disbursed_amount=200000.0, outstanding_principal=120000.0,
         total_outstanding=120000.0, overdue_amount=35000.0, emi_amount=8000.0, interest_rate=14.0,
         disbursement_date="2023-01-01", maturity_date="2026-01-01",
@@ -178,7 +178,7 @@ def test_data(db_session):
     db_session.add(c3)
     l3 = Loan(
         id=str(uuid.uuid4()), customer_id=c3.id, loan_account_number="LN003",
-        loan_type=LoanType.PERSONAL, bank_name="Axis Bank", branch_code="NO01",
+        loan_type=LoanType.PERSONAL, branch_code="NO01",
         sanctioned_amount=100000.0, disbursed_amount=100000.0, outstanding_principal=80000.0,
         total_outstanding=80000.0, overdue_amount=25000.0, emi_amount=5000.0, interest_rate=15.0,
         disbursement_date="2023-06-01", maturity_date="2025-06-01",

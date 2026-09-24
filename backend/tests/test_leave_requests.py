@@ -80,7 +80,7 @@ class World:
                                  aadhaar_masked="X", phone_primary="9000000001", address_line1="1", city="Delhi", state="DL",
                                  pincode="110001", latitude=28.6, longitude=77.2, risk_category=RiskCategory.MEDIUM)
             self.db.add(self.cust); self.db.flush()
-            self.loan = Loan(loan_account_number="LVL", customer_id=self.cust.id, loan_type=LoanType.PERSONAL, bank_name="B",
+            self.loan = Loan(loan_account_number="LVL", customer_id=self.cust.id, loan_type=LoanType.PERSONAL,
                              branch_code="BR", sanctioned_amount=1.0, disbursed_amount=1.0, outstanding_principal=1.0,
                              total_outstanding=1.0, overdue_amount=1.0, emi_amount=1.0, disbursement_date="2025-01-01",
                              maturity_date="2027-01-01", dpd=45, dpd_bucket=DPDBucket.BUCKET_2, status=LoanStatus.ACTIVE,

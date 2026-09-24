@@ -98,7 +98,7 @@ def book(db):
     )
     loan = Loan(
         id=str(uuid.uuid4()), customer_id=cust.id, loan_account_number="LNML1",
-        loan_type=LoanType.PERSONAL, bank_name="HDFC Bank", branch_code="GG01",
+        loan_type=LoanType.PERSONAL, branch_code="GG01",
         sanctioned_amount=250000.0, disbursed_amount=250000.0,
         outstanding_principal=180000.0, total_outstanding=205000.0,
         overdue_amount=24000.0, penal_charges=1200.0, emi_amount=8000.0,

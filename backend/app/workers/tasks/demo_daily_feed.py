@@ -165,11 +165,20 @@ def _territory_anchors(db) -> list[tuple[float, float, str, str, str]]:
     return [(float(la), float(lo), t, b, a) for la, lo, t, b, a in rows]
 
 
-def _active_contracts(db) -> dict[str, str]:
-    """agency_id → its ACTIVE contract id (the placement's contract)."""
-    from app.models.tenancy import AgencyContract
-    rows = db.query(AgencyContract.agency_id, AgencyContract.id).filter(AgencyContract.status == "ACTIVE").all()
-    return {a: c for a, c in rows}
+def _demo_batch(db, bank_id: str, day: date, batches: dict):
+    """One DEMO feed batch per (bank, day): this feed stands in for the bank's
+    file, so a row it cannot place is quarantined exactly as a real one is."""
+    import hashlib
+    from app.models.lending import BankFeedBatch
+    if bank_id not in batches:
+        tag = f"demo_daily_feed:{bank_id}:{day.isoformat()}"
+        batch = BankFeedBatch(bank_id=bank_id, feed_type="DAILY_BOOK", business_date=day,
+                              file_name=f"demo-feed-{day:%Y%m%d}.csv", received_via="DEMO",
+                              file_sha256=hashlib.sha256(tag.encode()).hexdigest(), status="RECEIVED")
+        db.add(batch)
+        db.flush()
+        batches[bank_id] = batch
+    return batches[bank_id]
 
 _FIRST = ["Amit", "Pooja", "Sanjay", "Neha", "Rahul", "Divya", "Manish", "Kiran",
           "Vijay", "Anjali", "Deepak", "Sneha", "Rohan", "Preeti", "Nikhil"]
@@ -211,8 +220,11 @@ def _seed_day(db, day: date) -> int:
         # Gurugram box with no owner).
         logger.info("demo_daily_feed.skip_no_agents", day=str(day))
         return 0
-    contracts = _active_contracts(db)
-    from app.models.placement import Placement
+    from app.services.placement_service import PlacementRefused, PlacementService
+    placements = PlacementService(db)
+    batches: dict = {}
+    held_by_bank: dict[str, int] = {}
+    quarantined = 0
     created = 0
     new_loan_ids: list[str] = []
     for i in range(n):
@@ -293,36 +305,34 @@ def _seed_day(db, day: date) -> int:
         db.flush()
         new_loan_ids.append(loan.id)
 
-        # The bank places the loan with the agency whose territory it lands in
-        # (a FEED placement against that agency's active contract); the case is
-        # that agency's work item on it.
-        placement_id = None
-        if agency_id in contracts:
-            placement = Placement(
-                bank_id=bank_id, agency_id=agency_id, loan_id=loan.id, contract_id=contracts[agency_id],
-                source="FEED", status="ACTIVE", placed_on=day,
-                dpd_at_placement=dpd, dpd_bucket_at_placement=dpd_bucket_for(dpd),
-                exposure_at_placement=loan.total_outstanding, overdue_at_placement=loan.overdue_amount,
-            )
-            db.add(placement)
-            db.flush()
-            placement_id = placement.id
-
-        case = Case(
-            id=_uid(), bank_id=bank_id, agency_id=agency_id, placement_id=placement_id,
-            case_number=f"{ref_prefix}C{i:02d}",
-            customer_id=cust.id, loan_id=loan.id,
-            agent_id=None, status=CaseStatus.UNASSIGNED,
-            priority=priority,
-            target_amount=emi, collected_amount=0.0,
-            allocation_date=day,
+        # The bank places the loan with the agency whose territory it lands in;
+        # the case is that agency's work item on the placement. A loan the
+        # agency cannot take (no contract in force, product not authorised,
+        # contract full) is quarantined, never turned into an unowned case —
+        # services/placement_service.py is the one place that rule lives.
+        try:
+            placement = placements.place_new_loan(loan, agency_id=agency_id, on=day, source="FEED")
+        except PlacementRefused as refused:
+            placements.quarantine(
+                _demo_batch(db, bank_id, day, batches), row_no=i + 1,
+                raw={"loan_account_number": loan.loan_account_number, "customer_ref": cust.customer_ref,
+                     "case_number": f"{ref_prefix}C{i:02d}", "agency_id": agency_id},
+                reason=refused.reason, detail=str(refused), loan_id=loan.id)
+            quarantined += 1
+            held_by_bank[bank_id] = held_by_bank.get(bank_id, 0) + 1
+            continue
+        placements.open_case(
+            placement, loan, case_number=f"{ref_prefix}C{i:02d}", target_amount=emi,
+            id=_uid(), priority=priority, allocation_date=day,
             allocation_score=float({"CRITICAL": 95, "HIGH": 75, "MEDIUM": 45, "LOW": 20}[priority.value]),
             is_ml_allocated=False, visit_count=0, max_visits_allowed=5,
             collection_stage="NPA_RECOVERY" if dpd > 90 else "FIELD",
         )
-        db.add(case)
         created += 1
 
+    for bank_id, batch in batches.items():
+        batch.status = "PARTIAL"
+        batch.rows_quarantined = held_by_bank.get(bank_id, 0)
     db.commit()
 
     # Score the accounts this batch created, the same way ingest_daily.py does
@@ -349,7 +359,7 @@ def _seed_day(db, day: date) -> int:
                     customers_written=scored["customers_written"],
                     write_gate_open=scored["write_risk_score_enabled"])
 
-    logger.info("demo_daily_feed.created", day=str(day), new_cases=created)
+    logger.info("demo_daily_feed.created", day=str(day), new_cases=created, quarantined=quarantined)
     return created
 
 

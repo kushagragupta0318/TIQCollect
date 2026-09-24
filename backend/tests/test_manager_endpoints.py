@@ -116,7 +116,7 @@ def seeded():
 
     loan = Loan(
         loan_account_number="LN1", customer_id=cust.id, loan_type=LoanType.PERSONAL,
-        bank_name="Test Bank", branch_code="BR1", sanctioned_amount=100000.0,
+        branch_code="BR1", sanctioned_amount=100000.0,
         disbursed_amount=100000.0, outstanding_principal=80000.0,
         total_outstanding=90000.0, overdue_amount=5000.0, emi_amount=4000.0,
         disbursement_date="2025-01-01", maturity_date="2027-01-01",

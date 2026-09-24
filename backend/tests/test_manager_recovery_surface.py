@@ -45,7 +45,7 @@ def _code_only(path: pathlib.Path) -> str:
 def loan(**over):
     base = dict(
         id="loan-1", loan_account_number="LN0001", loan_account_masked="****0001",
-        loan_type="HOME", bank_name="HDFC Bank", sanctioned_amount=2_000_000.0,
+        loan_type="HOME", bank_name="Meridian Trust Bank", sanctioned_amount=2_000_000.0,
         outstanding_principal=1_200_000.0, outstanding_interest=40_000.0,
         penal_charges=5_842.0, total_outstanding=1_298_335.0,
         overdue_amount=118_103.0, emi_amount=18_400.0, tenure_months=240,

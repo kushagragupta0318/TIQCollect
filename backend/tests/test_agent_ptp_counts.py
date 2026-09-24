@@ -93,7 +93,7 @@ def world(db):
     db.flush()
     loan = Loan(
         id=_uid(), customer_id=cust.id, loan_account_number="L1",
-        loan_type=LoanType.PERSONAL, bank_name="HDFC Bank", branch_code="DL01",
+        loan_type=LoanType.PERSONAL, branch_code="DL01",
         sanctioned_amount=500000.0, disbursed_amount=500000.0,
         outstanding_principal=250000.0, total_outstanding=250000.0,
         overdue_amount=50000.0, emi_amount=15000.0, interest_rate=12.5,

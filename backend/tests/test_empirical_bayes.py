@@ -58,7 +58,7 @@ def make_loan(db, loan_id: str, loan_type=LoanType.PERSONAL, bucket=DPDBucket.BU
     n = _next()
     loan = Loan(
         id=loan_id, loan_account_number=f"LN{n:06d}", customer_id="cust-1",
-        loan_type=loan_type, bank_name="Test Bank", branch_code="BR01",
+        loan_type=loan_type, branch_code="BR01",
         sanctioned_amount=100000.0, disbursed_amount=100000.0,
         outstanding_principal=80000.0, total_outstanding=90000.0,
         overdue_amount=10000.0, emi_amount=5000.0,

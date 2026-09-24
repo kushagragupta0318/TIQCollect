@@ -287,7 +287,7 @@ def test_the_adapter_supplies_every_feature_v2_selected(meta):
                     latitude=28.4, longitude=77.0, customer_segment="SALARIED",
                     cibil_score=640, is_hostile=True, fraud_flag=False)
     loan = Loan(id=str(uuid.uuid4()), customer_id=cust.id, loan_account_number="L1",
-                loan_type=LoanType.PERSONAL, bank_name="HDFC", branch_code="BR01",
+                loan_type=LoanType.PERSONAL, branch_code="BR01",
                 sanctioned_amount=250000.0, disbursed_amount=250000.0,
                 outstanding_principal=180000.0, total_outstanding=205000.0,
                 overdue_amount=24000.0, penal_charges=1200.0, emi_amount=8000.0,

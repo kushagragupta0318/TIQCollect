@@ -100,7 +100,7 @@ def world(db):
                     language_preference="HINDI")
     loan = Loan(id=str(uuid.uuid4()), customer_id=cust.id,
                 loan_account_number="L1", loan_type=LoanType.PERSONAL,
-                bank_name="HDFC", branch_code="B1", sanctioned_amount=200000.0,
+                branch_code="B1", sanctioned_amount=200000.0,
                 disbursed_amount=200000.0, outstanding_principal=150000.0,
                 total_outstanding=170000.0, overdue_amount=OVERDUE,
                 emi_amount=EMI, interest_rate=15.0, tenure_months=36,
@@ -664,7 +664,7 @@ def test_only_one_module_writes_the_outcome_label():
 def _second_loan(db, world, lan: str, case_no: str, *, with_sibling=False):
     loan = Loan(id=str(uuid.uuid4()), customer_id=world["customer"].id,
                 loan_account_number=lan, loan_type=LoanType.PERSONAL,
-                bank_name="HDFC", branch_code="B1", sanctioned_amount=200000.0,
+                branch_code="B1", sanctioned_amount=200000.0,
                 disbursed_amount=200000.0, outstanding_principal=150000.0,
                 total_outstanding=170000.0, overdue_amount=OVERDUE,
                 emi_amount=EMI, interest_rate=15.0, tenure_months=36,
