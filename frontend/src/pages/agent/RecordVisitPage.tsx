@@ -121,6 +121,7 @@ import type { PaymentReceiptData } from "@/components/ui/PaymentReceiptModal";
 import { haversineM } from "@/lib/geo";
 import { geo, geoAvailable } from "@/lib/deviceLocation";
 import { errorDetail } from "@/lib/apiError";
+import { VisitExtractionPanel } from "./VisitExtractionPanel";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -2175,6 +2176,16 @@ export default function RecordVisitPage() {
                   onAudioRemove={() => upd({ borrowerRecordingBlob: null, borrowerRecordingDuration: 0 })}
                 />
               </div>
+
+              {/* H14 (2026-09-24): suggested outcome / reason / promise from the two notes above */}
+              <VisitExtractionPanel
+                caseId={caseId ?? ""}
+                transcript={[form.notes, form.customerStatement].filter((t) => t.trim()).join("\n")}
+                form={{ outcome: form.outcome, defaultReason: form.defaultReason, ptpAmount: form.ptpAmount, ptpDate: form.ptpDate }}
+                outcomes={BORROWER_OUTCOMES}
+                reasons={DEFAULT_REASONS}
+                onApply={upd}
+              />
 
               {/* Signature */}
               <div className="mt-4">

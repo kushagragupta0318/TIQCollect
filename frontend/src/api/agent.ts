@@ -23,6 +23,7 @@
 // ──────────────────────────────────────────────────────────────────────────
 import api from "./axios";
 import type { Case } from "@/types";
+import type { VisitExtraction } from "@/pages/agent/visitExtraction";
 
 export async function getHomeSummary(): Promise<{
   cases_today: number;
@@ -144,6 +145,15 @@ export async function transcribeAudio(blob: Blob): Promise<string> {
     timeout: 60000,
   });
   return data.text as string;
+}
+
+// 2026-09-24 — H14. Transcribed notes → SUGGESTED form values, each with the
+// words it came from. Writes nothing server-side; see visitExtraction.ts for
+// what the page does with them. The LLM leg can take a few seconds, and the
+// server falls back to keyword rules itself, so this never needs a retry.
+export async function extractVisitFields(caseId: string, transcript: string): Promise<VisitExtraction> {
+  const { data } = await api.post(`/agent/cases/${caseId}/visit-extraction`, { transcript }, { timeout: 60000 });
+  return data as VisitExtraction;
 }
 
 export async function recordVisit(caseId: string, payload: {

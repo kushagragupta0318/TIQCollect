@@ -135,6 +135,8 @@ from app.services.notification_service import NotificationService
 from app.services.media_service import MediaService
 from app.services.payment_service import PaymentService
 from app.services.otp_service import OtpService
+from app.services import visit_report_extraction
+from app.schemas.visit_extraction import VisitExtractionRequest, VisitExtractionResponse
 from app.schemas.agent import (
     AvailabilityCalendarResponse,
     BeatResponse,
@@ -855,6 +857,31 @@ def transcribe_audio(current_user: AgentOnly, db: DbSession, audio: UploadFile =
         raise HTTPException(status_code=502, detail="Transcription failed") from exc
 
     return {"text": text}
+
+
+# ---------------------------------------------------------------------------
+# POST /agent/cases/{case_id}/visit-extraction  — 2026-09-24, H14
+# Voice note transcript → SUGGESTED form values (outcome, who was met, reason,
+# PTP amount and date) for the agent to confirm. Writes nothing. Logic and
+# every validation rule: services/visit_report_extraction.py.
+# ---------------------------------------------------------------------------
+
+@router.post("/cases/{case_id}/visit-extraction", response_model=VisitExtractionResponse)
+def extract_visit_fields(case_id: str, body: VisitExtractionRequest, current_user: AgentOnly, db: DbSession):
+    # TODO(A02): take RequestContext once it exists; scoped today through the
+    # same case-access check every other agent case route uses.
+    # TODO(B02): swap for the shared id validator in core once it lands. Ids
+    # become native UUIDs, and on Postgres a malformed one would be a DataError
+    # (a 500) rather than the 404 an unknown case gets.
+    try:
+        uuid.UUID(case_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Case not found")
+    agent = _get_agent_or_404(current_user, db)
+    case = _get_accessible_case_or_404(db, agent, case_id)
+    # The same figure PaymentService.set_ptp clamps a promise to.
+    remaining = max(0.0, (case.target_amount or 0.0) - (case.collected_amount or 0.0))
+    return visit_report_extraction.extract(body.transcript, remaining_amount=remaining).as_dict()
 
 
 # ---------------------------------------------------------------------------
