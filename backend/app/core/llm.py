@@ -37,17 +37,19 @@
 #     schema rides in the system prompt. Opt-in — without it the groq request
 #     is byte-identical, pinned by test_existing_json_mode_call_sends_exactly_
 #     what_it_did.
-#   - Four new statuses: INVALID_REQUEST (an Anthropic 400 is a parameter the
+#   - Three new statuses: INVALID_REQUEST (an Anthropic 400 is a parameter the
 #     model rejects, not the Groq JSON case), BILLING (402), REFUSED
-#     (stop_reason "refusal").
+#     (stop_reason "refusal"). (This read "Four new statuses" over a list of
+#     three until the audit of 9204955.)
 #   - CHANGED on the groq/openai path, visibly: a reply that hit max_tokens
 #     with NO text (finish_reason "length", content "") USED TO return OK with
 #     an empty string, so ai_generated read True over nothing — the monthly
 #     report endpoint then showed its computed fallback text while reporting
 #     "ai_generated": true. It is now BAD_RESPONSE. Every caller gates on
-#     ai_generated (agent.py visit strategy, manager.py briefing / insight /
-#     monthly report, ai_report_service, case_service rank reasons), so all six
-#     take their labelled fallback exactly as for any other failure.
+#     ai_generated, so all six take their fallback as for any other failure;
+#     four of them also label it (agent.py visit strategy, manager.py briefing /
+#     insight / monthly report), while ai_report_service and case_service rank
+#     reasons gate without labelling anything.
 #
 #   Found on the way, and fixed: the openai SDK retries 429/5xx itself
 #   (DEFAULT_MAX_RETRIES = 2 in 1.57.4, verified in the fieldops-dev image)
@@ -57,7 +59,47 @@
 #   never saw, never counted, and never applied its Retry-After handling to.
 #   Every SDK client is now built with max_retries=0: 3 requests, 3 log lines.
 #   The anthropic SDK (1.8.0) has the same default and measured the same, 9
-#   before and 3 after.
+#   before and 3 after. Pinned by test_a_persistent_429_costs_exactly_the_
+#   seams_own_attempts, which runs the PRODUCTION constructors' kwargs.
+#
+# 2026-09-24 — Fix-up after the coordinator's audit of 9204955. Each of these
+#   was a real defect in that commit:
+#   - OUR bugs read as THEIR outage. Request building and reply parsing ran
+#     inside the retry loop's `except Exception`, and anything without a
+#     status_code classified as UPSTREAM_ERROR — retryable AND a fallback
+#     trigger. A KeyError on a malformed history, ToolCall(**tc) with an
+#     unknown key, or the SDK's TypeError on a bad keyword (exactly the
+#     `temperature` TypeError found on the way) was retried three times with
+#     sleeps and then quietly served by Groq. Now three stages: BUILD (outside
+#     the loop; any failure is INVALID_REQUEST — no retry, no fallback), SEND
+#     (the only thing retried; a TypeError from the SDK call and a 413 are
+#     INVALID_REQUEST), PARSE (outside the loop; failure is BAD_RESPONSE).
+#   - A missing SDK read as MODEL_NOT_FOUND ("notfound" matched
+#     "modulenotfounderror") on exactly the state the user's un-rebuilt stack
+#     is in. Now NOT_CONFIGURED, "SDK not installed", and health() says so.
+#   - chat() reported a truncated tool call as runnable: a max_tokens stop
+#     mid tool_use returned partial input with wants_tools True. wants_tools
+#     now requires stop_reason "tool_use"; any max_tokens stop is BAD_RESPONSE.
+#   - LLM_PROVIDER="none" stopped being a kill switch once a fallback was set.
+#     An explicit "none" (or any non-provider value) now never falls back.
+#   - Fence-stripping of JSON had leaked onto the groq path — a fenced reply
+#     that was BAD_RESPONSE had become OK. Now Anthropic-only; groq unchanged.
+#     And llm.ok regained the attempt= field it had lost.
+#   - chat() gets its own LLM_AGENT_TIMEOUT_SECONDS: the 20 s sized for short
+#     prompts would time a 16k-token Sonnet 5 turn out and — TIMEOUT being a
+#     fallback trigger — switch provider mid agent loop.
+#   - When both providers fail, the PRIMARY's failure is returned, with the
+#     fallback's attached as fallback_failure, instead of the fallback's
+#     failure hiding the one that mattered.
+#   - complete() could raise: json.dumps(json_schema) for the cache key ran
+#     outside any guard. A non-serialisable schema is now INVALID_REQUEST.
+#   - CHANGED on the groq path: finish_reason "content_filter" in complete()
+#     was OK (often over empty text); it is REFUSED, as it already was in chat().
+#   - A fallback-served success counts as FALLBACK_OK, not OK, so the counters
+#     say which provider answered; health()'s `usable` is true while a fallback
+#     serves (primary_usable / unusable_reason say why the primary does not).
+#   - use_fake() swaps in an in-process store, so tests run in the api
+#     container no longer write counters into the real Redis.
 # ───────────────────────────────────────────────────────────────────────────
 """One LLM entry point for the whole product.
 
@@ -67,8 +109,8 @@ Providers, selected via settings.LLM_PROVIDER:
   - "openai"              — the original hosted path. Needs OPENAI_API_KEY.
   - "anthropic"           — Claude, through the `anthropic` SDK. Needs
                             ANTHROPIC_API_KEY.
-  - "none"                — never calls out; every request reports
-                            NOT_CONFIGURED. Useful for demos and tests.
+  - "none"                — never calls out, fallback included; every request
+                            reports NOT_CONFIGURED. Useful for demos and tests.
 
 Two calls:
   - complete(prompt, ...) -> LLMResult   single-shot text or JSON, cached.
@@ -88,6 +130,7 @@ Neutral message format for chat() — the same dicts work for every provider:
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import time
 from contextlib import contextmanager
@@ -103,16 +146,20 @@ logger = structlog.get_logger()
 # ── Outcomes ─────────────────────────────────────────────────────────────────
 OK = "OK"
 CACHED = "CACHED"
-NOT_CONFIGURED = "NOT_CONFIGURED"   # no key, or provider is "none"
+NOT_CONFIGURED = "NOT_CONFIGURED"   # no key, no SDK, or provider is "none"
 AUTH_FAILED = "AUTH_FAILED"         # 401/403 — wrong or revoked key
 BILLING = "BILLING"                 # 402 — the key is fine, the account cannot pay
 RATE_LIMITED = "RATE_LIMITED"       # 429 — survived the retries
 MODEL_NOT_FOUND = "MODEL_NOT_FOUND"  # 404 — LLM_MODEL is wrong or retired
 TIMEOUT = "TIMEOUT"
-BAD_RESPONSE = "BAD_RESPONSE"       # answered, but not the JSON we asked for
-INVALID_REQUEST = "INVALID_REQUEST"  # Anthropic 400 — a parameter this model rejects
-REFUSED = "REFUSED"                 # the model declined (stop_reason "refusal")
-UPSTREAM_ERROR = "UPSTREAM_ERROR"   # anything else
+BAD_RESPONSE = "BAD_RESPONSE"       # answered, but not in a usable shape
+INVALID_REQUEST = "INVALID_REQUEST"  # our request was wrong (Anthropic 400, 413, bad kwarg, bad history)
+REFUSED = "REFUSED"                 # the model declined (refusal / content_filter)
+UPSTREAM_ERROR = "UPSTREAM_ERROR"   # anything else the provider did
+
+# Counter-only label: a success served by LLM_FALLBACK_PROVIDER. The result's
+# own status is still OK; the counter says the primary did not answer it.
+FALLBACK_OK = "FALLBACK_OK"
 
 # Retrying cannot fix a bad key or an unknown model, and retrying a timeout on a
 # request a user is waiting for just doubles the wait.
@@ -125,6 +172,7 @@ _FALLBACK_ON = {NOT_CONFIGURED, AUTH_FAILED, BILLING, RATE_LIMITED,
                 MODEL_NOT_FOUND, TIMEOUT, UPSTREAM_ERROR}
 
 _PROVIDERS = ("groq", "openai", "anthropic")
+_SDK_MODULE = {"groq": "openai", "openai": "openai", "anthropic": "anthropic"}
 
 
 @dataclass
@@ -141,9 +189,12 @@ class LLMResult:
     # Normalised across providers: end_turn | tool_use | max_tokens | refusal.
     # Empty when the provider did not say (or on a cache hit).
     stop_reason: str = ""
-    # Set when the answer came from LLM_FALLBACK_PROVIDER: the provider that
+    # Set when this result came from LLM_FALLBACK_PROVIDER: the provider that
     # failed first, so "the AI works" is never mistaken for "the primary works".
     fallback_from: str | None = None
+    # Set on the PRIMARY's failure when the fallback was tried and failed too:
+    # {"provider", "status", "failure_reason"} of the fallback's attempt.
+    fallback_failure: dict[str, Any] | None = None
 
     @property
     def ai_generated(self) -> bool:
@@ -199,6 +250,7 @@ class ChatResult:
     usage: Usage = field(default_factory=Usage)
     failure_reason: str | None = None
     fallback_from: str | None = None
+    fallback_failure: dict[str, Any] | None = None
     # The provider's own content blocks, as plain dicts. Anthropic requires
     # thinking blocks to be sent back unchanged on the next turn of a tool loop;
     # a text + tool_calls reconstruction would silently drop them.
@@ -210,7 +262,10 @@ class ChatResult:
 
     @property
     def wants_tools(self) -> bool:
-        return self.status == OK and bool(self.tool_calls)
+        """The model finished a turn by asking for tools. A max_tokens stop is
+        never this, even with tool_use blocks present — their input may be cut
+        off, and running a tool on a truncated argument is worse than failing."""
+        return self.status == OK and self.stop_reason == "tool_use" and bool(self.tool_calls)
 
     def assistant_message(self) -> dict[str, Any]:
         """This turn as a neutral assistant message, ready to append."""
@@ -234,21 +289,47 @@ def tool_result(call: ToolCall | str, content: str, *, is_error: bool = False) -
 _fake: "FakeLLM | None" = None
 
 
+def _norm(name: str | None) -> str:
+    return (name or "none").strip().lower()
+
+
+def _sdk_missing(name: str) -> str | None:
+    """Why this provider's SDK cannot be used, or None when it can."""
+    mod = _SDK_MODULE.get(name)
+    if mod is None:
+        return None
+    try:
+        missing = importlib.util.find_spec(mod) is None
+    except (ImportError, ValueError):
+        missing = True
+    if missing:
+        return (f"the {mod} SDK is not installed in this image — rebuild it from "
+                f"backend/requirements.txt")
+    return None
+
+
 def _resolve(name: str, tier: str) -> tuple[str, str, str]:
     """(provider, model, api_key) for one named provider. "none" when unusable."""
-    p = (name or "none").strip().lower()
+    p = _norm(name)
     if p == "groq":
-        return ("groq" if settings.GROQ_API_KEY else "none",
-                settings.LLM_MODEL, settings.GROQ_API_KEY)
-    if p == "openai":
-        return ("openai" if settings.OPENAI_API_KEY else "none",
-                settings.LLM_MODEL_OPENAI, settings.OPENAI_API_KEY)
-    if p == "anthropic":
+        model, key = settings.LLM_MODEL, settings.GROQ_API_KEY
+    elif p == "openai":
+        model, key = settings.LLM_MODEL_OPENAI, settings.OPENAI_API_KEY
+    elif p == "anthropic":
         model = (settings.LLM_MODEL_ANTHROPIC_AGENT if tier == "agent"
                  else settings.LLM_MODEL_ANTHROPIC)
-        return ("anthropic" if settings.ANTHROPIC_API_KEY else "none",
-                model, settings.ANTHROPIC_API_KEY)
-    return ("none", "", "")
+        key = settings.ANTHROPIC_API_KEY
+    else:
+        return ("none", "", "")
+    usable = bool(key) and _sdk_missing(p) is None
+    return (p if usable else "none", model, key)
+
+
+def _unusable_reason(name: str) -> str:
+    p = _norm(name)
+    if p not in _PROVIDERS:
+        return f"LLM_PROVIDER is {name!r}: outbound LLM calls are switched off"
+    return _sdk_missing(p) or "No API key configured for the selected provider"
 
 
 def resolved_provider(tier: str = "fast") -> tuple[str, str, str]:
@@ -262,41 +343,59 @@ def resolved_provider(tier: str = "fast") -> tuple[str, str, str]:
     return _resolve(settings.LLM_PROVIDER, tier)
 
 
-def _candidates(tier: str) -> list[tuple[str, str, str]]:
-    """Primary, then the fallback if one is configured and differs."""
-    first = resolved_provider(tier)
-    out = [first]
-    fb = (settings.LLM_FALLBACK_PROVIDER or "").strip().lower()
-    if _fake is None and fb and fb != (settings.LLM_PROVIDER or "").strip().lower():
-        out.append(_resolve(fb, tier))
+def _fallback_name() -> str | None:
+    """The fallback provider, or None. None whenever the primary is not a real
+    provider: an explicit "none" is a kill switch, and a kill switch that a
+    fallback quietly routes around is not one."""
+    primary, fb = _norm(settings.LLM_PROVIDER), _norm(settings.LLM_FALLBACK_PROVIDER)
+    if _fake is not None or primary not in _PROVIDERS or fb not in _PROVIDERS or fb == primary:
+        return None
+    return fb
+
+
+def _candidates(tier: str) -> list[tuple[str, str, str, str]]:
+    """[(configured name, provider, model, key)]: the primary, then the fallback."""
+    if _fake is not None:
+        return [("fake", "fake", _fake.model, "fake")]
+    primary = _norm(settings.LLM_PROVIDER)
+    out = [(primary, *_resolve(primary, tier))]
+    fb = _fallback_name()
+    if fb:
+        out.append((fb, *_resolve(fb, tier)))
     return out
 
 
-def _client(provider: str, api_key: str):
+def _client(provider: str, api_key: str, timeout: float | None = None):
     from openai import OpenAI
+    t = settings.LLM_TIMEOUT_SECONDS if timeout is None else timeout
     # max_retries=0: this module owns retries (see the 2026-09-24 note above).
     if provider == "groq":
         # Groq speaks the OpenAI wire protocol, so no new dependency is needed —
         # only a different base_url.
         return OpenAI(api_key=api_key, base_url=settings.GROQ_BASE_URL,
-                      timeout=settings.LLM_TIMEOUT_SECONDS, max_retries=0)
-    return OpenAI(api_key=api_key, timeout=settings.LLM_TIMEOUT_SECONDS, max_retries=0)
+                      timeout=t, max_retries=0)
+    return OpenAI(api_key=api_key, timeout=t, max_retries=0)
 
 
-def _anthropic_client(api_key: str):
+def _anthropic_client(api_key: str, timeout: float | None = None):
     import anthropic
-    return anthropic.Anthropic(api_key=api_key, timeout=settings.LLM_TIMEOUT_SECONDS,
-                               max_retries=0)
+    t = settings.LLM_TIMEOUT_SECONDS if timeout is None else timeout
+    return anthropic.Anthropic(api_key=api_key, timeout=t, max_retries=0)
 
 
 def _classify(exc: Exception, provider: str = "") -> str:
-    """Map an SDK exception onto one of our statuses.
+    """Map an exception raised by the SDK CALL onto one of our statuses.
 
-    Matched on status_code first and class name second, rather than by importing
-    the SDK's exception classes, so a minor SDK version bump cannot silently
-    turn every failure into UPSTREAM_ERROR. Works for the openai and anthropic
-    SDKs alike: both carry `status_code` and `response` on their status errors.
+    Only the send stage reaches this: request building and reply parsing run
+    outside the retry loop and are classified where they happen. Matched on
+    status_code first and class name second, rather than by importing the
+    SDK's exception classes, so a minor SDK version bump cannot silently turn
+    every failure into UPSTREAM_ERROR. Works for the openai and anthropic SDKs
+    alike: both carry `status_code` and `response` on their status errors.
     """
+    if isinstance(exc, ImportError):
+        # Before any name matching: "ModuleNotFoundError" contains "notfound".
+        return NOT_CONFIGURED
     code = getattr(getattr(exc, "response", None), "status_code", None) or getattr(exc, "status_code", None)
     if code == 400:
         if provider == "anthropic":
@@ -317,8 +416,14 @@ def _classify(exc: Exception, provider: str = "") -> str:
         return BILLING
     if code == 404:
         return MODEL_NOT_FOUND
+    if code == 413:
+        return INVALID_REQUEST      # request too large: our history, not their outage
     if code == 429:
         return RATE_LIMITED
+    if isinstance(exc, TypeError):
+        # The SDK rejected a keyword before sending: our request shape. This is
+        # how anthropic 1.x reports `temperature`.
+        return INVALID_REQUEST
     name = type(exc).__name__.lower()
     if "timeout" in name:
         return TIMEOUT
@@ -407,6 +512,11 @@ def _usage_from(u: Any) -> Usage:
         cache_read_input_tokens=g("cache_read_input_tokens"),
         cache_creation_input_tokens=g("cache_creation_input_tokens"),
     )
+
+
+def _refusal_reason(resp: Any) -> str:
+    det = getattr(resp, "stop_details", None)
+    return f"refused ({getattr(det, 'category', None) or 'unspecified'})"
 
 
 # ── Cache + failure counters (Redis, with an in-process fallback) ─────────────
@@ -504,13 +614,18 @@ def stats() -> dict[str, dict[str, int]]:
     return out
 
 
-# ── Retry loop, shared by both calls and every provider ──────────────────────
-def _attempts(purpose: str, provider: str, model: str, fn: Callable[[], Any]):
-    """Run fn with the retry policy. Returns (value, None) or (None, (status, detail))."""
-    last_status, last_detail = UPSTREAM_ERROR, None
+# ── The three stages: build, send (retried), parse ───────────────────────────
+def _attempts(purpose: str, provider: str, model: str, send: Callable[[], Any]):
+    """Run the SEND stage with the retry policy.
+
+    Returns (value, None, attempt) or (None, (status, detail), attempt).
+    Only the SDK call is in here — building and parsing are not, so a bug in
+    our own code can never be retried or mistaken for a provider outage.
+    """
+    last_status, last_detail, attempt = UPSTREAM_ERROR, None, 0
     for attempt in range(settings.LLM_MAX_RETRIES + 1):
         try:
-            return fn(), None
+            return send(), None, attempt
         except Exception as exc:
             last_status = _classify(exc, provider)
             last_detail = str(exc)[:200]
@@ -524,12 +639,55 @@ def _attempts(purpose: str, provider: str, model: str, fn: Callable[[], Any]):
             # ignoring it is how a rate limit becomes a ban.
             wait = _retry_after(exc)
             time.sleep(min(wait if wait is not None else 0.5 * (2 ** attempt), 5.0))
-    return None, (last_status, last_detail)
+    return None, (last_status, last_detail), attempt
+
+
+def _build_failed(purpose: str, provider: str, model: str, exc: Exception) -> tuple[str, str]:
+    """Classify a failure of the BUILD stage (never retried, never a fallback
+    trigger unless the SDK itself is missing)."""
+    if isinstance(exc, ImportError):
+        reason = (f"the {_SDK_MODULE.get(provider, provider)} SDK could not be imported "
+                  f"({exc}) — rebuild the image from backend/requirements.txt")
+        logger.warning("llm.not_configured", purpose=purpose, provider=provider, reason=reason)
+        return NOT_CONFIGURED, reason
+    reason = f"could not build the request: {type(exc).__name__}: {exc}"[:300]
+    # ERROR with a traceback: this is a bug on our side, not a provider event.
+    logger.error("llm.invalid_request", purpose=purpose, provider=provider, model=model,
+                 error=reason, exc_info=exc)
+    return INVALID_REQUEST, reason
+
+
+def _parse_failed(purpose: str, provider: str, model: str, exc: Exception) -> str:
+    reason = f"could not read the provider's reply: {type(exc).__name__}: {exc}"[:300]
+    logger.error("llm.unreadable_response", purpose=purpose, provider=provider, model=model,
+                 error=reason, exc_info=exc)
+    return reason
+
+
+def _settle(purpose: str, tried: list[tuple[str, Any]], call: str):
+    """Pick what the caller sees from the primary's and (maybe) the fallback's result."""
+    primary_name, primary = tried[0]
+    if len(tried) == 1:
+        return primary
+    fb_name, fb = tried[-1]
+    if fb.status in _FALLBACK_ON:
+        # Both failed on the provider side. The primary's failure is the one
+        # that needs fixing; the fallback's rides along instead of hiding it.
+        primary.fallback_failure = {"provider": fb_name, "status": fb.status,
+                                    "failure_reason": fb.failure_reason}
+        logger.warning("llm.fallback_failed", purpose=purpose, call=call,
+                       primary=primary_name, primary_status=primary.status,
+                       fallback=fb_name, fallback_status=fb.status)
+        return primary
+    fb.fallback_from = primary_name
+    logger.warning("llm.fallback_used", purpose=purpose, call=call, failed=primary_name,
+                   primary_status=primary.status, served_by=fb_name, status=fb.status)
+    return fb
 
 
 # ── complete(): one-shot text or JSON ────────────────────────────────────────
-def _complete_openai(provider, model, api_key, prompt, system, json_mode, json_schema,
-                     max_tokens, temperature) -> tuple[str, str]:
+def _openai_complete_kwargs(model, prompt, system, want_json, json_schema, max_tokens,
+                            temperature) -> dict[str, Any]:
     messages: list[dict] = []
     sys_text = system
     if json_schema is not None:
@@ -546,19 +704,17 @@ def _complete_openai(provider, model, api_key, prompt, system, json_mode, json_s
         "model": model, "messages": messages,
         "max_tokens": max_tokens, "temperature": temperature,
     }
-    if json_mode or json_schema is not None:
+    if want_json:
         kwargs["response_format"] = {"type": "json_object"}
     if settings.LLM_REASONING_EFFORT:
         # Not a typed parameter on openai==1.57.4, so it rides in extra_body.
         # A provider that does not recognise it ignores it.
         kwargs["extra_body"] = {"reasoning_effort": settings.LLM_REASONING_EFFORT}
-    resp = _client(provider, api_key).chat.completions.create(**kwargs)
-    choice = resp.choices[0]
-    return (choice.message.content or "").strip(), _stop(getattr(choice, "finish_reason", None))
+    return kwargs
 
 
-def _complete_anthropic(model, api_key, prompt, system, json_mode, json_schema,
-                        max_tokens, temperature) -> tuple[str, str, str | None]:
+def _anthropic_complete_kwargs(model, prompt, system, want_json, json_schema, max_tokens,
+                               temperature) -> dict[str, Any]:
     caps = anthropic_caps(model)
     sys_text = system
     kwargs: dict[str, Any] = {
@@ -569,7 +725,7 @@ def _complete_anthropic(model, api_key, prompt, system, json_mode, json_schema,
     if json_schema is not None:
         # Structured outputs: the API guarantees the text is valid JSON for it.
         kwargs["output_config"] = {"format": {"type": "json_schema", "schema": json_schema}}
-    elif json_mode:
+    elif want_json:
         # No schema to constrain against, so ask for it and parse — the same
         # check the openai path applies, and BAD_RESPONSE when it is not JSON.
         sys_text = ((system + "\n\n") if system else "") + _JSON_INSTRUCTION
@@ -581,15 +737,41 @@ def _complete_anthropic(model, api_key, prompt, system, json_mode, json_schema,
         # The same "these are extraction prompts, not reasoning problems" dial
         # LLM_REASONING_EFFORT sets for gpt-oss, on the models that accept it.
         kwargs.setdefault("output_config", {})["effort"] = settings.LLM_REASONING_EFFORT
-    resp = _anthropic_client(api_key).messages.create(**kwargs)
+    return kwargs
+
+
+def _parse_openai_complete(resp: Any) -> tuple[str, str, str | None]:
+    choice = resp.choices[0]
+    stop = _stop(getattr(choice, "finish_reason", None))
+    return ((choice.message.content or "").strip(), stop,
+            "refused (content_filter)" if stop == "refusal" else None)
+
+
+def _parse_anthropic_complete(resp: Any) -> tuple[str, str, str | None]:
     text = "".join(getattr(b, "text", "") or "" for b in resp.content
                    if getattr(b, "type", None) == "text").strip()
     stop = _stop(getattr(resp, "stop_reason", None))
-    refusal = None
-    if stop == "refusal":
-        det = getattr(resp, "stop_details", None)
-        refusal = f"refused ({getattr(det, 'category', None) or 'unspecified'})"
-    return text, stop, refusal
+    return text, stop, (_refusal_reason(resp) if stop == "refusal" else None)
+
+
+def _build_complete(provider, model, api_key, prompt, *, purpose, system, want_json,
+                    json_schema, max_tokens, temperature):
+    """BUILD stage: returns (send, parse). Anything raised here is our bug (or a
+    missing SDK) and is classified by _build_failed, never retried."""
+    if provider == "fake":
+        def send():
+            return _fake._complete(prompt=prompt, system=system, purpose=purpose,
+                                   json_mode=want_json, json_schema=json_schema)
+        return send, (lambda v: v)
+    if provider == "anthropic":
+        client = _anthropic_client(api_key)
+        kwargs = _anthropic_complete_kwargs(model, prompt, system, want_json, json_schema,
+                                            max_tokens, temperature)
+        return (lambda: client.messages.create(**kwargs)), _parse_anthropic_complete
+    client = _client(provider, api_key)
+    kwargs = _openai_complete_kwargs(model, prompt, system, want_json, json_schema,
+                                     max_tokens, temperature)
+    return (lambda: client.chat.completions.create(**kwargs)), _parse_openai_complete
 
 
 def complete(
@@ -615,36 +797,42 @@ def complete(
     """
     started = time.monotonic()
     want_json = json_mode or json_schema is not None
-    first_failure: str | None = None
-    result: LLMResult | None = None
-
-    for provider, model, api_key in _candidates("fast"):
-        result = _complete_one(provider, model, api_key, prompt, purpose=purpose,
-                               system=system, want_json=want_json, json_schema=json_schema,
-                               max_tokens=max_tokens, temperature=temperature,
-                               cache_ttl=cache_ttl, started=started)
-        if result.status not in _FALLBACK_ON:
+    tried: list[tuple[str, LLMResult]] = []
+    for i, (name, provider, model, api_key) in enumerate(_candidates("fast")):
+        r = _complete_one(name, provider, model, api_key, prompt, purpose=purpose,
+                          system=system, want_json=want_json, json_schema=json_schema,
+                          max_tokens=max_tokens, temperature=temperature,
+                          cache_ttl=cache_ttl, started=started, is_fallback=i > 0)
+        tried.append((name, r))
+        if r.status not in _FALLBACK_ON:
             break
-        first_failure = first_failure or (provider if provider != "none" else settings.LLM_PROVIDER)
-    assert result is not None
-    if first_failure and result.ai_generated:
-        result.fallback_from = first_failure
-        logger.warning("llm.fallback_used", purpose=purpose, failed=first_failure,
-                       served_by=result.provider)
-    return result
+    return _settle(purpose, tried, "complete")
 
 
-def _complete_one(provider, model, api_key, prompt, *, purpose, system, want_json,
-                  json_schema, max_tokens, temperature, cache_ttl, started) -> LLMResult:
+def _complete_one(name, provider, model, api_key, prompt, *, purpose, system, want_json,
+                  json_schema, max_tokens, temperature, cache_ttl, started,
+                  is_fallback) -> LLMResult:
+    def elapsed() -> int:
+        return int((time.monotonic() - started) * 1000)
+
+    def fail(status: str, reason: str | None, **extra) -> LLMResult:
+        _record(purpose, status)
+        return LLMResult(status=status, provider=provider, model=model,
+                         failure_reason=reason, latency_ms=elapsed(), **extra)
+
     if provider == "none":
+        reason = _unusable_reason(name)
+        logger.warning("llm.not_configured", purpose=purpose, configured_provider=name,
+                       reason=reason)
         _record(purpose, NOT_CONFIGURED)
-        logger.warning("llm.not_configured", purpose=purpose,
-                       configured_provider=settings.LLM_PROVIDER)
-        return LLMResult(status=NOT_CONFIGURED, provider="none",
-                         failure_reason="No API key configured for the selected provider")
+        return LLMResult(status=NOT_CONFIGURED, provider="none", failure_reason=reason)
+
+    try:
+        key = _cache_key(purpose, model, prompt, system, json_schema)
+    except (TypeError, ValueError) as exc:
+        return fail(INVALID_REQUEST, f"json_schema is not JSON-serialisable: {exc}")
 
     ttl = settings.LLM_CACHE_TTL_SECONDS if cache_ttl is None else cache_ttl
-    key = _cache_key(purpose, model, prompt, system, json_schema)
     if ttl > 0:
         try:
             hit = _get_store().get(key)
@@ -655,61 +843,54 @@ def _complete_one(provider, model, api_key, prompt, *, purpose, system, want_jso
             _record(purpose, CACHED)
             return LLMResult(
                 status=CACHED, text=payload.get("text", ""), data=payload.get("data") or {},
-                provider=provider, model=model, cached=True,
-                latency_ms=int((time.monotonic() - started) * 1000),
+                provider=provider, model=model, cached=True, latency_ms=elapsed(),
             )
 
-    def call() -> tuple[str, str, str | None]:
-        if provider == "fake":
-            return _fake._complete(prompt=prompt, system=system, purpose=purpose,
-                                   json_mode=want_json, json_schema=json_schema)
-        if provider == "anthropic":
-            return _complete_anthropic(model, api_key, prompt, system, want_json,
-                                       json_schema, max_tokens, temperature)
-        text, stop = _complete_openai(provider, model, api_key, prompt, system, want_json,
-                                      json_schema, max_tokens, temperature)
-        return text, stop, None
+    try:
+        send, parse = _build_complete(provider, model, api_key, prompt, purpose=purpose,
+                                      system=system, want_json=want_json,
+                                      json_schema=json_schema, max_tokens=max_tokens,
+                                      temperature=temperature)
+    except Exception as exc:
+        return fail(*_build_failed(purpose, provider, model, exc))
 
-    value, failure = _attempts(purpose, provider, model, call)
-    latency = lambda: int((time.monotonic() - started) * 1000)  # noqa: E731
+    value, failure, attempt = _attempts(purpose, provider, model, send)
     if failure:
-        status, detail = failure
-        _record(purpose, status)
-        return LLMResult(status=status, provider=provider, model=model,
-                         failure_reason=detail, latency_ms=latency())
+        return fail(*failure)
 
-    text, stop, refusal = value
-    if refusal:
-        _record(purpose, REFUSED)
+    try:
+        text, stop, refusal = parse(value)
+    except Exception as exc:
+        return fail(BAD_RESPONSE, _parse_failed(purpose, provider, model, exc))
+
+    if stop == "refusal":
         logger.warning("llm.refused", purpose=purpose, provider=provider, model=model,
                        reason=refusal)
-        return LLMResult(status=REFUSED, provider=provider, model=model, text=text,
-                         stop_reason=stop, failure_reason=refusal, latency_ms=latency())
+        return fail(REFUSED, refusal or "refused", text=text, stop_reason=stop)
     if stop == "max_tokens" and not text:
         # The whole budget went on reasoning and no answer was started — the
         # gpt-oss failure LLM_REASONING_EFFORT exists for, seen from this side.
-        _record(purpose, BAD_RESPONSE)
         logger.warning("llm.no_answer_in_budget", purpose=purpose, provider=provider,
                        model=model)
-        return LLMResult(status=BAD_RESPONSE, provider=provider, model=model,
-                         stop_reason=stop, latency_ms=latency(),
-                         failure_reason="Output budget ran out before an answer was written")
+        return fail(BAD_RESPONSE, "Output budget ran out before an answer was written",
+                    stop_reason=stop)
 
     data: dict[str, Any] = {}
     if want_json:
+        # Fences are stripped for Anthropic only: without a native json_object
+        # mode a Claude reply may arrive fenced. The groq path keeps its
+        # pre-F01 contract — a fenced reply there is still BAD_RESPONSE.
+        raw = _strip_fences(text) if provider == "anthropic" else text
         try:
-            parsed = json.loads(_strip_fences(text))
+            parsed = json.loads(raw)
         except (ValueError, TypeError) as exc:
             # The model answered but not in the shape we asked for. A
             # weaker model drifting on a strict JSON contract lands here,
             # which is exactly what we want visible rather than swallowed.
-            _record(purpose, BAD_RESPONSE)
             logger.warning("llm.bad_response", purpose=purpose, provider=provider,
                            model=model, error=str(exc), preview=text[:120])
-            return LLMResult(status=BAD_RESPONSE, provider=provider, model=model,
-                             text=text, stop_reason=stop,
-                             failure_reason="Model did not return valid JSON",
-                             latency_ms=latency())
+            return fail(BAD_RESPONSE, "Model did not return valid JSON", text=text,
+                        stop_reason=stop)
         data = parsed if isinstance(parsed, dict) else {"value": parsed}
 
     if ttl > 0:
@@ -717,14 +898,19 @@ def _complete_one(provider, model, api_key, prompt, *, purpose, system, want_jso
             _get_store().setex(key, ttl, json.dumps({"text": text, "data": data}))
         except Exception:
             pass
-    _record(purpose, OK)
+    _record(purpose, FALLBACK_OK if is_fallback else OK)
     logger.info("llm.ok", purpose=purpose, provider=provider, model=model,
-                latency_ms=latency(), stop_reason=stop, cached=False)
+                latency_ms=elapsed(), attempt=attempt, stop_reason=stop, cached=False,
+                fallback=is_fallback)
     return LLMResult(status=OK, text=text, data=data, provider=provider,
-                     model=model, stop_reason=stop, latency_ms=latency())
+                     model=model, stop_reason=stop, latency_ms=elapsed())
 
 
 # ── chat(): one tool-calling turn ────────────────────────────────────────────
+def _as_call(tc: ToolCall | dict) -> ToolCall:
+    return tc if isinstance(tc, ToolCall) else ToolCall(**tc)
+
+
 def _to_anthropic(messages: list[dict]) -> list[dict]:
     out: list[dict] = []
     pending_results: list[dict] = []
@@ -737,7 +923,7 @@ def _to_anthropic(messages: list[dict]) -> list[dict]:
             pending_results.clear()
 
     for m in messages:
-        role = m.get("role")
+        role = m["role"]
         if role == "tool":
             block = {"type": "tool_result", "tool_use_id": m["tool_call_id"],
                      "content": str(m.get("content", ""))}
@@ -753,13 +939,14 @@ def _to_anthropic(messages: list[dict]) -> list[dict]:
             blocks: list[dict] = []
             if m.get("content"):
                 blocks.append({"type": "text", "text": m["content"]})
-            for tc in m.get("tool_calls") or []:
-                tc = tc if isinstance(tc, ToolCall) else ToolCall(**tc)
+            for tc in (_as_call(t) for t in m.get("tool_calls") or []):
                 blocks.append({"type": "tool_use", "id": tc.id, "name": tc.name,
                                "input": tc.arguments})
             out.append({"role": "assistant", "content": blocks or ""})
         elif role == "user":
             out.append({"role": "user", "content": m.get("content", "")})
+        else:
+            raise ValueError(f"unknown message role {role!r}")
     flush()
     return out
 
@@ -767,7 +954,7 @@ def _to_anthropic(messages: list[dict]) -> list[dict]:
 def _to_openai(system: str | None, messages: list[dict]) -> list[dict]:
     out: list[dict] = [{"role": "system", "content": system}] if system else []
     for m in messages:
-        role = m.get("role")
+        role = m["role"]
         if role == "tool":
             content = str(m.get("content", ""))
             # No is_error field on this wire format, so the model is told in text.
@@ -775,8 +962,7 @@ def _to_openai(system: str | None, messages: list[dict]) -> list[dict]:
                         "content": ("ERROR: " + content) if m.get("is_error") else content})
         elif role == "assistant":
             msg: dict[str, Any] = {"role": "assistant", "content": m.get("content") or None}
-            calls = [tc if isinstance(tc, ToolCall) else ToolCall(**tc)
-                     for tc in (m.get("tool_calls") or [])]
+            calls = [_as_call(tc) for tc in (m.get("tool_calls") or [])]
             if calls:
                 msg["tool_calls"] = [{"id": tc.id, "type": "function",
                                       "function": {"name": tc.name,
@@ -785,57 +971,95 @@ def _to_openai(system: str | None, messages: list[dict]) -> list[dict]:
             out.append(msg)
         elif role == "user":
             out.append({"role": "user", "content": m.get("content", "")})
+        else:
+            raise ValueError(f"unknown message role {role!r}")
     return out
 
 
-def _chat_anthropic(model, api_key, system, messages, tools, max_tokens, effort,
-                    temperature) -> ChatResult:
-    caps = anthropic_caps(model)
-    kwargs: dict[str, Any] = {
-        "model": model, "max_tokens": max_tokens,
-        "messages": _to_anthropic(messages),
-    }
-    if system:
-        kwargs["system"] = system
-    if tools:
-        kwargs["tools"] = [
-            {"name": t.name, "description": t.description, "input_schema": t.parameters,
-             **({"strict": True} if t.strict else {})}
-            for t in tools
-        ]
-    if caps["temperature"] and temperature is not None:
-        kwargs["extra_body"] = {"temperature": temperature}
-    if caps["effort"] and effort:
-        kwargs["output_config"] = {"effort": effort}
-    resp = _anthropic_client(api_key).messages.create(**kwargs)
-
-    text_parts: list[str] = []
-    calls: list[ToolCall] = []
-    for b in resp.content:
-        t = getattr(b, "type", None)
-        if t == "text":
-            text_parts.append(getattr(b, "text", "") or "")
-        elif t == "tool_use":
-            args = getattr(b, "input", None)
-            calls.append(ToolCall(id=b.id, name=b.name,
-                                  arguments=args if isinstance(args, dict) else {}))
-    stop = _stop(getattr(resp, "stop_reason", None))
-    res = ChatResult(status=OK, text="".join(text_parts).strip(), tool_calls=calls,
-                     stop_reason=stop, provider="anthropic", model=model,
-                     usage=_usage_from(getattr(resp, "usage", None)),
-                     provider_content=[_block_dict(b) for b in resp.content])
-    if stop == "refusal":
-        det = getattr(resp, "stop_details", None)
-        res.status = REFUSED
-        res.failure_reason = f"refused ({getattr(det, 'category', None) or 'unspecified'})"
-    return res
+def _parse_anthropic_chat(model: str):
+    def parse(resp: Any) -> ChatResult:
+        text_parts: list[str] = []
+        calls: list[ToolCall] = []
+        for b in resp.content:
+            t = getattr(b, "type", None)
+            if t == "text":
+                text_parts.append(getattr(b, "text", "") or "")
+            elif t == "tool_use":
+                args = getattr(b, "input", None)
+                calls.append(ToolCall(id=b.id, name=b.name,
+                                      arguments=args if isinstance(args, dict) else {}))
+        stop = _stop(getattr(resp, "stop_reason", None))
+        res = ChatResult(status=OK, text="".join(text_parts).strip(), tool_calls=calls,
+                         stop_reason=stop, provider="anthropic", model=model,
+                         usage=_usage_from(getattr(resp, "usage", None)),
+                         provider_content=[_block_dict(b) for b in resp.content])
+        if stop == "refusal":
+            res.status, res.failure_reason = REFUSED, _refusal_reason(resp)
+        return res
+    return parse
 
 
-def _chat_openai(provider, model, api_key, system, messages, tools, max_tokens,
-                 temperature) -> ChatResult:
-    kwargs: dict[str, Any] = {
-        "model": model, "messages": _to_openai(system, messages), "max_tokens": max_tokens,
-    }
+def _parse_openai_chat(provider: str, model: str):
+    def parse(resp: Any) -> ChatResult:
+        choice = resp.choices[0]
+        msg = choice.message
+        calls: list[ToolCall] = []
+        for tc in getattr(msg, "tool_calls", None) or []:
+            raw = tc.function.arguments or "{}"
+            try:
+                args = json.loads(raw)
+                err = None if isinstance(args, dict) else "arguments were not a JSON object"
+                args = args if isinstance(args, dict) else {}
+            except (ValueError, TypeError) as exc:
+                args, err = {}, f"arguments were not valid JSON: {exc}"
+            calls.append(ToolCall(id=tc.id, name=tc.function.name, arguments=args,
+                                  arguments_error=err))
+        stop = _stop(getattr(choice, "finish_reason", None))
+        if calls and stop == "end_turn":
+            # Some OpenAI-compatible servers finish a tool turn with "stop".
+            # The calls are complete either way; only "length" truncates them.
+            stop = "tool_use"
+        res = ChatResult(status=OK, text=(msg.content or "").strip(), tool_calls=calls,
+                         stop_reason=stop, provider=provider, model=model,
+                         usage=_usage_from(getattr(resp, "usage", None)))
+        if stop == "refusal":
+            res.status, res.failure_reason = REFUSED, "refused (content_filter)"
+        return res
+    return parse
+
+
+def _build_chat(provider, model, api_key, *, purpose, system, messages, tools, max_tokens,
+                effort, temperature):
+    """BUILD stage for chat(): translate history + tools, construct the client."""
+    if provider == "fake":
+        def send():
+            return _fake._chat(messages=messages, system=system, tools=tools, purpose=purpose)
+        return send, (lambda v: v)
+
+    timeout = settings.LLM_AGENT_TIMEOUT_SECONDS
+    if provider == "anthropic":
+        caps = anthropic_caps(model)
+        kwargs: dict[str, Any] = {
+            "model": model, "max_tokens": max_tokens,
+            "messages": _to_anthropic(messages),
+        }
+        if system:
+            kwargs["system"] = system
+        if tools:
+            kwargs["tools"] = [
+                {"name": t.name, "description": t.description, "input_schema": t.parameters,
+                 **({"strict": True} if t.strict else {})}
+                for t in tools
+            ]
+        if caps["temperature"] and temperature is not None:
+            kwargs["extra_body"] = {"temperature": temperature}
+        if caps["effort"] and effort:
+            kwargs["output_config"] = {"effort": effort}
+        client = _anthropic_client(api_key, timeout)
+        return (lambda: client.messages.create(**kwargs)), _parse_anthropic_chat(model)
+
+    kwargs = {"model": model, "messages": _to_openai(system, messages),
+              "max_tokens": max_tokens}
     if temperature is not None:
         kwargs["temperature"] = temperature
     if tools:
@@ -844,27 +1068,8 @@ def _chat_openai(provider, model, api_key, system, messages, tools, max_tokens,
                                          "parameters": t.parameters}} for t in tools]
     if settings.LLM_REASONING_EFFORT:
         kwargs["extra_body"] = {"reasoning_effort": settings.LLM_REASONING_EFFORT}
-    resp = _client(provider, api_key).chat.completions.create(**kwargs)
-    choice = resp.choices[0]
-    msg = choice.message
-    calls: list[ToolCall] = []
-    for tc in getattr(msg, "tool_calls", None) or []:
-        raw = tc.function.arguments or "{}"
-        try:
-            args = json.loads(raw)
-            err = None if isinstance(args, dict) else "arguments were not a JSON object"
-            args = args if isinstance(args, dict) else {}
-        except (ValueError, TypeError) as exc:
-            args, err = {}, f"arguments were not valid JSON: {exc}"
-        calls.append(ToolCall(id=tc.id, name=tc.function.name, arguments=args,
-                              arguments_error=err))
-    stop = _stop(getattr(choice, "finish_reason", None))
-    res = ChatResult(status=OK, text=(msg.content or "").strip(), tool_calls=calls,
-                     stop_reason=stop, provider=provider, model=model,
-                     usage=_usage_from(getattr(resp, "usage", None)))
-    if stop == "refusal":
-        res.status, res.failure_reason = REFUSED, "refused (content_filter)"
-    return res
+    client = _client(provider, api_key, timeout)
+    return (lambda: client.chat.completions.create(**kwargs)), _parse_openai_chat(provider, model)
 
 
 def chat(
@@ -881,56 +1086,70 @@ def chat(
 
     The caller runs the loop: execute `result.tool_calls`, append
     `result.assistant_message()` and one `tool_result(...)` per call, and call
-    chat() again until `result.wants_tools` is False. Nothing is cached.
+    chat() again while `result.wants_tools`. Nothing is cached.
 
     `effort` overrides LLM_AGENT_EFFORT on models that accept it; `temperature`
-    is sent only where the model accepts sampling parameters.
+    is sent only where the model accepts sampling parameters. A max_tokens stop
+    is BAD_RESPONSE: the turn was cut off, and a truncated tool call must not run.
     """
     started = time.monotonic()
     effort = effort if effort is not None else (settings.LLM_AGENT_EFFORT or None)
-    first_failure: str | None = None
-    result: ChatResult | None = None
-
-    for provider, model, api_key in _candidates("agent"):
-        if provider == "none":
-            _record(purpose, NOT_CONFIGURED)
-            logger.warning("llm.not_configured", purpose=purpose,
-                           configured_provider=settings.LLM_PROVIDER, call="chat")
-            result = ChatResult(status=NOT_CONFIGURED, provider="none",
-                                failure_reason="No API key configured for the selected provider")
-        else:
-            def call(provider=provider, model=model, api_key=api_key) -> ChatResult:
-                if provider == "fake":
-                    return _fake._chat(messages=messages, system=system, tools=tools or [],
-                                       purpose=purpose)
-                if provider == "anthropic":
-                    return _chat_anthropic(model, api_key, system, messages, tools or [],
-                                           max_tokens, effort, temperature)
-                return _chat_openai(provider, model, api_key, system, messages, tools or [],
-                                    max_tokens, temperature)
-
-            value, failure = _attempts(purpose, provider, model, call)
-            if failure:
-                status, detail = failure
-                result = ChatResult(status=status, provider=provider, model=model,
-                                    failure_reason=detail)
-            else:
-                result = value
-            result.latency_ms = int((time.monotonic() - started) * 1000)
-            _record(purpose, result.status)
-            log = logger.info if result.status == OK else logger.warning
-            log("llm.chat", purpose=purpose, provider=provider, model=model,
-                status=result.status, stop_reason=result.stop_reason,
-                tool_calls=len(result.tool_calls), input_tokens=result.usage.input_tokens,
-                output_tokens=result.usage.output_tokens, latency_ms=result.latency_ms)
-        if result.status not in _FALLBACK_ON:
+    tried: list[tuple[str, ChatResult]] = []
+    for i, (name, provider, model, api_key) in enumerate(_candidates("agent")):
+        r = _chat_one(name, provider, model, api_key, purpose=purpose, system=system,
+                      messages=messages, tools=tools or [], max_tokens=max_tokens,
+                      effort=effort, temperature=temperature, started=started,
+                      is_fallback=i > 0)
+        tried.append((name, r))
+        if r.status not in _FALLBACK_ON:
             break
-        first_failure = first_failure or (provider if provider != "none" else settings.LLM_PROVIDER)
-    assert result is not None
-    if first_failure and result.ai_generated:
-        result.fallback_from = first_failure
-        logger.warning("llm.fallback_used", purpose=purpose, failed=first_failure,
-                       served_by=result.provider, call="chat")
+    return _settle(purpose, tried, "chat")
+
+
+def _chat_one(name, provider, model, api_key, *, purpose, system, messages, tools,
+              max_tokens, effort, temperature, started, is_fallback) -> ChatResult:
+    def elapsed() -> int:
+        return int((time.monotonic() - started) * 1000)
+
+    if provider == "none":
+        reason = _unusable_reason(name)
+        logger.warning("llm.not_configured", purpose=purpose, configured_provider=name,
+                       reason=reason, call="chat")
+        _record(purpose, NOT_CONFIGURED)
+        return ChatResult(status=NOT_CONFIGURED, provider="none", failure_reason=reason)
+
+    attempt = 0
+    try:
+        send, parse = _build_chat(provider, model, api_key, purpose=purpose, system=system,
+                                  messages=messages, tools=tools, max_tokens=max_tokens,
+                                  effort=effort, temperature=temperature)
+    except Exception as exc:
+        status, reason = _build_failed(purpose, provider, model, exc)
+        result = ChatResult(status=status, provider=provider, model=model,
+                            failure_reason=reason)
+    else:
+        value, failure, attempt = _attempts(purpose, provider, model, send)
+        if failure:
+            result = ChatResult(status=failure[0], provider=provider, model=model,
+                                failure_reason=failure[1])
+        else:
+            try:
+                result = parse(value)
+            except Exception as exc:
+                result = ChatResult(status=BAD_RESPONSE, provider=provider, model=model,
+                                    failure_reason=_parse_failed(purpose, provider, model, exc))
+            if result.status == OK and result.stop_reason == "max_tokens":
+                result.status = BAD_RESPONSE
+                result.failure_reason = ("Output budget ran out mid-turn — an answer or a "
+                                         "tool call was cut off")
+
+    result.latency_ms = elapsed()
+    _record(purpose, FALLBACK_OK if (is_fallback and result.status == OK) else result.status)
+    log = logger.info if result.status == OK else logger.warning
+    log("llm.chat", purpose=purpose, provider=provider, model=model, status=result.status,
+        stop_reason=result.stop_reason, tool_calls=len(result.tool_calls), attempt=attempt,
+        input_tokens=result.usage.input_tokens, output_tokens=result.usage.output_tokens,
+        latency_ms=result.latency_ms, fallback=is_fallback)
     return result
 
 
@@ -947,19 +1166,25 @@ def health() -> dict:
     """Provider, model and whether a key is present — for the health endpoint
     and the startup log. Never includes the key itself."""
     provider, model, api_key = resolved_provider()
-    agent_provider, agent_model, _ = resolved_provider("agent")
-    fb = (settings.LLM_FALLBACK_PROVIDER or "").strip().lower() or None
+    _, agent_model, _ = resolved_provider("agent")
+    fb = _fallback_name()
+    fb_usable = bool(fb) and _resolve(fb, "fast")[0] != "none"
+    primary_usable = provider != "none"
     return {
         "configured_provider": settings.LLM_PROVIDER,
         "active_provider": provider,
         "model": model or None,
         "agent_model": agent_model or None,
         "key_present": bool(api_key),
-        "usable": provider != "none",
+        # Can a call succeed at all — through the primary or the fallback.
+        "usable": primary_usable or fb_usable,
+        "primary_usable": primary_usable,
+        "unusable_reason": None if primary_usable else _unusable_reason(settings.LLM_PROVIDER),
         "fallback_provider": fb,
-        "fallback_usable": bool(fb) and _resolve(fb, "fast")[0] != "none",
+        "fallback_usable": fb_usable,
         "cache_ttl_seconds": settings.LLM_CACHE_TTL_SECONDS,
         "timeout_seconds": settings.LLM_TIMEOUT_SECONDS,
+        "agent_timeout_seconds": settings.LLM_AGENT_TIMEOUT_SECONDS,
         "counters": stats(),
     }
 
@@ -1027,8 +1252,7 @@ class FakeLLM:
         if isinstance(item, ToolCall):
             item = [item]
         if isinstance(item, list):
-            calls = list(item)
-            return ChatResult(status=OK, tool_calls=calls, stop_reason="tool_use",
+            return ChatResult(status=OK, tool_calls=list(item), stop_reason="tool_use",
                               provider="fake", model=self.model)
         return ChatResult(status=OK, text=str(item), stop_reason="end_turn",
                           provider="fake", model=self.model)
@@ -1036,12 +1260,16 @@ class FakeLLM:
 
 @contextmanager
 def use_fake(script: list | Callable[[str, dict], Any] | None = None) -> Iterator[FakeLLM]:
-    """Install a FakeLLM for the duration of a with-block."""
-    global _fake
-    previous = _fake
+    """Install a FakeLLM for the duration of a with-block.
+
+    Also swaps in a fresh in-process store, so a test's counters and cache
+    never reach a real Redis (the api container has one).
+    """
+    global _fake, _store
+    previous_fake, previous_store = _fake, _store
     fake = script if isinstance(script, FakeLLM) else FakeLLM(script)
-    _fake = fake
+    _fake, _store = fake, _MemoryStore()
     try:
         yield fake
     finally:
-        _fake = previous
+        _fake, _store = previous_fake, previous_store

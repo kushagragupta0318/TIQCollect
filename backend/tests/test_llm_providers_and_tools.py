@@ -9,6 +9,12 @@
 # mock HTTP transport, because a stub cannot tell us that a parameter name is
 # wrong — the SDK's own serialisation and response parsing can. No network, no
 # key, no database.
+#
+# 2026-09-24, audit fix-up: the real-SDK tests used to inject clients already
+# built with max_retries=0, so they would have passed had production dropped
+# it. They now WRAP the SDK constructors — production's own kwargs reach the
+# real SDK, only the transport is swapped — and the 9 -> 3 retry measurement
+# is an executable test. The last section pins each audit finding.
 import json
 from types import SimpleNamespace as NS
 
@@ -31,6 +37,8 @@ def _isolate(monkeypatch):
     monkeypatch.setattr(settings, "LLM_MODEL", "groq-model")
     monkeypatch.setattr(settings, "LLM_MAX_RETRIES", 2)
     monkeypatch.setattr(settings, "LLM_CACHE_TTL_SECONDS", 60)
+    monkeypatch.setattr(settings, "LLM_TIMEOUT_SECONDS", 20.0)
+    monkeypatch.setattr(settings, "LLM_AGENT_TIMEOUT_SECONDS", 120.0)
     monkeypatch.setattr(llm, "_store", llm._MemoryStore())
     monkeypatch.setattr(llm.time, "sleep", lambda *_: None)
     monkeypatch.setattr(llm, "_fake", None)
@@ -297,7 +305,11 @@ def test_fallback_serves_when_the_primary_has_no_key(monkeypatch):
     r = llm.complete("p", purpose="fb1")
     assert r.status == llm.OK and r.provider == "groq"
     assert r.fallback_from == "anthropic"
-    assert llm.stats()["fb1"] == {llm.NOT_CONFIGURED: 1, llm.OK: 1}
+    # FALLBACK_OK, not OK: the counters say the primary did not answer this.
+    assert llm.stats()["fb1"] == {llm.NOT_CONFIGURED: 1, llm.FALLBACK_OK: 1}
+    h = llm.health()
+    assert h["usable"] is True and h["primary_usable"] is False
+    assert "No API key" in h["unusable_reason"]
 
 
 def test_fallback_serves_when_the_primary_fails_on_its_side(monkeypatch):
@@ -507,11 +519,47 @@ def test_health_names_both_tiers_and_the_fallback_without_the_key(monkeypatch):
     assert "sk-ant-test" not in json.dumps(h) and "gsk-test" not in json.dumps(h)
 
 
+
+
 # ── the real SDKs, through a mock HTTP transport ─────────────────────────────
+# The constructors are WRAPPED, not replaced: whatever production passes
+# (max_retries, timeout, base_url) reaches the real SDK; only the transport
+# is swapped for an in-process one.
+def _real_anthropic(monkeypatch, handler, built=None):
+    import anthropic
+    import httpx2
+    real = anthropic.Anthropic
+
+    def ctor(**kw):
+        if built is not None:
+            built.append(kw)
+        return real(**kw, http_client=httpx2.Client(transport=httpx2.MockTransport(handler)))
+
+    monkeypatch.setattr(anthropic, "Anthropic", ctor)
+
+
+def _real_openai(monkeypatch, handler, built=None):
+    import httpx
+    import openai
+    real = openai.OpenAI
+
+    def ctor(**kw):
+        if built is not None:
+            built.append(kw)
+        return real(**kw, http_client=httpx.Client(transport=httpx.MockTransport(handler)))
+
+    monkeypatch.setattr(openai, "OpenAI", ctor)
+
+
+def _anthropic_message(body, content, stop):
+    return {"id": "msg_1", "type": "message", "role": "assistant", "model": body["model"],
+            "content": content, "stop_reason": stop, "stop_sequence": None,
+            "usage": {"input_tokens": 20, "output_tokens": 9}}
+
+
 def test_real_anthropic_sdk_accepts_the_request_and_parses_the_reply(monkeypatch):
     """A stub cannot catch a misspelt parameter; the SDK's own serialiser and
     response models can. Runs complete(json_schema) and a chat tool turn."""
-    import anthropic
     import httpx2
 
     seen: list[dict] = []
@@ -523,27 +571,18 @@ def test_real_anthropic_sdk_accepts_the_request_and_parses_the_reply(monkeypatch
             content = [{"type": "thinking", "thinking": "", "signature": "sig"},
                        {"type": "tool_use", "id": "toolu_1", "name": "get_kpi",
                         "input": {"kpi_id": "npa_pct"}}]
-            stop = "tool_use"
-        else:
-            content = [{"type": "text", "text": '{"amount": 2500}'}]
-            stop = "end_turn"
-        return httpx2.Response(200, json={
-            "id": "msg_1", "type": "message", "role": "assistant", "model": body["model"],
-            "content": content, "stop_reason": stop, "stop_sequence": None,
-            "usage": {"input_tokens": 20, "output_tokens": 9}})
+            return httpx2.Response(200, json=_anthropic_message(body, content, "tool_use"))
+        return httpx2.Response(200, json=_anthropic_message(
+            body, [{"type": "text", "text": '{"amount": 2500}'}], "end_turn"))
 
-    def client(api_key):
-        return anthropic.Anthropic(api_key=api_key, max_retries=0,
-                                   http_client=httpx2.Client(transport=httpx2.MockTransport(handler)))
-
-    monkeypatch.setattr(llm, "_anthropic_client", client)
+    _real_anthropic(monkeypatch, handler)
     schema = {"type": "object", "properties": {"amount": {"type": "number"}},
               "required": ["amount"], "additionalProperties": False}
     r = llm.complete("PTP of 2500 on Friday", purpose="extract", json_schema=schema)
     assert r.status == llm.OK and r.data == {"amount": 2500}
 
     c = llm.chat([{"role": "user", "content": "npa?"}], purpose="copilot", tools=TOOLS)
-    assert c.status == llm.OK and c.tool_calls[0].arguments == {"kpi_id": "npa_pct"}
+    assert c.wants_tools and c.tool_calls[0].arguments == {"kpi_id": "npa_pct"}
     assert c.provider_content[0]["signature"] == "sig"
 
     assert seen[0]["output_config"] == {"format": {"type": "json_schema", "schema": schema}}
@@ -555,7 +594,6 @@ def test_real_anthropic_sdk_accepts_the_request_and_parses_the_reply(monkeypatch
 
 def test_real_openai_sdk_accepts_the_tool_request(monkeypatch):
     import httpx
-    import openai
 
     seen: list[dict] = []
 
@@ -570,11 +608,241 @@ def test_real_openai_sdk_accepts_the_tool_request(monkeypatch):
             "usage": {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6}})
 
     monkeypatch.setattr(settings, "LLM_PROVIDER", "groq")
-    monkeypatch.setattr(llm, "_client", lambda provider, key: openai.OpenAI(
-        api_key=key, base_url="http://groq.test/v1", max_retries=0,
-        http_client=httpx.Client(transport=httpx.MockTransport(handler))))
+    _real_openai(monkeypatch, handler)
     r = llm.chat([{"role": "user", "content": "npa?"}], purpose="copilot", tools=TOOLS)
     assert r.tool_calls == [llm.ToolCall("call_1", "get_kpi", {"kpi_id": "npa"})]
+    assert r.wants_tools
     assert seen[0]["tools"][0]["function"]["name"] == "get_kpi"
     # The SDK merges extra_body into the top level of the JSON body.
     assert seen[0]["reasoning_effort"] == "low"
+
+
+@pytest.mark.parametrize("provider", ["groq", "openai", "anthropic"])
+def test_a_persistent_429_costs_exactly_the_seams_own_attempts(monkeypatch, provider):
+    """The 9 -> 3 measurement, executable. Production's constructor kwargs go
+    to the real SDK; if max_retries=0 were dropped, the SDK would retry under
+    the seam and this would count 9 requests, not 3."""
+    monkeypatch.setattr(settings, "LLM_PROVIDER", provider)
+    monkeypatch.setattr(settings, "OPENAI_API_KEY", "sk-test")
+    hits: list[int] = []
+    if provider == "anthropic":
+        import httpx2 as h
+    else:
+        import httpx as h
+
+    def handler(request):
+        hits.append(1)
+        return h.Response(429, headers={"retry-after": "0"},
+                          json={"error": {"type": "rate_limit_error", "message": "slow down"}})
+
+    (_real_anthropic if provider == "anthropic" else _real_openai)(monkeypatch, handler)
+    r = llm.complete("p", purpose="r429", cache_ttl=0)
+    assert r.status == llm.RATE_LIMITED
+    assert len(hits) == settings.LLM_MAX_RETRIES + 1
+
+
+def test_chat_gets_the_agent_timeout_and_complete_the_short_one(monkeypatch):
+    import httpx2
+    built: list[dict] = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        return httpx2.Response(200, json=_anthropic_message(
+            body, [{"type": "text", "text": "ok"}], "end_turn"))
+
+    _real_anthropic(monkeypatch, handler, built)
+    assert llm.complete("p", purpose="t1", cache_ttl=0).status == llm.OK
+    assert llm.chat([{"role": "user", "content": "q"}], purpose="t2").status == llm.OK
+    assert [kw["timeout"] for kw in built] == [20.0, 120.0]
+    assert [kw["max_retries"] for kw in built] == [0, 0]
+
+
+# ── audit fix-ups (coordinator audit of 9204955) ─────────────────────────────
+class _Rec:
+    """Records structlog calls, so a log field can be asserted on."""
+
+    def __init__(self):
+        self.events: list[tuple[str, str, dict]] = []
+
+    def __getattr__(self, level):
+        return lambda event, **kw: self.events.append((level, event, kw))
+
+
+def test_a_malformed_history_is_invalid_request_not_an_outage(monkeypatch):
+    """A KeyError while BUILDING the request used to be UPSTREAM_ERROR: retried
+    three times, then quietly served by the fallback."""
+    monkeypatch.setattr(settings, "LLM_FALLBACK_PROVIDER", "groq")
+    anth = _anthropic(monkeypatch, _amsg([_text("x")]))
+    groq = _openai(monkeypatch, _oresp("x"))
+    r = llm.chat([{"role": "tool", "content": "no tool_call_id"}], purpose="bad1")
+    assert r.status == llm.INVALID_REQUEST and "KeyError" in r.failure_reason
+    assert anth.calls == [] and groq.calls == [] and r.fallback_from is None
+
+
+def test_an_unknown_tool_call_key_is_invalid_request(monkeypatch):
+    anth = _anthropic(monkeypatch, _amsg([_text("x")]))
+    r = llm.chat([{"role": "user", "content": "q"},
+                  {"role": "assistant", "content": "",
+                   "tool_calls": [{"id": "a", "name": "get_kpi", "argz": {}}]}],
+                 purpose="bad2")
+    assert r.status == llm.INVALID_REQUEST and anth.calls == []
+
+
+def test_an_sdk_keyword_rejection_is_invalid_request_and_not_retried(monkeypatch):
+    """Exactly the anthropic 1.x `temperature` TypeError, had it shipped."""
+    monkeypatch.setattr(settings, "LLM_FALLBACK_PROVIDER", "groq")
+    anth = _anthropic(monkeypatch, TypeError(
+        "Messages.create() got an unexpected keyword argument 'temperature'"))
+    groq = _openai(monkeypatch, _oresp("x"))
+    r = llm.complete("p", purpose="kw")
+    assert r.status == llm.INVALID_REQUEST
+    assert len(anth.calls) == 1 and groq.calls == []
+
+
+def test_413_is_invalid_request_and_not_retried(monkeypatch):
+    anth = _anthropic(monkeypatch, _http_err(413))
+    assert llm.complete("p", purpose="big").status == llm.INVALID_REQUEST
+    assert len(anth.calls) == 1
+
+
+def test_an_unreadable_reply_is_bad_response_not_retried_not_fallen_back(monkeypatch):
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "groq")
+    monkeypatch.setattr(settings, "LLM_FALLBACK_PROVIDER", "anthropic")
+    groq = _openai(monkeypatch, _oresp(None, [NS(id="c", type="function", function=None)],
+                                       finish="tool_calls"))
+    anth = _anthropic(monkeypatch, _amsg([_text("x")]))
+    r = llm.chat([{"role": "user", "content": "q"}], purpose="unread", tools=TOOLS)
+    assert r.status == llm.BAD_RESPONSE and "could not read" in r.failure_reason
+    assert len(groq.calls) == 1 and anth.calls == []
+
+
+def test_a_schema_that_cannot_be_serialised_is_invalid_request_not_a_raise(monkeypatch):
+    anth = _anthropic(monkeypatch, _amsg([_text("{}")]))
+    r = llm.complete("p", purpose="s", json_schema={"type": "object", "bad": object()},
+                     cache_ttl=0)
+    assert r.status == llm.INVALID_REQUEST and anth.calls == []
+
+
+def test_a_missing_sdk_is_not_configured_and_health_says_why(monkeypatch):
+    """The state of an un-rebuilt image: it used to classify as MODEL_NOT_FOUND
+    ("notfound" in "modulenotfounderror") while health() read usable."""
+    import sys
+    monkeypatch.setitem(sys.modules, "anthropic", None)
+    r = llm.complete("p", purpose="nosdk")
+    assert r.status == llm.NOT_CONFIGURED and "not installed" in r.failure_reason
+    h = llm.health()
+    assert h["usable"] is False and h["primary_usable"] is False
+    assert "not installed" in h["unusable_reason"]
+
+    monkeypatch.setattr(settings, "LLM_FALLBACK_PROVIDER", "groq")
+    _openai(monkeypatch, _oresp("from groq"))
+    r2 = llm.complete("p", purpose="nosdk", cache_ttl=0)
+    assert r2.provider == "groq" and r2.fallback_from == "anthropic"
+    assert llm.health()["usable"] is True
+
+
+def test_an_sdk_that_fails_to_import_is_not_configured_not_model_not_found(monkeypatch):
+    import sys
+    monkeypatch.setattr(llm, "_sdk_missing", lambda _name: None)   # the spec is there...
+    monkeypatch.setitem(sys.modules, "anthropic", None)             # ...the import fails
+    r = llm.complete("p", purpose="imp")
+    assert r.status == llm.NOT_CONFIGURED and "could not be imported" in r.failure_reason
+    assert llm._classify(ModuleNotFoundError("No module named 'anthropic'")) == llm.NOT_CONFIGURED
+
+
+def test_a_tool_call_cut_off_by_max_tokens_is_not_runnable(monkeypatch):
+    _anthropic(monkeypatch, _amsg([_tool_use("t1", "get_kpi", {"kpi_"})], stop="max_tokens"))
+    r = llm.chat([{"role": "user", "content": "q"}], purpose="cut", tools=TOOLS)
+    assert r.status == llm.BAD_RESPONSE and not r.wants_tools
+    assert "cut off" in r.failure_reason
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "groq"])
+def test_an_empty_turn_that_hit_max_tokens_is_bad_response(monkeypatch, provider):
+    monkeypatch.setattr(settings, "LLM_PROVIDER", provider)
+    if provider == "anthropic":
+        _anthropic(monkeypatch, _amsg([], stop="max_tokens"))
+    else:
+        _openai(monkeypatch, _oresp("", finish="length"))
+    r = llm.chat([{"role": "user", "content": "q"}], purpose="empty")
+    assert r.status == llm.BAD_RESPONSE and r.ai_generated is False
+
+
+def test_wants_tools_requires_a_tool_use_stop():
+    calls = [llm.ToolCall("a", "get_kpi")]
+    assert llm.ChatResult(status=llm.OK, tool_calls=calls, stop_reason="tool_use").wants_tools
+    assert not llm.ChatResult(status=llm.OK, tool_calls=calls, stop_reason="end_turn").wants_tools
+    assert not llm.ChatResult(status=llm.OK, tool_calls=calls, stop_reason="max_tokens").wants_tools
+
+
+def test_a_scripted_max_tokens_turn_is_bad_response_through_the_fake():
+    cut = llm.ChatResult(status=llm.OK, tool_calls=[llm.ToolCall("a", "get_kpi")],
+                         stop_reason="max_tokens", provider="fake")
+    with llm.use_fake([cut]):
+        r = llm.chat([{"role": "user", "content": "q"}], purpose="fake-cut")
+    assert r.status == llm.BAD_RESPONSE and not r.wants_tools
+
+
+def test_openai_tool_calls_finishing_with_stop_are_still_a_tool_turn(monkeypatch):
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "groq")
+    _openai(monkeypatch, _oresp(None, [NS(id="c1", type="function",
+                                          function=NS(name="get_kpi", arguments="{}"))],
+                                finish="stop"))
+    r = llm.chat([{"role": "user", "content": "q"}], purpose="stopcalls", tools=TOOLS)
+    assert r.stop_reason == "tool_use" and r.wants_tools
+
+
+def test_provider_none_is_a_kill_switch_even_with_a_fallback(monkeypatch):
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "none")
+    monkeypatch.setattr(settings, "LLM_FALLBACK_PROVIDER", "groq")
+    groq = _openai(monkeypatch, _oresp("must not be called"))
+    r = llm.complete("p", purpose="kill")
+    assert r.status == llm.NOT_CONFIGURED and "switched off" in r.failure_reason
+    assert llm.chat([{"role": "user", "content": "q"}], purpose="kill").status == llm.NOT_CONFIGURED
+    assert groq.calls == []
+    h = llm.health()
+    assert h["usable"] is False and h["fallback_provider"] is None
+
+
+def test_a_fenced_reply_on_groq_is_still_bad_response(monkeypatch):
+    """Fence-stripping is Anthropic-only; the groq JSON contract is unchanged."""
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "groq")
+    _openai(monkeypatch, _oresp('```json\n{"a": 1}\n```'))
+    assert llm.complete("p", purpose="fence", json_mode=True).status == llm.BAD_RESPONSE
+
+
+def test_llm_ok_logs_the_attempt_that_succeeded(monkeypatch):
+    rec = _Rec()
+    monkeypatch.setattr(llm, "logger", rec)
+    _anthropic(monkeypatch, lambda _k, n: _http_err(429) if n == 1 else _amsg([_text("ok")]))
+    llm.complete("p", purpose="att")
+    ok = [kw for level, event, kw in rec.events if event == "llm.ok"]
+    assert ok and ok[0]["attempt"] == 1
+
+
+def test_when_both_fail_the_primary_failure_is_returned_with_the_fallbacks(monkeypatch):
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "")
+    monkeypatch.setattr(settings, "LLM_FALLBACK_PROVIDER", "groq")
+    _openai(monkeypatch, _http_err(503))
+    r = llm.complete("p", purpose="both", cache_ttl=0)
+    assert r.status == llm.NOT_CONFIGURED and "No API key" in r.failure_reason
+    assert r.fallback_failure["provider"] == "groq"
+    assert r.fallback_failure["status"] == llm.UPSTREAM_ERROR
+    c = llm.chat([{"role": "user", "content": "q"}], purpose="both")
+    assert c.status == llm.NOT_CONFIGURED and c.fallback_failure["status"] == llm.UPSTREAM_ERROR
+
+
+def test_groq_content_filter_in_complete_is_refused(monkeypatch):
+    """It was OK, usually over an empty string; chat() already said REFUSED."""
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "groq")
+    _openai(monkeypatch, _oresp("", finish="content_filter"))
+    r = llm.complete("p", purpose="cf")
+    assert r.status == llm.REFUSED and r.ai_generated is False
+
+
+def test_use_fake_never_touches_the_real_store():
+    before = llm._store
+    with llm.use_fake(["x"]):
+        assert isinstance(llm._store, llm._MemoryStore) and llm._store is not before
+        llm.complete("p", purpose="fk")
+    assert llm._store is before

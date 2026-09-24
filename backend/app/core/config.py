@@ -221,8 +221,10 @@ class Settings(BaseSettings):
     # silently served a written-in answer when the key was missing, so a dead
     # integration was indistinguishable from a working one. See core/llm.py.
     #
-    # "groq" | "openai" | "none". Groq is OpenAI-compatible, so both run through
-    # the same SDK and differ only by base_url and model name.
+    # "groq" | "openai" | "anthropic" | "none". Groq is OpenAI-compatible, so
+    # groq and openai run through the same SDK and differ only by base_url and
+    # model name; anthropic has its own SDK (block below). "none" is a kill
+    # switch: nothing calls out, LLM_FALLBACK_PROVIDER included.
     LLM_PROVIDER: str = "groq"
     GROQ_API_KEY: str = ""
     GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
@@ -268,11 +270,19 @@ class Settings(BaseSettings):
     # a high-volume path does not move under an alias; Sonnet 5 has no dated id.
     LLM_MODEL_ANTHROPIC: str = "claude-haiku-4-5-20251001"
     LLM_MODEL_ANTHROPIC_AGENT: str = "claude-sonnet-5"
-    # Thinking depth for agent turns on models that accept `effort`
-    # (low | medium | high | xhigh | max). "medium" rather than the API's own
-    # default of "high": these agents read KPI tables and draft briefs, and an
-    # agent that needs more can pass effort= per call. Empty = API default.
+    # Thinking depth for agent turns on models that accept `effort`. Valid
+    # values depend on the model: low | medium | high everywhere effort exists
+    # (Opus 4.5 stops there), + max on the 4.6 line, + xhigh from Opus 4.7 /
+    # Sonnet 5 on. "medium" rather than the API's own default of "high": these
+    # agents read KPI tables and draft briefs, and an agent that needs more can
+    # pass effort= per call. Empty = API default. complete() does not use this;
+    # it reuses LLM_REASONING_EFFORT ("low", valid on every effort model).
     LLM_AGENT_EFFORT: str = "medium"
+    # chat() gets its own timeout: a Sonnet 5 turn with adaptive thinking and a
+    # 16k-token ceiling can legitimately run well past the 20 s sized for short
+    # complete() prompts — and TIMEOUT is a fallback trigger, so a too-short
+    # value would switch provider in the middle of an agent's loop.
+    LLM_AGENT_TIMEOUT_SECONDS: float = 120.0
     # A second provider tried once when the first is unusable or fails on its
     # side (no key, auth, rate limit, timeout, outage) — e.g. "groq" behind
     # "anthropic". Never tried for a caller-shaped failure (bad JSON, invalid
