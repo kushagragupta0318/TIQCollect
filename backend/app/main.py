@@ -172,6 +172,25 @@ app.include_router(field_ops.router)
 # entry — the browser only ever talks to one host.
 _STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
 
+# 2026-09-24 — static file serving could read outside the static root. The
+# requested path is now resolved (realpath) and anything that does not land
+# inside static/ answers the normal 404; the api/ and ws/ refusal is
+# unchanged. Same code as hotfix/spa-containment.
+def _spa_target(full_path: str, static_dir: str) -> str | None:
+    """What the SPA catch-all should serve for `full_path`, or None for a 404."""
+    # Never let an unmatched API path fall through to index.html: a caller
+    # would get 200 and a page of HTML instead of an honest 404.
+    if full_path.startswith(("api/", "ws/")):
+        return None
+    root = os.path.realpath(static_dir)
+    candidate = os.path.realpath(os.path.join(root, full_path))
+    if candidate != root and not candidate.startswith(root + os.sep):
+        return None                  # escapes static/ — never serve it
+    if full_path and os.path.isfile(candidate):
+        return candidate
+    return os.path.join(root, "index.html")
+
+
 if os.path.isdir(_STATIC_DIR):
     from fastapi.responses import FileResponse
     from fastapi.staticfiles import StaticFiles
@@ -188,11 +207,7 @@ if os.path.isdir(_STATIC_DIR):
         a hard refresh or a pasted link — the server has no such route, so
         without it every deep link would 404.
         """
-        # Never let an unmatched API path fall through to index.html: a caller
-        # would get 200 and a page of HTML instead of an honest 404.
-        if full_path.startswith(("api/", "ws/")):
+        target = _spa_target(full_path, _STATIC_DIR)
+        if target is None:
             raise HTTPException(status_code=404, detail="Not Found")
-        candidate = os.path.join(_STATIC_DIR, full_path)
-        if full_path and os.path.isfile(candidate):
-            return FileResponse(candidate)
-        return FileResponse(os.path.join(_STATIC_DIR, "index.html"))
+        return FileResponse(target)
