@@ -12,6 +12,7 @@ import { DrillPanel, type DrillData } from "../components/DrillPanel";
 import { ExecutiveHeader, PageRoot, ToolHeader, ToolHeaderAction } from "../components/PageTemplate";
 import { CureRollBars, ExposureFunnel, HeatGrid, TransitionMatrix } from "../components/portfolioVisuals";
 import { PulseKpiFlow } from "../components/PulseKpiFlow";
+import { SampleDataNote } from "../components/SampleDataNote";
 import { WorkspaceModal } from "../components/WorkspaceModal";
 import { BRAND, CHART_SERIES, DPD_COLORS, RISK_COLORS } from "../theme/colors";
 import { gradeColor } from "../theme/chartTheme";
@@ -233,10 +234,13 @@ export default function BankComponentGalleryPage() {
       {/* ── Analytics ──────────────────────────────────────────────────── */}
       <div id="portfolio-analytics" ref={analyticsRef} className="scroll-mt-4">
         <section className="space-y-6">
-          <AnalyticsSectionHeader
-            title="Portfolio Analytics"
-            subtitle="The header numbers taken apart. Rows and cells are clickable — every slice opens the accounts behind it."
-          />
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <AnalyticsSectionHeader
+              title="Portfolio Analytics"
+              subtitle="The header numbers taken apart. Rows and cells are clickable — every slice opens the accounts behind it."
+            />
+            <SampleDataNote />
+          </div>
           <AnalyticsTabBar tabs={ANALYTICS_TABS} active={tab} onChange={setTab} />
 
           <div className="space-y-5">

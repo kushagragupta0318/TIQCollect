@@ -18,25 +18,64 @@ const TAILWIND_DEFAULTS = new Set(["*", "::before", "::after", "::backdrop"]);
 // used — the same definitions TIQCollect's build already emits.
 const TAILWIND_KEYFRAMES = new Set(["spin", "ping", "pulse", "bounce"]);
 
+/**
+ * A selector that can only match inside the bank tree: it STARTS with the
+ * scope — `.bank-root`, `:where(.bank-root)`, or the portal container
+ * `.bank-root[data-bank-portal]` — followed by nothing or a DESCENDANT or
+ * CHILD step. `includes(".bank-root")` (the first version of this test)
+ * would also have passed `.bank-root ~ div` and `.bank-root + *`, which style
+ * the bank root's siblings, and `body:has(.bank-root)`, which styles <body>.
+ */
+const SCOPED = /^(?:\.bank-root|:where\(\.bank-root\))(?:\[data-bank-portal\])?(?:$|\s+(?![~+]))/;
+
 let root: Root;
+let tiqDefaults: Map<string, Map<string, string>>;
+
+// `--tw-*` declarations by selector group, from the `*, ::before, ::after`
+// and `::backdrop` rules.
+function twDefaults(r: Root): Map<string, Map<string, string>> {
+  const out = new Map<string, Map<string, string>>();
+  r.walkRules((rule) => {
+    if (!rule.selectors.every((s) => TAILWIND_DEFAULTS.has(s))) return;
+    const key = rule.selectors.join(", ");
+    const decls = out.get(key) ?? new Map<string, string>();
+    rule.walkDecls((d) => void decls.set(d.prop, d.value));
+    out.set(key, decls);
+  });
+  return out;
+}
 
 beforeAll(async () => {
   const result = await postcss([tailwindcss()]).process(readFileSync(CSS_PATH, "utf8"), { from: CSS_PATH });
   root = result.root;
+  // The main build's base layer, from TIQCollect's own config — the defaults
+  // the bank's copy must not disagree with, since both are global.
+  const tiqConfig = join(__dirname, "..", "..", "tailwind.config.js");
+  const tiq = await postcss([tailwindcss({ config: tiqConfig })]).process("@tailwind base;", { from: undefined });
+  tiqDefaults = twDefaults(tiq.root);
 }, 60_000);
 
 describe("bank.css is scoped to .bank-root", () => {
-  it("every rule outside a keyframe block names .bank-root", () => {
+  it("every rule outside a keyframe block starts with the .bank-root scope and only descends from it", () => {
     const leaks: string[] = [];
     root.walkRules((rule) => {
       const parent = rule.parent;
       if (parent?.type === "atrule" && /keyframes$/.test((parent as AtRule).name)) return;
       for (const selector of rule.selectors) {
-        if (selector.includes(".bank-root") || TAILWIND_DEFAULTS.has(selector)) continue;
+        if (SCOPED.test(selector.trim()) || TAILWIND_DEFAULTS.has(selector)) continue;
         leaks.push(selector);
       }
     });
     expect(leaks).toEqual([]);
+  });
+
+  it("the anchored check rejects the selectors a substring check let through", () => {
+    for (const bad of [".bank-root ~ div", ".bank-root + *", ".bank-root~div", "body:has(.bank-root)", "html .bank-root", ".x, .bank-root .y"]) {
+      expect(SCOPED.test(bad), bad).toBe(false);
+    }
+    for (const good of [".bank-root", ".bank-root .x", ".bank-root > .x", ":where(.bank-root) *", ".bank-root[data-bank-portal]", ".bank-root ::-webkit-scrollbar"]) {
+      expect(SCOPED.test(good), good).toBe(true);
+    }
   });
 
   it("the tw-* defaults declare only custom properties", () => {
@@ -44,6 +83,24 @@ describe("bank.css is scoped to .bank-root", () => {
       if (!rule.selectors.every((s) => TAILWIND_DEFAULTS.has(s))) return;
       rule.walkDecls((decl) => expect(decl.prop.startsWith("--tw-")).toBe(true));
     });
+  });
+
+  it("every tw-* default the bank emits equals the main build's, so loading it changes nothing global", () => {
+    const bank = twDefaults(root);
+    // Not vacuous: the universal block carries Tailwind's full default set.
+    expect(bank.get("*, ::before, ::after")?.size ?? 0).toBeGreaterThan(20);
+    const mismatches: string[] = [];
+    for (const [group, decls] of bank) {
+      const theirs = tiqDefaults.get(group);
+      if (!theirs) {
+        mismatches.push(`${group}: the main build has no such rule`);
+        continue;
+      }
+      for (const [prop, value] of decls) {
+        if (theirs.get(prop) !== value) mismatches.push(`${group} ${prop}: bank "${value}" vs main "${theirs.get(prop)}"`);
+      }
+    }
+    expect(mismatches).toEqual([]);
   });
 
   it("every keyframe is bank- prefixed or one of Tailwind's own", () => {

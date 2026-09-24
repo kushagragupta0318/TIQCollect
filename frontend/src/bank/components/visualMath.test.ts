@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { BRAND } from "../theme/colors";
-import { toCsv } from "./workspace";
+import { sampleFilename, toCsv } from "./workspace";
+import { SAMPLE_DATA_LABEL } from "./sampleData";
 import {
   bar100Width,
   chipBackground,
@@ -72,9 +73,40 @@ describe("transition matrix cells", () => {
 });
 
 describe("workspace CSV export", () => {
-  it("leaves headers bare, quotes every value, and doubles embedded quotes", () => {
-    expect(toCsv({ headers: ["Agency", "Lift"], rows: [["Sahyadri \"West\" Services", 1.9], ["Ganga", -0.4]] })).toBe(
-      'Agency,Lift\n"Sahyadri ""West"" Services","1.9"\n"Ganga","-0.4"',
+  it("quotes headers and values, and doubles embedded quotes", () => {
+    expect(toCsv({ headers: ["Agency", "Lift, ₹ Cr"], rows: [["Sahyadri \"West\" Services", 1.9], ["Ganga", -0.4]] })).toBe(
+      '"Agency","Lift, ₹ Cr"\n"Sahyadri ""West"" Services","1.9"\n"Ganga","-0.4"',
     );
+  });
+
+  it("defuses text a spreadsheet would run as a formula, in cells and headers", () => {
+    const csv = toCsv({
+      headers: ["=cmd", "Note"],
+      rows: [
+        ["=HYPERLINK(\"http://x\")", "+91 98200 11111"],
+        ["-2+3", "@SUM(A1)"],
+        ["\tTab", "Ramesh & Sons"],
+      ],
+    });
+    expect(csv.split("\n")).toEqual([
+      '"\'=cmd","Note"',
+      '"\'=HYPERLINK(""http://x"")","\'+91 98200 11111"',
+      '"\'-2+3","\'@SUM(A1)"',
+      '"\'\tTab","Ramesh & Sons"',
+    ]);
+  });
+
+  it("leaves numbers alone, negative ones included", () => {
+    expect(toCsv({ headers: ["Lift"], rows: [[-0.4], [0]] })).toBe('"Lift"\n"-0.4"\n"0"');
+  });
+
+  it("a sample export says so in its first line and its file name", () => {
+    expect(toCsv({ headers: ["Lift"], rows: [[1.9]] }, { banner: SAMPLE_DATA_LABEL }).split("\n")).toEqual([
+      `"${SAMPLE_DATA_LABEL}"`,
+      '"Lift"',
+      '"1.9"',
+    ]);
+    expect(sampleFilename("budget-optimizer.csv")).toBe("SAMPLE-budget-optimizer.csv");
+    expect(sampleFilename("SAMPLE-x.csv")).toBe("SAMPLE-x.csv");
   });
 });

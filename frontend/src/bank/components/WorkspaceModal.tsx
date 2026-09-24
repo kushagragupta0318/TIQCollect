@@ -10,7 +10,8 @@ import { CheckCircle, Download, Play, RefreshCw, Save, Settings, Share2, X } fro
 import { getBankPortalRoot } from "../lib/portal";
 import { useModalFocus } from "../lib/useModalFocus";
 import { SampleDataNote } from "./SampleDataNote";
-import { scenarioStorageKey, toCsv, type WorkspaceExport, type WorkspaceTool } from "./workspace";
+import { sampleFilename, scenarioStorageKey, toCsv, type WorkspaceExport, type WorkspaceTool } from "./workspace";
+import { SAMPLE_DATA_LABEL } from "./sampleData";
 
 export interface WorkspaceModalProps {
   tool: WorkspaceTool;
@@ -90,16 +91,19 @@ export function WorkspaceModal({
       showToast("No exportable data for this tool");
       return;
     }
-    const blob = new Blob([toCsv(data)], { type: "text/csv;charset=utf-8;" });
+    // A sample export is labelled in its first line and its file name.
+    const filename = sampleData ? sampleFilename(data.filename) : data.filename;
+    const csv = toCsv(data, { banner: sampleData ? SAMPLE_DATA_LABEL : undefined });
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = data.filename;
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
-    showToast(`Exported ${data.filename}`);
+    showToast(`Exported ${filename}`);
   };
 
   const handleShare = () => {
@@ -108,17 +112,18 @@ export function WorkspaceModal({
       const raw = localStorage.getItem(scenarioStorageKey(tool.panel));
       saved = raw ? JSON.parse(raw) : null;
     } catch {
-      saved = null; // storage blocked or a corrupt entry: share the live summary
+      saved = null; // storage blocked or a corrupt entry: share the unsaved summary
     }
     const summary = saved?.savedAt
       ? `Command Center — ${tool.label}\nSaved: ${new Date(saved.savedAt).toLocaleString()}`
       : `Command Center — ${tool.label} (unsaved simulation, no scenario saved yet)`;
+    const shared = sampleData ? `${summary}\n${SAMPLE_DATA_LABEL}` : summary;
     if (!navigator.clipboard) {
       showToast("Clipboard unavailable");
       return;
     }
     navigator.clipboard
-      .writeText(summary)
+      .writeText(shared)
       .then(() => {
         setShareIcon("check");
         showToast("Scenario summary copied to clipboard");

@@ -3,7 +3,9 @@
 // inside each composite rather than only in a page header because the drill
 // drawer and the workspace portal out of the page: a header marker cannot be
 // seen from inside them. Styled as CC's warning badge (#FDF0DC / #B54708).
-export function SampleDataNote({ label = "Sample data — invented figures, not the bank's book" }: { label?: string }) {
+import { SAMPLE_DATA_LABEL } from "./sampleData";
+
+export function SampleDataNote({ label = SAMPLE_DATA_LABEL }: { label?: string }) {
   return (
     <span
       role="note"

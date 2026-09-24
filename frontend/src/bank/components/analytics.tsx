@@ -142,7 +142,9 @@ export function DrillRow({ onDrill, children, className = "" }: { onDrill?: () =
 
 /**
  * A DPD bucket chip (spec §1.4). `dense` is the drill / alert-table size
- * (`text-[9px] font-bold px-1.5`); the default is the ladder's.
+ * (`text-[9px] font-bold px-1.5`); the default is the ladder's. An unmapped
+ * bucket falls back to slate — CC would render `color: undefined` and
+ * background "undefined15", i.e. no chip at all (UI spec §9).
  */
 export function BucketChip({ bucket, dense = false }: { bucket: string; dense?: boolean }) {
   const color = DPD_COLORS[bucket] ?? BRAND.slate;
