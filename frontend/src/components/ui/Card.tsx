@@ -1,24 +1,6 @@
 import { clsx } from "clsx";
 import type { ReactNode } from "react";
 
-interface CardProps {
-  children: ReactNode;
-  className?: string;
-  onClick?: () => void;
-  hover?: boolean;
-}
-
-export function Card({ children, className, onClick, hover }: CardProps) {
-  return (
-    <div
-      className={clsx("card", hover && "cursor-pointer hover:bg-[#F7F8FA] transition-colors", className)}
-      onClick={onClick}
-    >
-      {children}
-    </div>
-  );
-}
-
 export function StatCard({ label, value, subtext, icon, colorClass = "text-brand-600", onClick }: {
   label: string;
   value: string | number;

@@ -69,11 +69,6 @@ export async function reoptimizeBeat(lat: number, lon: number): Promise<{
   return data;
 }
 
-export async function getCases(): Promise<Case[]> {
-  const { data } = await api.get<Case[]>("/agent/cases");
-  return data;
-}
-
 export interface RankedCase extends Case {
   rank: number;
   rank_score: number;
@@ -225,11 +220,6 @@ export async function getUpiConfig(): Promise<UpiConfig> {
   return data;
 }
 
-export async function createPaymentLink(caseId: string, amount: number): Promise<{ image_url: string; qr_id: string }> {
-  const { data } = await api.post(`/agent/cases/${caseId}/payment-link`, { amount });
-  return data;
-}
-
 export async function collectPayment(caseId: string, payload: {
   amount: number;
   mode: string;
@@ -344,11 +334,6 @@ export async function cancelSOS() {
 
 export async function handoverCase(caseId: string, notes: string, returnToPool = true) {
   const { data } = await api.post(`/agent/cases/${caseId}/handover`, { notes, return_to_pool: returnToPool });
-  return data;
-}
-
-export async function flagCustomer(customerId: string, flags: { is_hostile?: boolean; do_not_contact?: boolean }) {
-  const { data } = await api.patch(`/agent/customers/${customerId}/flag`, flags);
   return data;
 }
 
