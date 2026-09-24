@@ -101,8 +101,9 @@ THE MODEL, month by month, for every account on every path
     RESOLVED at (1 - discount) of the balance.
 
 4.  Each account draws its next state by inverse CDF. The lookup is a
-    Chen–Asau guide table: one table read resolves ~90%+ of draws, a short
-    threshold walk the rest — exact, not an approximation. Measured in the
+    Chen–Asau guide table: one table read settles ~97% of draws (measured
+    on the synthetic 50k book: 3.4% walk), a short threshold walk the rest —
+    exact, not an approximation (test_the_guide_table_draw_is_exact). Measured in the
     fieldops-test image (numpy 2.2): ~27 ns per account-step, against ~83 ns
     for a take-and-compare over the 8 thresholds and ~240 ns for one flat
     np.searchsorted over row-offset cumulative rows.
@@ -126,6 +127,7 @@ from __future__ import annotations
 import math
 import os
 import time
+import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field, replace
 from typing import Callable, Mapping, Sequence
@@ -625,11 +627,15 @@ class Band:
 
     @classmethod
     def of(cls, per_path: np.ndarray) -> "Band":
+        """NaN paths (e.g. GNPA % once the live book is empty) are left out;
+        a metric undefined on every path stays NaN rather than becoming 0."""
         x = np.asarray(per_path, dtype=np.float64)
-        q = np.nanpercentile(x, PERCENTILES, axis=0)
-        n = np.sum(np.isfinite(x), axis=0)
-        mean = np.nanmean(x, axis=0)
-        sd = np.nanstd(x, axis=0, ddof=1) if x.shape[0] > 1 else np.full(mean.shape, np.nan)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            q = np.nanpercentile(x, PERCENTILES, axis=0)
+            n = np.sum(np.isfinite(x), axis=0)
+            mean = np.nanmean(x, axis=0)
+            sd = np.nanstd(x, axis=0, ddof=1) if x.shape[0] > 1 else np.full(mean.shape, np.nan)
         sem = sd / np.sqrt(np.maximum(n, 1))
         return cls(q[0], q[1], q[2], q[3], q[4], mean, sem)
 
@@ -1059,8 +1065,9 @@ def _run_chunk(ctx: _Context, p0: int, p1: int, ss: np.random.SeedSequence, out:
     out.pd_by_state[p0:p1] = np.where(stage == 1, pd1, np.where(stage == 2, pd2, np.where(stage == 3, 1.0, 0.0)))
 
     # 4. Account-level simulation. `state` and `idxk` (row id x K) are kept in
-    #    step; aggregates are updated from the accounts that MOVED only (~15%
-    #    of account-months), never rebuilt from the whole book.
+    #    step; aggregates are updated from the accounts that MOVED only (12.5%
+    #    of account-months on the synthetic 50k book), never rebuilt from the
+    #    whole book every month.
     shift_k = K.bit_length() - 1
     state = np.tile(ctx.state0, (pc, 1))
     rowbase = (np.arange(pc, dtype=np.int32)[:, None] * S + ctx.seg[None, :]) * N_STATES
@@ -1182,12 +1189,20 @@ def simulate(
     max_accounts: int | None = None,
     progress: Callable[[float], None] | None = None,
 ) -> SimulationResult:
-    """Run the Monte Carlo. Reproducible from (seed, inputs, config.chunk_paths).
+    """Run the Monte Carlo. Reproducible from (seed, inputs, config.chunk_paths)
+    under one numpy version — numpy does not promise its Generator
+    distributions are stable across versions, so the version is recorded in
+    `diagnostics["numpy_version"]` and belongs beside the seed (task E03).
 
     `max_accounts` opts into a stratified subsample (Portfolio.subsample) for
     very large books; the full book is simulated by default. `progress` is
     called with the completed fraction after each chunk (for the Celery job,
     task E03).
+
+    Memory: the per-path outputs are two (n_paths, horizon+1, segments, 8)
+    float64 arrays — 1,000 paths x 13 months x 24 segments is ~40 MB, and
+    10,000 paths x 100 segments ~1.7 GB. Working memory per thread is
+    ~15 bytes per account x chunk_paths.
     """
     t_start = time.perf_counter()
     config = config or EngineConfig()
@@ -1291,14 +1306,14 @@ def simulate(
     delinquent = out.seg_state_count[:, :T][..., list(DELINQUENT)].sum(axis=-1)
     out.field_cost[:] = delinquent * visits_per_delinquent * config.field_visit_cost_inr
 
-    # ECL = PD x LGD x EAD, per path, per stage.
+    # ECL = PD x LGD x EAD, per path, per stage (einsum: no book-sized temporary).
     lgd = ifrs9.lgd_by_state()
-    ecl_state = out.seg_state_balance * out.pd_by_state[:, None] * lgd  # (P, T+1, S, 8)
     stage = np.asarray(IFRS9_STAGE)
     for k in (1, 2, 3):
-        out.ecl_stage[..., k - 1] = ecl_state[..., stage == k].sum(axis=(-1, -2))
-        out.ead_stage[..., k - 1] = out.seg_state_balance[..., stage == k].sum(axis=(-1, -2))
-    del ecl_state
+        m = stage == k
+        out.ead_stage[..., k - 1] = out.seg_state_balance[..., m].sum(axis=(-1, -2))
+        out.ecl_stage[..., k - 1] = np.einsum("ptsk,psk,k->pt", out.seg_state_balance[..., m],
+                                              out.pd_by_state[..., m], lgd[m])
 
     per_path = _per_path_metrics(out)
     summary = {m: Band.of(v) for m, v in per_path.items()}
@@ -1323,6 +1338,7 @@ def simulate(
         assumptions=ASSUMPTIONS,
         diagnostics={
             "recovery_source": recovery.source,
+            "numpy_version": np.__version__,
             "rows_held_in_place": rows_held_in_place,
             "segments_without_loan_type": [matrices.keys[s] for s, lt in enumerate(loan_types) if lt is None],
             "macro_shift_by_segment": dict(zip(matrices.keys, mu.round(6).tolist())),
