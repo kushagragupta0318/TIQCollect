@@ -59,6 +59,12 @@ def test_a_nul_byte_is_refused_not_an_error(static_dir, path):
     assert _spa_target(path, static_dir) is None
 
 
+def test_a_static_dir_that_cannot_be_resolved_is_a_404_not_an_error():
+    """The root's own realpath sits inside the same guard as the candidate's.
+    static_dir is server configuration, so this is robustness, not exposure."""
+    assert _spa_target("index.html", "bad\x00dir") is None
+
+
 def test_an_absolute_path_is_refused(static_dir, tmp_path):
     """os.path.join discards the root when the second part is absolute."""
     assert _spa_target(os.path.join(str(tmp_path), "outside.txt"), static_dir) is None

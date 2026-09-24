@@ -181,10 +181,10 @@ def _within(path: str, root: str) -> bool:
 
 
 # 2026-09-24 — static file serving could read outside the static root. The
-# requested path is now checked on its face (no NUL byte, not absolute, no
-# drive, still under static/ after normpath) and then resolved with realpath,
-# which also follows symlinks; anything that does not land inside static/
-# answers the normal 404. The api/ and ws/ refusal is unchanged.
+# requested path is now checked on its face (no NUL byte, not absolute, still
+# under static/ after normpath) and then resolved with realpath, which also
+# follows symlinks; anything that does not land inside static/ answers the
+# normal 404. The api/ and ws/ refusal is unchanged.
 def _spa_target(full_path: str, static_dir: str) -> str | None:
     """What the SPA catch-all should serve for `full_path`, or None for a 404."""
     # Never let an unmatched API path fall through to index.html: a caller
@@ -192,14 +192,18 @@ def _spa_target(full_path: str, static_dir: str) -> str | None:
     if full_path.startswith(("api/", "ws/")):
         return None
     # Refused before the filesystem is touched: a NUL byte (realpath raises on
-    # it), an absolute path or a drive (os.path.join would drop the root), and
-    # a path that leaves static/ on its face.
+    # it), an absolute path (os.path.join would drop the root), and a path
+    # that leaves static/ on its face. splitdrive only ever finds a drive on
+    # Windows; on Linux the lexical normpath check below is what catches a
+    # drive-looking path.
     if "\x00" in full_path or os.path.isabs(full_path) or os.path.splitdrive(full_path)[0]:
         return None
-    root = os.path.realpath(static_dir)
-    if not _within(os.path.normpath(os.path.join(root, full_path)), root):
-        return None
+    # Both realpath calls sit inside one guard: anything the filesystem layer
+    # cannot resolve is a 404, never a 500.
     try:
+        root = os.path.realpath(static_dir)
+        if not _within(os.path.normpath(os.path.join(root, full_path)), root):
+            return None
         candidate = os.path.realpath(os.path.join(root, full_path))
     except (ValueError, OSError):
         return None
