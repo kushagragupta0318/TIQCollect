@@ -8,24 +8,19 @@
 //   a field the current visit type shows, a reason only where the page asks
 //   for one, PTP figures only when the outcome is a promise. Nothing here
 //   changes the form; it returns the patch the agent chose to apply.
+// 2026-09-24 (later) — after the audit of a4c834b: refuses payment outcomes
+//   itself (defence in depth — the server already never sends one), and the
+//   wire types moved to api/agent.ts, where an API type belongs.
 // ─────────────────────────────────────────────────────────────────────────────
 import type { DefaultReason, VisitOutcome } from "@/types";
+import type { ExtractedField, VisitExtraction } from "@/api/agent";
 
-export interface ExtractedField {
-  field: string;
-  value: string | number;
-  evidence: string;
-}
+export type { ExtractedField, VisitExtraction };
 
-export interface VisitExtraction {
-  source: "llm" | "rules" | "none";
-  ai_generated: boolean;
-  suggestions: ExtractedField[];
-  rejected: { field: string; value: unknown; reason: string }[];
-  llm_status: string | null;
-  failure_reason: string | null;
-  version: string;
-}
+/** Evidenced by a verified payment, never by speech. The server never
+ *  suggests these; refusing them here too means a change there cannot put a
+ *  claim about money into the form. */
+export const PAYMENT_OUTCOMES: ReadonlySet<string> = new Set(["PAID_FULL", "PART_PAID", "PART_PAID_PTP"]);
 
 /** The slice of RecordVisitPage's FormState a suggestion can fill. */
 export interface ExtractableForm {
@@ -78,7 +73,8 @@ export function planSuggestions(
   const byValue = new Map(outcomes.map((o) => [o.value, o]));
   const outcomeSug = ext.suggestions.find((s) => s.field === "outcome");
   const suggestedOutcome =
-    outcomeSug && byValue.has(outcomeSug.value as VisitOutcome) ? (outcomeSug.value as VisitOutcome) : null;
+    outcomeSug && byValue.has(outcomeSug.value as VisitOutcome) && !PAYMENT_OUTCOMES.has(String(outcomeSug.value))
+      ? (outcomeSug.value as VisitOutcome) : null;
   // What the outcome WOULD be after "fill empty fields": the agent's own choice
   // always wins over a suggestion.
   const effective = form.outcome ?? suggestedOutcome;
@@ -91,6 +87,10 @@ export function planSuggestions(
     }
 
     if (s.field === "outcome") {
+      if (PAYMENT_OUTCOMES.has(String(s.value))) {
+        return { ...base, formKey: "outcome", usable: false, fillable: false, alreadySet: false,
+          note: "Recorded from a verified payment, not suggested" };
+      }
       const opt = byValue.get(s.value as VisitOutcome);
       if (!opt) {
         return { ...base, formKey: "outcome", usable: false, fillable: false, alreadySet: false,

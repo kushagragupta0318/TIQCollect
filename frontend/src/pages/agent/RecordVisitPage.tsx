@@ -91,6 +91,11 @@
 //   Required on the Borrower path, no default; RTP / BROKEN_PTP / DISPUTE and
 //   the hardship reasons pre-select it and the agent's last tap wins (rules
 //   and tests: borrowerStance.ts). Sent as borrower_disposition.
+// 2026-09-24 - H14: section G gains "Fill the form from your notes"
+//   (VisitExtractionPanel) under the two voice-note boxes, on the Borrower
+//   path only. It suggests the outcome, reason and promise from what the agent
+//   dictated, each beside the words it came from; nothing is applied without a
+//   tap, and it never overwrites a choice silently. Logic: visitExtraction.ts.
 // ──────────────────────────────────────────────────────────────────────────
 import { useEffect, useRef, useState } from "react";
 import QRCode from "react-qr-code";
@@ -2177,15 +2182,16 @@ export default function RecordVisitPage() {
                 />
               </div>
 
-              {/* H14 (2026-09-24): suggested outcome / reason / promise from the two notes above */}
-              <VisitExtractionPanel
-                caseId={caseId ?? ""}
+              {/* H14 (2026-09-24): suggested outcome / reason / promise from the two notes above.
+                  Not rendered without a case id — it would post to /cases//visit-extraction. */}
+              {caseId && <VisitExtractionPanel
+                caseId={caseId}
                 transcript={[form.notes, form.customerStatement].filter((t) => t.trim()).join("\n")}
                 form={{ outcome: form.outcome, defaultReason: form.defaultReason, ptpAmount: form.ptpAmount, ptpDate: form.ptpDate }}
                 outcomes={BORROWER_OUTCOMES}
                 reasons={DEFAULT_REASONS}
                 onApply={upd}
-              />
+              />}
 
               {/* Signature */}
               <div className="mt-4">

@@ -20,10 +20,13 @@
 //   instead of PENDING_VERIFICATION). Backs the OTP gate + offline branch in
 //   RecordVisitPage. See prototype_to_product/30.07.md.
 //   Full detail + why for all: /changelog.md
+// 2026-09-24 — H14: extractVisitFields() and its wire types (VisitExtraction,
+//   ExtractedField, RejectedField) for POST /agent/cases/{id}/visit-extraction.
+//   The types live here, in the API layer, and the page's pure module imports
+//   them — not the other way round.
 // ──────────────────────────────────────────────────────────────────────────
 import api from "./axios";
 import type { Case } from "@/types";
-import type { VisitExtraction } from "@/pages/agent/visitExtraction";
 
 export async function getHomeSummary(): Promise<{
   cases_today: number;
@@ -149,10 +152,37 @@ export async function transcribeAudio(blob: Blob): Promise<string> {
 
 // 2026-09-24 — H14. Transcribed notes → SUGGESTED form values, each with the
 // words it came from. Writes nothing server-side; see visitExtraction.ts for
-// what the page does with them. The LLM leg can take a few seconds, and the
-// server falls back to keyword rules itself, so this never needs a retry.
+// what the page does with them. The server falls back to keyword rules
+// itself, so this never needs a retry.
+export interface ExtractedField {
+  field: string;
+  value: string | number;
+  evidence: string;
+}
+
+export interface RejectedField {
+  field: string;
+  value: unknown;
+  code: string;      // stable: payment_outcome, above_remaining, evidence_mismatch, superseded, …
+  reason: string;    // for the agent
+}
+
+export interface VisitExtraction {
+  source: "llm" | "rules" | "none";
+  ai_generated: boolean;
+  suggestions: ExtractedField[];
+  rejected: RejectedField[];
+  llm_status: string | null;
+  failure_reason: string | null;
+  version: string;
+}
+
+// 90 s, not 60: the server's LLM leg can take 20 s a try with two retries on
+// a rate limit (~61.5 s worst case). A shorter client timeout showed the
+// agent an error in exactly the case where the server was about to answer
+// with its keyword fallback.
 export async function extractVisitFields(caseId: string, transcript: string): Promise<VisitExtraction> {
-  const { data } = await api.post(`/agent/cases/${caseId}/visit-extraction`, { transcript }, { timeout: 60000 });
+  const { data } = await api.post(`/agent/cases/${caseId}/visit-extraction`, { transcript }, { timeout: 90000 });
   return data as VisitExtraction;
 }
 

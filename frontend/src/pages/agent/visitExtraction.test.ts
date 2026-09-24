@@ -127,6 +127,20 @@ describe("the page's own rules about when a field is asked", () => {
     expect(f.ptp_amount.usable).toBe(true);
   });
 
+  it("refuses a payment outcome even though the Borrower path lists it", () => {
+    // Defence in depth: the server never suggests one. If that ever changed,
+    // a spoken "he paid" still could not pre-fill a claim about money.
+    for (const value of ["PAID_FULL", "PART_PAID", "PART_PAID_PTP"]) {
+      const e = ext([
+        { field: "outcome", value, evidence: "he paid me in cash" },
+        { field: "ptp_amount", value: 500, evidence: "Rs 500" },
+      ]);
+      const rows = planSuggestions(e, EMPTY, OUTCOMES, REASONS);
+      expect(patchForEmpty(rows)).toEqual({});
+      expect(rows.every((r) => !r.usable)).toBe(true);
+    }
+  });
+
   it("refuses an outcome this visit type does not offer", () => {
     const e = ext([{ field: "outcome", value: "NOT_AVAILABLE", evidence: "not at home" }]);
     const [row] = planSuggestions(e, EMPTY, OUTCOMES, REASONS);

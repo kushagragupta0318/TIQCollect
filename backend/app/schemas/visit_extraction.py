@@ -28,7 +28,8 @@ class ExtractedField(BaseModel):
 class RejectedField(BaseModel):
     field: str
     value: Any
-    reason: str
+    code: str        # stable: payment_outcome, above_remaining, evidence_mismatch, superseded, …
+    reason: str      # for the agent
 
 
 class VisitExtractionResponse(BaseModel):

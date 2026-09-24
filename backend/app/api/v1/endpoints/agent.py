@@ -104,6 +104,10 @@
 #   caller, and ignores any client number. The token needs real credentials
 #   and lives 5 minutes; its errors no longer echo SDK text. PAY-2: new GET
 #   /upi-config serves the QR payee from settings (none => no QR).
+# 2026-09-24 — H14: POST /cases/{case_id}/visit-extraction, a thin delegate
+#   to services/visit_report_extraction.py — a voice-note transcript becomes
+#   SUGGESTED form values the agent confirms; it writes nothing. case_id is
+#   checked as a UUID at the boundary (404, never a Postgres DataError).
 # ───────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 
@@ -868,11 +872,17 @@ def transcribe_audio(current_user: AgentOnly, db: DbSession, audio: UploadFile =
 
 @router.post("/cases/{case_id}/visit-extraction", response_model=VisitExtractionResponse)
 def extract_visit_fields(case_id: str, body: VisitExtractionRequest, current_user: AgentOnly, db: DbSession):
-    # TODO(A02): take RequestContext once it exists; scoped today through the
-    # same case-access check every other agent case route uses.
-    # TODO(B02): swap for the shared id validator in core once it lands. Ids
-    # become native UUIDs, and on Postgres a malformed one would be a DataError
-    # (a 500) rather than the 404 an unknown case gets.
+    # TODO(A02): take RequestContext once it exists. Scoped today through
+    # _get_accessible_case_or_404, the helper the case-detail and
+    # visit-strategy routes use. (This read "the same case-access check every
+    # other agent case route uses" until the audit of a4c834b: false —
+    # media_service and otp_service require a strict agent_id match, and this
+    # helper is the looser one A03 is replacing.)
+    # TODO(B02): at the rebase onto standalone-p1, type case_id as
+    # app.core.ids.UUIDPath and delete this check (43's AST tripwire fails on a
+    # bare str *_id). Ids become native UUIDs, and on Postgres a malformed one
+    # would be a DataError (a 500); the body here is the unknown-case 404's, so
+    # the swap changes no behaviour.
     try:
         uuid.UUID(case_id)
     except ValueError:
