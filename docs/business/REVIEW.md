@@ -79,7 +79,7 @@ These ten answer the pilot's real questions: *is the app used, where do agents g
 | # | Decision | Recommendation | Why |
 |---|---|---|---|
 | a | **ML-1: the model reads a "borrower stance" nobody records.** A: stance picker (+1 tap). B: roll back the model. C: measure first | **A, done so the agent's tap count does not change, plus C in parallel. And for any pilot, run the model in shadow until real outcomes exist.** | The visit form already has a "Borrower Tone" row (Cooperative / Neutral / Hostile, marked "Recommended") in the right place. Today it is only written into the notes text. **Replace it with the stance row** (Will pay / May pay / No commitment / Refuses / Hardship / Dispute), with no default. Pre-select it where the outcome already says it: Refuse to Pay → Refuses; Dispute → Dispute; a hardship reason → Hardship. Most visits then cost **0 extra taps**, and the ambiguous ones cost 1. Add the same row to the call log; the call-round plan needs it anyway. **Lead dev to check** whether a stance pre-filled from the outcome is statistically what the model was trained on (a noisy, independent reading); that is exactly C. Rolling back (B) buys nothing commercially: both models are trained on synthetic borrowers, and no real money moves on either today. |
-| b | **Demo names: "Anantya Bank" and `.test` e-mail domains** | **Keep `.test`. Change the bank.** | `.test` is reserved and can never deliver mail, which is the right safety property. A buyer sees an e-mail only in the login box and on the Manage Agents table, and "demo tenant, mail cannot reach anyone" is a good answer if asked. **"Anantya" collides with Anantya Capital**, a real Kolkata family office that invests in financial services, and a fictional "Bank" implies an RBI banking licence. Recommend a fictional **NBFC** ("… Finance Ltd"), since most FOS-heavy lenders are NBFCs. Screen every candidate against RBI's bank and NBFC lists, an MCA company-name search and a trademark search before adopting it. Same test for the agencies. |
+| b | **Demo names: "Anantya Bank" and `.test` e-mail domains** | **Decided by the owner, 2026-09-24: keep `.test`; the lender becomes a fictional "… Finance Ltd" (no "Bank", not "Anantya").** Name shortlist and agency check in §6. | `.test` is reserved and can never deliver mail. A fictional "Bank" implies an RBI banking licence a demo tenant does not hold; most FOS-heavy lenders are NBFCs anyway. |
 | c | **Pilot shape** | **One lender, one agency, one dedicated India deployment, ≤100 agents, 90 days, paid** | Reachable after wave 1: about 50–114 developer-days, roughly 4–8 weeks with three developers. A bank-led, multi-agency pilot needs wave 2 as well, about 7–15 more weeks. Pilot data is also the only route to real model outcomes. |
 | d | **Pause P4, P5 (beyond F01) and P6 (beyond H14)**, including the Monte Carlo and backtest work in progress | Pause | They need real history, and no buyer purchases on them. The freed capacity goes to wave 1. |
 | e | **Pricing model** | Platform fee per lender (₹1.5 lakh a month) + ₹900 per active agent + messaging at cost; ₹6 lakh paid pilot | See ECONOMICS.md. Not % of recovery. |
@@ -140,6 +140,40 @@ These ten answer the pilot's real questions: *is the app used, where do agents g
   - GPS from login;
   - post-visit SMS discloses the outstanding amount, including after DECEASED;
   - the "unverified" copy contradicts the server's 403.
+
+## 6. Demo tenant naming — collision check (2026-09-24)
+
+Per the owner's decision (§3b): a fictional lender "… Finance Ltd", `.test` emails kept, and a check on the 9 existing agency names. **Method and its limit:** web search plus targeted MCA/company-registry lookups, checked today. The RBi NBFC list (`rbi.org.in/Scripts/BS_NBFCList.aspx`) is a downloadable Excel/PDF, not a searchable database, so it was **not** cross-checked line by line — that is a formal step for legal before this goes live, not something a web search substitutes for. No trademark-registry search was run (India's IP India portal has no public API); a name that clears web search can still be a registered mark. Treat every "clear" below as "nothing found today", not as a legal clearance.
+
+### Lender name candidates ("… Finance Ltd")
+
+| Candidate | Checked | Result | Verdict |
+|---|---|---|---|
+| Meridian Trust Finance Ltd (the current name, "Bank" dropped) | 2026-09-24 | **Collides.** "Meridian Trust Finance" is a real, NCUA-insured US credit union's trade name | **Reject** |
+| Sanchay Finance Ltd | 2026-09-24 | **Collides.** Sanchay Finvest Ltd is a real, BSE-listed Indian NBFC (ticker SANCF) | **Reject** |
+| Kavach Finance Ltd | 2026-09-24 | **Collides.** Two real, active Indian finance companies: Kavach Financial Services Pvt Ltd (Gurugram) and Kavach (India) Finance and Investment Co Ltd | **Reject** |
+| Vindhya Finance Ltd | 2026-09-24 | **Collides.** Vindhya G Micro Finance Pvt Ltd is a real, active Indian NBFC | **Reject** |
+| Tunga Finance Ltd | 2026-09-24 | **Borderline.** No exact match, but Tunga Investments / Tunga Share Investments are real, active Indian finance-sector firms with the same first word | **Reject (same sector, one word off)** |
+| **Girivan Finance Ltd** | 2026-09-24 | **Clear.** No finance-sector company found; only an unrelated Pune real-estate development ("Girivan") | **Recommend — my pick** |
+| **Satpura Finance Ltd** | 2026-09-24 | **Clear.** No finance-sector "Satpura Finance" found; other "Satpura" companies (bio-fertilisers, transport, renewables, foods) are unrelated sectors | **Recommend — second choice** |
+
+**My pick: Girivan Finance Ltd.** Zero same-sector hits at all, against Satpura's several unrelated-but-noisy namesakes. Both are safe to build on for a demo; only a formal trademark and MCA search (legal, not me) should gate the final choice before anything ships externally.
+
+### The 9 agency names (Appendix C, `docs/DATA-MODEL-V2.md`)
+
+| Agency | Checked | Result | Verdict |
+|---|---|---|---|
+| Aravalli Field Services Pvt. Ltd. | 2026-09-24 | Clear — no matching company found | **Pass** |
+| Sarthak Recovery Services LLP | 2026-09-24 | Weak partial: "Sarthak Sansthan", an unrelated Bhopal NGO. Different sector, different legal form | **Pass** |
+| Rajputana Credit Solutions Pvt. Ltd. | 2026-09-24 | Clear — no matching company found | **Pass** |
+| Awadh Field Collections Pvt. Ltd. | 2026-09-24 | Weak partial: an Instagram handle `@awadh_collection__`, not a registered company | **Pass** |
+| **Konkan Asset Recovery Pvt. Ltd.** | 2026-09-24 | **Collides.** Konkan Credit and Collection Services Pvt Ltd is a real, active agency in the *same region* (Mumbai/Pune/Goa — the demo agency's own coverage) and the *same trade* (collections/verification for banks). The closest collision found in this whole check | **Rename before B16** |
+| Sabarmati Collection Services LLP | 2026-09-24 | "Sabarmati" is a real place name (an Ahmedabad locality); no matching *company* found | **Pass** |
+| Deccan Resolve Associates Pvt. Ltd. | 2026-09-24 | Clear — no matching company found | **Pass** |
+| Coromandel Recovery Partners LLP | 2026-09-24 | Weak partial: Coromandel International is real but is agrochemicals, not collections. Different sector, different suffix | **Pass** |
+| Hooghly Credit Management Pvt. Ltd. | 2026-09-24 | Clear — no matching company found | **Pass** |
+
+**One rename needed: Konkan Asset Recovery Pvt. Ltd.** Same region word, same industry, overlapping cities — the one name in the roster that a Mumbai-based buyer could plausibly mistake for a real competitor. Suggest **"Sahyadri Field Recovery Pvt. Ltd."** (Sahyadri is the same mountain range Konkan sits below, so the regional flavour survives the rename) — not yet screened; screen it the same way before 43 commits B16. Every other agency name and Northfield Small Finance Bank Ltd (the second tenant; also needs "Bank" dropped per the owner's rule — not yet renamed or screened, flagging for the same pass) can go forward as is.
 
 ## Method and footprint
 
