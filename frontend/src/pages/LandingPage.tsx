@@ -9,15 +9,13 @@ import { BrandLogo } from "@/components/ui/BrandLogo";
 export default function LandingPage() {
   const navigate = useNavigate();
 
-  function goLogin(type?: "agent" | "manager") {
-    if (type === "agent") {
-      // Pre-fill agent demo creds via URL state
-      navigate("/login", { state: { prefill: "agent" } });
-    } else if (type === "manager") {
-      navigate("/login", { state: { prefill: "manager" } });
-    } else {
-      navigate("/login");
-    }
+  // 2026-09-24 — A10: every CTA here used to send `{ prefill: "agent" }` or
+  //   `{ prefill: "manager" }` router state, which LoginPage turned into the
+  //   seeded demo credentials. The CTAs keep their labels and all go to the
+  //   plain login form; who you are is decided by what you type, not which
+  //   button you pressed.
+  function goLogin() {
+    navigate("/login");
   }
 
   return (
@@ -42,7 +40,7 @@ export default function LandingPage() {
             <button onClick={() => goLogin()} className="text-sm font-medium text-slate-600 hover:text-slate-900 transition-colors px-3 py-2">
               Log In
             </button>
-            <button onClick={() => goLogin("manager")} className="hidden min-h-10 items-center gap-1.5 rounded-control border border-primary bg-white px-4 text-sm font-medium text-primary transition-colors hover:bg-brand-100 sm:flex">
+            <button onClick={() => goLogin()} className="hidden min-h-10 items-center gap-1.5 rounded-control border border-primary bg-white px-4 text-sm font-medium text-primary transition-colors hover:bg-brand-100 sm:flex">
               Get Started <ArrowRight className="w-3.5 h-3.5" />
             </button>
           </div>
@@ -68,10 +66,10 @@ export default function LandingPage() {
               </p>
 
               <div className="flex flex-wrap gap-3 mb-10">
-                <button onClick={() => goLogin("manager")} className="flex items-center gap-2 rounded-control border border-primary bg-primary px-6 py-3 text-sm font-medium text-white transition-colors hover:bg-brand-700">
+                <button onClick={() => goLogin()} className="flex items-center gap-2 rounded-control border border-primary bg-primary px-6 py-3 text-sm font-medium text-white transition-colors hover:bg-brand-700">
                   <BarChart3 className="w-4 h-4" /> Manager Dashboard
                 </button>
-                <button onClick={() => goLogin("agent")} className="flex items-center gap-2 rounded-control border border-[#C7DAF2] bg-white px-6 py-3 text-sm font-medium text-primary transition-colors hover:bg-[#E3EEF9]">
+                <button onClick={() => goLogin()} className="flex items-center gap-2 rounded-control border border-[#C7DAF2] bg-white px-6 py-3 text-sm font-medium text-primary transition-colors hover:bg-[#E3EEF9]">
                   <Phone className="w-4 h-4" /> Field Agent App
                 </button>
               </div>
@@ -260,7 +258,7 @@ export default function LandingPage() {
                   </li>
                 ))}
               </ul>
-              <button onClick={() => goLogin("agent")} className="mt-6 flex min-h-10 w-full items-center justify-center gap-2 rounded-control border border-primary bg-white px-4 text-sm font-medium text-primary transition-colors hover:bg-brand-100">
+              <button onClick={() => goLogin()} className="mt-6 flex min-h-10 w-full items-center justify-center gap-2 rounded-control border border-primary bg-white px-4 text-sm font-medium text-primary transition-colors hover:bg-brand-100">
                 Try Agent Demo <ArrowRight className="w-4 h-4" />
               </button>
             </div>
@@ -284,7 +282,7 @@ export default function LandingPage() {
                   </li>
                 ))}
               </ul>
-              <button onClick={() => goLogin("manager")} className="mt-6 flex min-h-10 w-full items-center justify-center gap-2 rounded-control border border-primary bg-white px-4 text-sm font-medium text-primary transition-colors hover:bg-brand-100">
+              <button onClick={() => goLogin()} className="mt-6 flex min-h-10 w-full items-center justify-center gap-2 rounded-control border border-primary bg-white px-4 text-sm font-medium text-primary transition-colors hover:bg-brand-100">
                 Try Manager Demo <ArrowRight className="w-4 h-4" />
               </button>
             </div>
@@ -380,10 +378,10 @@ export default function LandingPage() {
             See how TIQCollect turns manual, inefficient field collections into a data-driven, RBI-compliant operation.
           </p>
           <div className="flex flex-wrap justify-center gap-4">
-            <button onClick={() => goLogin("manager")} className="flex items-center gap-2 rounded-control border border-primary bg-primary px-8 py-3.5 text-sm font-medium text-white transition-colors hover:bg-brand-700">
+            <button onClick={() => goLogin()} className="flex items-center gap-2 rounded-control border border-primary bg-primary px-8 py-3.5 text-sm font-medium text-white transition-colors hover:bg-brand-700">
               <BarChart3 className="w-4 h-4" /> Open Manager Dashboard
             </button>
-            <button onClick={() => goLogin("agent")} className="flex items-center gap-2 rounded-control border border-[#C7DAF2] bg-white px-8 py-3.5 text-sm font-medium text-primary transition-colors hover:bg-[#E3EEF9]">
+            <button onClick={() => goLogin()} className="flex items-center gap-2 rounded-control border border-[#C7DAF2] bg-white px-8 py-3.5 text-sm font-medium text-primary transition-colors hover:bg-[#E3EEF9]">
               <Phone className="w-4 h-4" /> Try Agent Mobile App
             </button>
           </div>

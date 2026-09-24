@@ -12,8 +12,7 @@ import { useAuthStore } from "@/store/authStore";
 // Route-level code-splitting: separate heavy bundles (RecordVisit, Analytics, Maps)
 const LandingPage = lazy(() => import("@/pages/LandingPage"));
 const LoginPage = lazy(() => import("@/pages/auth/LoginPage"));
-const QuickLoginPage = lazy(() => import("@/pages/auth/QuickLoginPage")); // collection_dashboard
-const ManagerBridgePage = lazy(() => import("@/pages/auth/ManagerBridgePage")); // collection_dashboard
+const QuickLoginPage = lazy(() => import("@/pages/auth/QuickLoginPage")); // link minted by scripts/generate_quick_login_link.py
 
 const AgentHomePage = lazy(() => import("@/pages/agent/AgentHomePage"));
 const AgentCasesPage = lazy(() => import("@/pages/agent/AgentCasesPage"));
@@ -97,10 +96,11 @@ export default function App() {
           <Routes>
             <Route path="/" element={<RootRedirect />} />
             <Route path="/login" element={<LoginPage />} />
-            {/* collection_dashboard: public deep-link, bypasses login form */}
+            {/* Single-use link token → real session (core/security.py). */}
             <Route path="/quick-login" element={<QuickLoginPage />} />
-            {/* collection_dashboard: always force a Manager 1 session, then land on analytics */}
-            <Route path="/manager-bridge" element={<ManagerBridgePage />} />
+            {/* /manager-bridge was here until 2026-09-24 (A10): a public route that
+                logged ANY visitor in as manager1 with a password compiled into the
+                bundle. Removed with public/collection_dashboard/, its only caller. */}
             {SIMULATOR_ENABLED && <Route path="/simulator" element={<SimulatorPage />} />}
 
             {/* Record Visit — follows the same width ladder as AgentLayout:
