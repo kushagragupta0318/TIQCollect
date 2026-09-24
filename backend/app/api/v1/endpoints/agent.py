@@ -96,6 +96,14 @@
 #   also gained an optional verification_id (handled entirely in
 #   PaymentService). See otp_service.py, prototype_to_product/30.07.md,
 #   /changelog.md.
+# 2026-09-24 — live-site hotfix. AU-2: GET /voice/token and POST
+#   /voice/outbound rebuilt over services/voice_service.py. The webhook was
+#   unauthenticated, ignored X-Twilio-Signature and dialled the client's
+#   `PhoneTo`; it now requires a signature over PUBLIC_BASE_URL + path (fail
+#   closed when unset), dials only the borrower of a case ASSIGNED to the
+#   caller, and ignores any client number. The token needs real credentials
+#   and lives 5 minutes; its errors no longer echo SDK text. PAY-2: new GET
+#   /upi-config serves the QR payee from settings (none => no QR).
 # ───────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 
@@ -103,7 +111,7 @@ import uuid
 from datetime import datetime, date, time, timezone, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Form, File, UploadFile
+from fastapi import APIRouter, HTTPException, File, Request, UploadFile
 from fastapi.responses import Response as FastAPIResponse
 from pydantic import BaseModel
 from sqlalchemy import func
@@ -1038,53 +1046,98 @@ def get_availability_calendar(current_user: AgentOnly, db: DbSession):
 
 # ---------------------------------------------------------------------------
 # GET /agent/voice/token  — Twilio Voice access token for browser calling
+# POST /agent/voice/outbound — TwiML for the call (called by TWILIO, not us)
+#
+# 2026-09-24 (hotfix AU-2) — rebuilt; the old pair dialled any client-sent
+# number unauthenticated. Rules and reasons: services/voice_service.py.
 # ---------------------------------------------------------------------------
 
 @router.get("/voice/token")
 def get_voice_token(current_user: AgentOnly, db: DbSession):
-    if not all([settings.TWILIO_ACCOUNT_SID, settings.TWILIO_API_KEY_SID,
-                settings.TWILIO_API_KEY_SECRET, settings.TWILIO_TWIML_APP_SID]):
+    from app.services import voice_service as voice
+    if not voice.voice_configured():
         raise HTTPException(status_code=503, detail="Twilio Voice not configured")
     try:
-        from twilio.jwt.access_token import AccessToken
-        from twilio.jwt.access_token.grants import VoiceGrant
-        token = AccessToken(
-            settings.TWILIO_ACCOUNT_SID,
-            settings.TWILIO_API_KEY_SID,
-            settings.TWILIO_API_KEY_SECRET,
-            identity=str(current_user.id),
-            ttl=3600,
-        )
-        token.add_grant(VoiceGrant(
-            outgoing_application_sid=settings.TWILIO_TWIML_APP_SID,
-            incoming_allow=False,
-        ))
-        return {"token": token.to_jwt()}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return {"token": voice.mint_token(str(current_user.id)), "ttl_seconds": voice.VOICE_TOKEN_TTL_SECONDS}
+    except Exception as exc:  # noqa: BLE001 — never echo SDK internals to the client
+        logger.error("voice.token_failed", error_type=type(exc).__name__, exc_info=True)
+        raise HTTPException(status_code=503, detail="Twilio Voice unavailable") from exc
 
 
-# ---------------------------------------------------------------------------
-# POST /agent/voice/outbound  — TwiML for outbound calls (called by Twilio)
-# ---------------------------------------------------------------------------
+def _twiml(body) -> FastAPIResponse:
+    return FastAPIResponse(content=str(body), media_type="application/xml")
+
+
+def _voice_refusal_action(reason: str):
+    """v1 has no VOICE_CALL_REFUSED (audit_action_enum is a native Postgres
+    enum; a new value is a migration). The nearest existing actions stand in,
+    with the precise reason in failure_reason."""
+    from app.models.audit_log import AuditAction
+    from app.services import voice_service as voice
+    if reason == voice.OUTSIDE_CONTACT_HOURS:
+        return AuditAction.CONTACT_HOUR_VIOLATION_ATTEMPT
+    return AuditAction.ROLE_VIOLATION_ATTEMPT
+
 
 @router.post("/voice/outbound")
-def voice_outbound(PhoneTo: str = Form(default="")):
-    # The frontend Voice SDK sends the destination as the custom param `PhoneTo`
-    # (Twilio's own `To` param is the client identity, not the dialed number).
+async def voice_outbound(request: Request, db: DbSession):
+    """Twilio's webhook for a browser call. Honoured only with a valid
+    X-Twilio-Signature, for a CASE assigned to the calling agent; the number
+    dialled is resolved here, never taken from the request (a client
+    `PhoneTo` is ignored)."""
+    from app.core.audit import write_audit
+    from app.services import voice_service as voice
+
+    form = await request.form()
+    params = {k: v for k, v in form.multi_items()}
     try:
-        from twilio.twiml.voice_response import VoiceResponse, Dial
+        from twilio.twiml.voice_response import Dial, VoiceResponse
     except ImportError:
         return FastAPIResponse(content="<Response><Say>Service unavailable</Say></Response>",
                                media_type="application/xml")
+
+    url = voice.public_url(request.url.path, request.url.query)
+    if not voice.voice_configured() or not voice.signature_ok(url, params, request.headers.get("X-Twilio-Signature")):
+        reason = voice.BAD_SIGNATURE if voice.voice_configured() else voice.NOT_CONFIGURED
+        write_audit(db, action=_voice_refusal_action(reason), user_id=None, entity_type="voice_call",
+                    entity_id=f"{request.method} {request.url.path}", success=False, failure_reason=reason,
+                    ip_address=request.client.host if request.client else None)
+        raise HTTPException(status_code=403, detail="Forbidden")
+
     resp = VoiceResponse()
-    if PhoneTo:
-        dial = Dial(caller_id=settings.TWILIO_PHONE_NUMBER)
-        dial.number(PhoneTo)
-        resp.append(dial)
-    else:
-        resp.say("No destination number provided.")
-    return FastAPIResponse(content=str(resp), media_type="application/xml")
+    try:
+        dest = voice.resolve_destination(db, from_param=params.get("From"), case_id=params.get("CaseId"))
+    except voice.VoiceRefused as refused:
+        write_audit(db, action=_voice_refusal_action(refused.reason), user_id=refused.user_id,
+                    entity_type="voice_call", entity_id=refused.case_id, success=False,
+                    failure_reason=refused.reason)
+        resp.say("This call cannot be placed.")
+        return _twiml(resp)
+
+    # No audit row for a PLACED call on v1 (no fitting action without a
+    # migration); p1 writes VOICE_CALL_PLACED. The log line names the case,
+    # never the number.
+    logger.info("voice.call_placed", user_id=dest.user_id, case_id=dest.case_id)
+    dial = Dial(caller_id=settings.TWILIO_PHONE_NUMBER)
+    dial.number(dest.e164)
+    resp.append(dial)
+    return _twiml(resp)
+
+
+# ---------------------------------------------------------------------------
+# GET /agent/upi-config — 2026-09-24 (hotfix PAY-2)
+# The payee the collection QR pays, from settings. None when unset: the page
+# then offers no QR and the agent records the UTR by hand. The QR used to
+# hardcode a VPA and "ABC Bank" in the frontend bundle.
+# ---------------------------------------------------------------------------
+
+@router.get("/upi-config")
+def get_upi_config(current_user: AgentOnly):
+    from app.services.voice_service import _real
+    vpa, name = (settings.UPI_VPA or "").strip(), (settings.UPI_PAYEE_NAME or "").strip()
+    if not (_real(vpa) and _real(name)):
+        return {"available": False, "vpa": None, "payee_name": None}
+    return {"available": True, "vpa": vpa, "payee_name": name}
 
 
 # ─── Leave requests (2026-09-21) ─────────────────────────────────────────────

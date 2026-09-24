@@ -511,6 +511,20 @@ class Settings(BaseSettings):
     TWILIO_API_KEY_SID: str = ""
     TWILIO_API_KEY_SECRET: str = ""
     TWILIO_TWIML_APP_SID: str = ""
+    # 2026-09-24 (hotfix AU-2) — the PUBLIC origin Twilio calls webhooks on,
+    # e.g. https://fieldops.example.in. X-Twilio-Signature is computed over
+    # that exact URL; behind Caddy the app sees an internal http host, so the
+    # signature can only be checked against this. Unset => the voice webhook
+    # refuses every call (fail closed).
+    PUBLIC_BASE_URL: str = ""
+
+    # 2026-09-24 (hotfix PAY-2) — the UPI payee the collection QR pays. NO
+    # default, deliberately: the QR used to hardcode a personal-looking VPA and
+    # "ABC Bank", so every borrower who scanned it paid whoever owned that VPA.
+    # Unset => the QR is not offered and the agent records the UTR by hand.
+    # Per-bank payees are A14 (brand as data) in the standalone plan.
+    UPI_VPA: str = ""
+    UPI_PAYEE_NAME: str = ""
 
     # Borrower payment-verification OTP (see services/otp_service.py)
     OTP_LENGTH: int = 4                       # product decision: 4-digit code

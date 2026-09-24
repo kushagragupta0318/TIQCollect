@@ -1,3 +1,13 @@
+// ─── CHANGELOG ─────────────────────────────────────────────────────────────
+// 2026-09-24 (hotfix AU-2) — the call now names a CASE, never a number. This
+//   hook used to send the borrower's number as the custom param `PhoneTo`,
+//   and the server dialled whatever arrived there — so any agent (or anyone
+//   replaying the webhook) could ring any number on the company's Twilio
+//   account. The server now resolves the number from `CaseId` for a case
+//   assigned to the caller and ignores any number a client sends. The phone
+//   passed in here is for the call screen only. Tokens now live five minutes,
+//   so the Device refreshes its token before it expires.
+// ─────────────────────────────────────────────────────────────────────────────
 import { useState, useRef, useCallback } from "react";
 import { Device, Call } from "@twilio/voice-sdk";
 import { getVoiceToken } from "@/api/agent";
@@ -22,7 +32,8 @@ export function useVoiceCall() {
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
   };
 
-  const startCall = useCallback(async (phone: string, customerName: string) => {
+  /** `caseId` is what the server dials from; `phone` is only displayed. */
+  const startCall = useCallback(async (caseId: string, phone: string, customerName: string) => {
     try {
       setActiveCall({ customerName, phone, status: "connecting", duration: 0 });
 
@@ -33,12 +44,20 @@ export function useVoiceCall() {
         const device = new Device(token, {
           codecPreferences: [Call.Codec.Opus, Call.Codec.PCMU],
         });
+        // Five-minute tokens: renew before expiry so a later call still works.
+        device.on("tokenWillExpire", async () => {
+          try {
+            const { token: fresh } = await getVoiceToken();
+            device.updateToken(fresh);
+          } catch {
+            // The next call will fail and show the error state; nothing to do here.
+          }
+        });
         await device.register();
         deviceRef.current = device;
       }
 
-      const e164 = phone.startsWith("+") ? phone : `+91${phone.replace(/^0+/, "")}`;
-      const call = await deviceRef.current.connect({ params: { PhoneTo: e164 } });
+      const call = await deviceRef.current.connect({ params: { CaseId: caseId } });
       callRef.current = call;
 
       setActiveCall((a) => a ? { ...a, status: "ringing" } : a);

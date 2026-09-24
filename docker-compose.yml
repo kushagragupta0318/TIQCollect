@@ -239,6 +239,12 @@ services:
       # without this the dev server keeps serving code from before the edit
       # until the container restarts (vite.config.ts, 2026-09-24).
       VITE_WATCH_POLLING: "1"
+      # Demo aid (hotfix PAY-1, 2026-09-24): 10 s after the UPI QR is shown the
+      # card flips to "payment marked received" and records a DEMO-UPI-
+      # reference. DEV ONLY — the prod Dockerfile never sets this, and a
+      # frontend test fails if it does. The QR itself appears only when the api
+      # has UPI_VPA / UPI_PAYEE_NAME set (no default).
+      VITE_DEMO_UPI_AUTOCONFIRM: "1"
     volumes:
       - ./frontend:/app
       # Named volume so the container's node_modules (built for Alpine) is not

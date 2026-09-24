@@ -27,6 +27,15 @@
 # PENDING_VERIFICATION. When absent, behaviour is unchanged (offline/deferred
 # path: row stays PENDING_VERIFICATION for later borrower verification). See
 # otp_service.py, prototype_to_product/30.07.md, and /changelog.md.
+#
+# 2026-09-24 (hotfix PAY-1) — collect_payment refuses mode=UPI without a
+# non-blank upi_reference (AppException 422, UPI_REFERENCE_REQUIRED), before
+# anything is read or written. The Record Visit page used to waive the field
+# 10 s after showing a static QR — a demo timer in every build — so a UPI
+# payment could be recorded with no evidence it happened. There is no
+# gateway-verified exception because v1 records no gateway payment:
+# create_payment_link mints a Razorpay QR that no page calls and no webhook
+# confirms.
 from __future__ import annotations
 
 import uuid
@@ -46,7 +55,7 @@ from app.core.audit import write_audit
 from app.models.case import Case, CaseStatus
 from app.models.customer import Customer
 from app.models.loan import Loan
-from app.models.payment import Payment, PaymentStatus
+from app.models.payment import Payment, PaymentMode, PaymentStatus
 from app.models.ptp import PTP, PTPStatus
 from app.services.ptp_lifecycle_service import verified_paid_against
 from app.services.notification_service import NotificationService
@@ -101,6 +110,18 @@ class PaymentService:
     # POST /agent/cases/{case_id}/payment
     # -----------------------------------------------------------------
     def collect_payment(self, agent, case_id: str, req) -> dict:
+        # 2026-09-24 (hotfix PAY-1) — a UPI collection must carry its UTR. The
+        # page used to waive the field 10 s after showing a static QR (a demo
+        # timer, not a payment signal), so a "UPI payment" could be recorded
+        # with no evidence it happened. No gateway-verified exception exists
+        # because v1 records no gateway payment at all: create_payment_link
+        # mints a Razorpay QR that no page calls and no webhook confirms. A
+        # future webhook must put the gateway's payment id in upi_reference.
+        if req.mode == PaymentMode.UPI and not (req.upi_reference or "").strip():
+            raise AppException(
+                422, ErrorCode.UPI_REFERENCE_REQUIRED,
+                "A UPI payment needs its transaction reference (UTR) from the payment confirmation.",
+            )
         case = self._get_accessible_case(agent, case_id)
 
         existing = self._find_recent_duplicate(case.id, agent.id, req)
