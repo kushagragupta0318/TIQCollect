@@ -15,6 +15,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppException, ErrorCode
+from app.core.events import publish_event
 from app.core.geo import haversine_metres
 from app.models.agent import Agent
 from app.models.agent_location import AgentLocation, LocationSource
@@ -153,6 +154,16 @@ class LocationService:
             agent.last_location_update = heard.isoformat()
         if rows or heard is not None:
             self.db.commit()
+        # 2026-09-24 — one event per batch carrying only the newest stored fix,
+        # never one per row: a flushed offline queue can hold hundreds, and the
+        # live map needs where the agent IS, not the backlog. A stationary
+        # heartbeat stores nothing and publishes nothing.
+        if rows:
+            publish_event("agent.location", agent=agent,
+                          data={"lat": rows[-1].latitude, "lon": rows[-1].longitude,
+                                "accuracy_m": rows[-1].accuracy_metres,
+                                "recorded_at": rows[-1].recorded_at.isoformat(),
+                                "accepted": accepted})
 
         return {
             "accepted": accepted,

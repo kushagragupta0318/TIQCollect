@@ -16,6 +16,15 @@ import { AlertTriangle, BatteryLow, Check, Crosshair, Move, Navigation, RefreshC
 import { getAgentsLive, getAgentTrail, type AgentTrail, type LiveAgentPosition } from "@/api/manager";
 import { STALE_AFTER_S } from "./liveMapConstants";
 import { navigateAction } from "./liveMapNavigate";
+import { useLiveEvents } from "@/hooks/useLiveEvents";
+
+// 2026-09-24 (P0-07) — events that move a marker or change its state. A
+// location batch, a check-in/out, an SOS or a visit (which carries its own
+// check-in fix) re-reads positions at once instead of on the next 15 s poll.
+const MAP_EVENTS = new Set([
+  "agent.location", "agent.checked_in", "agent.checked_out",
+  "sos.triggered", "sos.cancelled", "visit.recorded",
+]);
 
 const EASE = "cubic-bezier(0.2,0,0,1)";
 
@@ -241,6 +250,18 @@ export default function ManagerLiveMapPage() {
     const t = setInterval(() => void load(), POLL_MS);
     return () => clearInterval(t);
   }, [load]);
+
+  // Coalesce a burst (a flushed offline queue, several agents at once) into
+  // one read 300 ms after the last event.
+  const eventTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useLiveEvents((e) => {
+    if (!MAP_EVENTS.has(e.type)) return;
+    if (eventTimer.current) clearTimeout(eventTimer.current);
+    eventTimer.current = setTimeout(() => void load(), 300);
+  });
+  useEffect(() => () => {
+    if (eventTimer.current) clearTimeout(eventTimer.current);
+  }, []);
 
   // ── markers ───────────────────────────────────────────────────────────────
   useEffect(() => {

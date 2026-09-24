@@ -376,6 +376,14 @@ class OtpService:
                 payment.verified_at = datetime.now(timezone.utc)
                 self._audit_verified(agent, payment, deferred=True)
                 self.db.commit()
+                # 2026-09-24 — live event (core/events.py; never raises).
+                from app.core.events import publish_event
+                publish_event("payment.verified", agent=agent, data={
+                    "payment_id": payment.id, "case_id": payment.case_id,
+                    "amount": payment.amount,
+                    "mode": str(getattr(payment.mode, "value", payment.mode)),
+                    "status": "VERIFIED", "deferred": True,
+                })
                 self._send_receipt(agent, payment)
             self.store.delete(key)
         else:

@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/Button";
 import { useAuthStore } from "@/store/authStore";
 import { useBeat } from "@/contexts/useBeat";
 import { useAnimatedValue, useCountUp } from "@/hooks/useAnimatedValue";
+import { geo, geoAvailable } from "@/lib/deviceLocation";
 
 export default function AgentHomePage() {
   const { user } = useAuthStore();
@@ -42,10 +43,12 @@ export default function AgentHomePage() {
   async function startSelfieCapture() {
     setSelfieModal(true);
     // Get GPS coords when modal opens
-    navigator.geolocation?.getCurrentPosition(
-      (p) => setCheckInCoords({ lat: p.coords.latitude, lon: p.coords.longitude }),
-      () => setCheckInCoords({ lat: 28.4595, lon: 77.0266 })
-    );
+    if (geoAvailable()) {
+      geo.getCurrentPosition(
+        (p) => setCheckInCoords({ lat: p.coords.latitude, lon: p.coords.longitude }),
+        () => setCheckInCoords({ lat: 28.4595, lon: 77.0266 })
+      );
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
       streamRef.current = stream;
@@ -93,9 +96,9 @@ export default function AgentHomePage() {
   // the agent's current live GPS so the demo customers snap to wherever the agent is
   const autoAnchoredRef = useRef(false);
   useEffect(() => {
-    if (!checkedIn || autoAnchoredRef.current || !navigator.geolocation) return;
+    if (!checkedIn || autoAnchoredRef.current || !geoAvailable()) return;
     autoAnchoredRef.current = true;
-    navigator.geolocation.getCurrentPosition(
+    geo.getCurrentPosition(
       (p) => { apiCheckIn(p.coords.latitude, p.coords.longitude).catch(() => {}); },
       () => {},
       { enableHighAccuracy: true, timeout: 15000 }

@@ -35,6 +35,7 @@ from datetime import datetime, timezone, timedelta
 
 from app.core.config import settings
 from app.core.errors import AppException, ErrorCode
+from app.core.events import publish_event
 # Agent is read in _get_accessible_case to check whether a colleague's case
 # belongs to the same manager. It was used there and never imported, so that
 # branch raised NameError instead of authorising the visit — latent because no
@@ -182,6 +183,17 @@ class PaymentService:
                      "status": str(getattr(payment.status, "value", payment.status)),
                      "receipt_number": payment.receipt_number},
         )
+        # 2026-09-24 — live events. An OTP-verified payment is written VERIFIED
+        # in the same commit, so it announces both steps; a deferred one
+        # announces the verification later, from OtpService.
+        status = str(getattr(payment.status, "value", payment.status))
+        event_data = {"payment_id": payment.id, "case_id": case.id,
+                      "case_number": case.case_number, "amount": payment.amount,
+                      "mode": str(getattr(payment.mode, "value", payment.mode)),
+                      "status": status, "case_status": str(getattr(case.status, "value", case.status))}
+        publish_event("payment.submitted", agent=agent, data=event_data)
+        if verified:
+            publish_event("payment.verified", agent=agent, data={**event_data, "deferred": False})
 
         receipt_sent = self._notify_payment_received(agent, case, payment, req)
         return self._payment_response(payment, case, receipt_sent=receipt_sent)
@@ -366,6 +378,11 @@ class PaymentService:
                      "agent_id": agent.id, "committed_amount": ptp.committed_amount,
                      "committed_date": ptp.committed_date.isoformat() if ptp.committed_date else None},
         )
+        publish_event("ptp.set", agent=agent, data={
+            "ptp_id": ptp.id, "case_id": case.id, "case_number": case.case_number,
+            "committed_amount": ptp.committed_amount,
+            "committed_date": ptp.committed_date.isoformat() if ptp.committed_date else None,
+        })
 
         return self._ptp_response(ptp)
 

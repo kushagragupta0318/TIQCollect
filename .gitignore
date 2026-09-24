@@ -105,3 +105,6 @@ backend/data/modelling/
 # generated dataset, so a committed copy would drift from whatever the
 # generator currently produces — the exact trap ml/models/*.json already is.
 backend/data/ledger/
+
+# Simulator acceptance run output (frontend/e2e/simulator_acceptance.py)
+frontend/e2e/screenshots/

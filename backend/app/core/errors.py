@@ -26,6 +26,10 @@ class ErrorCode(str, Enum):
     IDEMPOTENCY_KEY_REUSED = "IDEMPOTENCY_KEY_REUSED"
     RATE_LIMITED = "RATE_LIMITED"
     INTERNAL_ERROR = "INTERNAL_ERROR"
+    # 2026-09-24 — a dependency (Redis, for the live event stream) is down and
+    # the client has a documented fallback. Distinct from INTERNAL_ERROR so the
+    # frontend can switch to polling instead of showing a failure.
+    SERVICE_UNAVAILABLE = "SERVICE_UNAVAILABLE"
 
 
 class AppException(HTTPException):

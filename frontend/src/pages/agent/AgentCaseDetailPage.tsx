@@ -48,6 +48,7 @@ import { DPDBadge, VisitPriorityBadge, CaseStatusBadge } from "@/components/ui/B
 import { Button } from "@/components/ui/Button";
 import OtpInput from "@/components/ui/OtpInput";
 import { haversineM } from "@/lib/geo";
+import { geo, geoAvailable } from "@/lib/deviceLocation";
 import { errorDetail } from "@/lib/apiError";
 import type { CaseStatus, DPDBucket, VisitPriority } from "@/types";
 
@@ -158,7 +159,7 @@ export default function AgentCaseDetailPage() {
   useModalA11y(showCallModal, callModalRef, closeCallModal);
 
   const requestLocation = useCallback((): number | undefined => {
-    if (!navigator.geolocation) {
+    if (!geoAvailable()) {
       setGeoError("This device/browser does not support location.");
       return undefined;
     }
@@ -174,18 +175,18 @@ export default function AgentCaseDetailPage() {
       );
     };
     // Fast first fix: coarse/cached, ~1s, hard-capped at 5s so it never hangs.
-    navigator.geolocation.getCurrentPosition(onPos, onErr, {
+    geo.getCurrentPosition(onPos, onErr, {
       enableHighAccuracy: false, timeout: 5000, maximumAge: 60000,
     });
     // Then refine to a precise fix for the 100m geo-fence.
-    return navigator.geolocation.watchPosition(onPos, onErr, {
+    return geo.watchPosition(onPos, onErr, {
       enableHighAccuracy: true, timeout: 10000, maximumAge: 5000,
     });
   }, []);
 
   useEffect(() => {
     const watchId = requestLocation();
-    return () => { if (watchId !== undefined) navigator.geolocation.clearWatch(watchId); };
+    return () => { if (watchId !== undefined) geo.clearWatch(watchId); };
   }, [requestLocation]);
 
   const reloadCase = useCallback(async () => {

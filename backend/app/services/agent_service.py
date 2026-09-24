@@ -19,6 +19,7 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import settings
+from app.core.events import publish_event
 from app.core.security import create_agent_verify_token
 from app.models.agent import Agent, AgentStatus
 from app.models.beat import Beat
@@ -166,6 +167,9 @@ class AgentService:
         if settings.DEMO_MODE:
             self._anchor_demo_customers(req.latitude, req.longitude)
         self.db.commit()
+        # 2026-09-24 — live event, after the commit (core/events.py: never raises).
+        publish_event("agent.checked_in", agent=agent,
+                      data={"lat": req.latitude, "lon": req.longitude})
         return {"status": "ON_DUTY", "message": "Check-in successful. Have a safe day!"}
 
     # -----------------------------------------------------------------
@@ -186,6 +190,7 @@ class AgentService:
         """
         agent.status = AgentStatus.OFF_DUTY
         self.db.commit()
+        publish_event("agent.checked_out", agent=agent)
         return {"status": "OFF_DUTY", "message": "Checked out. Location tracking has stopped."}
 
     def _rewind_demo_case(self) -> None:
@@ -570,6 +575,11 @@ class AgentService:
                 quality = "LAST_KNOWN"
 
         self.db.commit()
+        # Published before the SMS attempt: the SMS can take seconds (Twilio)
+        # and the live bell is the faster of the two channels.
+        publish_event("sos.triggered", agent=agent,
+                      data={"lat": lat, "lon": lon, "location_quality": quality,
+                            "location_age_seconds": age_seconds})
 
         # SMS/WhatsApp the assigned manager immediately — the dashboard's red SOS
         # banner is poll-based (up to 30s, and only while the tab is open), so a
@@ -631,6 +641,7 @@ class AgentService:
         agent.sos_active = False
         agent.sos_triggered_at = None
         self.db.commit()
+        publish_event("sos.cancelled", agent=agent)
         return {"sos_cancelled": True, "message": "SOS deactivated. Stay safe."}
 
     # -----------------------------------------------------------------

@@ -16,6 +16,7 @@ import { AlertTriangle } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { triggerSOS as apiTriggerSOS, cancelSOS as apiCancelSOS } from "@/api/agent";
 import { useSOSStore } from "@/store/sosStore";
+import { geo, geoAvailable } from "@/lib/deviceLocation";
 
 interface Fix {
   lat: number;
@@ -30,7 +31,7 @@ const ACQUIRE_TIMEOUT_MS = 10_000;
 /** Resolves to a real fix, or null. Never invents one. */
 function getCoords(): Promise<Fix | null> {
   return new Promise((resolve) => {
-    if (!navigator.geolocation) {
+    if (!geoAvailable()) {
       resolve(null);
       return;
     }
@@ -41,7 +42,7 @@ function getCoords(): Promise<Fix | null> {
       resolve(v);
     };
     const timer = setTimeout(() => done(null), ACQUIRE_TIMEOUT_MS);
-    navigator.geolocation.getCurrentPosition(
+    geo.getCurrentPosition(
       (p) => {
         clearTimeout(timer);
         done({

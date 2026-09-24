@@ -101,7 +101,26 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=["*"],
 )
-app.add_middleware(GZipMiddleware, minimum_size=1000)
+class _GZipExceptEventStream(GZipMiddleware):
+    """GZip everything except the live event stream.
+
+    2026-09-24 — found by measuring, not reading: /events/stream connected
+    (200) and the event reached Redis, yet a client waited 8 s and received
+    nothing. Starlette 0.41's GZipMiddleware compresses `text/event-stream`
+    like any other body (newer Starlette exempts it), and zlib holds small
+    writes back until a deflate block fills — so each ~300-byte event sat in
+    the compressor indefinitely. Any client that sends Accept-Encoding: gzip
+    (every browser, httpx by default) saw a silent, "connected" stream.
+    """
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope.get("path", "").endswith("/events/stream"):
+            await self.app(scope, receive, send)
+            return
+        await super().__call__(scope, receive, send)
+
+
+app.add_middleware(_GZipExceptEventStream, minimum_size=1000)
 
 
 @app.middleware("http")

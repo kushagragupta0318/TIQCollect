@@ -30,6 +30,15 @@ const ManagerCasesPage = lazy(() => import("@/pages/manager/ManagerCasesPage"));
 const ManagerAnalyticsPage = lazy(() => import("@/pages/manager/ManagerAnalyticsPage"));
 const ManagerCompliancePage = lazy(() => import("@/pages/manager/ManagerCompliancePage"));
 
+// Mobile app simulator (standalone plan P0). A demo/dev tool: on in the Vite
+// dev server, off in a production build unless VITE_ENABLE_SIMULATOR=1 — a
+// page that puts two sessions side by side has no business on a field
+// deployment. It grants nothing: each frame logs in normally and the server
+// enforces every rule against what the frame submits.
+const SIMULATOR_ENABLED =
+  import.meta.env.DEV || import.meta.env.VITE_ENABLE_SIMULATOR === "1";
+const SimulatorPage = lazy(() => import("@/pages/simulator/SimulatorPage"));
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: { staleTime: 30_000, retry: 1 },
@@ -92,6 +101,7 @@ export default function App() {
             <Route path="/quick-login" element={<QuickLoginPage />} />
             {/* collection_dashboard: always force a Manager 1 session, then land on analytics */}
             <Route path="/manager-bridge" element={<ManagerBridgePage />} />
+            {SIMULATOR_ENABLED && <Route path="/simulator" element={<SimulatorPage />} />}
 
             {/* Record Visit — follows the same width ladder as AgentLayout:
                 phone shell below md, wider column at md, full width at lg where

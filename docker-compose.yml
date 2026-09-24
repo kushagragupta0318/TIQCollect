@@ -234,6 +234,10 @@ services:
       # api:8000; the config's default of localhost:8400 would resolve to this
       # container.
       VITE_API_TARGET: http://api:8000
+      # Poll for file changes: events do not cross the Windows bind mount, and
+      # without this the dev server keeps serving code from before the edit
+      # until the container restarts (vite.config.ts, 2026-09-24).
+      VITE_WATCH_POLLING: "1"
     volumes:
       - ./frontend:/app
       # Named volume so the container's node_modules (built for Alpine) is not

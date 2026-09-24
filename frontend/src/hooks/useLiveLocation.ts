@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { geo, geoAvailable } from "@/lib/deviceLocation";
 
 /**
  * Live GPS location + human-readable address for the field-agent view.
@@ -249,10 +250,10 @@ function subscribe(listener: () => void): () => void {
     stopTimer = undefined;
   }
   if (watchId === undefined) {
-    if (!("geolocation" in navigator)) {
+    if (!geoAvailable()) {
       publish({ status: "error", address: null, coords: null });
     } else {
-      watchId = navigator.geolocation.watchPosition(onPos, onErr, {
+      watchId = geo.watchPosition(onPos, onErr, {
         enableHighAccuracy: true,
         maximumAge: 30_000,
         timeout: 20_000,
@@ -270,7 +271,7 @@ function subscribe(listener: () => void): () => void {
       stopTimer = setTimeout(() => {
         stopTimer = undefined;
         if (subscriberCount <= 0 && watchId !== undefined) {
-          navigator.geolocation.clearWatch(watchId);
+          geo.clearWatch(watchId);
           watchId = undefined;
         }
       }, 10_000);
@@ -295,7 +296,7 @@ function subscribe(listener: () => void): () => void {
  * the outcome; this module only knows positions.
  */
 export function refreshLocation(): Promise<boolean> {
-  if (!("geolocation" in navigator)) {
+  if (!geoAvailable()) {
     publish({ status: "error", address: null, coords: null });
     return Promise.resolve(false);
   }
@@ -312,13 +313,13 @@ export function refreshLocation(): Promise<boolean> {
   // Restart the watch so a stalled or denied one re-acquires with the same
   // options the app always uses; the one-shot below is what answers now.
   if (watchId !== undefined) {
-    navigator.geolocation.clearWatch(watchId);
-    watchId = navigator.geolocation.watchPosition(onPos, onErr, {
+    geo.clearWatch(watchId);
+    watchId = geo.watchPosition(onPos, onErr, {
       enableHighAccuracy: true, maximumAge: 30_000, timeout: 20_000,
     });
   }
   return new Promise((resolve) => {
-    navigator.geolocation.getCurrentPosition(
+    geo.getCurrentPosition(
       (p) => { void onPos(p); resolve(true); },
       (e) => {
         onErr(e);

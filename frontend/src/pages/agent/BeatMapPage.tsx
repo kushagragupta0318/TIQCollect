@@ -9,6 +9,7 @@ import { useBeat } from "@/contexts/useBeat";
 import type { Case } from "@/types";
 import { useAnimatedValue } from "@/hooks/useAnimatedValue";
 import { BeatRouteMap, type BeatStop } from "@/components/map/BeatRouteMap";
+import { geo, geoAvailable } from "@/lib/deviceLocation";
 import "leaflet/dist/leaflet.css";
 
 // Client-side Haversine for the Google Maps URL builder only
@@ -50,7 +51,8 @@ export default function BeatMapPage() {
   const START_LAT = 28.455151, START_LON = 77.071623;
 
   useEffect(() => {
-    navigator.geolocation?.getCurrentPosition(
+    if (!geoAvailable()) return;
+    geo.getCurrentPosition(
       (p) => setUserLoc({ lat: p.coords.latitude, lon: p.coords.longitude }),
       () => {},
     );

@@ -69,6 +69,18 @@ export default defineConfig(({ mode }) => {
       // point of view — no CORS change needed on the backend, with or without
       // HTTPS.
       host: true,
+      // 2026-09-24 — file-change events do not cross a Windows → Docker bind
+      // mount for Vite's watcher (measured: an edit to a served module was
+      // still absent 3 s later, and a new route stayed missing until the
+      // container restarted, so the dev app silently ran stale code).
+      // Uvicorn's reloader in the api container is unaffected because
+      // watchfiles falls back to polling on its own; Vite's does not.
+      // docker-compose.yml sets VITE_WATCH_POLLING=1 for the web container; a
+      // native `npm run dev` keeps the cheaper event-based watcher.
+      watch:
+        process.env.VITE_WATCH_POLLING === "1"
+          ? { usePolling: true, interval: 300 }
+          : undefined,
       proxy: {
         "/api": {
           target: apiTarget,

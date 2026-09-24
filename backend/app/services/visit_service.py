@@ -42,6 +42,7 @@ import structlog
 from fastapi import HTTPException
 from sqlalchemy.orm import Session, joinedload
 
+from app.core.events import publish_event
 from app.core.geo import GEO_FENCE_METRES, IST, RBI_CONTACT_END, RBI_CONTACT_START, is_within_contact_hours, within_geo_fence
 from app.models.audit_log import AuditAction, AuditLog
 from app.core.audit import write_audit
@@ -258,6 +259,14 @@ class VisitService:
                      "geo_verified": bool(visit.geo_verified),
                      "distance_m": visit.distance_from_customer_metres},
         )
+        # 2026-09-24 — the live event, same post-commit contract as the audit row.
+        publish_event("visit.recorded", agent=agent, data={
+            "visit_id": visit.id, "case_id": case.id, "case_number": case.case_number,
+            "outcome": str(getattr(visit.outcome, "value", visit.outcome)),
+            "customer_met": bool(visit.customer_met),
+            "geo_verified": bool(visit.geo_verified),
+            "lat": visit.check_in_latitude, "lon": visit.check_in_longitude,
+        })
 
         # Generate AI audit report in the background — saved back to visit
         ai_visit_note = AIReportService.generate_visit_report(visit, case)

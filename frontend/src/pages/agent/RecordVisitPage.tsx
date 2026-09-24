@@ -97,6 +97,7 @@ import { useBeat } from "@/contexts/useBeat";
 import type { Customer, Loan, VisitOutcome, PersonMet, DefaultReason } from "@/types";
 import type { PaymentReceiptData } from "@/components/ui/PaymentReceiptModal";
 import { haversineM } from "@/lib/geo";
+import { geo, geoAvailable } from "@/lib/deviceLocation";
 import { errorDetail } from "@/lib/apiError";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -696,15 +697,16 @@ export default function RecordVisitPage() {
       gpsAltitude: p.coords.altitude ?? null,
     });
     // Fast first fix (coarse/cached, ~1s, capped at 5s), then refine precisely.
-    navigator.geolocation?.getCurrentPosition(onPos, () => {}, {
+    if (!geoAvailable()) return;
+    geo.getCurrentPosition(onPos, () => {}, {
       enableHighAccuracy: false, timeout: 5000, maximumAge: 60000,
     });
-    const wid = navigator.geolocation?.watchPosition(
+    const wid = geo.watchPosition(
       onPos,
       () => {},
       { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 },
     );
-    return () => { if (wid) navigator.geolocation.clearWatch(wid); };
+    return () => { geo.clearWatch(wid); };
   }, [caseId]);
 
   // ── Derived ────────────────────────────────────────────────────────────────

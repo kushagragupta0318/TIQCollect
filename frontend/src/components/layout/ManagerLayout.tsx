@@ -25,6 +25,8 @@ import api from "@/api/axios";
 import { useAuthStore } from "@/store/authStore";
 import { AccountMenu } from "@/components/layout/AccountMenu";
 import type { Agent } from "@/types";
+import { useQueryClient } from "@tanstack/react-query";
+import { useLiveEvents, WORK_EVENTS } from "@/hooks/useLiveEvents";
 
 const SIDEBAR_KEY   = "tiq:sidebar";
 const SIDEBAR_W     = 252;
@@ -89,21 +91,43 @@ export default function ManagerLayout() {
   // filed from a phone reaches the bell on whatever page the manager is on.
   const [leavePending, setLeavePending] = useState<LeaveRequest[]>([]);
 
+  const fetchSOS = useCallback(() => {
+    api.get("/manager/dashboard")
+      .then((r) => setSosCount(r.data.sos_active_count ?? 0))
+      .catch(() => {});
+    api.get("/manager/agents")
+      .then((r) => setSosAgents((r.data as Agent[]).filter((a: Agent) => a.sos_active)))
+      .catch(() => {});
+    api.get("/manager/leave-requests", { params: { status: "REQUESTED" } })
+      .then((r) => setLeavePending((r.data?.requests as LeaveRequest[]) ?? []))
+      .catch(() => {});
+  }, []);
+
   useEffect(() => {
-    function fetchSOS() {
-      api.get("/manager/dashboard")
-        .then((r) => setSosCount(r.data.sos_active_count ?? 0))
-        .catch(() => {});
-      api.get("/manager/agents")
-        .then((r) => setSosAgents((r.data as Agent[]).filter((a: Agent) => a.sos_active)))
-        .catch(() => {});
-      api.get("/manager/leave-requests", { params: { status: "REQUESTED" } })
-        .then((r) => setLeavePending((r.data?.requests as LeaveRequest[]) ?? []))
-        .catch(() => {});
-    }
     fetchSOS();
     const id = setInterval(fetchSOS, 30_000);
     return () => clearInterval(id);
+  }, [fetchSOS]);
+
+  // 2026-09-24 (P0-07) — live events. An SOS used to reach the bell on the
+  // next 30 s poll; it now reaches it as soon as the agent's phone commits it.
+  // Recorded work (visit, payment, PTP) marks every cached query stale, so
+  // whichever manager page is open re-reads its figures now instead of on its
+  // 60 s LIVE tick. Debounced: a burst of events is one refetch, not ten. The
+  // polls above stay — they are what still works if the stream never connects.
+  const queryClient = useQueryClient();
+  const invalidateTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useLiveEvents((e) => {
+    if (e.type.startsWith("sos.")) fetchSOS();
+    if (WORK_EVENTS.has(e.type)) {
+      if (invalidateTimer.current) clearTimeout(invalidateTimer.current);
+      invalidateTimer.current = setTimeout(() => {
+        void queryClient.invalidateQueries();
+      }, 1_500);
+    }
+  });
+  useEffect(() => () => {
+    if (invalidateTimer.current) clearTimeout(invalidateTimer.current);
   }, []);
 
   // Persist sidebar state across page loads.
