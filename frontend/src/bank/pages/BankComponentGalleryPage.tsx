@@ -252,6 +252,7 @@ export default function BankComponentGalleryPage() {
                     columns={LADDER_COLUMNS}
                     rows={DPD_LADDER}
                     rowKey={(b) => b.bucket}
+                    rowLabel={(b) => `Open ${b.bucket} DPD`}
                     onRowClick={(b) => openDrill(`${b.bucket} DPD`, b.exposureCr, b.accounts, b.sharePct)}
                   />
                 </Panel>
@@ -377,6 +378,7 @@ export default function BankComponentGalleryPage() {
                   columns={AGENCY_COLUMNS}
                   rows={AGENCIES}
                   rowKey={(a) => a.agency}
+                  rowLabel={(a) => `Open ${a.agency}`}
                   density="compact"
                   onRowClick={(a) => openDrill(a.agency, a.placedCr, a.placedCases, Math.round((a.placedCr / FUNNEL[2].exposureCr) * 1000) / 10)}
                 />

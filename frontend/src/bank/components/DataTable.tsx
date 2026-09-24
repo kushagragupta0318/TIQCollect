@@ -4,6 +4,7 @@
 // table rules outrank them (py 10px, th pb 12px / 600, hover muted/30 — spec
 // §0.3), and bank.css ports those rules so the same thing happens here.
 import type { CSSProperties, ReactNode } from "react";
+import { ROW_FOCUS_CLASS, rowActivation } from "./rowActivation";
 
 export interface DataColumn<Row> {
   key: string;
@@ -21,8 +22,14 @@ export interface DataTableProps<Row> {
   columns: DataColumn<Row>[];
   rows: Row[];
   rowKey: (row: Row) => string;
-  /** When set, rows are clickable and open the drill (`cursor-pointer hover:bg-accent/50`). */
+  /**
+   * When set, rows are clickable and open the drill (`cursor-pointer
+   * hover:bg-accent/50`) — and, unlike CC's, focusable and opened by Enter or
+   * Space (rowActivation.ts).
+   */
   onRowClick?: (row: Row) => void;
+  /** Accessible name for a clickable row, e.g. "Open 31-60 DPD". */
+  rowLabel?: (row: Row) => string;
   /** CC uses 620–640px on the wide tables; 0 for none. */
   minWidth?: number;
   /** "roomy" = the ladder's `py-3`; "compact" = the product and state tables' `py-2.5`. */
@@ -40,6 +47,7 @@ export function DataTable<Row>({
   rows,
   rowKey,
   onRowClick,
+  rowLabel,
   minWidth = 620,
   density = "roomy",
 }: DataTableProps<Row>) {
@@ -64,10 +72,10 @@ export function DataTable<Row>({
           {rows.map((row) => (
             <tr
               key={rowKey(row)}
-              onClick={onRowClick ? () => onRowClick(row) : undefined}
+              {...(onRowClick ? rowActivation(() => onRowClick(row), rowLabel?.(row)) : {})}
               className={
                 onRowClick
-                  ? "border-b border-border/30 cursor-pointer hover:bg-accent/50 transition-colors"
+                  ? `border-b border-border/30 cursor-pointer hover:bg-accent/50 transition-colors ${ROW_FOCUS_CLASS}`
                   : "border-b border-border/30"
               }
             >

@@ -4,10 +4,11 @@
 // `children` (CC switched over ten built-in workshops), the mode line and the
 // Run Analysis button are the caller's, and Download asks the caller for its
 // rows. The portal target is the `.bank-root` container (spec §7.3).
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { CheckCircle, Download, Play, RefreshCw, Save, Settings, Share2, X } from "lucide-react";
 import { getBankPortalRoot } from "../lib/portal";
+import { useModalFocus } from "../lib/useModalFocus";
 import { SampleDataNote } from "./SampleDataNote";
 import { scenarioStorageKey, toCsv, type WorkspaceExport, type WorkspaceTool } from "./workspace";
 
@@ -42,6 +43,11 @@ export function WorkspaceModal({
   const [saveIcon, setSaveIcon] = useState<"save" | "check">("save");
   const [shareIcon, setShareIcon] = useState<"share" | "check">("share");
   const timers = useRef<number[]>([]);
+  // Focus moves in, Tab stays in, Escape closes, focus returns, page scroll
+  // locks (lib/useModalFocus.ts). CC had no Escape and no scroll lock here.
+  const frameRef = useRef<HTMLDivElement>(null);
+  useModalFocus(frameRef, onClose);
+  const titleId = useId();
 
   useEffect(() => {
     const pending = timers.current;
@@ -106,7 +112,7 @@ export function WorkspaceModal({
     }
     const summary = saved?.savedAt
       ? `Command Center — ${tool.label}\nSaved: ${new Date(saved.savedAt).toLocaleString()}`
-      : `Command Center — ${tool.label} (live simulation, no scenario saved yet)`;
+      : `Command Center — ${tool.label} (unsaved simulation, no scenario saved yet)`;
     if (!navigator.clipboard) {
       showToast("Clipboard unavailable");
       return;
@@ -127,9 +133,10 @@ export function WorkspaceModal({
       style={{ backgroundColor: "rgba(0,0,0,0.4)", backdropFilter: "blur(4px)" }}
     >
       <div
+        ref={frameRef}
         role="dialog"
         aria-modal="true"
-        aria-label={tool.label}
+        aria-labelledby={titleId}
         className="w-full h-full max-w-screen-2xl max-h-[90vh] bg-background border border-border/60 flex flex-col overflow-hidden animate-scale-in"
         style={{ borderRadius: "26px", boxShadow: "0 24px 48px -12px rgba(22,119,255,0.15), 0 0 0 1px rgba(0,0,0,0.04)" }}
       >
@@ -140,7 +147,7 @@ export function WorkspaceModal({
               <Settings size={18} />
             </div>
             <div>
-              <h2 className="text-lg font-extrabold text-foreground tracking-tight">{tool.label || "Workspace"}</h2>
+              <h2 id={titleId} className="text-lg font-extrabold text-foreground tracking-tight">{tool.label || "Workspace"}</h2>
               <p className="text-[11px] font-semibold text-muted-foreground">{mode}</p>
             </div>
             {sampleData && <SampleDataNote />}
@@ -150,10 +157,10 @@ export function WorkspaceModal({
               {saveIcon === "check" ? <CheckCircle size={13} className="text-success" /> : <Save size={13} />}
               Save Scenario
             </button>
-            <button onClick={handleDownload} title="Export data as CSV" className="btn-secondary px-3">
+            <button onClick={handleDownload} title="Export data as CSV" aria-label="Export data as CSV" className="btn-secondary px-3">
               <Download size={14} />
             </button>
-            <button onClick={handleShare} title="Copy scenario summary" className="btn-secondary px-3">
+            <button onClick={handleShare} title="Copy scenario summary" aria-label="Copy scenario summary" className="btn-secondary px-3">
               {shareIcon === "check" ? <CheckCircle size={14} className="text-success" /> : <Share2 size={14} />}
             </button>
             {onRunAnalysis && (
@@ -189,7 +196,7 @@ export function WorkspaceModal({
 
         {/* Toast */}
         {toastMsg && (
-          <div className="absolute bottom-5 right-5 bg-foreground text-primary-foreground text-xs font-bold px-4 py-2.5 rounded-lg shadow-2xl z-[200] flex items-center gap-2 border border-border animate-slide-in">
+          <div role="status" className="absolute bottom-5 right-5 bg-foreground text-primary-foreground text-xs font-bold px-4 py-2.5 rounded-lg shadow-2xl z-[200] flex items-center gap-2 border border-border animate-slide-in">
             <CheckCircle size={14} className="text-success" />
             {toastMsg}
           </div>

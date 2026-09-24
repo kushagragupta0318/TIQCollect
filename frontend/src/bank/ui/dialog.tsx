@@ -1,12 +1,24 @@
 // Command Center `components/ui/dialog.jsx`, ported to TypeScript (spec §3.3).
-// Class strings verbatim. One change, and it is the point of the port: the
-// portal target is the `.bank-root` portal container, not document.body —
-// outside the wrapper the dialog would lose every bank variable and rule
-// (spec §7.3, lib/portal.ts).
-import { useEffect, type ComponentProps, type ReactNode } from "react";
+// Class strings verbatim. Two changes. The portal target is the `.bank-root`
+// portal container, not document.body — outside the wrapper the dialog would
+// lose every bank variable and rule (spec §7.3, lib/portal.ts). And focus is
+// managed (lib/useModalFocus.ts): it moves into the dialog, Tab stays inside,
+// Escape closes, focus returns to the opener, and the dialog is named by its
+// title (aria-labelledby) — CC does none of these (a recorded deviation,
+// UI spec §9). CC's own scroll lock and Escape listener live in that hook now.
+import { createContext, useContext, useId, useMemo, useRef, type ComponentProps, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "../lib/cn";
 import { getBankPortalRoot } from "../lib/portal";
+import { useModalFocus } from "../lib/useModalFocus";
+
+interface DialogContextValue {
+  close: () => void;
+  titleId: string;
+  descriptionId: string;
+}
+
+const DialogContext = createContext<DialogContextValue | null>(null);
 
 export interface DialogProps {
   open: boolean;
@@ -15,33 +27,35 @@ export interface DialogProps {
 }
 
 export function Dialog({ open, onOpenChange, children }: DialogProps) {
-  useEffect(() => {
-    document.body.style.overflow = open ? "hidden" : "";
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onOpenChange?.(false);
-    };
-    if (open) window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.body.style.overflow = "";
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [open, onOpenChange]);
+  const id = useId();
+  const value = useMemo<DialogContextValue>(
+    () => ({ close: () => onOpenChange?.(false), titleId: `${id}-title`, descriptionId: `${id}-description` }),
+    [id, onOpenChange],
+  );
 
   if (!open) return null;
   return createPortal(
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
-      <div className="fixed inset-0 bg-[#101828]/40" onClick={() => onOpenChange?.(false)} />
-      {children}
-    </div>,
+    <DialogContext.Provider value={value}>
+      <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-[#101828]/40" onClick={() => onOpenChange?.(false)} />
+        {children}
+      </div>
+    </DialogContext.Provider>,
     getBankPortalRoot(),
   );
 }
 
 export function DialogContent({ className, children, ...props }: ComponentProps<"div">) {
+  const ctx = useContext(DialogContext);
+  const ref = useRef<HTMLDivElement>(null);
+  useModalFocus(ref, ctx?.close);
   return (
     <div
+      ref={ref}
       role="dialog"
       aria-modal="true"
+      aria-labelledby={ctx?.titleId}
+      aria-describedby={ctx?.descriptionId}
       className={cn(
         "relative z-50 bg-card border border-border rounded-modal shadow-modal w-full max-w-[560px] max-h-[88vh] flex flex-col overflow-hidden",
         className,
@@ -59,11 +73,13 @@ export function DialogHeader({ className, ...props }: ComponentProps<"div">) {
 }
 
 export function DialogTitle({ className, ...props }: ComponentProps<"h2">) {
-  return <h2 className={cn("text-[19px] font-semibold text-foreground tracking-tight", className)} {...props} />;
+  const ctx = useContext(DialogContext);
+  return <h2 id={ctx?.titleId} className={cn("text-[19px] font-semibold text-foreground tracking-tight", className)} {...props} />;
 }
 
 export function DialogDescription({ className, ...props }: ComponentProps<"p">) {
-  return <p className={cn("text-[14px] text-muted-foreground mt-1", className)} {...props} />;
+  const ctx = useContext(DialogContext);
+  return <p id={ctx?.descriptionId} className={cn("text-[14px] text-muted-foreground mt-1", className)} {...props} />;
 }
 
 export function DialogFooter({ className, ...props }: ComponentProps<"div">) {

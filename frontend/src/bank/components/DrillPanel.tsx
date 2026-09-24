@@ -5,12 +5,13 @@
 // Two changes, both structural: the portal target is the `.bank-root` portal
 // container (spec §7.3), and the splits are a list, so the bank's extra drill
 // dimensions (agency, region, agent — plan §5.4) need no new markup.
-import { useEffect, type ReactNode } from "react";
+import { useId, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Loader2, X } from "lucide-react";
 import { BRAND, DPD_COLORS } from "../theme/colors";
 import { cr, rs } from "../theme/format";
 import { getBankPortalRoot } from "../lib/portal";
+import { useModalFocus } from "../lib/useModalFocus";
 import { BucketChip } from "./analytics";
 import { SampleDataNote } from "./SampleDataNote";
 import { splitBarWidth } from "./visualMath";
@@ -101,13 +102,10 @@ function Centered({ children }: { children: ReactNode }) {
 }
 
 export function DrillPanel({ drillKey, data, error = false, sampleData = false, onClose }: DrillPanelProps) {
-  useEffect(() => {
-    const esc = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", esc);
-    return () => window.removeEventListener("keydown", esc);
-  }, [onClose]);
+  // Focus moves in, Tab stays in, Escape closes, focus returns (lib/useModalFocus.ts).
+  const sheetRef = useRef<HTMLDivElement>(null);
+  useModalFocus(sheetRef, onClose);
+  const titleId = useId();
 
   return createPortal(
     <div
@@ -116,16 +114,17 @@ export function DrillPanel({ drillKey, data, error = false, sampleData = false, 
       onClick={onClose}
     >
       <div
+        ref={sheetRef}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
-        aria-label={data?.title || drillKey}
+        aria-labelledby={titleId}
         className="w-full max-w-[560px] h-full bg-background border-l border-border shadow-menu flex flex-col animate-slide-in overflow-hidden"
       >
         <div className="px-6 py-5 border-b border-border/60 bg-card flex items-start justify-between gap-4 shrink-0">
           <div className="min-w-0">
             <p className="text-[11px] font-medium text-muted-foreground">Drill-down</p>
-            <h3 className="text-lg font-extrabold text-foreground tracking-tight truncate mt-0.5">{data?.title || drillKey}</h3>
+            <h3 id={titleId} className="text-lg font-extrabold text-foreground tracking-tight truncate mt-0.5">{data?.title || drillKey}</h3>
             {data?.subtitle && <p className="text-[11px] font-semibold text-muted-foreground mt-1">{data.subtitle}</p>}
             {sampleData && (
               <div className="mt-2">

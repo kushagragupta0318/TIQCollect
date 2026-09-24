@@ -5,6 +5,7 @@
 import { BRAND, DPD_COLORS } from "../theme/colors";
 import { cr, cr1, n } from "../theme/format";
 import { funnelColor, funnelWidth, heatCellBackground, transitionCellStyle } from "./visualMath";
+import { ROW_FOCUS_CLASS, rowActivation } from "./rowActivation";
 
 /* ── Funnel (:108-133) ──────────────────────────────────────────────────── */
 
@@ -92,8 +93,8 @@ export function HeatGrid({ rows, buckets, rowHeader = "Product", onDrill }: Heat
               return (
                 <tr
                   key={row.label}
-                  onClick={onDrill ? () => onDrill(row) : undefined}
-                  className="border-b border-border/30 cursor-pointer hover:bg-accent/50 transition-colors"
+                  {...(onDrill ? rowActivation(() => onDrill(row), `Open ${row.label}`) : {})}
+                  className={`border-b border-border/30 cursor-pointer hover:bg-accent/50 transition-colors ${onDrill ? ROW_FOCUS_CLASS : ""}`}
                 >
                   <td className="py-2.5 pr-3 font-bold text-foreground">{row.label}</td>
                   <td className="py-2.5 pr-3 text-right font-semibold text-muted-foreground">{row.delqRatePct}%</td>
