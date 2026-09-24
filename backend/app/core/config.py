@@ -168,12 +168,12 @@ class Settings(BaseSettings):
     # The second, explicit opt-in to RETIRE every other account's password.
     # DEMO_MODE cannot be it: .env.example ships DEMO_MODE=true and compose
     # defaults it on, so a real deployment may well run with it.
-    DEMO_MASTER_DISABLE_OTHERS: bool = False
+    DEMO_MASTER_DISABLE_OTHERS: str = ""
     DEMO_EMAIL_DOMAINS: str = "tiqcollect.in"     # accounts outside these are never retired
     # 2026-09-24 (hotfix PAY-1) — accept the demo auto-confirm's DEMO-UPI-
     # reference. A flag production never sets: NOT DEMO_MODE, which the live
     # site runs with. Off => every UPI reference must be a 12-digit UTR.
-    DEMO_UPI_ACCEPT: bool = False
+    DEMO_UPI_ACCEPT: str = ""
     # The showcase customer (DEMO0003). Swap the phone to your CEO's / manager's
     # number here — no reseed, no rebuild; a backend restart applies it.
     DEMO_CONTACT_NAME: str = "Balraj Singh"

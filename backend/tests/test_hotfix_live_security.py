@@ -385,7 +385,7 @@ def test_the_payee_settings_have_no_default():
     assert Settings.model_fields["UPI_VPA"].default == ""
     assert Settings.model_fields["UPI_PAYEE_NAME"].default == ""
     assert Settings.model_fields["PUBLIC_BASE_URL"].default == ""
-    assert Settings.model_fields["DEMO_UPI_ACCEPT"].default is False
+    assert Settings.model_fields["DEMO_UPI_ACCEPT"].default == ""
     assert Settings.model_fields["BORROWER_HELPLINE"].default == ""
 
 
@@ -629,19 +629,34 @@ def sent(monkeypatch):
     return out
 
 
-def _visit(world, outcome, *, hostile=False, **extra):
+def _new_case(world, *, hostile=False, tags=None, bank="HDFC"):
     db = TestingSession()
     agent = db.get(Agent, world["ag"].id)
     ref = "V" + uuid.uuid4().hex[:8].upper()
     case = _case(db, agent, ref, "Ritu Bhardwaj", "9812300077")
     db.flush()
-    db.get(Customer, case.customer_id).is_hostile = hostile
+    cust = db.get(Customer, case.customer_id)
+    cust.is_hostile = hostile
+    cust.tags = tags
+    db.get(Loan, case.loan_id).bank_name = bank
     db.commit()
     loan = db.get(Loan, case.loan_id)
-    facts = {"loan_number": loan.loan_account_number, "agent": world["ua"].full_name}
-    vs.VisitService(db).record_visit(agent, case.id, RecordVisitRequest(
+    facts = {"case_id": case.id, "loan_number": loan.loan_account_number, "agent": world["ua"].full_name}
+    db.close()
+    return facts
+
+
+def _record(world, case_id, outcome, **extra):
+    db = TestingSession()
+    agent = db.get(Agent, world["ag"].id)
+    vs.VisitService(db).record_visit(agent, case_id, RecordVisitRequest(
         check_in_latitude=28.45, check_in_longitude=77.07, customer_met=True, outcome=outcome, **extra))
     db.close()
+
+
+def _visit(world, outcome, *, hostile=False, **extra):
+    facts = _new_case(world, hostile=hostile)
+    _record(world, facts["case_id"], outcome, **extra)
     return facts
 
 
@@ -689,3 +704,75 @@ def test_the_notice_rule_reads_the_borrower_at_send_time():
     c.phone_primary = ""
     assert vs.VisitService._should_send_visit_notice(VisitOutcome.RTP, c) is False
     assert vs.VisitService._should_send_visit_notice(VisitOutcome.RTP, None) is False
+
+
+# ── BL-5, coordinator re-audit of bb4371a ─────────────────────────────────────
+def test_a_later_visit_to_a_disputed_case_sends_nothing(world, sent):
+    """The first visit records the dispute (and sends nothing); a REVISIT to
+    the same case, still escalated as a dispute, must not send either."""
+    c = _new_case(world)
+    _record(world, c["case_id"], VisitOutcome.DISPUTE)
+    _record(world, c["case_id"], VisitOutcome.REVISIT)
+    assert sent == []
+
+
+def test_a_later_visit_to_a_borrower_tagged_deceased_sends_nothing(world, sent):
+    """do_not_contact is set with the tag, and a DNC borrower cannot be
+    visited at all; the tag alone must still stop the notice, e.g. after the
+    DNC flag is cleared by hand."""
+    c = _new_case(world, tags=["DECEASED"])
+    _record(world, c["case_id"], VisitOutcome.REVISIT)
+    assert sent == []
+
+
+def test_a_visit_to_an_rtp_escalated_case_still_notifies(world, sent):
+    """Only a DISPUTE escalation silences the notice; a refusal does not."""
+    c = _new_case(world)
+    _record(world, c["case_id"], VisitOutcome.RTP)
+    _record(world, c["case_id"], VisitOutcome.REVISIT)
+    assert len(sent) == 2
+
+
+@pytest.mark.parametrize("bank", ["", "   ", "${BANK_NAME}"])        # bank_name is NOT NULL
+def test_no_lender_name_means_no_message(world, sent, bank):
+    c = _new_case(world, bank=bank)
+    _record(world, c["case_id"], VisitOutcome.RTP)
+    assert sent == []
+
+
+# ── LOW 3 / LOW 5 ────────────────────────────────────────────────────────────
+@pytest.mark.parametrize("value,on", [("true", True), ("TRUE", True), (" True ", True), ("false", False),
+                                      ("", False), ("1", False), ("yes", False), ("${DEMO_UPI_ACCEPT}", False),
+                                      (True, True), (False, False), (None, False)])
+def test_a_demo_switch_is_on_only_for_an_explicit_true(value, on):
+    from app.core.security import explicit_true
+    assert explicit_true(value) is on
+
+
+def test_an_unresolved_demo_switch_does_not_break_settings(monkeypatch):
+    """Read as str: a literal ${VAR} left in an env file used to fail the
+    settings at boot, taking the API down with it."""
+    from app.core.config import Settings
+    monkeypatch.setenv("DEMO_MASTER_DISABLE_OTHERS", "${DEMO_MASTER_DISABLE_OTHERS}")
+    monkeypatch.setenv("DEMO_UPI_ACCEPT", "${DEMO_UPI_ACCEPT}")
+    s = Settings()
+    from app.core.security import explicit_true
+    assert not explicit_true(s.DEMO_MASTER_DISABLE_OTHERS) and not explicit_true(s.DEMO_UPI_ACCEPT)
+
+
+def test_an_unresolved_demo_upi_accept_refuses_the_demo_reference(world, monkeypatch):
+    monkeypatch.setattr(settings, "DEMO_UPI_ACCEPT", "${DEMO_UPI_ACCEPT}")
+    assert ps.payment_reference_problem(PaymentMode.UPI, upi_reference="DEMO-UPI-1", bank_reference=None,
+                                        cheque_number=None) is not None
+
+
+def test_the_stored_utr_is_the_one_the_rule_checked(world, monkeypatch):
+    monkeypatch.setattr(ps.NotificationService, "send_twilio", staticmethod(lambda *a, **k: False))
+    db = TestingSession()
+    agent = db.get(Agent, world["ag"].id)
+    ps.PaymentService(db).collect_payment(agent, world["pay"].id,
+                                          CollectPaymentRequest(amount=137.0, mode=PaymentMode.UPI,   # its own amount:
+                                                                upi_reference=" 5123 4567 8903 "))    # not a recent duplicate
+    assert db.query(Payment).filter(Payment.upi_reference == "512345678903").count() == 1
+    assert db.query(Payment).filter(Payment.upi_reference.like("% %")).count() == 0
+    db.close()

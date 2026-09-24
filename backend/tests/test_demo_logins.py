@@ -189,7 +189,7 @@ def test_the_login_route_admits_the_three_and_refuses_the_published_passwords(db
 def settings_for_main(db, monkeypatch):
     from app.core import config, database
     for k, v in {"DEMO_MASTER_PASSWORD": MASTER, "DEMO_MASTER_ACCOUNTS": ACCOUNTS, "DEMO_MODE": True,
-                 "DEMO_MASTER_KEEP_ACCOUNTS": "", "DEMO_MASTER_DISABLE_OTHERS": False,
+                 "DEMO_MASTER_KEEP_ACCOUNTS": "", "DEMO_MASTER_DISABLE_OTHERS": "",
                  "DEMO_EMAIL_DOMAINS": "tiqcollect.in"}.items():
         monkeypatch.setattr(config.settings, k, v)
     monkeypatch.setattr(database, "SessionLocal", Session)
@@ -216,7 +216,7 @@ def test_main_says_not_configured_with_its_own_exit_code(settings_for_main, monk
 
 def test_main_reads_the_keep_list_and_the_second_opt_in(db, settings_for_main, monkeypatch):
     monkeypatch.setattr(settings_for_main, "DEMO_MASTER_KEEP_ACCOUNTS", CC_ACCOUNT)
-    monkeypatch.setattr(settings_for_main, "DEMO_MASTER_DISABLE_OTHERS", True)
+    monkeypatch.setattr(settings_for_main, "DEMO_MASTER_DISABLE_OTHERS", "true")
     before = _hashes(db)
     assert demo.main() == demo.EXIT_APPLIED
     db.expire_all()
@@ -294,3 +294,26 @@ def test_accounts_that_differ_only_by_case_are_refused(db):
     out = _apply(db)
     assert not out.applied and "letter case" in out.reason
     assert _hashes(db) == before
+
+
+# ── coordinator re-audit of bb4371a ───────────────────────────────────────────
+@pytest.mark.parametrize("keep", ["${DEMO_MASTER_KEEP_ACCOUNTS}", " , ", "manager2@tiqcollect.in,${CC_ACCOUNT}"])
+def test_a_keep_list_that_names_nobody_or_is_unresolved_is_refused(db, keep):
+    """parse_accounts drops a ${VAR} entry; with the keep-list silently empty
+    the run would retire the very accounts it was meant to protect."""
+    before = _hashes(db)
+    out = _apply(db, keep_raw=keep)
+    assert not out.applied and "KEEP_ACCOUNTS" in out.reason
+    assert _hashes(db) == before
+
+
+@pytest.mark.parametrize("value", ["${DEMO_MASTER_DISABLE_OTHERS}", "false", "1", "yes", ""])
+def test_main_retires_nobody_unless_the_second_opt_in_says_true(db, settings_for_main, monkeypatch, value):
+    monkeypatch.setattr(settings_for_main, "DEMO_MASTER_DISABLE_OTHERS", value)
+    before = _hashes(db)
+    assert demo.main() == demo.EXIT_APPLIED
+    db.expire_all()
+    after = _hashes(db)
+    for email, _role in PEOPLE:
+        if email not in MASTER_EMAILS:
+            assert after[email] == before[email], (value, email)

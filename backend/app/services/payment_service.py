@@ -57,6 +57,7 @@ from app.models.customer import Customer
 from app.models.loan import Loan
 import re
 
+from app.core.security import explicit_true
 from app.models.payment import Payment, PaymentMode, PaymentStatus
 from app.models.ptp import PTP, PTPStatus
 from app.services.ptp_lifecycle_service import verified_paid_against
@@ -75,6 +76,18 @@ UPI_UTR = re.compile(r"^\d{12}$")
 _BANK_REFERENCE_MODES = frozenset({PaymentMode.NEFT, PaymentMode.RTGS, PaymentMode.DD})
 
 
+def normalised_upi_reference(ref: str | None) -> str | None:
+    """The UTR as stored: what the rule checks (spaces removed), so
+    "4123 4567 8901" and "412345678901" are one reference, not two. A demo
+    reference is kept as typed, trimmed."""
+    r = (ref or "").strip()
+    if not r:
+        return None
+    if r.upper().startswith(DEMO_UPI_REFERENCE_PREFIX):
+        return r
+    return r.replace(" ", "")
+
+
 def payment_reference_problem(mode, *, upi_reference: str | None, bank_reference: str | None,
                               cheque_number: str | None) -> tuple[ErrorCode, str] | None:
     """None when the payment carries the evidence its mode needs; otherwise
@@ -88,7 +101,7 @@ def payment_reference_problem(mode, *, upi_reference: str | None, bank_reference
         if ref.upper().startswith(DEMO_UPI_REFERENCE_PREFIX):
             # Accepted only where the demo flag production never sets is on —
             # NOT DEMO_MODE, which the live site runs with.
-            if settings.DEMO_UPI_ACCEPT:
+            if explicit_true(settings.DEMO_UPI_ACCEPT):
                 return None
             return ErrorCode.UPI_REFERENCE_REQUIRED, "A demo UPI reference is not accepted on this server."
         if not UPI_UTR.match(ref.replace(" ", "")):
@@ -194,7 +207,7 @@ class PaymentService:
             amount=req.amount,
             mode=req.mode,
             receipt_number=self._generate_receipt(),
-            upi_reference=req.upi_reference,
+            upi_reference=normalised_upi_reference(req.upi_reference),
             cheque_number=req.cheque_number,
             bank_reference=req.bank_reference,
             receipt_photo_key=req.receipt_photo_key,

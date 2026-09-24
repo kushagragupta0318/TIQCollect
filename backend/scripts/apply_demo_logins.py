@@ -45,7 +45,7 @@ import structlog
 from sqlalchemy.orm import Session
 
 from app.core.security import (
-    disabled_password_hash, hash_password, is_disabled_password_hash, verify_password,
+    disabled_password_hash, explicit_true, hash_password, is_disabled_password_hash, verify_password,
 )
 from app.models.user import User, UserRole
 
@@ -109,6 +109,12 @@ def apply(db: Session, *, password: str | None, accounts_raw: str | None, demo_m
     if len(emails) != len(REQUIRED_ROLES) or len(set(emails)) != len(emails):
         return Outcome(applied=False, reason=f"DEMO_MASTER_ACCOUNTS must name exactly {len(REQUIRED_ROLES)} distinct emails")
     keep = set(parse_accounts(keep_raw))
+    # A keep-list that is set but names nobody (or carries an unresolved
+    # ${VAR}) is a mistake that would retire the very accounts it meant to
+    # protect: refuse rather than drop the entry (coordinator re-audit).
+    if (keep_raw or "").strip() and ("${" in keep_raw or not keep):
+        return Outcome(applied=False, reason="DEMO_MASTER_KEEP_ACCOUNTS is set but names no account, "
+                                             "or holds an unresolved ${...}")
     if keep & set(emails):
         return Outcome(applied=False, reason=f"an account is both master and keep: {', '.join(sorted(keep & set(emails)))}")
 
@@ -173,7 +179,8 @@ def main() -> int:
     try:
         out = apply(db, password=settings.DEMO_MASTER_PASSWORD, accounts_raw=settings.DEMO_MASTER_ACCOUNTS,
                     demo_mode=settings.DEMO_MODE, keep_raw=settings.DEMO_MASTER_KEEP_ACCOUNTS,
-                    disable_others=settings.DEMO_MASTER_DISABLE_OTHERS, demo_domains=settings.DEMO_EMAIL_DOMAINS)
+                    disable_others=explicit_true(settings.DEMO_MASTER_DISABLE_OTHERS),
+                    demo_domains=settings.DEMO_EMAIL_DOMAINS)
     finally:
         db.close()
     if not out.applied:
@@ -186,7 +193,7 @@ def main() -> int:
     print(f"[demo-logins] master login: {len(out.master_set)} set, {len(out.master_unchanged)} unchanged "
           f"({', '.join(sorted(out.master_set + out.master_unchanged))}); {out.kept} kept; "
           + (f"{out.disabled} other accounts retired, {out.already_disabled} already retired"
-             if settings.DEMO_MASTER_DISABLE_OTHERS else
+             if explicit_true(settings.DEMO_MASTER_DISABLE_OTHERS) else
              f"{out.left_alone} other accounts left as they are (DEMO_MASTER_DISABLE_OTHERS is off)"))
     return EXIT_APPLIED
 

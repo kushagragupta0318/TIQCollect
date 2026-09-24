@@ -54,6 +54,17 @@ def is_disabled_password_hash(hashed: str | None) -> bool:
     return len(parts) == 4 and parts[3][:21] == DISABLED_PASSWORD_SALT[:21]
 
 
+def explicit_true(value) -> bool:
+    """A demo switch is on only when it says "true" (any case). Read as a
+    string, not a pydantic bool, so a literal ${VAR} left unresolved in an env
+    file reads as OFF instead of failing settings at boot (coordinator
+    re-audit of bb4371a). Used for DEMO_MASTER_DISABLE_OTHERS and
+    DEMO_UPI_ACCEPT."""
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() == "true"
+
+
 def demo_master_login_active() -> bool:
     """True while this box runs the shared demo master login. One password
     for an admin AND a manager lets one person be both halves of a four-eyes
