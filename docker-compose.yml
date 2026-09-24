@@ -11,8 +11,9 @@
 #     http://localhost:19001  MinIO console
 #     localhost:15432         Postgres    localhost:16379  Redis
 #
-# Log in as agent002@tiqcollect.in / Agent@123, or manager1@tiqcollect.in /
-# Manager@123. The database is created and seeded automatically on first start.
+# The database is created and filled automatically on first start. The demo
+# accounts are listed once, in backend/fixtures/README.md — never here and never
+# in the UI (the login page's demo buttons were removed on 2026-09-24).
 #
 # This is NOT how the app is deployed. In production one container serves the
 # built SPA and the API on a single origin — see ../docker-compose.yml and

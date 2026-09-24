@@ -1,5 +1,14 @@
-import { useEffect, useState, type FormEvent } from "react";
-import { useLocation, useNavigate } from "react-router";
+// ─── CHANGELOG ─────────────────────────────────────────────────────────────
+// 2026-09-24 — A10: the static login is gone. This page carried two "Quick
+//   demo login" buttons that filled agent002 / manager1 and their passwords
+//   into the form, and honoured a `prefill` router state LandingPage sent — so
+//   the product shipped two working credentials in its bundle to anyone who
+//   opened the page. Demo accounts still exist in the demo fixture and are
+//   documented once, in backend/fixtures/README.md; there is no UI shortcut to
+//   them. `src/noHardcodedCredentials.test.ts` fails if one comes back.
+// ─────────────────────────────────────────────────────────────────────────────
+import { useState, type FormEvent } from "react";
+import { useNavigate } from "react-router";
 import { Eye, EyeOff } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { BrandLogo } from "@/components/ui/BrandLogo";
@@ -10,19 +19,12 @@ import { Input } from "@/components/ui/Input";
 
 export default function LoginPage() {
   const navigate = useNavigate();
-  const location = useLocation();
   const { setTokens, setUser, deviceId } = useAuthStore();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    const prefill = (location.state as { prefill?: string } | null)?.prefill;
-    if (prefill === "agent") quickLogin("agent");
-    else if (prefill === "manager") quickLogin("manager");
-  }, []);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -40,11 +42,6 @@ export default function LoginPage() {
     } finally {
       setLoading(false);
     }
-  }
-
-  function quickLogin(type: "agent" | "manager") {
-    setEmail(type === "agent" ? "agent002@tiqcollect.in" : "manager1@tiqcollect.in");
-    setPassword(type === "agent" ? "Agent@123" : "Manager@123");
   }
 
   return (
@@ -132,30 +129,7 @@ export default function LoginPage() {
                 </Button>
               </form>
 
-              <div className="my-4 flex items-center gap-3 py-1">
-                <span className="h-px flex-1 bg-[#ECEDF1]" />
-                <span className="px-2 text-xs leading-5 text-[#98A2B3]">Quick demo login</span>
-                <span className="h-px flex-1 bg-[#ECEDF1]" />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <button
-                  type="button"
-                  onClick={() => quickLogin("agent")}
-                  className="min-h-10 rounded-control border border-[#BFDBFE] bg-[#EFF6FF] px-3 text-sm font-medium text-[#1D4ED8] transition-colors hover:bg-[#DBEAFE] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/20"
-                >
-                  Field Agent
-                </button>
-                <button
-                  type="button"
-                  onClick={() => quickLogin("manager")}
-                  className="min-h-10 rounded-control border border-[#DDD6FE] bg-[#F5F3FF] px-3 text-sm font-medium text-[#6D28D9] transition-colors hover:bg-[#EDE9FE] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/20"
-                >
-                  Manager
-                </button>
-              </div>
-
-              <p className="mt-3 text-center text-xs text-[#98A2B3] [@media(max-height:600px)]:hidden">
+              <p className="mt-5 text-center text-xs text-[#98A2B3] [@media(max-height:600px)]:hidden">
                 Access is assigned by your organization administrator.
               </p>
             </div>
