@@ -162,6 +162,18 @@ class Settings(BaseSettings):
     # defaulted. Unset = nothing changes. See that script for the rules.
     DEMO_MASTER_PASSWORD: str = ""
     DEMO_MASTER_ACCOUNTS: str = ""        # three emails, comma-separated: one admin, one manager, one agent
+    # Never touched by the script: the Collections Command Center's service
+    # logins (its TIQCOLLECT_AGENCY_ACCOUNTS), comma-separated emails.
+    DEMO_MASTER_KEEP_ACCOUNTS: str = ""
+    # The second, explicit opt-in to RETIRE every other account's password.
+    # DEMO_MODE cannot be it: .env.example ships DEMO_MODE=true and compose
+    # defaults it on, so a real deployment may well run with it.
+    DEMO_MASTER_DISABLE_OTHERS: bool = False
+    DEMO_EMAIL_DOMAINS: str = "tiqcollect.in"     # accounts outside these are never retired
+    # 2026-09-24 (hotfix PAY-1) — accept the demo auto-confirm's DEMO-UPI-
+    # reference. A flag production never sets: NOT DEMO_MODE, which the live
+    # site runs with. Off => every UPI reference must be a 12-digit UTR.
+    DEMO_UPI_ACCEPT: bool = False
     # The showcase customer (DEMO0003). Swap the phone to your CEO's / manager's
     # number here — no reseed, no rebuild; a backend restart applies it.
     DEMO_CONTACT_NAME: str = "Balraj Singh"
@@ -530,6 +542,9 @@ class Settings(BaseSettings):
     # Per-bank payees are A14 (brand as data) in the standalone plan.
     UPI_VPA: str = ""
     UPI_PAYEE_NAME: str = ""
+    # 2026-09-24 (hotfix BL-5) — the number the borrower's post-visit message
+    # tells them to call. Unset => the message leaves that sentence out.
+    BORROWER_HELPLINE: str = ""
 
     # Borrower payment-verification OTP (see services/otp_service.py)
     OTP_LENGTH: int = 4                       # product decision: 4-digit code

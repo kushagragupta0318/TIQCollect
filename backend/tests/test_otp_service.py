@@ -245,6 +245,24 @@ def test_verify_correct_deferred_promotes_payment(db, fake_redis):
     assert fake_redis.hgetall(OtpService._otp_key("otp-1")) == {}
 
 
+@pytest.mark.parametrize("mode", [PaymentMode.UPI, PaymentMode.NEFT, PaymentMode.CHEQUE])
+def test_verify_deferred_refuses_a_payment_without_its_reference(db, fake_redis, mode):
+    """Hotfix PAY-1 (2026-09-24): a PENDING row written before the server
+    required references must not become VERIFIED by a borrower OTP."""
+    _seed_case(db)
+    db.add(Payment(
+        id="pay-1", case_id="case-1", agent_id="agent-1", amount=5000.0,
+        mode=mode, receipt_number="TIQ-2026-FEEDBEEF",
+        payment_date=datetime.now(timezone.utc), status=PaymentStatus.PENDING_VERIFICATION,
+    ))
+    db.commit()
+    _put_otp(fake_redis, "otp-1", code="1234", payment_id="pay-1")
+    with pytest.raises(AppException) as e:
+        OtpService(db).verify(_agent(), "case-1", "otp-1", "1234")
+    assert e.value.status_code == 422
+    assert db.query(Payment).filter_by(id="pay-1").one().status == PaymentStatus.PENDING_VERIFICATION
+
+
 # ── consume_for_payment ───────────────────────────────────────────────────────
 
 def test_consume_requires_verified_otp(db, fake_redis):

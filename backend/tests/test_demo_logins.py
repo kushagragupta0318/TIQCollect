@@ -4,6 +4,12 @@ The owner's decision: one master password, three accounts (one AGENCY_ADMIN,
 one AGENCY_MANAGER, one FIELD_AGENT), set from a private server setting; every
 other account's password made unusable, which retires the seed's published
 passwords. The logins are checked through the real /auth/login route.
+
+Round 3 (the coordinator's audit): accounts on the keep-list (Command
+Center's service logins) are never touched; retiring the others needs a second
+opt-in, DEMO_MASTER_DISABLE_OTHERS, and refuses on a box with any non-demo
+account or more users than the demo fixture — DEMO_MODE alone cannot tell a
+demo box from a real one.
 """
 from __future__ import annotations
 
@@ -38,6 +44,7 @@ PEOPLE = [
     ("agent003@tiqcollect.in", UserRole.FIELD_AGENT),
 ]
 MASTER_EMAILS = {"admin@tiqcollect.in", "manager1@tiqcollect.in", "agent002@tiqcollect.in"}
+CC_ACCOUNT = "manager2@tiqcollect.in"                   # stands in for a Command Center service login
 
 
 @pytest.fixture
@@ -69,8 +76,9 @@ def _hashes(db):
     return {u.email: (u.hashed_password, u.hashed_refresh_token) for u in db.query(User).all()}
 
 
-def _apply(db, password=MASTER, accounts=ACCOUNTS, demo_mode=True):
-    return demo.apply(db, password=password, accounts_raw=accounts, demo_mode=demo_mode)
+def _apply(db, password=MASTER, accounts=ACCOUNTS, demo_mode=True, **kw):
+    kw.setdefault("disable_others", True)
+    return demo.apply(db, password=password, accounts_raw=accounts, demo_mode=demo_mode, **kw)
 
 
 # ── the rule ─────────────────────────────────────────────────────────────────
@@ -117,7 +125,9 @@ def test_a_new_master_password_rehashes_and_revokes(db):
     ({"demo_mode": False}, "DEMO_MODE is off"),
     ({"accounts": "admin@tiqcollect.in,manager1@tiqcollect.in"}, "exactly 3"),
     ({"accounts": "admin@tiqcollect.in,manager1@tiqcollect.in,manager1@tiqcollect.in"}, "exactly 3"),
-    ({"accounts": "admin@tiqcollect.in,manager1@tiqcollect.in,nobody@tiqcollect.in"}, "unknown users"),
+    ({"accounts": "admin@tiqcollect.in,manager1@tiqcollect.in,nobody@tiqcollect.in"}, "unknown accounts"),
+    ({"keep_raw": "nobody@tiqcollect.in"}, "unknown accounts"),
+    ({"keep_raw": "MANAGER1@tiqcollect.in"}, "both master and keep"),
     ({"accounts": "admin@tiqcollect.in,manager1@tiqcollect.in,manager2@tiqcollect.in"}, "must be one"),
 ])
 def test_a_refusal_changes_nothing(db, kwargs, reason):
@@ -175,18 +185,102 @@ def test_the_login_route_admits_the_three_and_refuses_the_published_passwords(db
 
 
 # ── the password never leaves the environment ────────────────────────────────
-def test_main_never_prints_the_password(db, monkeypatch, capsys):
+@pytest.fixture
+def settings_for_main(db, monkeypatch):
     from app.core import config, database
-    monkeypatch.setattr(config.settings, "DEMO_MASTER_PASSWORD", MASTER)
-    monkeypatch.setattr(config.settings, "DEMO_MASTER_ACCOUNTS", ACCOUNTS)
-    monkeypatch.setattr(config.settings, "DEMO_MODE", True)
+    for k, v in {"DEMO_MASTER_PASSWORD": MASTER, "DEMO_MASTER_ACCOUNTS": ACCOUNTS, "DEMO_MODE": True,
+                 "DEMO_MASTER_KEEP_ACCOUNTS": "", "DEMO_MASTER_DISABLE_OTHERS": False,
+                 "DEMO_EMAIL_DOMAINS": "tiqcollect.in"}.items():
+        monkeypatch.setattr(config.settings, k, v)
     monkeypatch.setattr(database, "SessionLocal", Session)
-    assert demo.main() == 0
-    monkeypatch.setattr(config.settings, "DEMO_MASTER_PASSWORD", "tiny-secret-9")    # refused: 13 chars
-    assert demo.main() == 1
+    return config.settings
+
+
+def test_main_never_prints_the_password(settings_for_main, monkeypatch, capsys):
+    assert demo.main() == demo.EXIT_APPLIED
+    monkeypatch.setattr(settings_for_main, "DEMO_MASTER_PASSWORD", "tiny-secret-9")    # refused: 13 chars
+    assert demo.main() == demo.EXIT_REFUSED
     out = capsys.readouterr()
     for secret in (MASTER, "tiny-secret-9"):
         assert secret not in out.out and secret not in out.err
+
+
+@pytest.mark.parametrize("password", ["", "${DEMO_MASTER_PASSWORD}"])
+def test_main_says_not_configured_with_its_own_exit_code(settings_for_main, monkeypatch, capsys, password):
+    """Exit 3, not 0: the entrypoint must not print "applied" for a run that
+    changed nothing (audit of 4dcd9dc)."""
+    monkeypatch.setattr(settings_for_main, "DEMO_MASTER_PASSWORD", password)
+    assert demo.main() == demo.EXIT_NOT_CONFIGURED
+    assert "not set" in capsys.readouterr().out
+
+
+def test_main_reads_the_keep_list_and_the_second_opt_in(db, settings_for_main, monkeypatch):
+    monkeypatch.setattr(settings_for_main, "DEMO_MASTER_KEEP_ACCOUNTS", CC_ACCOUNT)
+    monkeypatch.setattr(settings_for_main, "DEMO_MASTER_DISABLE_OTHERS", True)
+    before = _hashes(db)
+    assert demo.main() == demo.EXIT_APPLIED
+    db.expire_all()
+    after = _hashes(db)
+    assert after[CC_ACCOUNT] == before[CC_ACCOUNT]
+    assert demo.is_disabled_hash(after["agent001@tiqcollect.in"][0])
+
+
+# ── round 3: the keep-list, and the second opt-in ─────────────────────────────
+def test_a_kept_account_is_never_touched(db):
+    """Command Center logs in here as agency managers with its own passwords;
+    changing one 502s every /field/* page it serves."""
+    before = _hashes(db)
+    out = _apply(db, keep_raw=f" {CC_ACCOUNT.upper()} ")
+    assert out.applied and out.kept == 1
+    assert _hashes(db)[CC_ACCOUNT] == before[CC_ACCOUNT]           # password AND session untouched
+    assert verify_password(SEED[UserRole.AGENCY_MANAGER], db.query(User).filter(User.email == CC_ACCOUNT).one().hashed_password)
+    assert out.disabled == len(PEOPLE) - 3 - 1
+
+
+def test_without_the_second_opt_in_other_accounts_are_left_alone(db):
+    """DEMO_MODE cannot tell demo from real, so the master password alone sets
+    three accounts and retires nobody."""
+    before = _hashes(db)
+    out = _apply(db, disable_others=False)
+    assert out.applied and out.disabled == 0 and out.left_alone == len(PEOPLE) - 3
+    after = _hashes(db)
+    for email, _role in PEOPLE:
+        if email not in MASTER_EMAILS:
+            assert after[email] == before[email]
+
+
+def test_retiring_others_refuses_on_a_box_with_a_non_demo_account(db):
+    db.add(User(id=str(uuid.uuid4()), email="ops.lead@meridianfinance.in", phone="9000000298",
+                full_name="Farhan Qureshi", hashed_password=hash_password("Real-Password-01"),
+                role=UserRole.AGENCY_MANAGER, is_active=True, is_verified=True))
+    db.commit()
+    before = _hashes(db)
+    out = _apply(db)
+    assert not out.applied and "outside the demo domains" in out.reason
+    assert _hashes(db) == before
+    # The same box, the foreign account on the keep-list: allowed, and it stays usable.
+    out = _apply(db, keep_raw="ops.lead@meridianfinance.in")
+    assert out.applied
+    assert _hashes(db)["ops.lead@meridianfinance.in"] == before["ops.lead@meridianfinance.in"]
+
+
+def test_retiring_others_refuses_on_a_box_with_more_users_than_the_fixture(db):
+    before = _hashes(db)
+    out = _apply(db, max_users=len(PEOPLE) - 1)
+    assert not out.applied and "more than the demo fixture" in out.reason
+    assert _hashes(db) == before
+    assert _apply(db, max_users=len(PEOPLE)).applied          # the boundary itself is allowed
+
+
+def test_a_foreign_domain_is_fine_when_nothing_is_retired(db):
+    db.add(User(id=str(uuid.uuid4()), email="ops.lead@meridianfinance.in", phone="9000000297",
+                full_name="Farhan Qureshi", hashed_password=hash_password("Real-Password-01"),
+                role=UserRole.AGENCY_MANAGER, is_active=True, is_verified=True))
+    db.commit()
+    before = _hashes(db)
+    out = _apply(db, disable_others=False)
+    assert out.applied
+    assert _hashes(db)["ops.lead@meridianfinance.in"] == before["ops.lead@meridianfinance.in"]
 
 
 def test_accounts_that_differ_only_by_case_are_refused(db):

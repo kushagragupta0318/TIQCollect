@@ -371,6 +371,16 @@ class OtpService:
             # Deferred flow: promote the already-created pending payment now, and
             # consume the OTP (single-use) — nothing left to collect afterwards.
             payment = self.db.query(Payment).filter(Payment.id == payment_id).first()
+            # 2026-09-24 (hotfix PAY-1) — never promote a payment that lacks the
+            # evidence its mode needs: rows written before the server required
+            # references could otherwise become VERIFIED by a borrower OTP.
+            if payment and payment.status != PaymentStatus.VERIFIED:
+                from app.services.payment_service import payment_reference_problem
+                problem = payment_reference_problem(
+                    payment.mode, upi_reference=payment.upi_reference,
+                    bank_reference=payment.bank_reference, cheque_number=payment.cheque_number)
+                if problem:
+                    raise AppException(422, problem[0], problem[1] + " It cannot be verified without one.")
             if payment and payment.status != PaymentStatus.VERIFIED:
                 payment.status = PaymentStatus.VERIFIED
                 payment.verified_at = datetime.now(timezone.utc)

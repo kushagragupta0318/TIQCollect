@@ -59,6 +59,7 @@ NOT_YOUR_CASE = "NOT_YOUR_CASE"
 OUTSIDE_CONTACT_HOURS = "OUTSIDE_CONTACT_HOURS"
 DO_NOT_CONTACT = "DO_NOT_CONTACT"
 NO_NUMBER = "NO_NUMBER"
+NOT_OUR_APP = "NOT_OUR_APP"
 
 
 class VoiceRefused(Exception):
@@ -91,7 +92,10 @@ def voice_configured() -> bool:
 
 
 def identity_for(user_id: str) -> str:
-    return f"{IDENTITY_PREFIX}:{user_id}"
+    """agent_<32 hex>. Alphanumerics and underscore only: Twilio client
+    identities may not allow ':' or '-', and an identity it rejects makes every
+    call fail. (This was agent:<uuid> until the audit of 4dcd9dc.)"""
+    return f"{IDENTITY_PREFIX}_{uuid.UUID(str(user_id)).hex}"
 
 
 def parse_identity(from_param: str | None) -> str | None:
@@ -99,10 +103,21 @@ def parse_identity(from_param: str | None) -> str | None:
     value = (from_param or "").strip()
     if value.startswith("client:"):
         value = value[len("client:"):]
-    parts = value.split(":")
-    if len(parts) != 2 or parts[0] != IDENTITY_PREFIX:
+    prefix = f"{IDENTITY_PREFIX}_"
+    if not value.startswith(prefix):
         return None
-    return _uuid(parts[1])
+    hex_part = value[len(prefix):]
+    if len(hex_part) != 32 or any(c not in "0123456789abcdef" for c in hex_part):
+        return None
+    return str(uuid.UUID(hex=hex_part))
+
+
+def from_our_app(params: dict) -> bool:
+    """The signed request came from OUR Twilio account and OUR TwiML app. The
+    signature proves the account's auth token signed it; any other TwiML app
+    in the same account could otherwise point here with identities of its own."""
+    return (params.get("AccountSid") == settings.TWILIO_ACCOUNT_SID
+            and params.get("ApplicationSid") == settings.TWILIO_TWIML_APP_SID)
 
 
 def public_url(path: str, query: str = "") -> str | None:
@@ -154,7 +169,11 @@ def resolve_destination(db: Session, *, from_param: str | None, case_id: str | N
     now = now or datetime.now(timezone.utc)
 
     user = db.get(User, user_id)
-    if user is None or not user.is_active or user.role != UserRole.FIELD_AGENT:
+    if user is None:
+        # Not user_id=user_id: an id with no users row violates the audit
+        # table's foreign key on Postgres and the refusal row would be lost.
+        raise VoiceRefused(BAD_IDENTITY)
+    if not user.is_active or user.role != UserRole.FIELD_AGENT:
         raise VoiceRefused(BAD_IDENTITY, user_id=user_id)
 
     cid = _uuid(case_id)

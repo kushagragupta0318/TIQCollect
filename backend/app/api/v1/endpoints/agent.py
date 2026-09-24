@@ -1095,11 +1095,11 @@ async def voice_outbound(request: Request, db: DbSession):
         params = {k: v for k, v in form.multi_items()}
     except Exception:  # noqa: BLE001 — a body the parser cannot read is not Twilio's
         params = None
+    client_ip = request.client.host if request.client else None
     if params is None:
-        write_audit(db, action=_voice_refusal_action(voice.BAD_SIGNATURE), user_id=None, entity_type="voice_call",
-                    entity_id=f"{request.method} {request.url.path}", success=False,
-                    failure_reason=voice.BAD_SIGNATURE,
-                    ip_address=request.client.host if request.client else None)
+        # Logged, not audited: anyone can POST here, and an audit row per junk
+        # request would let them fill the audit table (audit of 4dcd9dc).
+        logger.warning("voice.outbound_refused", reason=voice.BAD_SIGNATURE, detail="unparseable body", ip=client_ip)
         raise HTTPException(status_code=403, detail="Forbidden")
     try:
         from twilio.twiml.voice_response import Dial, VoiceResponse
@@ -1110,13 +1110,14 @@ async def voice_outbound(request: Request, db: DbSession):
     url = voice.public_url(request.url.path, request.url.query)
     if not voice.voice_configured() or not voice.signature_ok(url, params, request.headers.get("X-Twilio-Signature")):
         reason = voice.BAD_SIGNATURE if voice.voice_configured() else voice.NOT_CONFIGURED
-        write_audit(db, action=_voice_refusal_action(reason), user_id=None, entity_type="voice_call",
-                    entity_id=f"{request.method} {request.url.path}", success=False, failure_reason=reason,
-                    ip_address=request.client.host if request.client else None)
+        # Logged, not audited — see above. Signed requests are audited below.
+        logger.warning("voice.outbound_refused", reason=reason, ip=client_ip)
         raise HTTPException(status_code=403, detail="Forbidden")
 
     resp = VoiceResponse()
     try:
+        if not voice.from_our_app(params):
+            raise voice.VoiceRefused(voice.NOT_OUR_APP)
         dest = voice.resolve_destination(db, from_param=params.get("From"), case_id=params.get("CaseId"))
     except voice.VoiceRefused as refused:
         write_audit(db, action=_voice_refusal_action(refused.reason), user_id=refused.user_id,

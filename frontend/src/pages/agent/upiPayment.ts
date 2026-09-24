@@ -27,9 +27,28 @@ export function demoUpiReference(nowMs: number): string {
   return `${DEMO_UPI_REFERENCE_PREFIX}${nowMs}`;
 }
 
-/** Mirrors the server rule: a UPI payment carries a non-blank reference. */
-export function upiReferenceOk(ref: string | null | undefined): boolean {
-  return !!ref && ref.trim().length > 0;
+/** Mirrors the server rule (payment_service.payment_reference_problem): a UPI
+ *  reference is a 12-digit UTR. The demo's DEMO-UPI- reference passes only in
+ *  a demo build — and the server accepts it only with DEMO_UPI_ACCEPT. */
+export function upiReferenceOk(ref: string | null | undefined, opts: { demo?: boolean } = {}): boolean {
+  const r = (ref ?? "").trim();
+  if (opts.demo && r.toUpperCase().startsWith(DEMO_UPI_REFERENCE_PREFIX)) return true;
+  return /^\d{12}$/.test(r.replace(/\s+/g, ""));
+}
+
+export interface PaymentReferences {
+  upiRef: string;
+  neftRef: string;
+  chequeNumber: string;
+}
+
+/** The evidence each mode must carry, as the server requires it: UPI a UTR,
+ *  NEFT / RTGS / DD a bank reference, CHEQUE its number. Cash needs none. */
+export function paymentReferenceOk(mode: string, refs: PaymentReferences, opts: { demo?: boolean } = {}): boolean {
+  if (mode === "UPI") return upiReferenceOk(refs.upiRef, opts);
+  if (mode === "NEFT" || mode === "RTGS" || mode === "DD") return refs.neftRef.trim().length > 0;
+  if (mode === "CHEQUE") return refs.chequeNumber.trim().length > 0;
+  return true;
 }
 
 /** The upi:// payload for the QR, or null when the server has no payee. */

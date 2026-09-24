@@ -56,6 +56,11 @@ from app.services.notification_service import NotificationService
 logger = structlog.get_logger()
 
 _PAYMENT_OUTCOMES = {VisitOutcome.PAID_FULL, VisitOutcome.PART_PAID, VisitOutcome.PART_PAID_PTP}
+# 2026-09-24 (hotfix BL-5 / D10) — outcomes after which the borrower is sent
+# NOTHING: a deceased borrower's phone is the family's, and a disputed debt is
+# not one to remind anybody of. Hostile and do-not-contact borrowers are
+# excluded by their own flags (_should_send_visit_notice).
+_NO_VISIT_NOTICE_OUTCOMES = frozenset({VisitOutcome.DECEASED, VisitOutcome.DISPUTE})
 # A flaky connection can make an agent's app retry the same submit. Anything
 # for the same case/agent/outcome within this window is treated as the same
 # physical check-in, not a second real visit.
@@ -276,7 +281,7 @@ class VisitService:
 
         # Send visit completion message for non-payment outcomes (payment
         # outcomes are handled by collect_payment)
-        if req.outcome not in _PAYMENT_OUTCOMES and case.customer and case.customer.phone_primary:
+        if self._should_send_visit_notice(req.outcome, case.customer):
             self._notify_visit_completed(agent, case, now_utc)
 
         return self._to_response(visit)
@@ -383,25 +388,27 @@ class VisitService:
         elif case.status == CaseStatus.ASSIGNED:
             case.status = CaseStatus.IN_PROGRESS
 
+    @staticmethod
+    def _should_send_visit_notice(outcome, customer) -> bool:
+        """Payment outcomes get a receipt from collect_payment instead; the
+        outcomes in _NO_VISIT_NOTICE_OUTCOMES, hostile and do-not-contact
+        borrowers, and a borrower with no number get nothing."""
+        return (outcome not in _PAYMENT_OUTCOMES
+                and outcome not in _NO_VISIT_NOTICE_OUTCOMES
+                and customer is not None and bool(customer.phone_primary)
+                and not customer.is_hostile and not customer.do_not_contact)
+
     def _notify_visit_completed(self, agent: Agent, case: Case, now_utc: datetime) -> None:
-        """Best-effort SMS/WhatsApp telling the customer a visit happened with no payment collected."""
-        loan = case.loan
-        masked_acct = "XXXX" + loan.loan_account_number[-4:] if loan else "XXXXXXXX"
-        outstanding = case.target_amount - case.collected_amount
-        visit_date = now_utc.strftime("%d %b %Y")
+        """Best-effort SMS/WhatsApp telling the borrower a visit happened.
+
+        2026-09-24 (hotfix BL-5 / D10) — NEUTRAL. It used to carry the masked
+        loan number, the agent's name, "No payment collected" and the
+        outstanding amount. A phone is often shared or read by someone else, so
+        a message about a debt must not say how much or on what; it now says a
+        representative visited about the account, and where to call. The text
+        is NotificationService.visit_notice_text — one definition.
+        """
+        lender = (case.loan.bank_name if case.loan and case.loan.bank_name else "your lender")
+        text = NotificationService.visit_notice_text(lender)
         e164 = "+" + NotificationService.normalize_phone(case.customer.phone_primary)
-        sms_body = (
-            f"Dear {case.customer.full_name}, ABC Bank's field agent {agent.user.full_name} "
-            f"completed a visit on {visit_date} for loan {masked_acct}. "
-            f"No payment collected. Outstanding: Rs.{outstanding:,.0f}. - ABC Bank"
-        )
-        wa_body = (
-            f"*Visit Completed – ABC Bank*\n\n"
-            f"Dear {case.customer.full_name},\n\n"
-            f"Agent *{agent.user.full_name}* visited on {visit_date}.\n"
-            f"Loan Account: {masked_acct}\n"
-            f"Outstanding: Rs.{outstanding:,.0f}\n"
-            f"Payment: none collected.\n\n"
-            f"Please contact us to resolve your dues.\n– ABC Bank"
-        )
-        NotificationService.send_twilio(e164, sms_body, wa_body)
+        NotificationService.send_twilio(e164, text, text)

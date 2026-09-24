@@ -55,14 +55,51 @@ from app.core.audit import write_audit
 from app.models.case import Case, CaseStatus
 from app.models.customer import Customer
 from app.models.loan import Loan
-from app.models.payment import Payment, PaymentMode, PaymentStatus
+import re
 
-# The prefix the demo auto-confirm writes (frontend upiPayment.ts). Upper-case
-# compare, so a hand-typed variant is caught too.
-DEMO_UPI_REFERENCE_PREFIX = "DEMO-UPI-"
+from app.models.payment import Payment, PaymentMode, PaymentStatus
 from app.models.ptp import PTP, PTPStatus
 from app.services.ptp_lifecycle_service import verified_paid_against
 from app.services.notification_service import NotificationService
+
+# ── The evidence each payment mode must carry (hotfix PAY-1, 2026-09-24) ──────
+# The only evidence a non-cash payment happened is its reference. The page
+# asked for these; the server never did — 201 of the demo book's 1,036
+# payments are NEFT rows with no reference at all. One definition, read by
+# collect_payment and by the deferred-OTP promotion (otp_service).
+# The prefix the demo auto-confirm writes (frontend upiPayment.ts); compared
+# upper-case, so a hand-typed variant is caught too.
+DEMO_UPI_REFERENCE_PREFIX = "DEMO-UPI-"
+# A UPI transaction's UTR / RRN is 12 digits.
+UPI_UTR = re.compile(r"^\d{12}$")
+_BANK_REFERENCE_MODES = frozenset({PaymentMode.NEFT, PaymentMode.RTGS, PaymentMode.DD})
+
+
+def payment_reference_problem(mode, *, upi_reference: str | None, bank_reference: str | None,
+                              cheque_number: str | None) -> tuple[ErrorCode, str] | None:
+    """None when the payment carries the evidence its mode needs; otherwise
+    the error code and the message for the agent."""
+    mode = PaymentMode(mode) if not isinstance(mode, PaymentMode) else mode
+    if mode == PaymentMode.UPI:
+        ref = (upi_reference or "").strip()
+        if not ref:
+            return (ErrorCode.UPI_REFERENCE_REQUIRED,
+                    "A UPI payment needs its transaction reference (UTR) from the payment confirmation.")
+        if ref.upper().startswith(DEMO_UPI_REFERENCE_PREFIX):
+            # Accepted only where the demo flag production never sets is on —
+            # NOT DEMO_MODE, which the live site runs with.
+            if settings.DEMO_UPI_ACCEPT:
+                return None
+            return ErrorCode.UPI_REFERENCE_REQUIRED, "A demo UPI reference is not accepted on this server."
+        if not UPI_UTR.match(ref.replace(" ", "")):
+            return ErrorCode.UPI_REFERENCE_REQUIRED, "A UPI transaction reference (UTR) is 12 digits."
+        return None
+    if mode in _BANK_REFERENCE_MODES and not (bank_reference or "").strip():
+        return (ErrorCode.PAYMENT_REFERENCE_REQUIRED,
+                f"A {mode.value} payment needs its bank reference (UTR) from the transfer confirmation.")
+    if mode == PaymentMode.CHEQUE and not (cheque_number or "").strip():
+        return ErrorCode.PAYMENT_REFERENCE_REQUIRED, "A cheque payment needs the cheque number."
+    return None
 
 
 class PaymentService:
@@ -121,19 +158,14 @@ class PaymentService:
         # because v1 records no gateway payment at all: create_payment_link
         # mints a Razorpay QR that no page calls and no webhook confirms. A
         # future webhook must put the gateway's payment id in upi_reference.
-        if req.mode == PaymentMode.UPI and not (req.upi_reference or "").strip():
-            raise AppException(
-                422, ErrorCode.UPI_REFERENCE_REQUIRED,
-                "A UPI payment needs its transaction reference (UTR) from the payment confirmation.",
-            )
-        # The demo auto-confirm writes DEMO-UPI-<ms>. Accepted only on a demo
-        # box: a production bundle built with the demo flag by mistake must not
-        # be able to record a fake UPI payment.
-        if (req.upi_reference or "").strip().upper().startswith(DEMO_UPI_REFERENCE_PREFIX) and not settings.DEMO_MODE:
-            raise AppException(
-                422, ErrorCode.UPI_REFERENCE_REQUIRED,
-                "A demo UPI reference is not accepted outside demo mode.",
-            )
+        # Every non-cash mode now carries its evidence (see
+        # payment_reference_problem): UPI a 12-digit UTR (or, on a box with
+        # DEMO_UPI_ACCEPT, the demo's DEMO-UPI- reference), NEFT/RTGS/DD a bank
+        # reference, CHEQUE its number.
+        problem = payment_reference_problem(req.mode, upi_reference=req.upi_reference,
+                                            bank_reference=req.bank_reference, cheque_number=req.cheque_number)
+        if problem:
+            raise AppException(422, problem[0], problem[1])
         case = self._get_accessible_case(agent, case_id)
 
         existing = self._find_recent_duplicate(case.id, agent.id, req)

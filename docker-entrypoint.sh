@@ -123,11 +123,13 @@ fi
 # script through the environment only, never this command line. Never fatal: a
 # refusal is logged and the container still starts.
 if [ -n "${DEMO_MASTER_PASSWORD:-}" ] && [ "${1:-}" != "celery" ]; then
-  if python -m scripts.apply_demo_logins; then
-    echo "[entrypoint] demo master login applied"
-  else
-    echo "[entrypoint] demo master login NOT applied — see the error above; nothing was changed"
-  fi
+  rc=0
+  python -m scripts.apply_demo_logins || rc=$?
+  case "$rc" in
+    0) echo "[entrypoint] demo master login applied" ;;
+    3) echo "[entrypoint] demo master login not configured — nothing changed" ;;
+    *) echo "[entrypoint] demo master login NOT applied — see the error above; nothing was changed" ;;
+  esac
 fi
 
 exec "$@"

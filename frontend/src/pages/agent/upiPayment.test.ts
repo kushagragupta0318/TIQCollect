@@ -5,6 +5,7 @@ import {
   DEMO_UPI_REFERENCE_PREFIX,
   demoUpiAutoconfirmEnabled,
   demoUpiReference,
+  paymentReferenceOk,
   upiQrValue,
   upiReferenceOk,
 } from "./upiPayment";
@@ -31,17 +32,36 @@ describe("the demo auto-confirm is off unless the build asks for it exactly", ()
   });
 });
 
-describe("a UPI payment always carries a reference", () => {
-  it("refuses a blank reference — there is no waiver any more", () => {
-    for (const ref of ["", "   ", null, undefined]) expect(upiReferenceOk(ref)).toBe(false);
+describe("every payment mode carries the evidence the server requires", () => {
+  it("a UPI reference is a 12-digit UTR", () => {
+    for (const ref of ["", "   ", null, undefined, "12345", "4123456789012", "41234567890a"]) {
+      expect(upiReferenceOk(ref)).toBe(false);
+    }
     expect(upiReferenceOk("412345678901")).toBe(true);
+    expect(upiReferenceOk(" 4123 4567 8901 ")).toBe(true);
   });
 
-  it("labels the demo reference as a demo, so it can never pass for a UTR", () => {
+  it("the demo reference passes only in a demo build, and never looks like a UTR", () => {
     const ref = demoUpiReference(1_727_164_800_000);
     expect(ref.startsWith(DEMO_UPI_REFERENCE_PREFIX)).toBe(true);
-    expect(upiReferenceOk(ref)).toBe(true);
+    expect(upiReferenceOk(ref)).toBe(false);                 // a normal build refuses it
+    expect(upiReferenceOk(ref, { demo: true })).toBe(true);
     expect(ref).not.toMatch(/^\d{12}$/);
+  });
+
+  const none = { upiRef: "", neftRef: "", chequeNumber: "" };
+  it.each([
+    ["CASH", none, true],
+    ["UPI", none, false],
+    ["UPI", { ...none, upiRef: "412345678901" }, true],
+    ["NEFT", none, false],
+    ["NEFT", { ...none, neftRef: "UTIBN52026092400123" }, true],
+    ["RTGS", none, false],
+    ["DD", none, false],
+    ["CHEQUE", none, false],
+    ["CHEQUE", { ...none, chequeNumber: "004512" }, true],
+  ])("%s with %j -> %s", (mode, refs, want) => {
+    expect(paymentReferenceOk(mode, refs)).toBe(want);
   });
 });
 

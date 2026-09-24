@@ -34,6 +34,8 @@ class ErrorCode(str, Enum):
     # reference (UTR). The only evidence a UPI payment happened is that
     # reference; the demo QR used to waive it after a 10-second timer.
     UPI_REFERENCE_REQUIRED = "UPI_REFERENCE_REQUIRED"
+    # NEFT / RTGS / DD without a bank reference, CHEQUE without its number.
+    PAYMENT_REFERENCE_REQUIRED = "PAYMENT_REFERENCE_REQUIRED"
 
 
 class AppException(HTTPException):

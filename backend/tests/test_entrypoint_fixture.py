@@ -187,23 +187,31 @@ def test_the_password_never_appears_on_a_command_line(tmp_path):
     assert _SECRET not in proc.stdout and _SECRET not in proc.stderr
 
 
-def test_a_refused_master_login_does_not_stop_the_api(tmp_path):
-    """The script exits 1 on a refusal (short password, DEMO_MODE off, wrong
-    accounts). The container must still start."""
+@pytest.mark.parametrize("rc,says,never", [
+    (0, "demo master login applied", "NOT applied"),
+    (1, "demo master login NOT applied", "login applied"),
+    (3, "demo master login not configured", "login applied"),
+])
+def test_the_entrypoint_reports_what_the_step_did_and_still_starts(tmp_path, rc, says, never):
+    """Exit 1 is a refusal (short password, DEMO_MODE off, wrong accounts),
+    exit 3 "not configured". Neither may read as "applied" (audit of 4dcd9dc:
+    a run that changed nothing printed "applied"), and neither stops the
+    container."""
     bindir = tmp_path / "bin"
     bindir.mkdir()
     log = tmp_path / "calls.log"
     for name in ("pg_isready", "pg_restore", "alembic"):
         _stub(bindir, name)
     _stub(bindir, "psql", "echo t")
-    _stub(bindir, "python", 'case "$*" in *apply_demo_logins*) exit 1;; esac')
+    _stub(bindir, "python", f'case "$*" in *apply_demo_logins*) exit {rc};; esac')
     e = {**os.environ, "PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}", "STUB_LOG": str(log),
          "DATABASE_URL": "postgresql+psycopg2://u:p@db:5432/fieldops", "RUN_SEED": "true",
          "DEMO_MASTER_PASSWORD": _SECRET}
     proc = subprocess.run([BASH, str(ENTRYPOINT), "echo", "api-started"], env=e, capture_output=True,
                           text=True, cwd=tmp_path)
     assert proc.returncode == 0, proc.stderr
-    assert "api-started" in proc.stdout and "NOT applied" in proc.stdout
+    assert "api-started" in proc.stdout and says in proc.stdout
+    assert never not in proc.stdout
 
 
 def _boot(tmp_path, command: list[str], env: dict) -> tuple[subprocess.CompletedProcess, list[str]]:

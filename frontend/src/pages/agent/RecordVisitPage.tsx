@@ -97,7 +97,7 @@ import {
 import { toast } from "react-hot-toast";
 import { getCaseDetail, recordVisit, collectPayment, setPTP, getPhotoUploadUrl, getCasePhotos, getRecordingUploadUrl, reoptimizeBeat, transcribeAudio, queueVisitTranscription, sendPaymentOtp, verifyPaymentOtp, getUpiConfig } from "@/api/agent";
 import { useQuery } from "@tanstack/react-query";
-import { DEMO_UPI_REFERENCE_PREFIX, demoUpiAutoconfirmEnabled, demoUpiReference, upiQrValue, upiReferenceOk } from "./upiPayment";
+import { DEMO_UPI_REFERENCE_PREFIX, demoUpiAutoconfirmEnabled, demoUpiReference, paymentReferenceOk, upiQrValue, upiReferenceOk } from "./upiPayment";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import SignaturePad from "@/components/ui/SignaturePad";
@@ -775,8 +775,11 @@ export default function RecordVisitPage() {
       // UPI needs its transaction ref (UTR), always. The demo QR used to waive
       // it after a 10 s timer; the demo now fills a DEMO-UPI- reference
       // instead (hotfix PAY-1), and the server refuses a UPI payment without one.
-      (form.paymentMode !== "UPI" || upiReferenceOk(form.upiRef)) &&
-      (form.paymentMode !== "CHEQUE" || (!!form.chequeNumber && !!form.chequeDate && !!form.chequeBank)));
+      // One rule for every mode's reference (upiPayment.paymentReferenceOk,
+      // the server's rule): UPI a 12-digit UTR, NEFT/RTGS a bank reference,
+      // cheque its number — plus the cheque's date and bank, page-side only.
+      paymentReferenceOk(form.paymentMode, form, { demo: DEMO_UPI_AUTOCONFIRM }) &&
+      (form.paymentMode !== "CHEQUE" || (!!form.chequeDate && !!form.chequeBank)));
 
   const ptpValid = !sel?.needsPTP || (!!form.ptpAmount && !!form.ptpDate);
   const escalationValid = !sel?.needsEscalation || form.escalationNotes.length >= 10;
@@ -947,7 +950,7 @@ export default function RecordVisitPage() {
     setQrPaidDemo(false);   // reopen always starts on "Waiting…"
     const t = setTimeout(() => {
       setQrPaidDemo(true);
-      setForm((f) => (upiReferenceOk(f.upiRef) ? f : { ...f, upiRef: demoUpiReference(Date.now()) }));
+      setForm((f) => (upiReferenceOk(f.upiRef, { demo: true }) ? f : { ...f, upiRef: demoUpiReference(Date.now()) }));
       playSuccessChime();
       toast.success(`Demo · payment marked received · ₹${amountNum.toLocaleString("en-IN")}`);
     }, QR_DEMO_DELAY_MS);
@@ -2172,7 +2175,8 @@ export default function RecordVisitPage() {
               {sel?.needsPayment && (!form.amount || amountNum <= 0) && <p>• Enter payment amount</p>}
               {sel?.needsPayment && amountExceedsRemainingTarget && <p>• Payment amount exceeds remaining target amount (max ₹{remainingTargetAmount.toLocaleString("en-IN")})</p>}
               {sel?.needsPayment && form.paymentMode === "CASH" && !form.cashCounted && <p>• Confirm cash counted</p>}
-              {sel?.needsPayment && form.paymentMode === "UPI" && !upiReferenceOk(form.upiRef) && <p>• Enter the UPI transaction ID (UTR) from the payment confirmation</p>}
+              {sel?.needsPayment && form.paymentMode === "UPI" && !upiReferenceOk(form.upiRef, { demo: DEMO_UPI_AUTOCONFIRM }) && <p>• Enter the 12-digit UPI transaction ID (UTR) from the payment confirmation</p>}
+              {sel?.needsPayment && ["NEFT", "RTGS"].includes(form.paymentMode) && !form.neftRef.trim() && <p>• Enter the bank reference (UTR) from the transfer confirmation</p>}
               {sel?.needsPayment && form.paymentMode === "CHEQUE" && (!form.chequeNumber || !form.chequeDate || !form.chequeBank) && <p>• Complete cheque details</p>}
               {sel?.needsPayment && paymentValid && !paymentVerified && <p>• Verify the amount with the borrower via OTP (or use the offline option + signature)</p>}
               {sel?.needsPTP && (!form.ptpAmount || !form.ptpDate) && <p>• Complete PTP commitment details</p>}
