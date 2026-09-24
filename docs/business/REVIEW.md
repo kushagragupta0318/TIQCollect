@@ -188,6 +188,17 @@ Northfield Bank is a real US bank, and "… Bank" also breaks the owner's no-ban
 
 **Recommend Kumaon Finance Ltd** for the second tenant.
 
+### Second tenant's agency — clash found by 43
+
+After the Konkan rename, Appendix C would carry two "Sahyadri…" agencies (the second tenant already has "Sahyadri Recovery Desk LLP", Pune) — confusing in the tenant-isolation demo, whose whole point is that two tenants' data is visibly separate. Renaming the Kumaon-tenant's agency to fit its own region, screened 2026-09-24:
+
+| Candidate | Result | Verdict |
+|---|---|---|
+| Nainital Recovery Desk LLP (43's suggestion) | **Too close.** Nainital Bank is a large, well-known real regional bank, and it publishes its own "List of Recovery Agents" page — a "Nainital Recovery Desk" reads like it could be that bank's own vendor | **Reject** |
+| **Almora Recovery Desk LLP** | **Clear.** No finance or collections company found; other "Almora" entities (a crypto VC fund, a skincare brand) are unrelated sectors. Almora is a Kumaon-division district, same regional fit as Nainital | **Recommend** |
+
+**Recommend Almora Recovery Desk LLP** for Kumaon Finance Ltd's agency, replacing "Sahyadri Recovery Desk LLP".
+
 ## Method and footprint
 
 - **Walks:** the main tree's running app, in headless Chrome with a low-end Android profile (360×800, 4× CPU, throttled 4G) and a 1440 px desktop.
