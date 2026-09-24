@@ -9,7 +9,8 @@
 #   by-product of a manager doing their job rather than by an annotation
 #   exercise nobody will fund.
 # 2026-09-24 (B06) — collections schema, tenant columns with composite FKs.
-#   agent_id CASCADE → RESTRICT and reviewed_by SET NULL → RESTRICT: users are
+#   agent_id CASCADE → NO ACTION and reviewed_by SET NULL → NO ACTION (this
+#   said RESTRICT; corrected 2026-09-24, see base.uuid_fk): users are
 #   never deleted, so SET NULL could only ever erase who made the call.
 #   updated_at added: a manager may change a verdict in place.
 # ───────────────────────────────────────────────────────────────────────────

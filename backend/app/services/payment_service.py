@@ -48,7 +48,7 @@ from app.models.customer import Customer
 from app.models.loan import Loan
 from app.models.payment import Payment, PaymentStatus
 from app.models.ptp import PTP, PTPStatus
-from app.services.scope import agent_case_or_404
+from app.services.scope import agent_case_or_404, sync_assignee
 from app.services.ptp_lifecycle_service import verified_paid_against
 from app.services.brand import brand_for
 from app.services.notification_service import NotificationService
@@ -76,7 +76,7 @@ class PaymentService:
     def _get_accessible_case(self, agent, case_id: str) -> Case:
         """2026-09-24 (A03): the one rule (services/scope). The old copy took
         over any unassigned case in any tenant on the first payment."""
-        return agent_case_or_404(self.db, agent, case_id, sync_assignee=True)
+        return agent_case_or_404(self.db, agent, case_id)
 
     # -----------------------------------------------------------------
     # POST /agent/cases/{case_id}/payment
@@ -148,6 +148,7 @@ class PaymentService:
             case.status = CaseStatus.PARTIALLY_PAID
 
         agent.current_month_collections += req.amount
+        sync_assignee(case, agent)   # at the business commit, never at the read
 
         self.db.commit()
         self.db.refresh(payment)
@@ -355,6 +356,7 @@ class PaymentService:
 
         case.status = CaseStatus.PTP_SET
         agent.current_month_ptps_set += 1
+        sync_assignee(case, agent)   # at the business commit, never at the read
 
         self.db.commit()
         self.db.refresh(ptp)

@@ -20,7 +20,8 @@
 #   (id, as_of_date) and every FK into this table carries both (placements,
 #   allocation/placement decisions, settlement offers). The ORM keeps `id` as
 #   its identity. bank_id / agency_id added (filled from the loan / case);
-#   loan/case/agent FKs are RESTRICT (were SET NULL: a prediction's subject is
+#   loan/case/agent FKs are NO ACTION (this said RESTRICT; corrected
+#   2026-09-24, see base.uuid_fk) (were SET NULL: a prediction's subject is
 #   never deleted, so SET NULL could only erase what it was about).
 #   entity_id is a UUID; JSON → JSONB; actual_outcome CHECK IN (0, 1).
 # ───────────────────────────────────────────────────────────────────────────

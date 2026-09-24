@@ -3543,6 +3543,20 @@ Of the 476 columns:
 
 ## Appendix C — demo tenant roster (decided 2026-09-24)
 
+*(Renamed 2026-09-24, after screening by the business lead (REVIEW.md §6)
+and the owner's pick of the lender. This appendix first named the primary
+tenant "Meridian Trust Bank Ltd." — the brand of a real US credit union —
+and the second "Northfield Small Finance Bank Ltd." (Northfield Bank is a
+real US bank); agency 5 was "Konkan Asset Recovery Pvt. Ltd.", which
+collides with a real Mumbai/Pune/Goa collections agency; the second tenant's
+agency was "Sahyadri Recovery Desk LLP", renamed to avoid two "Sahyadri"
+agencies ("Nainital" was rejected: Nainital Bank is real and publishes its
+recovery-agent list). Every email domain is `.test`. The checks were web and
+MCA searches only — formal trademark / NBFC-name clearance is legal's step.
+Demo passwords: one private DEMO_MASTER_PASSWORD for three accounts, per the
+owner, never documented here; every other seeded user gets an unusable
+hash.)*
+
 **Everything below is fictional and invented for the prototype.** The names
 were chosen to sound like real Indian firms without being any real bank,
 NBFC or collection agency. Where a name could plausibly collide with a small
@@ -3560,10 +3574,10 @@ the UPI QR (task A14).
 
 | Bank | Role in the demo | HQ | Notes |
 |---|---|---|---|
-| **Meridian Trust Bank Ltd.** ("Meridian Trust") | the primary tenant; replaces "ABC Bank" | Meridian House, G Block, Bandra Kurla Complex, Mumbai 400051 | private-sector style; retail book across 4 zones; branch codes keep v1's `GGN044` format |
-| **Northfield Small Finance Bank Ltd.** | second, small tenant; exists only so tenant isolation is demonstrable and testable (plan §4.7) | Baner Road, Pune 411045 | one agency, ~2k loans |
+| **Girivan Finance Ltd** ("Girivan") | the primary tenant (a fictional NBFC); replaces "ABC Bank" | Girivan House, G Block, Bandra Kurla Complex, Mumbai 400051 | private-sector style; retail book across 4 zones; branch codes keep v1's `GGN044` format |
+| **Kumaon Finance Ltd** | second, small tenant; exists only so tenant isolation is demonstrable and testable (plan §4.7) | Baner Road, Pune 411045 | one agency, ~2k loans |
 
-### C.2 Agencies of Meridian Trust
+### C.2 Agencies of Girivan Finance
 
 Seven are active, one is suspended and one is mid-onboarding, so every
 lifecycle state in the portal has real data behind it.
@@ -3574,15 +3588,15 @@ lifecycle state in the portal has real data behind it.
 | 2 | **Sarthak Recovery Services LLP** | LLP | Noida | North | Noida, Ghaziabad, East Delhi | ACTIVE | 2026-01-12 | 22 |
 | 3 | **Rajputana Credit Solutions Pvt. Ltd.** | Pvt Ltd | Jaipur | North | Jaipur, Ajmer | ACTIVE | 2026-02-02 | 16 |
 | 4 | **Awadh Field Collections Pvt. Ltd.** | Pvt Ltd | Lucknow | North | Lucknow, Kanpur | SUSPENDED 2026-09-02 (geofence-failure spike under review) | 2026-02-20 | 14 |
-| 5 | **Konkan Asset Recovery Pvt. Ltd.** | Pvt Ltd | Mumbai | West | Mumbai, Thane, Navi Mumbai, Pune | ACTIVE | 2025-12-08 | 28 |
+| 5 | **Sahyadri Field Recovery Pvt. Ltd.** | Pvt Ltd | Mumbai | West | Mumbai, Thane, Navi Mumbai, Pune | ACTIVE | 2025-12-08 | 28 |
 | 6 | **Sabarmati Collection Services LLP** | LLP | Ahmedabad | West | Ahmedabad, Surat, Vadodara | ACTIVE | 2026-03-16 | 17 |
 | 7 | **Deccan Resolve Associates Pvt. Ltd.** | Pvt Ltd | Hyderabad | South | Hyderabad, Bengaluru | ACTIVE | 2026-01-26 | 24 |
 | 8 | **Coromandel Recovery Partners LLP** | LLP | Chennai | South | Chennai, Coimbatore | ACTIVE | 2026-04-06 | 15 |
 | 9 | **Hooghly Credit Management Pvt. Ltd.** | Pvt Ltd | Kolkata | East | Kolkata, Bhubaneswar | ONBOARDING — invite sent 2026-09-18, 2 documents pending | — | 0 |
 
-Northfield SFB has one agency: **Sahyadri Recovery Desk LLP** (Pune, 8 agents).
+Kumaon Finance has one agency: **Almora Recovery Desk LLP** (Pune, 8 agents).
 
-Workforce: 154 agents at Meridian Trust plus 8 at Northfield. That meets the
+Workforce: 154 agents at Girivan Finance plus 8 at Kumaon Finance. That meets the
 plan's "~160".
 
 ### C.3 Invented details every agency carries
@@ -3595,7 +3609,7 @@ plan's "~160".
   - a registered address: a fictional building on a real locality's street.
 - **People:** Director, Operations Head and Compliance Officer, each with a
   realistic en_IN name, `+91 9xxxxxxxxx` phone and an email on the agency's
-  own domain (e.g. `ops@aravallifs.in`).
+  own domain (e.g. `ops@aravallifs.test`).
 - **Coverage:** regions and cities served; authorised products (of the 8
   loan types); authorised DPD buckets.
 - **Contract:**
@@ -3613,7 +3627,7 @@ plan's "~160".
   verification policy, and the DRA-certification register.
   - Each is generated as a specimen PDF, footed "Specimen — fictional demo
     document", stored in MinIO, with realistic issue and expiry dates.
-  - Konkan's insurance expires in 21 days, so the expiry alert has something
+  - Sahyadri Field Recovery's insurance expires in 21 days, so the expiry alert has something
     to show. Hooghly is missing 2 documents.
 - **Workforce:** realistic en_IN names; an IIBF-style DRA certificate number
   and expiry per agent (a few expired, for the compliance tile); joining dates
@@ -3627,7 +3641,7 @@ plan's "~160".
 Each agency and agent gets a hidden skill, drawn per §4.7 of the plan, so the
 scorecards differ for a reason the generator's ground-truth manifest can
 prove:
-- Konkan: strong across the board.
+- Sahyadri Field Recovery: strong across the board.
 - Deccan: high contact rate, weak conversion.
 - Sabarmati: small but efficient.
 - Awadh: weak, with an evidence-integrity problem (which is why it is
@@ -3640,14 +3654,17 @@ The case-mix-adjusted ranking (H01) is scored against this truth.
 
 | Who | Role | Login |
 |---|---|---|
-| Ananya Iyer, Head of Collections | BANK_ADMIN | `ananya.iyer@meridiantrust.in` |
-| Rohan Mehta, Collections Analytics | BANK_ANALYST | `rohan.mehta@meridiantrust.in` |
-| Farah Siddiqui, Tech Ops & MLOps | BANK_TECHOPS | `farah.siddiqui@meridiantrust.in` |
-| Vikram Malhotra (v1 `manager1`) | AGENCY_ADMIN, Aravalli | `vikram.malhotra@aravallifs.in` |
-| v1 `manager2` | AGENCY_MANAGER, Aravalli | `<first>.<last>@aravallifs.in` |
+| Ananya Iyer, Head of Collections | BANK_ADMIN | `ananya.iyer@girivanfinance.test` |
+| Rohan Mehta, Collections Analytics | BANK_ANALYST | `rohan.mehta@girivanfinance.test` |
+| Farah Siddiqui, Tech Ops & MLOps | BANK_TECHOPS | `farah.siddiqui@girivanfinance.test` |
+| Vikram Malhotra (v1 `manager1`) | AGENCY_ADMIN, Aravalli | `vikram.malhotra@aravallifs.test` |
+| v1 `manager2` | AGENCY_MANAGER, Aravalli | `<first>.<last>@aravallifs.test` |
 | each agency's Operations Head | AGENCY_ADMIN (its master login) | `<first>.<last>@<agency domain>` |
-| every agent | FIELD_AGENT | `<first>.<last>@<agency domain>`; v1 agents keep their names (e.g. `piyush.sharma@aravallifs.in`) |
+| every agent | FIELD_AGENT | `<first>.<last>@<agency domain>`; v1 agents keep their names (e.g. `piyush.sharma@aravallifs.test`) |
 
-Passwords (one per role) are documented only in `backend/fixtures/README.md`.
-There is no UI shortcut (plan §3.1). The v1 `admin@tiqcollect.in` becomes
+Passwords: superseded 2026-09-24 by the owner's decision — one master password
+from the private setting `DEMO_MASTER_PASSWORD`, for the three accounts listed
+in `DEMO_MASTER_ACCOUNTS` (a bank user, an agency manager, a field agent);
+every other seeded user has an unusable hash. There is no UI shortcut (plan
+§3.1). *(This said "one per role, documented only in fixtures/README.md".)* The v1 `admin@tiqcollect.in` becomes
 Ananya Iyer's account (Q1).

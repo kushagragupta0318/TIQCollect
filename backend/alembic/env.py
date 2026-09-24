@@ -12,7 +12,6 @@
 #     schema, and a role-level search_path that happens to list `tenancy`
 #     first must not decide where an unqualified object lands.
 # ────────────────────────────────────────────────────────────────────────────
-import re
 from logging.config import fileConfig
 
 import sqlalchemy as sa
@@ -37,15 +36,21 @@ OUR_SCHEMAS = set(DOMAIN_SCHEMAS) | {"public"}
 
 
 # Partitions are created by v2_0003 and the maintenance task (B12), never by
-# the models, so autogenerate must not see them as tables to drop.
-_PARTITION = re.compile(r"(_p\d{6}|_default|^agent_locations_(sos|trail.*))$")
+# the models, so autogenerate must not see them as tables to drop. Identified
+# by Postgres itself — pg_class.relispartition, (schema, name) — filled per
+# connection below. 2026-09-24 (coordinator LOW): this was a name regex
+# (`_pNNNNNN`, `_default`, `agent_locations_sos/trail*`), which would also
+# have hidden a real table that happened to match and missed a partition B12
+# names differently.
+_PG_PARTITIONS: set[tuple[str, str]] = set()
 
 
 def include_name(name, type_, parent_names):
     if type_ == "schema":
         return name in OUR_SCHEMAS or name is None
     if type_ == "table":
-        return name != "alembic_version" and not _PARTITION.search(name or "")
+        schema = (parent_names or {}).get("schema_name") or "public"
+        return name != "alembic_version" and (schema, name) not in _PG_PARTITIONS
     return True
 
 
@@ -60,7 +65,7 @@ _PG_FK_CLONES: set[str] = set()
 def include_object(obj, name, type_, reflected, compare_to):
     if type_ == "foreign_key_constraint" and reflected and compare_to is None and name in _PG_FK_CLONES:
         return False
-    if type_ == "table" and reflected and compare_to is None and _PARTITION.search(name or ""):
+    if type_ == "table" and reflected and compare_to is None and (obj.schema or "public", name) in _PG_PARTITIONS:
         return False
     # The models declare UNIQUE (id, <partition key>) on the partitioned
     # tables because SQLite (the suite) needs a unique target for the
@@ -123,6 +128,9 @@ def run_migrations_online() -> None:
         connection.execute(text("SET search_path TO public"))
         _PG_FK_CLONES.update(r[0] for r in connection.execute(text(
             "SELECT conname FROM pg_constraint WHERE contype = 'f' AND conparentid <> 0")))
+        _PG_PARTITIONS.update((r[0], r[1]) for r in connection.execute(text(
+            "SELECT n.nspname, c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE c.relispartition")))
         connection.commit()
         context.configure(connection=connection, **_COMMON)
         with context.begin_transaction():

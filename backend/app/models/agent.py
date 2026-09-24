@@ -6,8 +6,9 @@
 #     never changes agency; a move is a new agent row.
 #   - (user_id, agency_id) and (manager_user_id, agency_id) → users(id,
 #     agency_id): an agent's login and manager must belong to the same agency.
-#     user_id is RESTRICT (was CASCADE) and manager_user_id RESTRICT (was
-#     SET NULL).
+#     user_id and manager_user_id are NO ACTION (were CASCADE / SET NULL).
+#     (This said RESTRICT; corrected 2026-09-24 — see base.uuid_fk: same
+#     refusal, checked at statement end, deferrable.)
 #   - employee_code unique per agency; id_card_number unique per bank.
 #   - last_location_update / sos_triggered_at are instants (were String(50)).
 #   - joined_on / exited_on (attrition), suspended_at / suspended_reason —

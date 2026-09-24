@@ -22,7 +22,8 @@
 #       borrower's, resolved here, and only for a case the calling agent may
 #       act on (services/scope: assigned, or on today's beat), inside RBI contact hours, not do-not-contact, and through the
 #       same demo/tenant suppression as SMS (services/brand.tenant_of).
-#     - The caller is identified by the token identity `agent:<user>:<sid>`,
+#     - The caller is identified by the token identity `agent_<user hex>_<sid hex>`
+#       (it read `agent:<user>:<sid>` until aligned with d4's hotfix-1 format),
 #       and the call is refused unless that login session is still live — so
 #       logout, an admin revoke or reuse detection ends calling too, and the
 #       token itself lives five minutes.
@@ -32,6 +33,7 @@
 # ────────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -79,7 +81,18 @@ def voice_configured() -> bool:
 
 
 def identity_for(user_id: str, sid: str) -> str:
-    return f"{IDENTITY_PREFIX}:{user_id}:{sid}"
+    """agent_<32 hex user>_<32 hex session>. Alphanumerics and underscore
+    only — d4's hotfix-1 format (Twilio client identities may not allow ':'
+    or '-'), extended with the session so the webhook can refuse a call from a
+    logged-out session. 2026-09-24: this was agent:<uuid>:<uuid>, aligned
+    ahead of the hotfix-1 rebase so the two definitions merge into one."""
+    return f"{IDENTITY_PREFIX}_{uuid.UUID(str(user_id)).hex}_{uuid.UUID(str(sid)).hex}"
+
+
+def _hex_uuid(part: str) -> str | None:
+    if len(part) != 32 or any(c not in "0123456789abcdef" for c in part):
+        return None
+    return str(uuid.UUID(hex=part))
 
 
 def parse_identity(from_param: str | None) -> tuple[str, str] | None:
@@ -87,10 +100,10 @@ def parse_identity(from_param: str | None) -> tuple[str, str] | None:
     value = (from_param or "").strip()
     if value.startswith("client:"):
         value = value[len("client:"):]
-    parts = value.split(":")
+    parts = value.split("_")
     if len(parts) != 3 or parts[0] != IDENTITY_PREFIX:
         return None
-    user_id, sid = parse_uuid(parts[1]), parse_uuid(parts[2])
+    user_id, sid = _hex_uuid(parts[1]), _hex_uuid(parts[2])
     return (user_id, sid) if user_id and sid else None
 
 

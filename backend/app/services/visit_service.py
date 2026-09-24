@@ -50,7 +50,7 @@ from app.models.agent import Agent
 from app.models.case import Case, CaseStatus, EscalationReason
 from app.models.visit import Visit, VisitOutcome
 from app.schemas.agent import RecordVisitRequest
-from app.services.scope import agent_case_or_404
+from app.services.scope import agent_case_or_404, sync_assignee
 from app.services.ai_report_service import AIReportService
 from app.services.brand import brand_for
 from app.services.notification_service import NotificationService
@@ -96,7 +96,7 @@ class VisitService:
         # unassigned case in any tenant and then RE-ASSIGNED it to the caller,
         # so recording a visit took the case over. A stale assignee is synced
         # only for a case on the caller's beat today, inside their agency.
-        case = agent_case_or_404(self.db, agent, case_id, sync_assignee=True,
+        case = agent_case_or_404(self.db, agent, case_id,
                                  options=(joinedload(Case.customer), joinedload(Case.loan)))
 
         if case.customer.do_not_contact:
@@ -164,6 +164,11 @@ class VisitService:
                     f"If the address itself is wrong, select 'Address Issue' as the outcome instead."
                 ),
             )
+
+        # Every refusal is behind us: only now may a same-day handover move the
+        # case to the caller (scope.sync_assignee — never at the read, because
+        # the contact-hours refusal above commits its audit row).
+        sync_assignee(case, agent)
 
         visit_num = case.visit_count + 1
         visit = Visit(

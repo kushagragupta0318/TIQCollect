@@ -63,8 +63,12 @@ def db():
 def book(db):
     """One borrower with a loan, a case, and PTP history.
 
-    Dates are STRINGS throughout, because that is what this schema stores —
-    Customer.date_of_birth and every Loan date column are String(10).
+    v2 CORRECTION, 2026-09-24: this used to say dates were STRINGS throughout
+    "because that is what this schema stores" — true under v1, when
+    Customer.date_of_birth and every Loan date column were String(10). The v2
+    migration made them real Date columns, so the fixture below passes real
+    `date(...)` objects; see test_the_schema_really_does_store_dates_as_strings
+    for the schema-level assertion this now backs.
     """
     # PTP.agent_id is NOT NULL, so the history this test is about cannot exist
     # without a real agent behind it.
@@ -146,10 +150,20 @@ def test_as_date_never_raises_on_bad_input():
 
 
 def test_the_schema_really_does_store_dates_as_strings():
-    """If these ever become Date columns the coercion is dead weight — and this
-    test says so rather than leaving it unexplained."""
-    assert isinstance(Loan.__table__.c.disbursement_date.type.python_type(), str)
-    assert isinstance(Customer.__table__.c.date_of_birth.type.python_type(), str)
+    """v2 CORRECTION, 2026-09-24. This test used to assert the opposite of what
+    it says now: that `Loan.disbursement_date` and `Customer.date_of_birth`
+    were `String(10)`, which was true under the v1 schema and is the entire
+    reason `_as_date` above has to coerce a string at all. The v2 data-model
+    migration made both real `Date` columns.
+
+    Corrected visibly rather than deleted, per this repo's convention: a test
+    that silently started asserting the opposite of its old name would be
+    exactly the kind of drift this file exists to catch in the app it tests.
+    `build_features` still has to handle a real `date` object — that is what
+    `test_build_features_survives_string_dates` below now exercises — the
+    schema just no longer forces the string path."""
+    assert Loan.__table__.c.disbursement_date.type.python_type is date
+    assert Customer.__table__.c.date_of_birth.type.python_type is date
 
 
 def test_build_features_survives_string_dates(db, book):

@@ -38,7 +38,18 @@ from app.models.visit import PersonMet, Visit, VisitOutcome
 from app.services.agent_service import AgentService
 from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
-TODAY = date.today()
+# 2026-09-24 (A03): the agent's beat is read for TODAY ON THE IST CALENDAR
+# (services/scope.access_day). This was date.today() — the container's UTC
+# date, a different day from 18:30 to 24:00 UTC — and is pinned below so a run
+# that crosses midnight cannot split the fixture from the code.
+from app.services.leave_service import leave_today  # noqa: E402
+TODAY = leave_today()
+
+
+@pytest.fixture(autouse=True)
+def _pin_the_calendar(monkeypatch):
+    from app.services import leave_service
+    monkeypatch.setattr(leave_service, "leave_today", lambda: TODAY)
 NOW = datetime.now(timezone.utc)
 
 

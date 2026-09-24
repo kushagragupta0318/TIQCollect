@@ -80,7 +80,8 @@ class CallLog(Base, UUIDPrimaryKey, TimestampMixin):
 
     # ── Core foreign keys ────────────────────────────────────────────────────
     # 2026-09-24 (B06): tenant columns + composite FKs; the three CASCADEs
-    # became RESTRICT — deleting a case must never silently erase the calls
+    # became NO ACTION (this said RESTRICT; corrected 2026-09-24, see
+    # base.uuid_fk) — deleting a case must never silently erase the calls
     # that were made about it.
     bank_id:     Mapped[str] = mapped_column(UUIDType, nullable=False)
     agency_id:   Mapped[str] = mapped_column(UUIDType, nullable=False)

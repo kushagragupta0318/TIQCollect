@@ -9,7 +9,8 @@
 #     the same integrity and leaves every reader (the ML adapter reads
 #     branch_code) untouched. Recorded as a departure in the design's §0.
 #   - money is NUMERIC(14,2) (read as float); the four dates are DATEs.
-#   - customer_id is RESTRICT (was CASCADE): deleting a borrower must never
+#   - customer_id is NO ACTION (was CASCADE; this said RESTRICT — corrected
+#     2026-09-24, see base.uuid_fk): deleting a borrower must never
 #     silently delete their loans.
 #   - dpd_as_of says how old the current dpd is; npa_since splits NPA-Sub
 #     from Doubtful for the Monte Carlo state space.

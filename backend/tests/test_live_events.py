@@ -138,7 +138,7 @@ def world():
     au = user("a1@t.io", UserRole.FIELD_AGENT, "Asha Verma")
     db.flush()
     agent = Agent(id=str(uuid.uuid4()), user_id=au.id, employee_code="EMP9001",
-                  id_card_number="EMP9001-ID", agency_id="AG-1", manager_user_id=m1.id,
+                  id_card_number="EMP9001-ID", manager_user_id=m1.id,
                   gender="F", base_latitude=28.45, base_longitude=77.07, territory="Gurugram",
                   languages_spoken=["HINDI"], status=AgentStatus.OFF_DUTY, tier=AgentTier.TIER_1,
                   specialization=AgentSpecialization.BOTH, ranking_score=80.0)

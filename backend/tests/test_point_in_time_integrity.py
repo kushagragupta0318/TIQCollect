@@ -155,6 +155,26 @@ def db():
 
 
 def _seed_eb(db, payments: list[tuple[str, float, date]]):
+    # 2026-09-24 (v2): foreign keys are enforced in the suite now, so the
+    # customer and every paying agent must exist, and ids are UUIDs.
+    from app.models.agent import Agent
+    from app.models.customer import Customer
+    from app.models.user import User, UserRole
+    db.add(User(id=test_id("pit-mgr"), email="pit.mgr@pit.test", phone="9810007000", full_name="Nandini Rao",
+                hashed_password="x", role=UserRole.AGENCY_MANAGER))
+    db.add(Customer(id=test_id("cust-1"), customer_ref="PIT-C-1", full_name="Harish Menon",
+                    date_of_birth=date(1981, 3, 9), gender="MALE", pan_masked="XXXXX4321X",
+                    aadhaar_masked="XXXXXXXX4321", phone_primary="9899004321", address_line1="12, Panampilly Nagar",
+                    city="Kochi", state="Kerala", pincode="682036", latitude=9.96, longitude=76.29))
+    db.flush()
+    for n, agent_id in enumerate(sorted({a for a, _, _ in payments})):
+        uid = test_id(f"pit-user-{agent_id}")
+        db.add(User(id=uid, email=f"pit{n}@pit.test", phone=f"98100071{n:02d}", full_name=f"Field Agent {n}",
+                    hashed_password="x", role=UserRole.FIELD_AGENT))
+        db.flush()
+        db.add(Agent(id=agent_id, user_id=uid, manager_user_id=test_id("pit-mgr"), employee_code=f"PIT{n:04d}",
+                     id_card_number=f"PIT-ID-{n:04d}", base_latitude=9.96, base_longitude=76.29, territory="Kochi"))
+    db.flush()
     db.add(Loan(
         id=test_id("loan-1"), loan_account_number="LN1", customer_id=test_id("cust-1"),
         loan_type=LoanType.PERSONAL, branch_code="BR",
@@ -162,8 +182,10 @@ def _seed_eb(db, payments: list[tuple[str, float, date]]):
         total_outstanding=9e4, overdue_amount=1e4, emi_amount=5e3,
         disbursement_date=date(2025, 1, 1), maturity_date=date(2028, 1, 1),
         dpd=45, dpd_bucket=DPDBucket.BUCKET_2, interest_rate=12.0))
+    db.flush()
     db.add(Case(id=test_id("case-1"), case_number="C1", customer_id=test_id("cust-1"),
                 loan_id=test_id("loan-1"), target_amount=10000.0))
+    db.flush()
     for i, (agent, amount, when) in enumerate(payments):
         db.add(Payment(
             id=test_id(f"p{i}"), case_id=test_id("case-1"), agent_id=agent, amount=amount,
@@ -251,7 +273,7 @@ def test_rebuilding_the_same_historical_date_gives_an_identical_vector():
 def test_eb_refits_deterministically_for_a_historical_date(db):
     t = date(2026, 5, 1)
     _seed_eb(db, [(test_id("agent-A"), 3000.0, t - timedelta(days=20)),
-                  ("agent-B", 5000.0, t - timedelta(days=40))])
+                  (test_id("agent-B"), 5000.0, t - timedelta(days=40))])
     a = EmpiricalBayesAgentAdjuster().fit_from_db(db, as_of=t, lookback_days=180)
     b = EmpiricalBayesAgentAdjuster().fit_from_db(db, as_of=t, lookback_days=180)
     assert a.agent_observations == b.agent_observations

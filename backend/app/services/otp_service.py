@@ -346,10 +346,18 @@ class OtpService:
     # POST /agent/cases/{case_id}/payment/otp/verify
     # -----------------------------------------------------------------
     def verify(self, agent, case_id: str, otp_id: str, code: str) -> dict:
+        # 2026-09-24 (coordinator MED 2): verify called no access check and
+        # never compared the OTP's issuing agent with the caller, so any agent
+        # holding an otp_id could confirm ANOTHER agent's deferred payment (and
+        # spend its wrong-code attempts). Now: the case must pass scope (the
+        # uniform 404), and an OTP issued by someone else reads exactly like a
+        # missing one — same status, same body — so the answer says nothing
+        # about whether that otp_id exists.
+        case = agent_case_or_404(self.db, agent, case_id)
         key = self._otp_key(otp_id)
         data = self.store.hgetall(key)
         # Missing key = never issued OR already expired (5-min TTL) OR burned.
-        if not data or data.get("case_id") != case_id:
+        if not data or data.get("case_id") != case.id or data.get("agent_id") != agent.id:
             raise AppException(400, ErrorCode.VALIDATION_ERROR, "OTP not found or expired. Please request a new one.")
 
         # Idempotent: a second verify of an already-verified pre-collection OTP
@@ -373,7 +381,8 @@ class OtpService:
         if payment_id:
             # Deferred flow: promote the already-created pending payment now, and
             # consume the OTP (single-use) — nothing left to collect afterwards.
-            payment = self.db.query(Payment).filter(Payment.id == payment_id).first()
+            payment = (self.db.query(Payment)
+                       .filter(Payment.id == payment_id, Payment.case_id == case.id).first())
             if payment and payment.status != PaymentStatus.VERIFIED:
                 payment.status = PaymentStatus.VERIFIED
                 payment.verified_at = datetime.now(timezone.utc)

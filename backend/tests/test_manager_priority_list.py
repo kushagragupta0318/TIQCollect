@@ -73,7 +73,7 @@ def client(request):
     c = TestClient(app)
     c.hdr = {                                       # type: ignore[attr-defined]
         "Authorization":
-            f"Bearer {create_access_token('u-mgr', UserRole.AGENCY_MANAGER.value, 'test-device')}"
+            f"Bearer {create_access_token(test_id('u-mgr'), UserRole.AGENCY_MANAGER.value, 'test-device')}"
     }
     c.db = db                                       # type: ignore[attr-defined]
     yield c

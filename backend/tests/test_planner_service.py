@@ -426,7 +426,8 @@ def test_planning_does_not_stamp_a_future_date_on_a_case(client, db_session, tes
                        headers=headers)
     assert resp.status_code == 200
     plan_date = resp.json()["plan_date"]
-    today = _date.today().isoformat()
+    today_date = _date.today()
+    today = today_date.isoformat()
     assert plan_date > today, "the plan is for a future day, or this test proves nothing"
 
     body = client.get("/api/v1/manager/allocation/latest", headers=headers).json()
@@ -438,10 +439,12 @@ def test_planning_does_not_stamp_a_future_date_on_a_case(client, db_session, tes
     rows = db_session.query(_Case).filter(_Case.id.in_(ids)).all()
     assert rows
     for c in rows:
-        assert c.allocation_date == today, (
+        # allocation_date is a real Date column (v2); compare date objects, not
+        # a date against its own isoformat() string — those are never equal.
+        assert c.allocation_date == today_date, (
             f"case {c.case_number} stamped {c.allocation_date}, but the assignment "
             f"was made {today} — a manager would see a date that has not arrived")
-        assert c.allocation_date <= today
+        assert c.allocation_date <= today_date
 
     # The beat still carries the schedule, so nothing about WHEN the work is due
     # was lost by taking it off the case. Asserted against the Beat rows rather

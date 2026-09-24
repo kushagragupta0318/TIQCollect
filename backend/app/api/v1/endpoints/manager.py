@@ -4483,7 +4483,7 @@ def reset_agent_device(agent_id: UUIDPath, current_user: ManagerOnly, db: DbSess
     from app.core.audit import write_audit
     from app.models.agent import AgentDevice
     from app.models.audit_log import AuditAction
-    from app.models.identity import UserSession
+    from app.services.auth_service import revoke_user_sessions
 
     agent = _require_own_agent(db, current_user, agent_id)
     now = datetime.now(timezone.utc)
@@ -4494,10 +4494,7 @@ def reset_agent_device(agent_id: UUIDPath, current_user: ManagerOnly, db: DbSess
         d.unbound_at = now
         d.unbound_by = current_user.id
         d.unbind_reason = "Manager reset"
-    revoked = (db.query(UserSession)
-               .filter(UserSession.user_id == agent.user_id, UserSession.revoked_at.is_(None))
-               .update({UserSession.revoked_at: now, UserSession.revoked_reason: "DEVICE_RESET",
-                        UserSession.revoked_by: current_user.id}, synchronize_session=False))
+    revoked = revoke_user_sessions(db, agent.user_id, "DEVICE_RESET", by=current_user.id)
     db.commit()
     write_audit(db, action=AuditAction.DEVICE_RESET, user_id=current_user.id, entity_type="agent",
                 entity_id=agent.id, details={"devices_unbound": len(devices), "sessions_revoked": revoked})

@@ -19,12 +19,20 @@ from app.main import app
 from app.models import Agent, Case, Customer, Loan, LoanType, User, UserRole
 from app.models.beat import Beat
 from app.models.tenancy import Agency
-from app.services.scope import agent_case_or_404
+from app.services.scope import agent_case_or_404, sync_assignee
 from tests._db import TEST_AGENCY_ID, TEST_BANK_ID, create_schema, make_engine, make_session_factory, test_id
 
 from app.services.leave_service import leave_today  # noqa: E402
 
 TODAY = leave_today()   # the IST calendar date access is judged on
+
+
+@pytest.fixture(autouse=True)
+def _pin_the_calendar(monkeypatch):
+    """TODAY is read once at import; without this a run that crosses IST
+    midnight judges access on a date the fixtures' beats are not for."""
+    from app.services import leave_service
+    monkeypatch.setattr(leave_service, "leave_today", lambda: TODAY)
 OTHER_AGENCY = test_id("agency:kaveri")
 PHONES = {"mgr": "9810002001", "mgrb": "9810002002", "asha": "9810002003", "bala": "9810002004", "chitra": "9810002005"}
 
@@ -105,10 +113,36 @@ def test_own_case_is_granted(w):
     assert agent_case_or_404(w["db"], w["agent"], w["cases"]["mine"]).id == w["cases"]["mine"]
 
 
-def test_a_case_on_todays_beat_is_granted_and_synced_only_when_asked(w):
+def test_a_case_on_todays_beat_is_granted_and_synced_only_at_the_write(w):
     db, cid = w["db"], w["cases"]["handover"]
-    assert agent_case_or_404(db, w["agent"], cid).agent_id != w["agent"].id      # read: not synced
-    assert agent_case_or_404(db, w["agent"], cid, sync_assignee=True).agent_id == w["agent"].id
+    case = agent_case_or_404(db, w["agent"], cid)
+    assert case.agent_id != w["agent"].id      # the read never moves it
+    sync_assignee(case, w["agent"])
+    assert case.agent_id == w["agent"].id
+
+
+def test_sync_refuses_a_case_of_another_agency(w):
+    foreign = w["db"].get(Case, w["cases"]["other_agency_pool"])
+    with pytest.raises(AppException) as exc:
+        sync_assignee(foreign, w["agent"])
+    assert exc.value.status_code == 404 and foreign.agent_id is None
+
+
+def test_a_refused_out_of_hours_visit_does_not_take_the_case_over(w, monkeypatch):
+    """Coordinator MED 3: the refusal commits its audit row, and that commit
+    used to carry the read-time reassignment with it."""
+    from types import SimpleNamespace as NS
+    from fastapi import HTTPException
+    from app.models.visit import VisitOutcome
+    from app.services import visit_service
+    monkeypatch.setattr(visit_service, "is_within_contact_hours", lambda now=None: False)
+    req = NS(outcome=VisitOutcome.NOT_AVAILABLE, check_in_latitude=28.49, check_in_longitude=77.09)
+    with pytest.raises(HTTPException) as exc:
+        visit_service.VisitService(w["db"]).record_visit(w["agent"], w["cases"]["handover"], req)
+    assert exc.value.status_code == 403
+    w["db"].rollback()
+    w["db"].expire_all()
+    assert w["db"].get(Case, w["cases"]["handover"]).agent_id == test_id("agent:bala")
 
 
 @pytest.mark.parametrize("key", ["peer", "pool", "other_agency_pool", "old_beat"])
@@ -196,3 +230,93 @@ def test_with_nothing_owed_there_is_nothing_to_promise(w):
     with pytest.raises(AppException) as exc:
         _ptp(w, 500.0)
     assert exc.value.status_code == 400
+
+
+# ── the LIST side of the rule (coordinator HIGH, 2026-09-24) ─────────────────
+
+def _listed(w, path):
+    r = TestClient(app).get(path, headers=_h(w))
+    assert r.status_code == 200, r.text
+    return {row["id"] for row in r.json()}
+
+
+@pytest.mark.parametrize("path", ["/api/v1/agent/cases", "/api/v1/agent/cases/ranked"])
+def test_the_case_lists_show_todays_beat_only_inside_the_agency(w, path, monkeypatch):
+    """Both lists took the agent's LATEST beat of any date and returned every
+    id on it, phone and address included. With today's beat present they must
+    show exactly it; a foreign-agency id smuggled onto it must not appear."""
+    from app.core import llm
+    monkeypatch.setattr(llm, "complete", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("offline")))
+    db = w["db"]
+    beat = db.query(Beat).filter(Beat.beat_date == TODAY).one()
+    beat.ordered_case_ids = [*beat.ordered_case_ids, w["cases"]["other_agency_pool"]]
+    db.commit()
+    assert _listed(w, path) == {w["cases"]["mine"], w["cases"]["handover"]}
+
+
+@pytest.mark.parametrize("path", ["/api/v1/agent/cases", "/api/v1/agent/cases/ranked"])
+def test_a_stale_beat_lists_nothing(w, path):
+    """No beat today: the three-day-old beat (whose case is now a teammate's)
+    must not be listed, since its detail page answers 404."""
+    db = w["db"]
+    db.query(Beat).filter(Beat.beat_date == TODAY).delete()
+    db.commit()
+    assert _listed(w, path) == set()
+
+
+def test_reoptimize_never_writes_a_stale_beat(w):
+    db = w["db"]
+    db.query(Beat).filter(Beat.beat_date == TODAY).delete()
+    db.commit()
+    r = TestClient(app).post("/api/v1/agent/beat/reoptimize", params={"lat": 28.45, "lon": 77.07}, headers=_h(w))
+    assert r.status_code == 404
+    db.expire_all()
+    old = db.query(Beat).filter(Beat.beat_date == TODAY - timedelta(days=3)).one()
+    assert old.ordered_case_ids == [w["cases"]["old_beat"]]
+
+
+def test_a_flag_or_handover_refusal_is_the_uniform_404(w):
+    client = TestClient(app)
+    missing = client.patch(f"/api/v1/agent/customers/{test_id('nobody')}/flag", json={"is_hostile": True}, headers=_h(w))
+    db = w["db"]
+    db.query(Beat).delete()
+    db.query(Case).filter(Case.id == w["cases"]["mine"]).update({"agent_id": test_id("agent:bala")})
+    db.commit()
+    real = client.patch(f"/api/v1/agent/customers/{test_id('cust')}/flag", json={"is_hostile": True}, headers=_h(w))
+    assert missing.status_code == real.status_code == 404 and missing.json() == real.json()
+    peer = client.post(f"/api/v1/agent/cases/{w['cases']['peer']}/handover", json={"notes": "x", "return_to_pool": True},
+                       headers=_h(w))
+    gone = client.post(f"/api/v1/agent/cases/{test_id('nope')}/handover", json={"notes": "x", "return_to_pool": True},
+                       headers=_h(w))
+    assert peer.status_code == gone.status_code == 404 and peer.json() == gone.json()
+    db.expire_all()
+    assert db.get(Case, w["cases"]["peer"]).agent_id == test_id("agent:bala")
+
+
+# ── GET /agent/beat and /agent/home-summary: what the Cases page renders ─────
+# (tiq-auditor on the re-audit fix, 2026-09-24: these two read the latest beat
+# of any date and every id on it, the same leak as the lists above.)
+
+def test_the_beat_payload_carries_only_todays_granted_cases(w):
+    db = w["db"]
+    beat = db.query(Beat).filter(Beat.beat_date == TODAY).one()
+    beat.ordered_case_ids = [*beat.ordered_case_ids, w["cases"]["other_agency_pool"]]
+    db.commit()
+    r = TestClient(app).get("/api/v1/agent/beat", headers=_h(w))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    shown = {c["id"] for c in body["cases"]}
+    assert shown == {w["cases"]["mine"], w["cases"]["handover"]}
+    assert set(body["ordered_case_ids"]) == shown
+    home = TestClient(app).get("/api/v1/agent/home-summary", headers=_h(w)).json()
+    assert home["cases_today"] == 2
+
+
+def test_a_stale_beat_is_not_served_as_todays(w):
+    db = w["db"]
+    db.query(Beat).filter(Beat.beat_date == TODAY).delete()
+    db.commit()
+    r = TestClient(app).get("/api/v1/agent/beat", headers=_h(w))
+    assert r.status_code == 200 and r.json() is None       # the 3-day-old beat is not today's
+    home = TestClient(app).get("/api/v1/agent/home-summary", headers=_h(w)).json()
+    assert home["cases_today"] == 0 and home["total_target_today"] == 0

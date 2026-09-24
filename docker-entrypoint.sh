@@ -37,6 +37,10 @@
 #       leaves no `agents` table (pg_restore is not transactional, but the table
 #       is created late in the TOC), so the next boot tries again rather than
 #       treating a half-restored database as seeded.
+#       *(2026-09-24: no longer true, and no longer relied on. The gate is now
+#       the v2 GENERATION probe, workforce.agents, which the v2 TOC creates
+#       BEFORE any data — so a half-finished restore read as initialised. The
+#       restore is now one transaction instead; see below.)*
 #
 set -euo pipefail
 
@@ -66,7 +70,7 @@ echo "[entrypoint] postgres is up"
 #   empty: with the fixture that crash-looped on the restore, and with
 #   SEED_FROM_FIXTURE=false it re-ran the destructive seed on every boot —
 #   data loss. The probe now names the generation:
-#     v2     workforce.agents exists       -> leave it alone
+#     v2     workforce.agents exists       -> leave the data alone
 #     v1     public.agents exists          -> REFUSE to start, with the reason.
 #            v2 code cannot run on v1, and the v1 chain is no longer on this
 #            image's upgrade path (it is alembic/versions_v1; operate a v1
@@ -75,75 +79,132 @@ echo "[entrypoint] postgres is up"
 #     empty  neither                       -> build v2, then fill it
 #   A v1 fixture is refused the same way: it would create v1 tables in public.
 #
+# 2026-09-24 (coordinator re-audit, MED 4-6 and a LOW):
+#   * EVERY container reads the generation now, not only the seeding one. The
+#     worker, beat and a reloading dev API used to start blind on a v1
+#     database. Only the seeding container (RUN_SEED=true) ever changes
+#     anything; the others refuse on v1 / unreadable and otherwise start.
+#   * The restore is ONE TRANSACTION. It was not, and the header above said a
+#     half-failed restore "leaves no agents table ... so the next boot tries
+#     again" — true of v1's TOC order, false of v2's: workforce.agents is
+#     created before any data is copied, so a restore that died halfway read
+#     as a finished v2 database for ever after. The SQL now goes to psql inside
+#     BEGIN, and COMMIT is sent only if pg_restore itself finished cleanly;
+#     psql reaching end of input with the transaction open rolls it back.
+#   * The fixture's TOC is captured, then searched: `pg_restore -l | grep -q`
+#     under pipefail refuses a valid fixture whenever grep exits at the first
+#     match and pg_restore takes SIGPIPE writing the rest of a large listing.
+#   * search_path and timezone are DATABASE settings (v2_0001 sets them). A
+#     restore without -C drops them, and the restored alembic_version is past
+#     v2_0001, so nothing set them again. scripts.ensure_db_settings --apply
+#     re-applies both (idempotent) after a restore and on every start of the
+#     seeding container, and fails the start if a new connection still does
+#     not see them; the other containers --check and warn.
+export PGPASSWORD="${_creds#*:}"
+generation=$(psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -tAc \
+  "SELECT CASE WHEN to_regclass('workforce.agents') IS NOT NULL THEN 'v2'
+               WHEN to_regclass('public.agents') IS NOT NULL THEN 'v1'
+               ELSE 'empty' END" 2>/dev/null || echo "unknown")
+if [ "$generation" = "v1" ]; then
+  echo "[entrypoint] REFUSING TO START: database ${DB_NAME} holds the v1 schema (public.agents)"
+  echo "[entrypoint] and this image runs the v2 data model. Nothing was changed."
+  echo "[entrypoint]   - v1 migrations: alembic -c alembic_v1.ini <command>"
+  echo "[entrypoint]   - moving v1 data to v2: scripts/migrate_v1_to_v2 (task B15), into a NEW database"
+  exit 1
+elif [ "$generation" != "v2" ] && [ "$generation" != "empty" ]; then
+  echo "[entrypoint] could not read the database's schema generation — refusing to guess"
+  exit 1
+fi
+
 # Only the API seeds. Worker and beat share this image and would otherwise race
 # each other and the API to run the same destructive script on a cold start.
-if [ "${RUN_SEED:-false}" = "true" ]; then
-  export PGPASSWORD="${_creds#*:}"
-  generation=$(psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -tAc \
-    "SELECT CASE WHEN to_regclass('workforce.agents') IS NOT NULL THEN 'v2'
-                 WHEN to_regclass('public.agents') IS NOT NULL THEN 'v1'
-                 ELSE 'empty' END" 2>/dev/null || echo "unknown")
-  if [ "$generation" = "v1" ]; then
-    echo "[entrypoint] REFUSING TO START: database ${DB_NAME} holds the v1 schema (public.agents)"
-    echo "[entrypoint] and this image runs the v2 data model. Nothing was changed."
-    echo "[entrypoint]   - v1 migrations: alembic -c alembic_v1.ini <command>"
-    echo "[entrypoint]   - moving v1 data to v2: scripts/migrate_v1_to_v2 (task B15), into a NEW database"
-    exit 1
-  elif [ "$generation" = "unknown" ]; then
-    echo "[entrypoint] could not read the database's schema generation — refusing to guess"
-    exit 1
+#
+# An initialised v2 database is never upgraded at boot (coordinator decision,
+# 2026-09-24) — but it is CHECKED: scripts.check_migrations compares its
+# alembic revision with this code's head and every container refuses to start
+# on a mismatch, printing both revisions and the command to run.
+if [ "${RUN_SEED:-false}" != "true" ]; then
+  if [ "$generation" = "empty" ]; then
+    # Not a refusal: worker and beat routinely start before the API container
+    # has built the schema. Said out loud so an empty database is never silent.
+    echo "[entrypoint] WARNING: database ${DB_NAME} is empty; only the API container (RUN_SEED=true) builds it — this container will not"
   elif [ "$generation" = "v2" ]; then
-    echo "[entrypoint] database already initialised (v2) — skipping"
-  else
-    # A committed fixture wins over the seed. SEED_FROM_FIXTURE=false forces the
-    # seed; DEMO_FIXTURE points at a different dump. The default is the v2
-    # demo fixture (task B18); the v1 dump is never the default any more.
-    fixture="${DEMO_FIXTURE:-/app/fixtures/fieldops-demo-v2.dump}"
-    if [ "${SEED_FROM_FIXTURE:-true}" = "true" ] && [ -s "$fixture" ]; then
-      if ! pg_restore -l "$fixture" | grep -q "SCHEMA - workforce"; then
-        echo "[entrypoint] REFUSING: $fixture is not a v2 dump (no workforce schema). Nothing was changed."
-        exit 1
-      fi
-      echo "[entrypoint] empty database — restoring fixture $fixture"
-      # NOT `pg_restore -d ... --exit-on-error`. The image ships Postgres 17
-      # client tools and the server is 16: pg_restore 17 prefixes its output
-      # with `SET transaction_timeout = 0`, a 17-only GUC that a 16 server
-      # rejects, and --exit-on-error then aborts before the first table.
-      # Found on the first real run (2026-09-22). Emitting SQL and feeding it
-      # to psql keeps the fail-fast behaviour (ON_ERROR_STOP + pipefail) and
-      # drops the one line the server cannot understand — with sed, not
-      # grep -v, because grep exits 1 on empty input and pipefail would make
-      # that fatal. Harmless on a 17 server too, so it is not conditional
-      # on the version.
-      pg_restore --no-owner --no-acl -f - "$fixture" \
-        | sed '/^SET transaction_timeout/d' \
-        | psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" \
-            -X -q -v ON_ERROR_STOP=1 -o /dev/null
-      echo "[entrypoint] fixture restored — applying migrations newer than it"
-      alembic upgrade head
-      echo "[entrypoint] restore complete"
-    else
-      # No fixture: build the v2 schema, then seed. (Until B16 replaces it,
-      # scripts.seed_data is the v1 seed and refuses to run without
-      # ALLOW_V1_SEED=true — the database is left with the v2 schema and no
-      # data, never dropped.)
-      echo "[entrypoint] empty database — creating the v2 schema"
-      alembic upgrade head
-      echo "[entrypoint] seeding (runs once, on an empty database only)"
-      python -m scripts.seed_data
-      echo "[entrypoint] seed step complete"
+    if ! python -m scripts.ensure_db_settings --check; then
+      echo "[entrypoint] WARNING: database-level search_path/timezone are not set; the API container re-applies them on start"
     fi
-    # Snapshot the showcase case while it is provably clean — straight off the
-    # seed is the only moment that is guaranteed. DEMO_REHEARSAL_MODE rewinds to
-    # this on every check-in. Never fatal: a box that is not running the demo has
-    # no baseline to take and should still start.
-    if python -m scripts.demo_reset --save; then
-      echo "[entrypoint] demo baseline captured"
-    else
-      echo "[entrypoint] demo baseline not captured (fine unless you are running the demo)"
+    if ! python -m scripts.check_migrations; then
+      echo "[entrypoint] REFUSING TO START: the database is not at this code's migration head (see above)"
+      exit 1
     fi
   fi
-  unset PGPASSWORD
+elif [ "$generation" = "v2" ]; then
+  echo "[entrypoint] database already initialised (v2) — skipping"
+  python -m scripts.ensure_db_settings --apply
+  if ! python -m scripts.check_migrations; then
+    echo "[entrypoint] REFUSING TO START: the database is not at this code's migration head (see above)"
+    exit 1
+  fi
+else
+  # A committed fixture wins over the seed. SEED_FROM_FIXTURE=false forces the
+  # seed; DEMO_FIXTURE points at a different dump. The default is the v2
+  # demo fixture (task B18); the v1 dump is never the default any more.
+  fixture="${DEMO_FIXTURE:-/app/fixtures/fieldops-demo-v2.dump}"
+  if [ "${SEED_FROM_FIXTURE:-true}" = "true" ] && [ -s "$fixture" ]; then
+    if ! toc=$(pg_restore -l "$fixture"); then
+      echo "[entrypoint] REFUSING: could not read the table of contents of $fixture. Nothing was changed."
+      exit 1
+    fi
+    if ! grep -q "SCHEMA - workforce" <<<"$toc"; then
+      echo "[entrypoint] REFUSING: $fixture is not a v2 dump (no workforce schema). Nothing was changed."
+      exit 1
+    fi
+    echo "[entrypoint] empty database — restoring fixture $fixture (one transaction)"
+    # NOT `pg_restore -d ... --exit-on-error`. The image ships Postgres 17
+    # client tools and the server is 16: pg_restore 17 prefixes its output
+    # with `SET transaction_timeout = 0`, a 17-only GUC that a 16 server
+    # rejects, and --exit-on-error then aborts before the first table.
+    # Found on the first real run (2026-09-22). Emitting SQL and feeding it
+    # to psql keeps the fail-fast behaviour (ON_ERROR_STOP + pipefail) and
+    # drops the one line the server cannot understand — with sed, not
+    # grep -v, because grep exits 1 on empty input and pipefail would make
+    # that fatal. Harmless on a 17 server too, so it is not conditional
+    # on the version.
+    {
+      echo "BEGIN;"
+      if pg_restore --no-owner --no-acl -f - "$fixture" | sed '/^SET transaction_timeout/d'; then
+        echo "COMMIT;"
+      else
+        echo "[entrypoint] pg_restore failed — the restore is rolled back, nothing was kept" >&2
+        exit 1
+      fi
+    } | psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" \
+          -X -q -v ON_ERROR_STOP=1 -o /dev/null
+    python -m scripts.ensure_db_settings --apply
+    echo "[entrypoint] fixture restored — applying migrations newer than it"
+    alembic upgrade head
+    echo "[entrypoint] restore complete"
+  else
+    # No fixture: build the v2 schema, then seed. (Until B16 replaces it,
+    # scripts.seed_data is the v1 seed and refuses to run without
+    # ALLOW_V1_SEED=true — the database is left with the v2 schema and no
+    # data, never dropped.) v2_0001 sets search_path/timezone itself here.
+    echo "[entrypoint] empty database — creating the v2 schema"
+    alembic upgrade head
+    python -m scripts.ensure_db_settings --check
+    echo "[entrypoint] seeding (runs once, on an empty database only)"
+    python -m scripts.seed_data
+    echo "[entrypoint] seed step complete"
+  fi
+  # Snapshot the showcase case while it is provably clean — straight off the
+  # seed is the only moment that is guaranteed. DEMO_REHEARSAL_MODE rewinds to
+  # this on every check-in. Never fatal: a box that is not running the demo has
+  # no baseline to take and should still start.
+  if python -m scripts.demo_reset --save; then
+    echo "[entrypoint] demo baseline captured"
+  else
+    echo "[entrypoint] demo baseline not captured (fine unless you are running the demo)"
+  fi
 fi
+unset PGPASSWORD
 
 exec "$@"

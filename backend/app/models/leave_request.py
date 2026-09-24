@@ -18,7 +18,8 @@
 #   migration is needed, and services/leave_service.py is the one place that
 #   copies the value across.
 # 2026-09-24 (B07) — workforce schema, tenant columns with composite FKs;
-#   manager_user_id / requested_by / decided_by are RESTRICT (were SET NULL:
+#   manager_user_id / requested_by / decided_by are NO ACTION (this said
+#   RESTRICT; corrected 2026-09-24, see base.uuid_fk) (were SET NULL:
 #   users are never deleted, so SET NULL could only erase who decided).
 #   DEFERRED to B23: beat_ids → workforce.attendance.leave_request_id, with
 #   leave days moving from beats to attendance (design §4.4).

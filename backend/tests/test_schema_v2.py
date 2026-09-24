@@ -349,3 +349,36 @@ def test_loan_bank_name_reads_the_bank_row(session):
     *_, loan, _case = _graph(session)
     session.commit()
     assert session.get(Loan, loan.id).bank_name == "Meridian Trust Bank"
+
+
+def test_every_cross_schema_fk_is_really_created_on_the_suite_database():
+    """Pins tests/_db._render_cross_schema_fks_on_sqlite (coordinator LOW,
+    2026-09-24). SQLAlchemy's SQLite compiler silently drops a FK whose two
+    tables sit in different schemas; without the patch every such FK —
+    visits -> agents, loans -> branches, ... — is missing and the suite's
+    tenant FKs are decorative. Read back through PRAGMA, not trusted."""
+    from collections import defaultdict
+
+    from app.core.database import Base
+    from tests._db import create_schema, make_engine
+
+    engine = make_engine()
+    create_schema(engine)
+    declared_total, missing = 0, []
+    with engine.connect() as conn:
+        for table in Base.metadata.sorted_tables:
+            declared = {
+                (fk.elements[0].column.table.name, tuple(sorted(e.parent.name for e in fk.elements)))
+                for fk in table.foreign_key_constraints
+                if fk.elements[0].column.table.schema != table.schema and not fk.use_alter
+            }
+            if not declared:
+                continue
+            declared_total += len(declared)
+            by_id = defaultdict(list)
+            for row in conn.exec_driver_sql(f'PRAGMA foreign_key_list("{table.name}")'):
+                by_id[row[0]].append(row)
+            actual = {(rows[0][2], tuple(sorted(r[3] for r in rows))) for rows in by_id.values()}
+            missing += [f"{table.name} -> {ref}{cols}" for ref, cols in declared - actual]
+    assert declared_total > 20, declared_total        # the model really is cross-schema
+    assert not missing, missing

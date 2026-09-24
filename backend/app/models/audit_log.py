@@ -51,7 +51,8 @@ class AuditLog(Base, UUIDPrimaryKey):
     # second index identical to ix_audit_created_at below.
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
-    # 2026-09-24 (B09): RESTRICT, was SET NULL. Users are never deleted, and the
+    # 2026-09-24 (B09): NO ACTION, was SET NULL (this said RESTRICT; corrected
+    # 2026-09-24, see base.uuid_fk). Users are never deleted, and the
     # immutability trigger (design §7.4) would block a SET NULL cascade anyway.
     user_id: Mapped[str | None] = uuid_fk("tenancy.users.id", nullable=True)
     # Denormalised tenant, so the bank / agency audit views need no join and

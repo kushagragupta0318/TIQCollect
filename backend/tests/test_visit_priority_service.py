@@ -111,11 +111,16 @@ def _build(db, *, n=None, dnc_idx=(), female_idx=(), ptp_idx=()):
                      status=AgentStatus.ON_DUTY, tier=AgentTier.TIER_1,
                      specialization=AgentSpecialization.BOTH,
                      ranking_score=50.0, manager_user_id=mgr.id))
+    db.flush()
 
     plan = _PLAN if n is None else [_PLAN[i % len(_PLAN)] for i in range(n)]
     for i, (tag, dpd, outstanding, rate, visits) in enumerate(plan):
         _customer(db, i, dnc=i in dnc_idx, needs_female=i in female_idx)
         _loan(db, i, dpd=dpd, outstanding=outstanding)
+        # 2026-09-24 (v2): flush the parents first. RepaymentSnapshot has no ORM
+        # relationship to Loan, so one flush may INSERT the snapshot before its
+        # loan — invisible until the suite enforced foreign keys.
+        db.flush()
         _snapshot(db, i, rate_90=rate)
         db.add(Case(id=test_id(f"c{i}"), case_number=f"CASE{i:07d}", customer_id=test_id(f"cu{i}"),
                     loan_id=test_id(f"ln{i}"), agent_id=None,
@@ -206,7 +211,7 @@ def test_only_the_newest_snapshot_per_loan_is_used(db):
     # An older, deliberately different rate for the same loan.
     _snapshot(db, 1, rate_90=0.01, as_of=TODAY - timedelta(days=30))
     db.commit()
-    case = db.query(Case).filter(Case.id == "c1").one()
+    case = db.query(Case).filter(Case.id == test_id("c1")).one()
     result = score_cases(db, [case], today=TODAY)[case.id]
     value = next(c for c in result["components"] if c["code"] == "RECOVERABLE_VALUE")
     assert value["evidence"]["rate_90"] == 0.50, value
@@ -226,9 +231,9 @@ def test_an_imminent_ptp_is_scored_with_amount_and_a_distant_one_is_not(db):
     def effort(cid):
         return next(c for c in scored[cid]["components"] if c["code"] == "EFFORT")
 
-    assert effort("c0")["evidence"]["penalty_waived"] is False
-    assert effort("c0")["evidence"]["ptp_committed_amount"] == 10_000.0
-    assert effort("c0")["evidence"]["ptp_follow_up_points"] > 0
+    assert effort(test_id("c0"))["evidence"]["penalty_waived"] is False
+    assert effort(test_id("c0"))["evidence"]["ptp_committed_amount"] == 10_000.0
+    assert effort(test_id("c0"))["evidence"]["ptp_follow_up_points"] > 0
     assert effort(test_id("c2"))["evidence"]["penalty_waived"] is False
     assert "ptp_follow_up_points" not in effort(test_id("c2"))["evidence"]
 
@@ -330,7 +335,7 @@ def test_a_do_not_contact_case_is_still_never_allocated(db):
     whole change would need re-certifying rather than reasoning about."""
     _build(db, dnc_idx={1})   # the highest-scoring case, so order cannot hide it
     res = CaseAllocator(db).run()
-    blocked = db.query(Case).filter(Case.customer_id == "cu1").one()
+    blocked = db.query(Case).filter(Case.customer_id == test_id("cu1")).one()
     assert blocked.status == CaseStatus.UNASSIGNED
     assert blocked.agent_id is None
     assert res["blocked_by_rule"].get("DO_NOT_CONTACT") == 1
@@ -342,7 +347,7 @@ def test_a_female_agent_requirement_is_still_honoured(db):
     to whoever is free — even though it is the top-scoring case."""
     _build(db, female_idx={1})
     res = CaseAllocator(db).run()
-    assert db.query(Case).filter(Case.customer_id == "cu1").one().agent_id is None
+    assert db.query(Case).filter(Case.customer_id == test_id("cu1")).one().agent_id is None
     assert res["no_eligible_agent"] >= 1
 
 

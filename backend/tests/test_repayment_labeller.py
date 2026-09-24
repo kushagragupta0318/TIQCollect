@@ -27,7 +27,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.models.base import Base
-from app.models.customer import RiskCategory
+from app.models.customer import Customer, RiskCategory
+from app.models.loan import Loan, LoanType
 from app.models.repayment_snapshot import RepaymentSnapshot
 from app.services.repayment_service import RepaymentService, _CENSORING_STATUSES
 from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
@@ -300,6 +301,42 @@ def db():
         session.close()
 
 
+def _ensure_customer(db, customer_id=test_id("cu1")):
+    """The Customer a loan's composite FK requires. Idempotent: several tests
+    build their loan/case fixtures in the same session and must not insert the
+    same borrower twice."""
+    if db.get(Customer, customer_id) is None:
+        db.add(Customer(
+            id=customer_id, customer_ref=f"REF-{customer_id[:8]}", full_name="Borrower",
+            date_of_birth=date(1985, 1, 1), gender="M", pan_masked="XXXXX1234X",
+            aadhaar_masked="XXXXXXXX5678", phone_primary="9800000000",
+            address_line1="1 Road", city="Delhi", state="Delhi", pincode="110001",
+            latitude=28.6, longitude=77.2,
+        ))
+        db.flush()
+    return customer_id
+
+
+def _ensure_loan(db, loan_id=test_id("l1"), customer_id=test_id("cu1")):
+    """The Loan a snapshot's (and a case's) composite FK requires. SQLite now
+    enforces `(loan_id, bank_id) -> lending.loans` on RepaymentSnapshot, so a
+    row naming a loan that was never inserted fails at flush rather than at a
+    validation query later."""
+    _ensure_customer(db, customer_id)
+    if db.get(Loan, loan_id) is None:
+        db.add(Loan(
+            id=loan_id, customer_id=customer_id, loan_account_number=f"LN-{loan_id[:8]}",
+            loan_type=LoanType.PERSONAL, branch_code="BR1",
+            sanctioned_amount=100_000.0, disbursed_amount=100_000.0,
+            outstanding_principal=80_000.0, total_outstanding=90_000.0,
+            overdue_amount=10_000.0, emi_amount=5_000.0,
+            disbursement_date=date(2024, 1, 1), maturity_date=date(2027, 1, 1),
+            interest_rate=12.0,
+        ))
+        db.flush()
+    return loan_id
+
+
 def _case_row(db, loan_id=test_id("l1"), case_id=test_id("case-1")):
     """A minimal Case, so a snapshot's loan is OBSERVABLE.
 
@@ -307,6 +344,7 @@ def _case_row(db, loan_id=test_id("l1"), case_id=test_id("case-1")):
     (Payment.case_id is NOT NULL) and the labeller now correctly treats the row
     as unobservable rather than recovering zero — which is right, but it is not
     what the horizon-advancement tests are trying to measure."""
+    _ensure_loan(db, loan_id)
     case_row = Case(
         id=case_id, case_number=f"C-{case_id}", customer_id=test_id("cu1"), loan_id=loan_id,
         status=CaseStatus.IN_PROGRESS, priority=CasePriority.MEDIUM,
@@ -318,6 +356,7 @@ def _case_row(db, loan_id=test_id("l1"), case_id=test_id("case-1")):
 
 
 def _row(db, *, days_ago, rate_90=0.42, through=0, loan_id=test_id("l1")):
+    _ensure_loan(db, loan_id)
     row = RepaymentSnapshot(
         loan_id=loan_id, customer_id=test_id("cu1"), case_id=None,
         as_of_date=date.today() - timedelta(days=days_ago),

@@ -95,6 +95,31 @@ def _open_session(db: Session, user: User, device_id: str, request: Request) -> 
     return {"access_token": access, "refresh_token": refresh}
 
 
+def open_session(db: Session, user: User, device_id: str, request: Request) -> dict:
+    """FROZEN INTERFACE (P1 split, 2026-09-24): mint a token pair under a new
+    user_sessions row, the one way a login of any kind (password, invite
+    acceptance, quick-login, a future SSO) starts a session. Caller commits."""
+    return _open_session(db, user, device_id, request)
+
+
+def revoke_user_sessions(db: Session, user_id: str, reason: str, *, by: str | None = None,
+                         except_sid: str | None = None) -> int:
+    """FROZEN INTERFACE (P1 split): end every live session of `user_id` with
+    `reason` (one of identity.SESSION_REVOKE_REASONS — e.g. PASSWORD_CHANGED,
+    ADMIN_REVOKED, USER_DEACTIVATED, DEVICE_RESET), optionally keeping the
+    caller's own session. Returns how many were revoked. Their access tokens
+    stop working at once (dependencies.get_current_user checks the sid).
+    Caller commits."""
+    from app.models.identity import SESSION_REVOKE_REASONS
+    if reason not in SESSION_REVOKE_REASONS:
+        raise ValueError(f"unknown revoke reason {reason!r}")
+    q = db.query(UserSession).filter(UserSession.user_id == user_id, UserSession.revoked_at.is_(None))
+    if except_sid:
+        q = q.filter(UserSession.id != except_sid)
+    return q.update({UserSession.revoked_at: datetime.now(timezone.utc), UserSession.revoked_reason: reason,
+                     UserSession.revoked_by: by}, synchronize_session=False)
+
+
 def _enforce_device_binding(db: Session, user: User, device_id: str, request: Request) -> None:
     """A09. First login binds; a different device is refused (or, with
     DEMO_DEVICE_REBIND on, re-bound with a record of it)."""

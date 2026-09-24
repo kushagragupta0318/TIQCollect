@@ -410,3 +410,49 @@ def test_verification_path_is_untouched_by_delivery_result(db, fake_redis, monke
         OtpService(db).verify(_agent(), test_id("case-1"), res["otp_id"], "0000")
     assert fake_redis.hgetall(OtpService._otp_key(res["otp_id"]))["attempts"] == "1"
     assert OtpService(db).verify(_agent(), test_id("case-1"), res["otp_id"], "1234")["verified"] is True
+
+
+# ── verify: only the issuing agent, only on a case scope grants (2026-09-24) ──
+
+def _peer(db):
+    """A second agent of the SAME agency, not assigned the case."""
+    from app.models.agent import Agent
+    from app.models.user import User, UserRole
+    db.add(User(id=test_id("user-2"), email="agent2@otp.test", phone="9810003003", full_name="Peer Agent",
+                hashed_password="x", role=UserRole.FIELD_AGENT))
+    db.flush()
+    db.add(Agent(id=test_id("agent-2"), user_id=test_id("user-2"), manager_user_id=test_id("mgr-1"),
+                 employee_code="OTP0002", id_card_number="OTP-ID-0002", base_latitude=18.5,
+                 base_longitude=73.8, territory="Pune"))
+    db.commit()
+    return SimpleNamespace(id=test_id("agent-2"), user_id=test_id("user-2"), agency_id=TEST_AGENCY_ID,
+                           user=SimpleNamespace(full_name="Peer Agent"))
+
+
+def test_verify_refuses_an_agent_the_case_is_not_granted_to_with_the_uniform_404(db, fake_redis):
+    _seed_case(db)
+    peer = _peer(db)
+    _put_otp(fake_redis, test_id("otp-1"), code="1234", payment_id="")
+    with pytest.raises(AppException) as e:
+        OtpService(db).verify(peer, test_id("case-1"), test_id("otp-1"), "1234")
+    assert e.value.status_code == 404 and e.value.detail == "Not found"
+    # nothing spent: the owner's OTP is untouched
+    assert fake_redis.hgetall(OtpService._otp_key(test_id("otp-1")))["attempts"] == "0"
+
+
+def test_an_otp_issued_by_another_agent_reads_exactly_like_a_missing_one(db, fake_redis):
+    # The peer CAN open the case (it is on their beat today) but did not issue the OTP.
+    from app.models.beat import Beat
+    from app.services.scope import access_day
+    _seed_case(db)
+    peer = _peer(db)
+    db.add(Beat(agent_id=peer.id, beat_date=access_day(), beat_number="OTP-7", ordered_case_ids=[test_id("case-1")]))
+    db.commit()
+    _put_otp(fake_redis, test_id("otp-1"), code="1234")
+    with pytest.raises(AppException) as foreign:
+        OtpService(db).verify(peer, test_id("case-1"), test_id("otp-1"), "1234")
+    with pytest.raises(AppException) as missing:
+        OtpService(db).verify(peer, test_id("case-1"), test_id("otp-none"), "1234")
+    assert (foreign.value.status_code, foreign.value.detail) == (missing.value.status_code, missing.value.detail)
+    stored = fake_redis.hgetall(OtpService._otp_key(test_id("otp-1")))
+    assert stored["verified"] == "0" and stored["attempts"] == "0"

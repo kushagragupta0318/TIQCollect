@@ -98,7 +98,8 @@ class RepaymentSnapshot(Base, UUIDPrimaryKey):
     __tablename__ = "repayment_score_snapshots"
     __tenant_parents__ = (("loan_id", "Loan"),)
 
-    # 2026-09-24 (B09): ml schema; the loan's bank. FKs are RESTRICT (were
+    # 2026-09-24 (B09): ml schema; the loan's bank. FKs are NO ACTION (this
+    # said RESTRICT; corrected 2026-09-24, see base.uuid_fk) (were
     # CASCADE / SET NULL): this is the training-set table and a deleted loan
     # must not silently take its history with it.
     bank_id: Mapped[str] = mapped_column(UUIDType, nullable=False)

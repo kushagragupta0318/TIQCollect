@@ -45,7 +45,8 @@ class AgentLocation(Base, UUIDPrimaryKey):
     """One GPS fix for one agent. Append-only.
 
     2026-09-24 (B07): workforce schema; tenant columns; the agent FK is
-    RESTRICT (a cascade into a 30M-row partitioned table is a trap). On
+    NO ACTION (this said RESTRICT; corrected 2026-09-24, see base.uuid_fk)
+    (a cascade into a 30M-row partitioned table is a trap). On
     Postgres the table is partitioned LIST(is_sos) then RANGE(recorded_at)
     monthly, with PK (id, is_sos, recorded_at) — migration-only DDL (design
     §7); the ORM keeps `id` as its identity so lookups by id still work. The
