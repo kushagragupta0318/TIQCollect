@@ -60,22 +60,28 @@ task with a testable **Done when**.
   - A request round-trip is audited end to end.
   - The runbook is committed.
   - The consent text version is stored on every visit and every recording.
+  - A test asserts that the agent-facing case detail exposes no field beyond what
+    `RecordVisitPage` and `AgentCaseDetailPage` use: name, contact, outstanding and security
+    address, not the full Borrower 360.
 - **Depends on:** B09 (immutable audit), B06 (`visit_media`), and the owner's answers on BL-4
   and D10.
 
-### N03 · India data residency and a per-lender LLM switch · M · ce (llm), 43 (tenant setting), bb (deployment)
+### N03 · India data residency and a per-lender AI switch (LLM and speech-to-text) · M · ce (llm, transcription), 43 (tenant setting), bb (deployment)
 
 - **What:**
   - A written commitment and deployment recipe for hosting in an India region.
   - A per-lender AI setting: `off` (the rule-based fallbacks that already exist, labelled as not
     AI), `india_hosted` (an endpoint in India), or `global`.
-  - No borrower field reaches a provider the lender has not allowed. Today every visit sends the
-    borrower's name, loan details and the agent's notes to a US-hosted model
+  - The same switch governs **speech-to-text.** `TRANSCRIPTION_PROVIDER` defaults to `openai` in
+    the settings; the dev compose overrides it to local, which is environment and not a
+    guarantee. The audio is the borrower's actual voice.
+  - No borrower field or recording reaches a provider the lender has not allowed. Today every
+    visit sends the borrower's name, loan details and the agent's notes to a US-hosted model
     (`ai_report_service.py`).
 - **Done when:**
-  - With a lender set to `off`, a full visit and payment day makes **zero** outbound LLM calls
-    (a test counts them).
-  - Every AI output shows the provider and region that produced it.
+  - With a lender set to `off`, a full visit and payment day, including a voice note, makes
+    **zero** outbound LLM or transcription calls (a test counts both).
+  - Every AI output, transcripts included, shows the provider and region that produced it.
   - The deployment doc names the region for every stateful service.
 - **Depends on:** F01 (provider seam), B03 (the lender entity).
 
@@ -123,11 +129,11 @@ task with a testable **Done when**.
     id.
   - A delivery receipt is stored per message.
   - The per-lender policy switches each message type, with a test per type.
-  - The cost per agent-month is measured on the pilot and compared with the ₹102 model
-    (RESTRUCTURE-PLAN §4).
+  - The messaging cost per agent-month is measured on the pilot and compared with the reconciled
+    floor in `docs/business/ECONOMICS.md` §0.
 - **Depends on:** A14 (message text as data), B22 (demo suppression), D10 (the owner).
-- **Why it matters:** on Twilio, messaging is about ₹3,120 per agent-month, against a seat price
-  near ₹900.
+- **Why it matters:** on Twilio as coded, messaging alone costs several times a plausible seat
+  price (`docs/business/ECONOMICS.md` §0, the reconciled figures).
 
 ### N07 · Grievance capture and closure · M · 43 (tables), d4 (agent and manager UI)
 
