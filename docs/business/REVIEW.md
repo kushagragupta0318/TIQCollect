@@ -12,7 +12,7 @@
 
    The product's pitch is verified money and evidence. Fixing these is days of work, and it comes first.
 2. **Critical: the field app does not survive a normal Indian field day.** No signal means no work: "Case not found", and a reload gives Chrome's offline page. A wrong map pin locks the visit, and case detail offers no way out. The app is English only. GPS runs flat out from login.
-3. **Critical: as coded, every agent loses money.** SMS on Twilio costs about ₹3,100 per agent per month against a seat worth about ₹900. An Indian DLT gateway brings the whole variable cost to about ₹314. Three free public map services are in production use against their policies.
+3. **Critical: as coded, every agent loses money.** SMS on Twilio costs ₹4,100–4,500 per agent per month against a seat worth about ₹900 (reconciled with the lead developer's cost model, ECONOMICS.md §0). An Indian DLT gateway brings the whole variable cost to about ₹480–550. Three free public map services are in production use against their policies.
 4. **Critical: nine day-one buyer questions have no answer in the plan.** Hindi, DPDP consent and retention, India data residency (every visit sends borrower names and notes to a US LLM), DRA certificates, cash custody and deposits, the DLT SMS route, grievances, bank-format exports and SSO. See PRIORITIES.md, "Missing".
 5. **Important: the plan builds depth where there is no data yet.** Monte Carlo, forecasting, an AI agent studio and ten more models are scheduled or in progress while **not one real outcome exists**. The live model reads a borrower-stance input the app never records.
 6. **Important: the manager's screens undercut themselves.**

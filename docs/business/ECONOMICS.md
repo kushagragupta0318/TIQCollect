@@ -1,14 +1,39 @@
 # Unit economics and pricing: a rough first cut
 
-*Business lead, 2026-09-24. The lead developer's capacity and cost model has not landed yet. This is my own rough version: every assumption is labelled, and it should be replaced by the lead's figures when they exist. Nothing here is measured on real traffic, because there is none. Usage volumes come from domain knowledge checked against the demo book (REVIEW.md §2). Unit prices are public list prices fetched today (sources at the end). FX is assumed at ₹88 per US dollar.*
+*Business lead, 2026-09-24. Originally written before the lead developer's capacity and cost model existed; **reconciled below (§0)** against `docs/RESTRUCTURE-PLAN.md` §4 on branch `lead-structure` (bb, 2026-09-24), which grounds its volumes in code (`max_cases_per_day`, demo allocation runs, actual table sizes) rather than in my industry assumption. Nothing here is measured on real traffic, because there is none. FX is assumed at ₹88 per US dollar throughout, by both models independently.*
 
-## The answer first
+## 0. Reconciled against the lead developer's cost model
 
-- **As coded today, the product loses money on every agent.** Messaging alone costs about **₹3,100 per agent per month** on Twilio, while a plausible seat price is about ₹900. **Critical.**
-- **With an Indian SMS gateway, variable cost falls to about ₹310–320 per agent per month**, and to about ₹240 if the post-visit borrower message is off by default.
-- **A dedicated India deployment is a fixed cost of about ₹60k a month.** At pilot scale that dominates, so **pricing needs a per-lender platform fee plus a per-active-agent seat**. Seat-only pricing loses money below about 150 agents.
-- **Recommended price:** ₹1.5 lakh a month per lender, plus ₹900 per active agent a month (₹750 from 500 agents), plus messaging at cost + 15% beyond an allowance. **Pilot: ₹6 lakh fixed for 90 days, up to 100 agents.** Gross margin is about 60% at 100–300 agents.
-- **Five features cost more to run than they return**, and should change before a pilot (last section).
+bb's model (`RESTRUCTURE-PLAN.md` §4.4) and mine were built independently, from different sources (bb from code call-sites and table sizes; mine from an industry visit-rate assumption). They land within 10% of each other on unit prices and about 40% apart on the total, for one identified reason.
+
+| | Mine (below) | bb's (`RESTRUCTURE-PLAN.md` §4) | Agreement |
+|---|---|---|---|
+| Twilio SMS price | ₹7.32/msg ($0.0832 × 88) | ₹7.3/msg | **Same source, same number** — good cross-check |
+| WhatsApp price | ₹0.136 (with GST) | ₹0.13 | Same, within rounding |
+| Indian DLT SMS | ₹0.15 | ₹0.20 | Both assumptions pending a vendor quote; use bb's as the more conservative |
+| Visits per agent per day | **12** (industry range, assumption) | **15** (`max_cases_per_day` cap in code, `models/agent.py:54`; demo allocation runs average 14.3) | **This is the gap.** bb's is grounded in what the allocator actually assigns; mine is a generic FOS estimate below the code's cap. **Use bb's 15** |
+| SMS + WhatsApp / agent-month, Indian gateway | ₹103 | ₹173 (₹112 SMS + ₹61 WA) | Even scaling mine to 15 visits/day gives only ₹128 — bb's ₹173 likely also counts a message I didn't (a plausible extra OTP resend or confirmation send); treat bb's as the safer upper bound |
+| Transcription | ₹82 (single pass, defect fixed) | ₹155 (as-coded, double transcription, 15 visits/day) | bb models today's code as it runs now; mine models it after the double-transcription defect (§6) is fixed. Both are right for what they describe |
+| Fixed infrastructure | ₹60k/month flat estimate, no per-scale detail | ₹132–198/agent (scales 5,000 → 160 agents), fully costed (API, Postgres, Redis, self-hosted OSRM, backups) | **Use bb's** — it is the more careful estimate and gives a number at every fleet size, not just one |
+| **Total, DLT gateway + Groq, 1,000 agents** | ₹434 | **₹483** | Within 10% |
+| **Total, Twilio, 1,000 agents** | ₹3,528 | **₹4,483** | Both agree Twilio is 9–11× the DLT-gateway cost and dominates the bill either way |
+
+**Reconciled pricing floor: use bb's numbers.** They are grounded in the code (the allocator's actual cap, measured table sizes) rather than in an outside industry rate, and they are the more conservative (higher) figure. At pilot scale (~100–160 agents, no economies of scale yet), the reconciled variable cost per agent is:
+
+| Scenario | ₹ / agent / month | At 100 agents |
+|---|---|---|
+| **DLT gateway + Groq (recommended)** | **≈ ₹549** (₹198 infra + ₹4 storage + ₹19 LLM + ₹155 transcription + ₹112 SMS + ₹61 WA) | ₹54,900/month |
+| Twilio (as coded) | ≈ ₹4,549 | ₹4.55 lakh/month |
+
+This **replaces** the "recommended stack ₹314" and "as-coded ₹3,408" figures in §4 below — those undercounted transcription and used a lower visit rate. The rest of this document (§1–§6) is kept for its per-line detail and the "not worth its cost" findings, which still hold; only the headline totals below are superseded by the reconciled figures in this section.
+
+## The answer first (reconciled)
+
+- **As coded today, the product loses money on every agent.** Messaging alone runs **₹4,100–4,500 per agent per month** on Twilio, against a plausible seat price of ₹900. **Critical.**
+- **With an Indian DLT SMS gateway, the reconciled variable cost is about ₹480–550 per agent per month** (₹483 at 1,000 agents, ₹549 at pilot scale before economies of scale). Both independent models agree the SMS/WhatsApp line is what moves this number; the LLM choice moves it by at most ₹265 (bb) / ₹300 (mine).
+- **Fixed infrastructure is per-agent, not a flat deployment cost** (bb's correction to my earlier "₹60k flat"): ₹132–198 per agent depending on fleet size, self-hosted OSRM included. **Pricing still needs a per-lender platform fee plus a per-active-agent seat**, because at pilot scale (100–160 agents) infra alone is ₹20–32k/month before any messaging or LLM cost.
+- **Recommended price, reconciled:** ₹1.5 lakh a month per lender, plus ₹900 per active agent a month (₹750 from 500 agents), plus messaging at cost + 15% beyond an allowance. At the reconciled ₹549 floor and this price, **gross margin is about 77% at 100 agents, 66% at 300, 54% at 1,000** (§5) — better than my original estimate, because bb's infra figures scale down faster than my flat ₹60k assumption did.
+- **Five features cost more to run than they return**, and should change before a pilot (§6).
 
 ## 1. Usage per active agent per month
 
@@ -67,30 +92,22 @@ The obvious "fix" is a paid Google API, and it would be ruinous:
 
 The right answer is self-hosting maps, routing and geocoding on one VM in the fixed cost below, and **looking up an address only at check-in and at a visit**.
 
-## 3. Fixed cost per dedicated India deployment (assumption)
+## 3. Fixed cost per dedicated India deployment
 
-| Item | ₹ / month |
-|---|---|
-| App server (API, workers, Redis), 4 vCPU / 16 GB | 12,000 |
-| Managed Postgres with backups | 15,000 |
-| Object storage and backups | 2,000 |
-| Maps VM (OSRM, tiles, geocoder; north-India extract), 8 vCPU / 32 GB | 20,000 |
-| Local speech-to-text capacity | 8,000 |
-| Monitoring, TLS, e-mail, logs | 3,000 |
-| **Total, up to about 150 agents** | **about 60,000** (about 75,000 up to 400 agents; about 1.2 lakh at 1,000) |
+**Superseded by bb's per-agent figures** (§0): my flat ₹60k/month estimate is replaced by bb's fully costed, scale-dependent number — ₹198/agent at ~160 agents, ₹132/agent at 1,000, ₹67/agent at 5,000 (API, workers, managed Postgres, Redis, **self-hosted OSRM** — the free public routing server this repo defaults to cannot carry production load — and backups). The components are the same ones I listed (app server, Postgres, object storage, a maps VM, speech-to-text capacity, monitoring); bb's version sizes each one and scales it with fleet size instead of quoting one flat number. A shared multi-tenant India deployment would cut this further; price a dedicated deployment as a premium.
 
-A shared multi-tenant India deployment would cut the fixed cost per lender by 3–5×. Price a dedicated deployment as a premium.
+## 4. Cost per agent (reconciled)
 
-## 4. Cost per agent
+Per agent per month: bb's variable cost (§0) plus a share of bb's per-agent infrastructure figure.
 
-Per agent per month: variable cost (recommended stack **₹314**; as coded **₹3,408**) plus a share of the fixed cost.
-
-| Active agents | Fixed share | **Cost per agent (recommended)** | Cost per agent (as coded) |
+| Active agents | Infra (bb) | **Cost per agent, DLT gateway + Groq** | Cost per agent, Twilio |
 |---|---|---|---|
-| 50 | ₹1,200 | ₹1,514 | ₹4,608 |
-| 100 | ₹600 | **₹914** | ₹4,008 |
-| 300 | ₹250 | **₹564** | ₹3,658 |
-| 1,000 | ₹120 | **₹434** | ₹3,528 |
+| ~100–160 | ₹198 | **≈ ₹549** | ≈ ₹4,549 |
+| 300 | ₹132 (interpolated) | **≈ ₹483** | ≈ ₹4,483 |
+| 1,000 | ₹132 | **₹483** | ₹4,483 |
+| 5,000 | ₹67 | **₹418** | ₹4,418 |
+
+(My earlier "recommended ₹314 / as-coded ₹3,408" figures undercounted transcription and used a lower visit rate; superseded above.)
 
 ## 5. Pricing
 
@@ -112,26 +129,25 @@ Per agent per month: variable cost (recommended stack **₹314**; as coded **₹
 - **Seat: ₹900 per active agent a month** (₹750 from 500 agents; do not go below ₹700 unless messaging is trimmed).
 - **Messaging:** 300 messages per active agent included; beyond that, at cost + 15%.
 - **Add-ons later:** Hindi voice-to-report, bank copilot. Price them separately so frontier-model costs never sit inside the seat.
-- **Paid pilot: ₹6 lakh fixed for 90 days, up to 100 agents, one region, one or two agencies.** 50% is credited against year 1 if they convert. This covers about ₹1.8 lakh of infrastructure plus onboarding and support. Success criteria are agreed in writing up front (REVIEW.md §4).
+- **Paid pilot: ₹6 lakh fixed for 90 days, up to 100 agents, one region, one or two agencies.** 50% is credited against year 1 if they convert. This covers about ₹1.65 lakh of infrastructure and messaging (reconciled ₹549/agent × 100 agents × 3 months) plus onboarding and support. Success criteria are agreed in writing up front (REVIEW.md §4).
 
-**Margin at list price** (recommended stack):
+**Margin at list price, reconciled** (DLT gateway + Groq, bb's per-agent cost from §4):
 
 | Active agents | Revenue / month | Cost / month | Gross margin |
 |---|---|---|---|
-| 50 | ₹1.95 lakh | ₹0.76 lakh | 61% |
-| 100 | ₹2.40 lakh | ₹0.91 lakh | **62%** |
-| 300 | ₹4.20 lakh | ₹1.69 lakh | 60% |
-| 1,000 (seat ₹750) | ₹9.00 lakh | ₹4.34 lakh | 52% |
+| 100 | ₹2.40 lakh | ₹0.55 lakh | **77%** |
+| 300 | ₹4.20 lakh | ₹1.45 lakh | **66%** |
+| 1,000 (seat ₹750) | ₹9.00 lakh | ₹4.83 lakh | **54%** |
 
-For comparison, with **seat-only pricing** (no platform fee), 100 agents gives **−2%** and 300 agents gives 37%. **As coded (Twilio)**, 100 agents cost ₹4.0 lakh a month against ₹2.4 lakh of revenue.
+Margins are **better** than my original estimate once bb's infrastructure figures (which scale down with fleet size) replace my flat ₹60k assumption. For comparison, **as coded (Twilio)**, 100 agents cost ₹4.55 lakh a month against ₹2.40 lakh of revenue — still a clear loss, and the reason the DLT gateway switch is priced as urgent, not optional.
 
 ## 6. Features worth their running cost, and ones that aren't
 
 | Feature | Running cost / agent-month | Verdict |
 |---|---|---|
-| **Post-visit SMS + WhatsApp to the borrower** | ₹67 (Indian) / about ₹1,850 (Twilio) | **Default off; per-lender setting.** It also discloses the outstanding amount to whoever holds the phone, including after a "deceased" visit |
+| **Post-visit SMS + WhatsApp to the borrower** | ₹67–173 (Indian, mine–bb) / about ₹1,850–4,100 (Twilio) | **Default off; per-lender setting.** It also discloses the outstanding amount to whoever holds the phone, including after a "deceased" visit |
 | **Street-address lookup every 40 m** | Free today only by breaching OSM policy; about ₹14k on Google | **Cut** to check-in and visit events |
-| **Double transcription** | ₹165 → ₹82 | **Fix.** Pure waste |
+| **Double transcription** | ₹155 (bb, as-coded, 15 visits/day) → ₹82 (mine, fixed) | **Fix.** Pure waste — roughly halves the transcription line either way |
 | **AI visit report on every submit** | ₹21 (Groq) / ₹323 (Sonnet) | Keep on a cheap model, but **move it off the submit path**. It causes the 15 s timeout and duplicate visits (JOURNEYS §1a), and nobody reads it at the door |
 | **Automatic re-optimise after every visit** | Free self-hosted; ruinous on a paid API | Keep only on self-hosted OSRM |
 | GPS post every 15 s from login | Data trivial; battery real | Track only while checked in (also a DPDP point) |
