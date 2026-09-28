@@ -41,6 +41,16 @@ export function errorDetail(err: unknown, fallback: string): string {
   return typeof detail === "string" && detail.trim() ? detail : fallback;
 }
 
+/**
+ * The `code` half of `{detail, code}` — the stable machine-readable ErrorCode
+ * string (e.g. "MFA_REQUIRED"), for callers that need to branch on which
+ * error happened rather than just show `detail`'s message.
+ */
+export function errorCode(err: unknown): string | undefined {
+  const code = body(err)?.code;
+  return typeof code === "string" ? code : undefined;
+}
+
 /** HTTP status, for the few places that branch on 404 vs 409 vs the rest. */
 export function errorStatus(err: unknown): number | undefined {
   if (typeof err !== "object" || err === null) return undefined;

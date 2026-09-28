@@ -32,12 +32,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router";
-import { Search, MapPin, AlertTriangle, Phone, ChevronDown, ChevronUp, ChevronsUpDown, Brain, Shuffle, X, Loader2, TrendingUp, TrendingDown, Minus, IndianRupee } from "lucide-react";
+import { Search, MapPin, AlertTriangle, Phone, ChevronDown, ChevronUp, ChevronsUpDown, Brain, Shuffle, X, Loader2, TrendingUp, TrendingDown, Minus, IndianRupee, Plus, Pencil, KeyRound, Ban, RotateCcw } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { shortAmount, shortMoney } from "@/lib/money";
 import { AiBadge } from "@/components/ui/AiBadge";
-import { getAgents, getAgentInsight, getReallocationPlan, updateAgentStatus, acknowledgeAgentSos } from "@/api/manager";
+import { getAgents, getAgentInsight, getReallocationPlan, updateAgentStatus, acknowledgeAgentSos, resetAgentLogin, reactivateAgent } from "@/api/manager";
 import type { AgentInsight, ReallocationPlan } from "@/api/manager";
+import { errorDetail } from "@/lib/apiError";
 import { Input } from "@/components/ui/Input";
 import { TierBadge } from "@/components/ui/Badge";
 import { useModalA11y } from "@/hooks/useModalA11y";
@@ -46,6 +47,9 @@ import { useLeaveRequests } from "./leaveQueries";
 import { CalendarOff } from "lucide-react";
 import { useSearchParams } from "react-router";
 import type { Agent, AgentStatus } from "@/types";
+import { CreateAgentDrawer } from "./CreateAgentDrawer";
+import { EditAgentDrawer } from "./EditAgentDrawer";
+import { SuspendAgentModal } from "./SuspendAgentModal";
 
 const EASE = "cubic-bezier(0.16,1,0.3,1)";
 
@@ -102,6 +106,13 @@ export default function ManagerAgentsPage() {
   const [tierFilter, setTierFilter]     = useState<"ALL" | "TIER_1" | "TIER_2" | "TIER_3">("ALL");
   const [expandedAgent, setExpandedAgent] = useState<string | null>(null);
   const [sort, setSort] = useState<SortState>({ key: "default", dir: "asc" });
+  // Create/edit/suspend drawer & modal state — lifted here (not into AgentRow)
+  // so the same three components can be mounted once per page rather than
+  // once per row. AgentRow gets callbacks, the same pattern onStatusChange
+  // already uses.
+  const [createOpen, setCreateOpen] = useState(false);
+  const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
+  const [suspendingAgent, setSuspendingAgent] = useState<Agent | null>(null);
 
   // Cycle: first click sorts the way the column is usually read, second click
   // reverses, third returns to the API's own order rather than leaving the
@@ -192,6 +203,17 @@ export default function ManagerAgentsPage() {
             {teamTargetToday > 0 && <> of ₹{(teamTargetToday / 100000).toFixed(1)}L visited target</>}
           </p>
         </div>
+        {/* Add Agent — opens the create drawer. Same visual weight as Leave,
+            placed just before it so the two header actions read as a pair. */}
+        <button
+          type="button"
+          onClick={() => setCreateOpen(true)}
+          className="tap-target flex items-center gap-2 px-3 sm:px-4 py-2 rounded-xl font-semibold text-xs sm:text-sm flex-shrink-0 transition hover:brightness-95"
+          style={{ background: "#1677FF", border: "1px solid #1677FF", color: "#fff" }}
+        >
+          <Plus className="w-4 h-4 flex-shrink-0" />
+          <span className="hidden sm:inline">Add Agent</span>
+        </button>
         {/* Leave — a button top right; the panel opens as a floating window.
             2026-09-21. The header bell deep-links here with ?leave=1. */}
         <button
@@ -397,6 +419,9 @@ export default function ManagerAgentsPage() {
                 onToggle={() => setExpandedAgent(expandedAgent === agent.id ? null : agent.id)}
                 delay={i * 30}
                 onStatusChange={handleStatusChange}
+                onEdit={setEditingAgent}
+                onSuspend={setSuspendingAgent}
+                onRefresh={load}
               />
             ))
         }
@@ -407,14 +432,27 @@ export default function ManagerAgentsPage() {
           </div>
         )}
       </div>
+
+      <CreateAgentDrawer open={createOpen} onClose={() => setCreateOpen(false)} onCreated={load} />
+      {/* key forces a full remount per agent, so EditAgentDrawer can seed its
+          form from lazy useState initializers instead of a resync effect —
+          see that file's own comment. */}
+      <EditAgentDrawer key={editingAgent?.id ?? "closed"} agent={editingAgent} onClose={() => setEditingAgent(null)} onSaved={load} />
+      <SuspendAgentModal agent={suspendingAgent} onClose={() => setSuspendingAgent(null)} onSuspended={load} />
     </div>
   );
 }
 
 function AgentRow({
-  agent, rank, expanded, onToggle, delay, onStatusChange,
+  agent, rank, expanded, onToggle, delay, onStatusChange, onEdit, onSuspend, onRefresh,
 }: {
   agent: Agent; rank: number; expanded: boolean; onToggle: () => void; delay: number; onStatusChange: (id: string, newStatus: AgentStatus) => void;
+  onEdit: (agent: Agent) => void;
+  onSuspend: (agent: Agent) => void;
+  /** Full reload — used after reactivate, where more than `status` changes
+   *  (suspended_at/suspended_reason clear too), unlike the optimistic
+   *  onStatusChange the ON_DUTY/OFF_DUTY toggle uses. */
+  onRefresh: () => void;
 }) {
   const navigate      = useNavigate();
   const ptpRate       = Math.round(agent.ptp_rate_pct ?? 0);
@@ -428,6 +466,35 @@ function AgentRow({
   const [showPlan, setShowPlan]             = useState(false);
   const [statusUpdating, setStatusUpdating] = useState(false);
   const [sosAcking, setSosAcking]           = useState(false);
+  const [resetLoginBusy, setResetLoginBusy] = useState(false);
+  const [reactivateBusy, setReactivateBusy] = useState(false);
+
+  async function resetLogin() {
+    setResetLoginBusy(true);
+    try {
+      const result = await resetAgentLogin(agent.id);
+      toast.success(result.sent
+        ? `Reset link sent to ${agent.full_name} by SMS`
+        : "Could not send the reset link — try again shortly");
+    } catch (err) {
+      toast.error(errorDetail(err, "Could not reset login"));
+    } finally {
+      setResetLoginBusy(false);
+    }
+  }
+
+  async function reactivate() {
+    setReactivateBusy(true);
+    try {
+      await reactivateAgent(agent.id);
+      toast.success(`${agent.full_name} reactivated — now Off Duty`);
+      onRefresh();
+    } catch (err) {
+      toast.error(errorDetail(err, "Could not reactivate agent"));
+    } finally {
+      setReactivateBusy(false);
+    }
+  }
 
   async function acknowledgeSos() {
     setSosAcking(true);
@@ -547,9 +614,9 @@ function AgentRow({
         </div>
 
         <div className="col-span-1 flex items-center gap-1.5">
-          <span className={`w-2 h-2 rounded-full ${agent.status === "ON_DUTY" ? "bg-success-500" : agent.status === "ON_LEAVE" ? "bg-warning-500" : "bg-slate-300"}`} />
-          <span className={`text-xs font-medium ${agent.status === "ON_DUTY" ? "text-success-600" : agent.status === "ON_LEAVE" ? "text-warning-600" : "text-slate-400"}`}>
-            {agent.status === "ON_DUTY" ? "On Duty" : agent.status === "ON_LEAVE" ? "On Leave" : "Off"}
+          <span className={`w-2 h-2 rounded-full ${agent.status === "ON_DUTY" ? "bg-success-500" : agent.status === "ON_LEAVE" ? "bg-warning-500" : agent.status === "SUSPENDED" ? "bg-danger-500" : "bg-slate-300"}`} />
+          <span className={`text-xs font-medium ${agent.status === "ON_DUTY" ? "text-success-600" : agent.status === "ON_LEAVE" ? "text-warning-600" : agent.status === "SUSPENDED" ? "text-danger-600" : "text-slate-400"}`}>
+            {agent.status === "ON_DUTY" ? "On Duty" : agent.status === "ON_LEAVE" ? "On Leave" : agent.status === "SUSPENDED" ? "Suspended" : "Off"}
           </span>
           <ChevronDown
             className="w-3 h-3 ml-auto transition-transform"
@@ -609,9 +676,9 @@ function AgentRow({
           <span>{agent.current_month_visits} visits</span>
           <span>PTP {ptpRate}%</span>
           <span className="flex items-center gap-1 ml-auto">
-            <span className={`w-2 h-2 rounded-full ${agent.status === "ON_DUTY" ? "bg-success-500" : agent.status === "ON_LEAVE" ? "bg-warning-500" : "bg-slate-300"}`} />
-            <span className={agent.status === "ON_DUTY" ? "text-success-600 font-medium" : agent.status === "ON_LEAVE" ? "text-warning-600 font-medium" : "text-slate-400"}>
-              {agent.status === "ON_DUTY" ? "On Duty" : agent.status === "ON_LEAVE" ? "On Leave" : "Off"}
+            <span className={`w-2 h-2 rounded-full ${agent.status === "ON_DUTY" ? "bg-success-500" : agent.status === "ON_LEAVE" ? "bg-warning-500" : agent.status === "SUSPENDED" ? "bg-danger-500" : "bg-slate-300"}`} />
+            <span className={agent.status === "ON_DUTY" ? "text-success-600 font-medium" : agent.status === "ON_LEAVE" ? "text-warning-600 font-medium" : agent.status === "SUSPENDED" ? "text-danger-600 font-medium" : "text-slate-400"}>
+              {agent.status === "ON_DUTY" ? "On Duty" : agent.status === "ON_LEAVE" ? "On Leave" : agent.status === "SUSPENDED" ? "Suspended" : "Off"}
             </span>
           </span>
         </div>
@@ -623,6 +690,14 @@ function AgentRow({
           className="px-4 pb-4 border-t"
           style={{ background: "#F5F6F9", borderColor: "#EAEBEF" }}
         >
+          {/* Contact — plain labelled text, not StatMini: StatMini's value is
+              set in a large bold face meant for a number, and an email
+              address at that size wraps awkwardly. */}
+          <div className="flex flex-wrap gap-x-6 gap-y-0.5 mt-3 text-xs" style={{ color: "#6B6D76" }}>
+            <span>{agent.email}</span>
+            <span>{agent.phone}</span>
+          </div>
+
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
             <StatMini label="Visits This Month"  value={String(agent.current_month_visits)} />
             {/* "PTPs Due", not "PTPs Set". The backend counts promises whose
@@ -658,6 +733,28 @@ function AgentRow({
             <span className="text-xs badge badge-gray px-2.5 py-1">{agent.specialization}</span>
             <span className="text-xs badge badge-gray px-2.5 py-1">Max {agent.max_cases_per_day} cases/day</span>
           </div>
+
+          {/* Suspension banner — same amber/red tint shape as the SOS banner
+              at the top of the page (rgba(220,38,38,...) pair). The backend
+              does not yet track WHO suspended an agent (no
+              suspended_by_user_id/suspended_by_role column), so this says so
+              plainly rather than omitting the line or guessing a name. */}
+          {agent.status === "SUSPENDED" && (
+            <div className="rounded-xl p-3 mt-3 space-y-1" style={{ background: "rgba(220,38,38,0.06)", border: "1px solid rgba(220,38,38,0.18)" }}>
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 flex-shrink-0" style={{ color: "#DC2626" }} />
+                <span className="text-sm font-semibold" style={{ color: "#991B1B" }}>Suspended</span>
+              </div>
+              <p className="text-xs" style={{ color: "#B91C1C" }}>{agent.suspended_reason || "No reason recorded"}</p>
+              <p className="text-xs" style={{ color: "#B91C1C" }}>
+                Suspended by: not recorded yet
+                {agent.suspended_at && (
+                  <> · {new Date(agent.suspended_at).toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: true })}</>
+                )}
+              </p>
+            </div>
+          )}
+
           <div className="flex gap-2 mt-3 flex-wrap">
             <button
               onClick={() => {
@@ -730,6 +827,40 @@ function AgentRow({
               }
               {agent.status === "ON_DUTY" ? "Mark Off Duty" : "Mark On Duty"}
             </button>
+            )}
+            <button
+              onClick={() => onEdit(agent)}
+              className="tap-target text-xs px-3 py-1.5 rounded-xl font-semibold transition hover:brightness-95 inline-flex items-center justify-center gap-1.5"
+              style={{ background: "#FFFFFF", color: "#2563EB", border: "1px solid #2563EB" }}
+            >
+              <Pencil className="w-3 h-3" /> Edit
+            </button>
+            <button
+              onClick={resetLogin}
+              disabled={resetLoginBusy}
+              className="tap-target text-xs px-3 py-1.5 rounded-xl font-semibold badge-blue transition hover:brightness-95 inline-flex items-center justify-center gap-1.5"
+            >
+              {resetLoginBusy ? <Loader2 className="w-3 h-3 animate-spin" /> : <KeyRound className="w-3 h-3" />} Reset Login
+            </button>
+            {agent.status === "SUSPENDED" ? (
+              <button
+                onClick={reactivate}
+                disabled={reactivateBusy}
+                className="tap-target text-xs px-3 py-1.5 rounded-xl font-semibold transition hover:brightness-95 flex items-center justify-center gap-1.5"
+                style={{
+                  background: "rgba(22,163,74,0.10)", color: "#16a34a", border: "1px solid rgba(22,163,74,0.25)",
+                }}
+              >
+                {reactivateBusy ? <Loader2 className="w-3 h-3 animate-spin" /> : <RotateCcw className="w-3 h-3" />} Reactivate
+              </button>
+            ) : (
+              <button
+                onClick={() => onSuspend(agent)}
+                className="flex items-center gap-1.5 rounded-control border px-3 py-1.5 text-xs font-semibold text-danger-700 transition hover:bg-danger-100"
+                style={{ background: "#FFFFFF", borderColor: "#F04438" }}
+              >
+                <Ban className="w-3 h-3" /> Suspend
+              </button>
             )}
             <button
               onClick={() => setMarkLeave(true)}

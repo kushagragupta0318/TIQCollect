@@ -70,6 +70,16 @@ export interface Agent {
   employee_code: string;
   id_card_number: string;
   full_name: string;
+  /** G02 (Manage Agents) — the table and edit drawer. */
+  email: string;
+  phone: string;
+  gender: string | null;
+  vehicle_type: string;
+  territory_region_id: string | null;
+  base_latitude: number;
+  base_longitude: number;
+  suspended_at: string | null;
+  suspended_reason: string | null;
   territory: string;
   status: AgentStatus;
   tier: AgentTier;
