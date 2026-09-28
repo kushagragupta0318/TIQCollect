@@ -213,7 +213,12 @@ _CATALOG: tuple[Capability, ...] = (
     _cap("field.leave.request", "request leave", (FA,)),
     _cap("field.sos", "raise SOS", (FA,)),
 
-    _cap("service.field_ops.read", "the /api/field-ops/* contract (embedded mode)", (SV,)),
+    # service.field_ops.read (the /api/field-ops/* contract) was here until
+    # 2026-09-28: lead-structure's Wave 1 D4 (0c32082) merged, deleting
+    # /api/field-ops/* as unused — the capability outlived the route it
+    # named by exactly the gap test_product_mode.py's own changelog
+    # predicted. Dropped rather than left dangling; docs/DATA-MODEL-V2.md
+    # §5.1/§5.2 corrected to match (flagged to 43, who owns that doc).
     _cap("service.manager_api.read",
         "read-only /api/v1/manager/* for Command Center — DECLARED, NOT WIRED: "
         "manager.py's 48 routes still check ManagerOnly only (known issue 6, no "

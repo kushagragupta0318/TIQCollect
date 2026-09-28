@@ -120,9 +120,11 @@ def test_field_agent_holds_only_self_and_field_and_copilot():
     }
 
 
-def test_service_role_holds_only_the_two_service_capabilities_and_bank_feed_upload():
+def test_service_role_holds_only_manager_api_read_and_bank_feed_upload():
+    """service.field_ops.read is gone (lead-structure's Wave 1 D4, 0c32082,
+    deleted /api/field-ops/* as unused; coordinator audit 2026-09-28)."""
     assert role_capabilities(UserRole.SERVICE) == {
-        "bank_feed.upload", "service.field_ops.read", "service.manager_api.read",
+        "bank_feed.upload", "service.manager_api.read",
     }
 
 

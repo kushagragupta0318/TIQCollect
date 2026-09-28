@@ -2723,6 +2723,9 @@ being decorative (known issue 11):
 `2P` means `requires_second_person`: a second holder must complete the
 action. `S` means `is_sensitive`: every use is audited.
 
+*(2026-09-28: `service.field_ops.read` removed with the `/api/field-ops/*`
+router at the v1-main merge; it listed 76 capabilities.)*
+
 | Code | Allows | Flags |
 |---|---|---|
 | `self.profile` | read and edit own profile | |
@@ -2798,7 +2801,6 @@ action. `S` means `is_sensitive`: every use is audited.
 | `field.location.report` | location pings and check-in | |
 | `field.leave.request` | request leave | |
 | `field.sos` | raise SOS | |
-| `service.field_ops.read` | the `/api/field-ops/*` contract (embedded mode) | |
 | `service.manager_api.read` | read-only `/api/v1/manager/*` for Command Center (replaces `TIQCOLLECT_AGENCY_ACCOUNTS` manager passwords, plan §2.1) | |
 
 ### 5.2 Role → capability matrix (seed of `tenancy.role_permissions`)
@@ -2851,7 +2853,7 @@ Legend:
 | `settlements.approve` | · | Y | · | · | · | · | · | · |
 | `agency.audit.read` | · | · | · | · | Y | · | · | · |
 | `field.*` (8) | · | · | · | · | · | · | S | · |
-| `service.field_ops.read`, `service.manager_api.read` | · | · | · | · | · | · | · | Y |
+| `service.manager_api.read` | · | · | · | · | · | · | · | Y |
 
 **Consequences worth stating.**
 - **The promote exposure closes.** `ml.approve` and `ml.promote` belong to
