@@ -44,10 +44,10 @@ from app.models.user import User, UserRole
 from app.models.visit import Visit, VisitOutcome
 from app.schemas.agent import RecordVisitRequest
 from app.services import visit_service as vs
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
-engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
-                       poolclass=StaticPool)
-TestingSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+engine = make_engine()
+TestingSession = make_session_factory(autocommit=False, autoflush=False, bind=engine)
 TODAY = date.today()
 BACKEND = pathlib.Path(__file__).resolve().parents[1]
 
@@ -65,7 +65,7 @@ def _user(db, email, role, name):
 
 def _agent(db, user, code, mgr):
     a = Agent(id=_uid(), user_id=user.id, employee_code=code, id_card_number=code + "-ID",
-              agency_id="AG1", manager_user_id=mgr.id, gender="M",
+              manager_user_id=mgr.id, gender="M",
               base_latitude=28.63, base_longitude=77.21, territory="Delhi",
               languages_spoken=["HINDI"], status=AgentStatus.ON_DUTY, tier=AgentTier.TIER_1,
               specialization=AgentSpecialization.BOTH, ranking_score=80.0, max_cases_per_day=5)
@@ -75,31 +75,31 @@ def _agent(db, user, code, mgr):
 
 def _case_for(db, agent, ref):
     c = Customer(id=_uid(), customer_ref=ref, full_name=f"Borrower {ref}",
-                 date_of_birth="1990-01-01", gender="M", pan_masked="ABCDE1234F",
+                 date_of_birth=date(1990, 1, 1), gender="M", pan_masked="ABCDE1234F",
                  aadhaar_masked="123456789012", phone_primary="98" + ref.ljust(8, "0"),
                  address_line1="Delhi", city="Delhi", state="Delhi", pincode="110001",
                  latitude=28.6315, longitude=77.2167, language_preference="HINDI")
     db.add(c)
     db.flush()
     loan = Loan(id=_uid(), customer_id=c.id, loan_account_number="L" + ref,
-                loan_type=LoanType.PERSONAL, bank_name="HDFC", branch_code="DL01",
+                loan_type=LoanType.PERSONAL, branch_code="DL01",
                 sanctioned_amount=100000.0, disbursed_amount=100000.0,
                 outstanding_principal=50000.0, total_outstanding=50000.0,
                 overdue_amount=10000.0, emi_amount=5000.0, interest_rate=12.0,
-                disbursement_date="2022-01-01", maturity_date="2027-01-01",
+                disbursement_date=date(2022, 1, 1), maturity_date=date(2027, 1, 1),
                 dpd=45, dpd_bucket=DPDBucket.BUCKET_2, status=LoanStatus.ACTIVE)
     db.add(loan)
     db.flush()
     k = Case(id=_uid(), case_number="C-" + ref, customer_id=c.id, loan_id=loan.id,
              agent_id=agent.id, status=CaseStatus.ASSIGNED,
-             target_amount=20000.0, collected_amount=0.0, allocation_date=TODAY.isoformat())
+             target_amount=20000.0, collected_amount=0.0, allocation_date=TODAY)
     db.add(k)
     return k
 
 
 @pytest.fixture(scope="module")
 def world():
-    Base.metadata.create_all(engine)
+    create_schema(engine)
     db = TestingSession()
     mgr_a = _user(db, "a@t.io", UserRole.AGENCY_MANAGER, "Manager A")
     mgr_b = _user(db, "b@t.io", UserRole.AGENCY_MANAGER, "Manager B")
@@ -114,7 +114,7 @@ def world():
     yield {"db": db, "mgr_a": mgr_a, "mgr_b": mgr_b, "ag_a": ag_a, "ag_b": ag_b,
            "case_a": case_a, "case_a2": case_a2, "case_b": case_b}
     db.close()
-    Base.metadata.drop_all(engine)
+    drop_schema(engine)
 
 
 @pytest.fixture(scope="module")

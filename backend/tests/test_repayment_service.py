@@ -25,6 +25,7 @@ from app.models.repayment_snapshot import SOURCE_SCORECARD
 from app.models.loan import LoanType
 from app.models.ptp import PTPStatus
 from app.models.visit import VisitOutcome
+from tests._db import test_id
 from app.services.repayment_service import (
     _FORBIDDEN_FEATURE_KEYS, RepaymentService, ScoreOutcome,
 )
@@ -36,7 +37,7 @@ AS_OF = date(2026, 8, 21)
 
 def loan(**over):
     base = dict(
-        id="loan-1", customer_id="cust-1", dpd=75, loan_type=LoanType.PERSONAL,
+        id=test_id("loan-1"), customer_id=test_id("cust-1"), dpd=75, loan_type=LoanType.PERSONAL,
         emi_amount=18400.0, overdue_amount=73600.0,
         outstanding_principal=520000.0, last_payment_amount=9000.0,
         legal_status="NONE", settlement_status="NONE",
@@ -46,7 +47,7 @@ def loan(**over):
         # never actually present it, and hides the omission until something
         # reads the column for real.
         total_outstanding=592000.0, penal_charges=12000.0, npa_flag=False,
-        last_payment_date="2026-07-04",
+        last_payment_date=date(2026, 7, 4),
     )
     base.update(over)
     return NS(**base)
@@ -54,7 +55,7 @@ def loan(**over):
 
 def customer(**over):
     base = dict(
-        id="cust-1", cibil_score=610, customer_segment="SALARIED",
+        id=test_id("cust-1"), cibil_score=610, customer_segment="SALARIED",
         is_hostile=False, fraud_flag=False,
     )
     base.update(over)
@@ -85,7 +86,7 @@ def payment(*, days_ago=5, amount=10000.0, status="PENDING_VERIFICATION"):
 
 
 def case(**over):
-    base = dict(id="case-1", target_amount=48000.0, collected_amount=0.0)
+    base = dict(id=test_id("case-1"), target_amount=48000.0, collected_amount=0.0)
     base.update(over)
     return NS(**base)
 
@@ -217,7 +218,7 @@ def recovery_outcome(likelihood=60.0, as_of=AS_OF, potential="MEDIUM", rate_90=0
     """
     risk = 100.0 - likelihood
     return ScoreOutcome(
-        loan_id="loan-1", customer_id="cust-1", case_id=None, as_of=as_of,
+        loan_id=test_id("loan-1"), customer_id=test_id("cust-1"), case_id=None, as_of=as_of,
         likelihood=likelihood, risk_score=risk, band=band_for(likelihood),
         risk_category=risk_category_for(risk), evidence_coverage=0.8,
         model_version="scorecard-1.0.0", source="SCORECARD",
@@ -236,7 +237,7 @@ def outcome(likelihood=60.0, as_of=AS_OF):
     and label disagree tests nothing real and hides the bug it looks like."""
     risk = 100.0 - likelihood
     return ScoreOutcome(
-        loan_id="loan-1", customer_id="cust-1", case_id=None, as_of=as_of,
+        loan_id=test_id("loan-1"), customer_id=test_id("cust-1"), case_id=None, as_of=as_of,
         likelihood=likelihood, risk_score=risk, band=band_for(likelihood),
         risk_category=risk_category_for(risk), evidence_coverage=0.8,
         model_version="scorecard-1.0.0", source="SCORECARD",
@@ -442,7 +443,7 @@ def test_recency_comes_from_the_ledger_when_the_ledger_has_it():
 def test_recency_falls_back_to_the_loan_column_only_for_a_past_date():
     """The column is windowless, so it still answers for a borrower who last paid
     longer ago than the behaviour window. Worth keeping as a fallback."""
-    f = build(loan=loan(last_payment_date="2026-06-01"))
+    f = build(loan=loan(last_payment_date=date(2026, 6, 1)))
     assert f["days_since_last_payment"] == (AS_OF - date(2026, 6, 1)).days
     assert f["_payment_recency_source"] == "LOAN_COLUMN"
 
@@ -453,7 +454,7 @@ def test_recency_refuses_a_loan_column_date_after_as_of():
     payment that had not happened yet on as_of. Accepting it would teach a model
     that money already known to have arrived predicts money arriving; the
     measured accuracy would be excellent and worthless."""
-    f = build(loan=loan(last_payment_date="2026-09-15"))   # after AS_OF
+    f = build(loan=loan(last_payment_date=date(2026, 9, 15)))   # after AS_OF
     assert f["days_since_last_payment"] is None
     assert f["_payment_recency_source"] == "LOAN_COLUMN_REFUSED_FUTURE"
 
@@ -610,7 +611,7 @@ def test_unlikely_to_pay_can_still_be_high_to_recover():
     rep, rec = _both(
         loan=loan(loan_type=LoanType.GOLD, dpd=85, overdue_amount=40000.0,
                   total_outstanding=800000.0, penal_charges=0.0,
-                  last_payment_date="2026-08-14", last_payment_amount=18400.0),
+                  last_payment_date=date(2026, 8, 14), last_payment_amount=18400.0),
         customer=customer(cibil_score=330, is_hostile=True, fraud_flag=True),
         visits=[visit(days_ago=d, met=True, outcome=VisitOutcome.RTP)
                 for d in (2, 5, 9)],
@@ -637,7 +638,7 @@ def test_likely_to_pay_can_still_be_low_to_recover():
         loan=loan(loan_type=LoanType.CREDIT_CARD, dpd=60, overdue_amount=480000.0,
                   total_outstanding=520000.0, penal_charges=95000.0,
                   npa_flag=True, settlement_status="NEGOTIATING",
-                  last_payment_date="2026-08-11", last_payment_amount=6000.0),
+                  last_payment_date=date(2026, 8, 11), last_payment_amount=6000.0),
         customer=customer(cibil_score=780, customer_segment="SALARIED"),
         visits=[visit(days_ago=d, met=True) for d in (2, 6, 11, 16)],
         ptps=[ptp(days_ago=d, status=PTPStatus.HONORED, updated_days_ago=d)
@@ -697,7 +698,7 @@ def test_neither_score_is_a_transform_of_the_other():
 # corrected denominator: what was still owed on as_of_date.
 
 def _snap(as_of=AS_OF):
-    return NS(as_of_date=as_of, loan_id="loan-1")
+    return NS(as_of_date=as_of, loan_id=test_id("loan-1"))
 
 
 def _pay_on(day, amount):
@@ -708,13 +709,13 @@ def _pay_on(day, amount):
 def test_a_cycle_settled_before_the_score_is_not_in_the_denominator():
     """The regression. Two closed cycles plus one open one used to demand
     3 x 10,000 in 30 days; only the open 10,000 was ever collectable."""
-    closed_a = NS(id="c1", target_amount=10000.0, status="PAID")
-    closed_b = NS(id="c2", target_amount=10000.0, status="PAID")
-    live = NS(id="c3", target_amount=10000.0, status="ASSIGNED")
+    closed_a = NS(id=test_id("c1"), target_amount=10000.0, status="PAID")
+    closed_b = NS(id=test_id("c2"), target_amount=10000.0, status="PAID")
+    live = NS(id=test_id("c3"), target_amount=10000.0, status="ASSIGNED")
     payments = {
-        "c1": [_pay_on(AS_OF - timedelta(days=90), 10000.0)],
-        "c2": [_pay_on(AS_OF - timedelta(days=45), 10000.0)],
-        "c3": [_pay_on(AS_OF + timedelta(days=5), 9500.0)],
+        test_id("c1"): [_pay_on(AS_OF - timedelta(days=90), 10000.0)],
+        test_id("c2"): [_pay_on(AS_OF - timedelta(days=45), 10000.0)],
+        test_id("c3"): [_pay_on(AS_OF + timedelta(days=5), 9500.0)],
     }
     outcome, amount = SVC._infer_outcome(_snap(), [closed_a, closed_b, live], payments)
 
@@ -725,8 +726,8 @@ def test_a_cycle_settled_before_the_score_is_not_in_the_denominator():
 
 
 def test_a_part_paid_cycle_contributes_only_its_remainder():
-    case = NS(id="c1", target_amount=10000.0, status="PARTIALLY_PAID")
-    payments = {"c1": [_pay_on(AS_OF - timedelta(days=10), 7000.0),
+    case = NS(id=test_id("c1"), target_amount=10000.0, status="PARTIALLY_PAID")
+    payments = {test_id("c1"): [_pay_on(AS_OF - timedelta(days=10), 7000.0),
                        _pay_on(AS_OF + timedelta(days=3), 2900.0)]}
     outcome, amount = SVC._infer_outcome(_snap(), [case], payments)
 
@@ -737,8 +738,8 @@ def test_a_part_paid_cycle_contributes_only_its_remainder():
 
 def test_short_of_the_outstanding_balance_is_still_partial():
     """The fix must not turn every payment into a REPAID."""
-    case = NS(id="c1", target_amount=10000.0, status="ASSIGNED")
-    payments = {"c1": [_pay_on(AS_OF + timedelta(days=4), 2000.0)]}
+    case = NS(id=test_id("c1"), target_amount=10000.0, status="ASSIGNED")
+    payments = {test_id("c1"): [_pay_on(AS_OF + timedelta(days=4), 2000.0)]}
     outcome, amount = SVC._infer_outcome(_snap(), [case], payments)
     assert outcome == "PARTIAL"
     assert amount == pytest.approx(2000.0)
@@ -748,9 +749,9 @@ def test_the_denominator_is_read_from_the_ledger_not_from_collected_amount():
     """Case.collected_amount is overwritten in place and holds TODAY's total,
     so on a historical row it has already absorbed the label's own payments.
     Setting it to a contradictory value must change nothing."""
-    honest = NS(id="c1", target_amount=10000.0, status="ASSIGNED", collected_amount=0.0)
-    lying = NS(id="c1", target_amount=10000.0, status="ASSIGNED", collected_amount=9999.0)
-    payments = {"c1": [_pay_on(AS_OF - timedelta(days=5), 6000.0),
+    honest = NS(id=test_id("c1"), target_amount=10000.0, status="ASSIGNED", collected_amount=0.0)
+    lying = NS(id=test_id("c1"), target_amount=10000.0, status="ASSIGNED", collected_amount=9999.0)
+    payments = {test_id("c1"): [_pay_on(AS_OF - timedelta(days=5), 6000.0),
                        _pay_on(AS_OF + timedelta(days=5), 3800.0)]}
 
     assert (SVC._infer_outcome(_snap(), [honest], payments)
@@ -760,8 +761,8 @@ def test_the_denominator_is_read_from_the_ledger_not_from_collected_amount():
 def test_payments_on_the_as_of_day_count_as_already_collected():
     """Same boundary as everywhere else: as_of belongs to the past. A payment
     on the day reduces the outstanding balance; it is not a future recovery."""
-    case = NS(id="c1", target_amount=10000.0, status="ASSIGNED")
-    payments = {"c1": [_pay_on(AS_OF, 4000.0),
+    case = NS(id=test_id("c1"), target_amount=10000.0, status="ASSIGNED")
+    payments = {test_id("c1"): [_pay_on(AS_OF, 4000.0),
                        _pay_on(AS_OF + timedelta(days=1), 5800.0)]}
     outcome, amount = SVC._infer_outcome(_snap(), [case], payments)
 
@@ -774,8 +775,8 @@ def test_payments_on_the_as_of_day_count_as_already_collected():
 def test_a_fully_settled_loan_with_no_further_money_is_not_repaid():
     """Nothing outstanding and nothing received is NO_PAYMENT, not a division
     by zero and not a free REPAID."""
-    case = NS(id="c1", target_amount=10000.0, status="ASSIGNED")
-    payments = {"c1": [_pay_on(AS_OF - timedelta(days=20), 10000.0)]}
+    case = NS(id=test_id("c1"), target_amount=10000.0, status="ASSIGNED")
+    payments = {test_id("c1"): [_pay_on(AS_OF - timedelta(days=20), 10000.0)]}
     outcome, amount = SVC._infer_outcome(_snap(), [case], payments)
     assert outcome == "NO_PAYMENT"
     assert amount is None
@@ -812,10 +813,10 @@ def test_case_as_of_never_looks_forward():
     from types import SimpleNamespace
 
     cases = [
-        SimpleNamespace(id="existed", created_at=datetime(2026, 3, 1, tzinfo=timezone.utc)),
-        SimpleNamespace(id="future", created_at=datetime(2026, 9, 1, tzinfo=timezone.utc)),
+        SimpleNamespace(id=test_id("existed"), created_at=datetime(2026, 3, 1, tzinfo=timezone.utc)),
+        SimpleNamespace(id=test_id("future"), created_at=datetime(2026, 9, 1, tzinfo=timezone.utc)),
     ]
-    assert _case_as_of(cases, date(2026, 5, 1)) == "existed"
+    assert _case_as_of(cases, date(2026, 5, 1)) == test_id("existed")
 
 
 def test_case_as_of_degrades_to_the_old_behaviour_without_timestamps():
@@ -825,7 +826,7 @@ def test_case_as_of_degrades_to_the_old_behaviour_without_timestamps():
     from app.services.repayment_service import _case_as_of
     from types import SimpleNamespace
 
-    cases = [SimpleNamespace(id="first", created_at=None),
-             SimpleNamespace(id="second", created_at=None)]
-    assert _case_as_of(cases, date(2026, 5, 1)) == "first"
+    cases = [SimpleNamespace(id=test_id("first"), created_at=None),
+             SimpleNamespace(id=test_id("second"), created_at=None)]
+    assert _case_as_of(cases, date(2026, 5, 1)) == test_id("first")
     assert _case_as_of([], date(2026, 5, 1)) is None

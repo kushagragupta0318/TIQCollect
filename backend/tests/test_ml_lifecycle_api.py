@@ -29,6 +29,7 @@ from tests.test_planner_service import (  # noqa: F401
 
 # 2026-09-16 — read from the pointer; see tests/_served_champion.py.
 from tests._served_champion import served_vector, serving_version  # noqa: E402
+from tests._db import test_id
 
 SERVING = serving_version()
 
@@ -55,7 +56,7 @@ def _matured(db, n, *, outcome_fn, as_of=None):
         p = (i % 100) / 100.0
         row = ModelPrediction(
             id=str(uuid.uuid4()), model_name="recovery_risk", model_version=SERVING,
-            entity_type="case", entity_id=f"lc{i}", case_id=f"lc{i}",
+            entity_type="case", entity_id=test_id(f"lc{i}"), case_id=None,   # v2: no case row behind it
             as_of_date=as_of, probability=p, is_modelled=True,
             feature_coverage=1.0,
             features=served_vector(i, dpd=40.0, cibil_score=600.0,

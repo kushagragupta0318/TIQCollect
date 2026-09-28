@@ -107,3 +107,6 @@ statsmodels==0.15.0
 # — see ml/pipeline/eda.py.
 matplotlib==3.11.1
 seaborn==0.13.2
+# 2026-09-28 (P1 A08, d4): Fernet for TOTP secrets (services/mfa_service). It was only transitive
+# via python-jose[cryptography]; pinned at the version the fieldops-test image resolves.
+cryptography==50.0.1

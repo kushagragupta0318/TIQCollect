@@ -33,6 +33,7 @@ from app.models.customer import Customer
 from app.models.loan import Loan, LoanType
 from app.models.payment import Payment, PaymentStatus
 from app.models.ptp import PTP, PTPStatus
+from app.models.user import User
 from app.models.visit import Visit, VisitOutcome
 from app.services.visit_priority_service import score_cases as score_cases_priority
 
@@ -209,6 +210,22 @@ class PlannerService:
         """
         target_date = plan_date or get_target_plan_date()
 
+        # A04 (coordinator audit follow-up, 2026-09-28) — resolved once, up
+        # front, rather than deep inside the candidate-case query: it also
+        # scopes the agent roster below (defence in depth — the eligible set
+        # feeds the exploration swaps) and it must be known before anything
+        # else runs. `ck_users_role_scope` requires AGENCY_MANAGER/
+        # AGENCY_ADMIN to carry a non-NULL agency_id, so None here means the
+        # manager row is malformed in a way the schema is supposed to
+        # prevent — not a normal "no work today" state, so this does not
+        # take the lock, touch a beat, or write the usual zero-agents run
+        # row; it raises, and the nightly task's existing per-manager
+        # try/except records it as a FAILED AllocationRun the same way any
+        # other plan_next_day exception already does.
+        manager_agency_id = self.db.query(User.agency_id).filter(User.id == self.manager_user_id).scalar()
+        if manager_agency_id is None:
+            raise ValueError(f"Manager {self.manager_user_id} has no agency_id; cannot plan.")
+
         # 1. Who can work on TARGET_DATE — which is not the same question as
         #    who is working today.
         #
@@ -239,6 +256,7 @@ class PlannerService:
 
         agents = self.db.query(Agent).filter(
             Agent.manager_user_id == self.manager_user_id,
+            Agent.agency_id == manager_agency_id,
             Agent.status != AgentStatus.SUSPENDED,
         ).all()
         _on_leave = agent_ids_on_leave(self.db, target_date, [a.id for a in agents])
@@ -288,11 +306,26 @@ class PlannerService:
             raise ValueError(f"Cannot replan: {len(active_or_done)} beat(s) on {target_date} are already IN_PROGRESS or COMPLETED.")
 
         # 3. Load Candidate Case Pool Scoped to Manager's Team
-        # Unassigned cases + cases assigned to this manager's agents
+        # Unassigned cases + cases assigned to this manager's agents.
+        #
+        # A04 (standalone plan, coordinator audit 2026-09-28) — the UNASSIGNED
+        # half of this filter had no tenant bound at all: `Case.agent_id.in_
+        # (agent_ids)` is safe by construction (agent_id/agency_id is a
+        # composite FK into agents, so an assigned case's agency already
+        # matches its agent's), but `Case.agent_id.is_(None)` matched every
+        # unplaced case in the WHOLE DATABASE — any bank, any agency. Every
+        # manager's nightly plan was drawing from every other agency's
+        # unassigned pool too, and the allocator could hand a borrower who
+        # belongs to one agency's book to another agency's agent. Closed by
+        # binding the pool to this manager's own agency_id, which is what
+        # `ix_cases_unassigned_pool (agency_id, status, ...)` was already
+        # indexed for. (manager_agency_id resolved once, at the top of this
+        # method — see the note there.)
         candidate_cases = self.db.query(Case).options(
             joinedload(Case.customer),
             joinedload(Case.loan),
         ).filter(
+            Case.agency_id == manager_agency_id,
             or_(
                 Case.agent_id.in_(agent_ids),
                 Case.agent_id.is_(None),
@@ -727,7 +760,7 @@ class PlannerService:
                 # it belongs: `beat_date` plus `ordered_case_ids` say exactly
                 # which cases are worked when, and the agent's day is built from
                 # those, never from this column.
-                assigned_on = date.today().strftime("%Y-%m-%d")
+                assigned_on = date.today()
                 for c in cases_for_agent:
                     c.agent_id = ag.id
                     c.allocation_date = assigned_on
@@ -752,10 +785,16 @@ class PlannerService:
             allocated_ids = {c.id for lst in assigned_cases_by_agent.values() for c in lst}
             # Must match what the loop above actually wrote, or the sweep looks
             # for a stamp nobody made and silently clears nothing.
-            stamp = date.today().strftime("%Y-%m-%d")
+            stamp = date.today()
             stale = [
                 c for c in self.db.query(Case)
-                .filter(Case.allocation_date == stamp).all()
+                # A04: same tenant bound as the candidate pool above — this
+                # scan used to have none, so another agency's case stamped
+                # with today's date could be picked up here and, if it
+                # happened to carry a Visit already, have its allocation_date
+                # silently rewritten by a plan run that has nothing to do
+                # with it.
+                .filter(Case.allocation_date == stamp, Case.agency_id == manager_agency_id).all()
                 if c.id not in allocated_ids
             ]
             if stale:
@@ -767,7 +806,7 @@ class PlannerService:
                 for c in stale:
                     when = last_visit.get(c.id)
                     if when is not None:
-                        c.allocation_date = when.date().strftime("%Y-%m-%d")
+                        c.allocation_date = when.date()
 
         # 8. Create and Persist AllocationRun
         run = AllocationRun(

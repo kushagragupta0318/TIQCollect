@@ -44,6 +44,7 @@ from app.models.repayment_snapshot import (
     OUTCOME_CENSORED, OUTCOME_NO_PAYMENT, OUTCOME_PARTIAL, POSITIVE_OUTCOMES,
 )
 from app.models.user import User, UserRole
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
 HORIZON = settings.REPAYMENT_OUTCOME_HORIZON_DAYS
 AS_OF = date(2026, 7, 1)
@@ -53,16 +54,15 @@ OVERDUE = 24000.0
 EMI = 8000.0
 THRESHOLD = MATERIAL_PAYMENT_RATIO * min(OVERDUE, EMI)      # 6400.0
 
-test_engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
-                            poolclass=StaticPool)
-Session = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
+test_engine = make_engine()
+Session = make_session_factory(autocommit=False, autoflush=False, bind=test_engine)
 
 
 @pytest.fixture(autouse=True)
 def setup_db():
-    Base.metadata.create_all(bind=test_engine)
+    create_schema(bind=test_engine)
     yield
-    Base.metadata.drop_all(bind=test_engine)
+    drop_schema(bind=test_engine)
 
 
 @pytest.fixture
@@ -86,25 +86,25 @@ def world(db):
                is_active=True, is_verified=True)
     db.add_all([mgr, usr]); db.flush()
     agent = Agent(id=str(uuid.uuid4()), user_id=usr.id, employee_code="E1",
-                  id_card_number="T1", agency_id="AG", manager_user_id=mgr.id,
+                  id_card_number="T1", manager_user_id=mgr.id,
                   gender="M", base_latitude=28.4, base_longitude=77.0,
                   territory="Gurugram", languages_spoken=["HINDI"],
                   specialization=AgentSpecialization.BOTH, max_cases_per_day=10,
                   status=AgentStatus.ON_DUTY, tier=AgentTier.TIER_1,
                   ranking_score=50.0, lifetime_collection_rate=0.5)
     cust = Customer(id=str(uuid.uuid4()), customer_ref="C1", full_name="B",
-                    date_of_birth="1990-01-01", gender="M", pan_masked="A1234B",
+                    date_of_birth=date(1990, 1, 1), gender="M", pan_masked="A1234B",
                     aadhaar_masked="1111", phone_primary="9900000001",
                     address_line1="x", city="Gurugram", state="HR",
                     pincode="122001", latitude=28.4, longitude=77.0,
                     language_preference="HINDI")
     loan = Loan(id=str(uuid.uuid4()), customer_id=cust.id,
                 loan_account_number="L1", loan_type=LoanType.PERSONAL,
-                bank_name="HDFC", branch_code="B1", sanctioned_amount=200000.0,
+                branch_code="B1", sanctioned_amount=200000.0,
                 disbursed_amount=200000.0, outstanding_principal=150000.0,
                 total_outstanding=170000.0, overdue_amount=OVERDUE,
                 emi_amount=EMI, interest_rate=15.0, tenure_months=36,
-                disbursement_date="2022-01-01", maturity_date="2025-01-01",
+                disbursement_date=date(2022, 1, 1), maturity_date=date(2025, 1, 1),
                 dpd=60, dpd_bucket=DPDBucket.BUCKET_2, status=LoanStatus.ACTIVE)
     case = Case(id=str(uuid.uuid4()), case_number="CS1", customer_id=cust.id,
                 loan_id=loan.id, agent_id=agent.id, status=CaseStatus.ASSIGNED,
@@ -664,11 +664,11 @@ def test_only_one_module_writes_the_outcome_label():
 def _second_loan(db, world, lan: str, case_no: str, *, with_sibling=False):
     loan = Loan(id=str(uuid.uuid4()), customer_id=world["customer"].id,
                 loan_account_number=lan, loan_type=LoanType.PERSONAL,
-                bank_name="HDFC", branch_code="B1", sanctioned_amount=200000.0,
+                branch_code="B1", sanctioned_amount=200000.0,
                 disbursed_amount=200000.0, outstanding_principal=150000.0,
                 total_outstanding=170000.0, overdue_amount=OVERDUE,
                 emi_amount=EMI, interest_rate=15.0, tenure_months=36,
-                disbursement_date="2022-01-01", maturity_date="2025-01-01",
+                disbursement_date=date(2022, 1, 1), maturity_date=date(2025, 1, 1),
                 dpd=60, dpd_bucket=DPDBucket.BUCKET_2, status=LoanStatus.ACTIVE)
     case = Case(id=str(uuid.uuid4()), case_number=case_no,
                 customer_id=world["customer"].id, loan_id=loan.id,

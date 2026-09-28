@@ -29,7 +29,9 @@ from app.models.payment import Payment, PaymentStatus
 from app.models.ptp import PTP, PTPStatus
 from app.models.user import User
 from app.models.visit import Visit
+from app.services.brand import brand_for
 from app.services.notification_service import NotificationService
+from app.services.scope import access_day, today_beat_cases
 
 # Fixed offsets (as fractions of DEMO_ANCHOR_RADIUS_M) used to scatter the demo
 # "anchor" customers a few tens of metres around the agent's live GPS. Each
@@ -62,9 +64,13 @@ class AgentService:
     # GET /agent/home-summary
     # -----------------------------------------------------------------
     def home_summary(self, agent: Agent) -> dict:
-        from app.api.v1.endpoints.agent import _effective_day, _visited_today
+        from app.api.v1.endpoints.agent import _visited_today
 
-        eff_day = _effective_day(agent.id, self.db)
+        # 2026-09-24 (A03, coordinator HIGH + audit): today's beat on the IST
+        # calendar, and only the cases on it this agent may act on
+        # (scope.today_beat_cases). It read the latest beat on or before
+        # date.today() (endpoints/agent._effective_day) and every id on it.
+        eff_day = access_day()
         from sqlalchemy import or_
         days = {eff_day, date.today()}
         visit_conditions = []
@@ -76,12 +82,8 @@ class AgentService:
             payment_conditions.append((Payment.payment_date >= start) & (Payment.payment_date <= end))
 
         # Use beat as single source of truth for cases/target — same as beat map and my-cases
-        beat = (
-            self.db.query(Beat)
-            .filter(Beat.agent_id == agent.id, Beat.beat_date == eff_day)
-            .first()
-        )
-        beat_case_ids = beat.ordered_case_ids if beat else []
+        beat, _visible = today_beat_cases(self.db, agent)
+        beat_case_ids = [c.id for c in _visible]
         if beat_case_ids:
             # Same rule as get_beat: a case settled before today is not today's
             # work and must not be counted here either, or the two endpoints
@@ -163,7 +165,7 @@ class AgentService:
         agent.status = AgentStatus.ON_DUTY
         agent.last_known_latitude = req.latitude
         agent.last_known_longitude = req.longitude
-        agent.last_location_update = datetime.now(timezone.utc).isoformat()
+        agent.last_location_update = datetime.now(timezone.utc)
         if settings.DEMO_MODE:
             self._anchor_demo_customers(req.latitude, req.longitude)
         self.db.commit()
@@ -249,14 +251,20 @@ class AgentService:
     # GET /agent/beat
     # -----------------------------------------------------------------
     def get_beat(self, agent: Agent) -> dict | None:
-        from app.api.v1.endpoints.agent import _effective_day, _visited_today, _format_case
+        from app.api.v1.endpoints.agent import _visited_today, _format_case
 
-        eff_day = _effective_day(agent.id, self.db)
-        beat = (
-            self.db.query(Beat)
-            .filter(Beat.agent_id == agent.id, Beat.beat_date == eff_day)
-            .first()
-        )
+        # 2026-09-24 (A03, coordinator HIGH + audit): THIS is the payload the
+        # Cases page renders (see the visit-priority note below), and it read
+        # the latest beat on or before date.today() and loaded every id on it
+        # with no agency or assignee check — so a case handed to a teammate
+        # mid-day, or a stale beat on a paused book, still came back with the
+        # borrower's name, phones and masked PAN/Aadhaar while its detail page
+        # answered 404. Now: today's IST beat, and only the cases on it this
+        # agent may act on (scope.today_beat_cases — the list side of
+        # agent_case_or_404). The stored beat is not rewritten.
+        eff_day = access_day()
+        beat, _visible = today_beat_cases(self.db, agent,
+                                          options=(joinedload(Case.customer), joinedload(Case.loan)))
         if not beat:
             return None
 
@@ -264,7 +272,7 @@ class AgentService:
         # Scope visited IDs to cases in this beat — prevents off-beat visits from
         # inflating the "done" count on Home while the Cases page fades fewer cards.
         _all_visited = _visited_today(agent.id, eff_day, self.db)
-        _beat_case_set = set(beat.ordered_case_ids or [])
+        _beat_case_set = {c.id for c in _visible}
         visited_today_ids = list(_all_visited & _beat_case_set)
         _day_start = datetime.combine(eff_day, datetime.min.time()).replace(tzinfo=timezone.utc)
         amount_collected_today = (
@@ -277,15 +285,7 @@ class AgentService:
         # money that was already in the bank before today started.
         total_target_today = 0.0
 
-        cases_by_id: dict[str, Case] = {}
-        if beat.ordered_case_ids:
-            cases = (
-                self.db.query(Case)
-                .options(joinedload(Case.customer), joinedload(Case.loan))
-                .filter(Case.id.in_(beat.ordered_case_ids))
-                .all()
-            )
-            cases_by_id = {c.id: c for c in cases}
+        cases_by_id: dict[str, Case] = {c.id: c for c in _visible}
 
         # 2026-09-22 — PENDING IS NOT total MINUS visited-today.
         #
@@ -328,7 +328,8 @@ class AgentService:
         # returned so a client can explain a route shorter than the plan rather
         # than silently dropping a stop.
         _dropped = set(no_visit_needed_ids)
-        route_case_ids = [cid for cid in (beat.ordered_case_ids or []) if cid not in _dropped]
+        route_case_ids = [cid for cid in (beat.ordered_case_ids or [])
+                          if cid in cases_by_id and cid not in _dropped]
         cases_pending = max(len(route_case_ids) - len(visited_today_ids), 0)
 
         # Case IDs on THIS BEAT that have an active PTP committed for today.
@@ -357,7 +358,7 @@ class AgentService:
             self.db.query(PTP.case_id)
             .join(Case, Case.id == PTP.case_id)
             .filter(
-                PTP.case_id.in_(beat.ordered_case_ids or []),
+                PTP.case_id.in_(list(cases_by_id)),
                 PTP.committed_date == eff_day,
                 PTP.status == PTPStatus.ACTIVE,
                 Case.status.notin_(list(RESOLVED_STATUSES)),
@@ -482,13 +483,16 @@ class AgentService:
                 .scalar() or 0
             )
 
-        beat = (
-            self.db.query(Beat)
-            .filter(Beat.agent_id == agent.id)
-            .order_by(Beat.beat_date.desc())
-            .first()
-        )
-        cases_today = len(beat.ordered_case_ids) if beat and beat.ordered_case_ids else 0
+        # Same set as GET /agent/beat (scope.today_beat_cases, 2026-09-24): it
+        # counted every id on the LATEST beat of any date.
+        cases_today = len(today_beat_cases(self.db, agent)[1])
+
+        # The ID card's issuer and RBI registration are the agency's own record;
+        # absent means not shown, never a placeholder.
+        from app.models.tenancy import Agency
+        from app.services.brand import tenant_of
+        tenant = tenant_of(self.db, agent=agent)
+        agency = self.db.get(Agency, agent.agency_id) if agent.agency_id else None
 
         return {
             "id": agent.id,
@@ -515,6 +519,8 @@ class AgentService:
             "last_known_longitude": agent.last_known_longitude,
             "sos_active": agent.sos_active,
             "cases_today": cases_today,
+            "agency_name": tenant.agency_name if tenant else None,
+            "agency_rbi_registration_no": agency.rbi_registration_no if agency else None,
         }
 
     # -----------------------------------------------------------------
@@ -535,7 +541,7 @@ class AgentService:
 
         now_utc = datetime.now(timezone.utc)
         agent.sos_active = True
-        agent.sos_triggered_at = now_utc.isoformat()
+        agent.sos_triggered_at = now_utc
 
         lat, lon = req.latitude, req.longitude
         quality = "NONE"
@@ -546,7 +552,7 @@ class AgentService:
             age_seconds = 0
             agent.last_known_latitude = lat
             agent.last_known_longitude = lon
-            agent.last_location_update = now_utc.isoformat()
+            agent.last_location_update = now_utc
             # Pin the SOS itself into the trail so an incident replay has a
             # marked origin, independent of the sos_active flag that
             # cancel_sos() later clears.
@@ -600,9 +606,12 @@ class AgentService:
                     mins = max(1, round((age_seconds or 0) / 60))
                     where_sms = f"LAST KNOWN location ({mins} min old): {maps_link}"
                     where_wa = f"*Last known* location ({mins} min old): {maps_link}"
+            # Staff alert: signed by the AGENCY the agent works for (A14).
+            brand = brand_for(self.db, agent=agent)
+            sign = brand.agency_name or brand.bank_name
             sms_body = (
                 f"SOS ALERT: Field agent {agent.user.full_name} ({agent.employee_code}) "
-                f"triggered an emergency SOS at {alert_time} UTC. {where_sms} - ABC Bank"
+                f"triggered an emergency SOS at {alert_time} UTC. {where_sms} - {sign}"
             )
             wa_body = (
                 f"*SOS ALERT*\n\n"
@@ -611,7 +620,8 @@ class AgentService:
                 f"{where_wa}\n\n"
                 f"Please respond immediately."
             )
-            NotificationService.send_twilio(e164 := "+" + NotificationService.normalize_phone(manager.phone), sms_body, wa_body)
+            NotificationService.send_twilio(e164 := "+" + NotificationService.normalize_phone(manager.phone), sms_body, wa_body,
+                                            db=self.db, user_id=manager.id)
             notified = True
             logger.info("sos.manager_alerted", agent_id=agent.id, quality=quality,
                         age_seconds=age_seconds, to=e164[-4:])

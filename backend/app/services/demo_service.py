@@ -22,7 +22,8 @@ means whatever the case looked like when someone said it was clean.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from decimal import Decimal
 
 from sqlalchemy import text
 
@@ -71,8 +72,16 @@ def _ensure_table(db) -> None:
 
 
 def _serialise(value):
+    # 2026-09-28 (v2): DATE and NUMERIC columns (allocation_date, the money
+    # fields) arrive as date / Decimal, which json.dumps refused — the
+    # entrypoint's baseline snapshot failed on the first v2 boot. Each is
+    # tagged, like datetimes, so the rewind restores the same type.
     if isinstance(value, datetime):
         return {"__dt__": value.isoformat()}
+    if isinstance(value, date):
+        return {"__date__": value.isoformat()}
+    if isinstance(value, Decimal):
+        return {"__dec__": str(value)}
     if hasattr(value, "value"):          # enum
         return {"__enum__": value.value}
     return value
@@ -82,6 +91,10 @@ def _deserialise(value):
     if isinstance(value, dict):
         if "__dt__" in value:
             return datetime.fromisoformat(value["__dt__"])
+        if "__date__" in value:
+            return date.fromisoformat(value["__date__"])
+        if "__dec__" in value:
+            return Decimal(value["__dec__"])
         if "__enum__" in value:
             return value["__enum__"]
     return value

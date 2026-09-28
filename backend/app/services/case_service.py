@@ -13,6 +13,14 @@
 #   §7.1 row) is deliberately NOT included in this pass — it's a large,
 #   separate AI-generation block; left inline in agent.py, tracked as its
 #   own follow-up rather than bundled in here. Full detail: /changelog.md
+# 2026-09-24 (A03, coordinator HIGH) — list_cases, ranked_cases and
+#   reoptimize_beat read the agent's LATEST beat of any date and loaded every
+#   id on it unchecked, so a case from a stale beat, since given to a
+#   teammate, was listed with the borrower's phone and address while its
+#   detail page answered 404, and reoptimize wrote onto that stale beat. All
+#   three now go through scope.today_beat_cases (today's IST beat, agent's
+#   agency only) and date their "today" by scope.access_day(), not
+#   endpoints/agent._effective_day (the container's UTC date.today()).
 # ───────────────────────────────────────────────────────────────────────────
 """
 Business logic for agent-facing case/beat operations.
@@ -35,12 +43,13 @@ from app.core import llm
 from app.core.config import settings
 from app.core.routing import optimize_route
 from app.models.agent import Agent
-from app.models.beat import Beat
 from app.models.call_log import CallLog
 from app.models.case import RESOLVED_STATUSES, Case, CaseStatus
 from app.models.customer import Customer
 from app.models.ptp import PTP, PTPStatus
 from app.models.visit import Visit
+from app.core.errors import AppException, ErrorCode
+from app.services.scope import _not_found, access_day, agent_case_or_404, today_beat_cases
 from app.services.media_service import MediaService
 
 logger = structlog.get_logger()
@@ -86,29 +95,21 @@ class CaseService:
         # import (agent.py imports CaseService at module load time; these
         # two helpers are only needed once this method actually runs, by
         # which point agent.py is already fully loaded).
-        from app.api.v1.endpoints.agent import _effective_day, _visited_today
+        from app.api.v1.endpoints.agent import _visited_today
 
-        beat = (
-            self.db.query(Beat)
-            .filter(Beat.agent_id == agent.id)
-            .order_by(Beat.beat_date.desc())
-            .first()
-        )
-        if not beat or not beat.ordered_case_ids:
+        beat, all_cases = today_beat_cases(self.db, agent, options=(joinedload(Case.customer),))
+        if not beat or not all_cases:
             raise HTTPException(status_code=404, detail="No active beat found")
+        # Ids on the beat this agent may not act on are not re-ordered, and not
+        # dropped either: they keep their place at the end, untouched.
+        visible_ids = {c.id for c in all_cases}
+        untouched = [i for i in (beat.ordered_case_ids or []) if i not in visible_ids]
 
-        eff_day = _effective_day(agent.id, self.db)
+        eff_day = access_day()
         # Cases that already have a visit recorded today should not be re-ordered —
         # the agent has physically been there regardless of their current status.
         visited_today = _visited_today(agent.id, eff_day, self.db)
         _DONE_STATUS = {CaseStatus.PAID, CaseStatus.CLOSED, CaseStatus.WRITTEN_OFF}
-
-        all_cases = (
-            self.db.query(Case)
-            .options(joinedload(Case.customer))
-            .filter(Case.id.in_(beat.ordered_case_ids))
-            .all()
-        )
 
         candidates = [c for c in all_cases if c.id not in visited_today and c.status not in _DONE_STATUS]
         done = [c for c in all_cases if c.id in visited_today or c.status in _DONE_STATUS]
@@ -124,7 +125,7 @@ class CaseService:
         pending = [c for c in candidates if c.id not in blocked_ids]
 
         if not pending:
-            new_order = [c.id for c in done] + [c.id for c in blocked]
+            new_order = [c.id for c in done] + [c.id for c in blocked] + untouched
             beat.ordered_case_ids = new_order
             self.db.commit()
             return {
@@ -146,7 +147,7 @@ class CaseService:
         )
 
         ordered_pending = [pending[i] for i in order if i < len(pending)]
-        new_order = [c.id for c in ordered_pending] + [c.id for c in done] + [c.id for c in blocked]
+        new_order = [c.id for c in ordered_pending] + [c.id for c in done] + [c.id for c in blocked] + untouched
 
         beat.ordered_case_ids = new_order
         # Update agent's last known location while we're at it
@@ -225,27 +226,15 @@ class CaseService:
     # -----------------------------------------------------------------
     def list_cases(self, agent: Agent) -> list[dict]:
         """Return today's beat cases — pending first (by visit priority), done last."""
-        from app.api.v1.endpoints.agent import _effective_day, _visited_today, _format_case
+        from app.api.v1.endpoints.agent import _visited_today, _format_case
         from app.services.visit_priority_service import score_cases, sort_key
 
-        beat = (
-            self.db.query(Beat)
-            .filter(Beat.agent_id == agent.id)
-            .order_by(Beat.beat_date.desc())
-            .first()
-        )
-        if not beat or not beat.ordered_case_ids:
+        _beat, cases = today_beat_cases(self.db, agent, options=(joinedload(Case.customer), joinedload(Case.loan)))
+        if not cases:
             return []
 
-        eff_day = _effective_day(agent.id, self.db)
+        eff_day = access_day()
         visited_today_ids = _visited_today(agent.id, eff_day, self.db)
-
-        cases = (
-            self.db.query(Case)
-            .options(joinedload(Case.customer), joinedload(Case.loan))
-            .filter(Case.id.in_(beat.ordered_case_ids))
-            .all()
-        )
 
         def _is_done(c: Case) -> bool:
             return (
@@ -289,28 +278,16 @@ class CaseService:
         """
         import json as _json
         from datetime import datetime as _dt
-        from app.api.v1.endpoints.agent import _effective_day, _visited_today, _format_case
+        from app.api.v1.endpoints.agent import _visited_today, _format_case
 
         agent_row = agent
-        beat = (
-            self.db.query(Beat)
-            .filter(Beat.agent_id == agent_row.id)
-            .order_by(Beat.beat_date.desc())
-            .first()
-        )
-        if not beat or not beat.ordered_case_ids:
+        _beat, cases = today_beat_cases(self.db, agent_row, options=(joinedload(Case.customer), joinedload(Case.loan)))
+        if not cases:
             return []
 
-        case_ids: list[str] = beat.ordered_case_ids
-        eff_day = _effective_day(agent_row.id, self.db)
+        case_ids: list[str] = [c.id for c in cases]
+        eff_day = access_day()
         visited_today_ids = _visited_today(agent_row.id, eff_day, self.db)
-
-        cases = (
-            self.db.query(Case)
-            .options(joinedload(Case.customer), joinedload(Case.loan))
-            .filter(Case.id.in_(case_ids))
-            .all()
-        )
 
         # Latest call log per case (single bulk query)
         _call_subq = (
@@ -540,7 +517,7 @@ class CaseService:
             return None
 
     def case_detail(self, agent: Agent, case_id: str) -> dict:
-        from app.api.v1.endpoints.agent import _effective_day, _format_case
+        from app.api.v1.endpoints.agent import _format_case
         from app.services.visit_priority_service import score_cases
 
         case = (
@@ -555,31 +532,22 @@ class CaseService:
             .filter(Case.id == case_id)
             .first()
         )
+        # 2026-09-24 (A03): access through the one rule, AFTER the eager load
+        # above (a refused case is the same 404 as a missing one).
         if not case:
-            raise HTTPException(status_code=404, detail="Case not found")
-
-        authorized = (case.agent_id == agent.id)
-        if not authorized:
-            beats = self.db.query(Beat).filter(Beat.agent_id == agent.id).all()
-            if any(case_id in (b.ordered_case_ids or []) for b in beats):
-                authorized = True
-            elif agent.manager_user_id and case.agent_id:
-                curr_ag = self.db.query(Agent).filter(Agent.id == case.agent_id).first()
-                if curr_ag and curr_ag.manager_user_id == agent.manager_user_id:
-                    authorized = True
-            elif case.agent_id is None:
-                authorized = True
-
-        if not authorized:
-            raise HTTPException(status_code=403, detail="Case not found or not assigned to you")
+            raise AppException(404, ErrorCode.NOT_FOUND, "Not found")
+        agent_case_or_404(self.db, agent, case_id)
 
         base = _format_case(case)
 
-        # Keep the detail badge on the same live score and effective day as the
+        # Keep the detail badge on the same live score and the same day as the
         # agent's case list. Case.priority remains only for backwards-compatible
         # storage; it is no longer decision-support data for the UI.
+        # 2026-09-28 (audit LOW): dated by scope.access_day() (IST), as the list
+        # is since A03 — it read endpoints/agent._effective_day, so list and
+        # detail could score one case against two different days.
         base["visit_priority"] = score_cases(
-            self.db, [case], today=_effective_day(agent.id, self.db)
+            self.db, [case], today=access_day()
         ).get(case.id)
 
         # Repayment likelihood, computed live for this one loan rather than read
@@ -663,9 +631,13 @@ class CaseService:
     # POST /agent/cases/{case_id}/handover
     # -----------------------------------------------------------------
     def handover_case(self, agent: Agent, case_id: str, req) -> dict:
-        case = self.db.query(Case).filter(Case.id == case_id, Case.agent_id == agent.id).first()
-        if not case:
-            raise HTTPException(status_code=404, detail="Case not found or not assigned to you")
+        # Only the ASSIGNEE hands a case over (stricter than scope's read rule:
+        # a today's-beat grant must not let a caller return a teammate's case
+        # to the pool). Refusal is the uniform 404 (was a bespoke body that
+        # said "not assigned to you" — i.e. "it exists"), 2026-09-24.
+        case = agent_case_or_404(self.db, agent, case_id)
+        if case.agent_id != agent.id:
+            raise _not_found()
         case.handover_notes = req.notes
         if req.return_to_pool:
             case.status = CaseStatus.UNASSIGNED
@@ -677,15 +649,20 @@ class CaseService:
     # PATCH /agent/customers/{customer_id}/flag
     # -----------------------------------------------------------------
     def flag_customer(self, agent: Agent, customer_id: str, req) -> dict:
-        # Verify agent has at least one case for this customer
-        case_exists = self.db.query(Case).filter(
-            Case.customer_id == customer_id, Case.agent_id == agent.id
-        ).first()
-        if not case_exists:
-            raise HTTPException(status_code=403, detail="You have no active case for this customer")
+        # The agent may flag a customer only through a case scope grants them:
+        # assigned, or on today's beat, inside their agency. 2026-09-24: this
+        # was a strict assignee copy of the rule answering 403 "no active case"
+        # for a real customer and 404 for a missing one — a probe for which
+        # customer ids exist. Now one uniform 404 for every refusal.
+        _beat, today = today_beat_cases(self.db, agent)
+        today_ids = {c.id for c in today}
+        grants = (self.db.query(Case.id, Case.agent_id)
+                  .filter(Case.customer_id == customer_id, Case.agency_id == agent.agency_id).all())
+        if not any(aid == agent.id or cid in today_ids for cid, aid in grants):
+            raise _not_found()
         customer = self.db.query(Customer).filter(Customer.id == customer_id).first()
         if not customer:
-            raise HTTPException(status_code=404, detail="Customer not found")
+            raise _not_found()
         if req.is_hostile is not None:
             customer.is_hostile = req.is_hostile
         if req.do_not_contact is not None:

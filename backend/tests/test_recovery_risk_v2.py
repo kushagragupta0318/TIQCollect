@@ -19,6 +19,7 @@ Three groups, each answering a different question:
 Nothing here touches champion.txt, and one test fails if anything did.
 """
 from __future__ import annotations
+from datetime import date
 
 import json
 from pathlib import Path
@@ -33,6 +34,7 @@ from app.ml.pipeline.config import (
     CANDIDATE_SPECS, LOGGED_FEATURES, RECOVERY_RISK, RECOVERY_RISK_V2,
 )
 from app.ml.pipeline.engine import DecisionEngine
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
 V2 = "2.0.0"
 
@@ -263,10 +265,9 @@ def test_the_adapter_supplies_every_feature_v2_selected(meta):
     from app.models.visit import DefaultReason, Visit, VisitOutcome
     from app.services.ml_scoring_service import MLScoringService
 
-    engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
-                           poolclass=StaticPool)
-    Base.metadata.create_all(bind=engine)
-    db = sessionmaker(bind=engine)()
+    engine = make_engine()
+    create_schema(bind=engine)
+    db = make_session_factory(bind=engine)()
     now = datetime.now(timezone.utc)
 
     user = User(id=str(uuid.uuid4()), email="a@x.test", phone="9000000001",
@@ -274,25 +275,25 @@ def test_the_adapter_supplies_every_feature_v2_selected(meta):
                 is_active=True, is_verified=True)
     db.add(user); db.flush()
     agent = Agent(id=str(uuid.uuid4()), user_id=user.id, employee_code="E1",
-                  id_card_number="IC1", agency_id="AG", manager_user_id=user.id,
+                  id_card_number="IC1", manager_user_id=user.id,
                   gender="M", base_latitude=28.4, base_longitude=77.0,
                   territory="Gurugram", languages_spoken=["HINDI"],
                   specialization=AgentSpecialization.BOTH, max_cases_per_day=10,
                   status=AgentStatus.ON_DUTY, tier=AgentTier.TIER_1,
                   ranking_score=50.0, lifetime_collection_rate=0.5)
     cust = Customer(id=str(uuid.uuid4()), customer_ref="C1", full_name="B",
-                    date_of_birth="1985-05-05", gender="M", pan_masked="A",
+                    date_of_birth=date(1985, 5, 5), gender="M", pan_masked="A",
                     aadhaar_masked="1", phone_primary="9900000001",
                     address_line1="x", city="Gurugram", state="HR", pincode="122001",
                     latitude=28.4, longitude=77.0, customer_segment="SALARIED",
                     cibil_score=640, is_hostile=True, fraud_flag=False)
     loan = Loan(id=str(uuid.uuid4()), customer_id=cust.id, loan_account_number="L1",
-                loan_type=LoanType.PERSONAL, bank_name="HDFC", branch_code="BR01",
+                loan_type=LoanType.PERSONAL, branch_code="BR01",
                 sanctioned_amount=250000.0, disbursed_amount=250000.0,
                 outstanding_principal=180000.0, total_outstanding=205000.0,
                 overdue_amount=24000.0, penal_charges=1200.0, emi_amount=8000.0,
-                interest_rate=16.5, tenure_months=36, disbursement_date="2024-01-15",
-                maturity_date="2027-01-15", last_payment_date="2026-08-01",
+                interest_rate=16.5, tenure_months=36, disbursement_date=date(2024, 1, 15),
+                maturity_date=date(2027, 1, 15), last_payment_date=date(2026, 8, 1),
                 dpd=62, dpd_bucket=DPDBucket.BUCKET_3, status=LoanStatus.ACTIVE)
     case = Case(id=str(uuid.uuid4()), case_number="CS1", customer_id=cust.id,
                 loan_id=loan.id, agent_id=agent.id, status=CaseStatus.ASSIGNED,

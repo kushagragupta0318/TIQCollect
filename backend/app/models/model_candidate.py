@@ -31,7 +31,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base, TimestampMixin, UUIDPrimaryKey
+from sqlalchemy import CheckConstraint
+from app.models.base import PUBLIC, Base, JsonDoc, TimestampMixin, UUIDPrimaryKey, UUIDType, uuid_fk
 
 
 class CandidateState(str, enum.Enum):
@@ -90,7 +91,7 @@ ACTIVE_STATES = {
 class ModelCandidate(Base, UUIDPrimaryKey, TimestampMixin):
     __tablename__ = "model_candidates"
 
-    model_name: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    model_name: Mapped[str] = mapped_column(String(50), nullable=False)
 
     #: The version string the artifact is written under. Never "champion", and
     #: never equal to a version already on disk — lifecycle mints it from the
@@ -106,7 +107,7 @@ class ModelCandidate(Base, UUIDPrimaryKey, TimestampMixin):
     incumbent_version: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     state: Mapped[CandidateState] = mapped_column(
-        SAEnum(CandidateState, name="model_candidate_state_enum"),
+        SAEnum(CandidateState, name="model_candidate_state_enum", schema=PUBLIC, metadata=Base.metadata),
         nullable=False, index=True, default=CandidateState.TRAINING)
 
     # ── what caused it ──────────────────────────────────────────────────────
@@ -116,39 +117,38 @@ class ModelCandidate(Base, UUIDPrimaryKey, TimestampMixin):
     #: a duplicate trigger into a no-op instead of a second training job.
     monitoring_run_id: Mapped[str] = mapped_column(String(80), nullable=False,
                                                    index=True)
-    trigger_reasons: Mapped[list | None] = mapped_column(JSON, nullable=True)
-    monitoring_report: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    trigger_reasons: Mapped[list | None] = mapped_column(JsonDoc, nullable=True)
+    monitoring_report: Mapped[dict | None] = mapped_column(JsonDoc, nullable=True)
 
     # ── the data it was trained on ──────────────────────────────────────────
     #: Row count, date bounds, class balance, outcome definition version, the
     #: horizon, and the prediction ids' hash — everything needed to rebuild the
     #: exact cohort or to prove two runs used different data.
-    training_cohort: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    training_cohort: Mapped[dict | None] = mapped_column(JsonDoc, nullable=True)
     cohort_rows: Mapped[int | None] = mapped_column(Integer, nullable=True)
     outcome_definition_version: Mapped[str | None] = mapped_column(String(50),
                                                                    nullable=True)
 
     # ── what was produced and what was decided ──────────────────────────────
-    feature_set: Mapped[list | None] = mapped_column(JSON, nullable=True)
-    code_versions: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    training_metrics: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    feature_set: Mapped[list | None] = mapped_column(JsonDoc, nullable=True)
+    code_versions: Mapped[dict | None] = mapped_column(JsonDoc, nullable=True)
+    training_metrics: Mapped[dict | None] = mapped_column(JsonDoc, nullable=True)
 
     validation_run_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
     #: Every gate row as the training pipeline produced it: gate, observed,
     #: threshold, result. Stored whole — a summary would lose the one line
     #: somebody will want.
-    gate_results: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    gate_results: Mapped[list | None] = mapped_column(JsonDoc, nullable=True)
     gates_passed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
     comparison_run_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
-    comparison_results: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    comparison_results: Mapped[dict | None] = mapped_column(JsonDoc, nullable=True)
     comparison_passed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     #: Signed: challenger minus incumbent, on the shared out-of-time frame.
     gini_uplift: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     # ── the human decision ──────────────────────────────────────────────────
-    decided_by_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"),
-                                                      nullable=True)
+    decided_by_id: Mapped[str | None] = uuid_fk("tenancy.users.id", nullable=True)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True),
                                                         nullable=True)
     decision_note: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -157,6 +157,8 @@ class ModelCandidate(Base, UUIDPrimaryKey, TimestampMixin):
                                                          nullable=True)
     #: What the pointer said immediately before promotion. This is the rollback
     #: target, recorded at the moment it stops being true.
+    # 2026-09-24 (B09): who moved the pointer — was recorded only in the audit log.
+    promoted_by_id: Mapped[str | None] = uuid_fk("tenancy.users.id", nullable=True)
     promoted_from_version: Mapped[str | None] = mapped_column(String(50),
                                                               nullable=True)
 
@@ -164,7 +166,7 @@ class ModelCandidate(Base, UUIDPrimaryKey, TimestampMixin):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     #: [{at, from, to, reason}] — appended on every transition, never rewritten.
-    state_history: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    state_history: Mapped[list | None] = mapped_column(JsonDoc, nullable=True)
 
     __table_args__ = (
         # ONE CANDIDATE PER MONITORING EVENT PER MODEL. This is the idempotency
@@ -173,6 +175,12 @@ class ModelCandidate(Base, UUIDPrimaryKey, TimestampMixin):
         UniqueConstraint("model_name", "monitoring_run_id",
                          name="uq_candidate_monitoring_event"),
         Index("ix_candidate_model_state", "model_name", "state"),
+        # Four-eyes, mirrored in the database (lifecycle.promote is the rule;
+        # this makes a hand-edited row unable to break it). A NULL approver does
+        # not trip it — absent evidence is not evidence of self-approval.
+        CheckConstraint("promoted_by_id IS NULL OR decided_by_id IS NULL OR promoted_by_id <> decided_by_id",
+                        name="four_eyes"),
+        {"schema": "ml"},
     )
 
     # ── transitions ─────────────────────────────────────────────────────────

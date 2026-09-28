@@ -41,10 +41,10 @@ from app.schemas.agent import CollectPaymentRequest, RecordVisitRequest, SetPTPR
 from app.services import notification_service as ns
 from app.services import payment_service as ps
 from app.services import visit_service as vs
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
-engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
-                       poolclass=StaticPool)
-TestingSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+engine = make_engine()
+TestingSession = make_session_factory(autocommit=False, autoflush=False, bind=engine)
 TODAY = date.today()
 
 
@@ -60,7 +60,7 @@ def _user(db, email, role, name, phone):
 
 def _agent(db, user, code, mgr):
     a = Agent(id=_uid(), user_id=user.id, employee_code=code, id_card_number=code + "-ID",
-              agency_id="AG1", manager_user_id=mgr.id, gender="M",
+              manager_user_id=mgr.id, gender="M",
               base_latitude=28.63, base_longitude=77.21, territory="Delhi",
               languages_spoken=["HINDI"], status=AgentStatus.ON_DUTY, tier=AgentTier.TIER_1,
               specialization=AgentSpecialization.BOTH, ranking_score=80.0, max_cases_per_day=5)
@@ -69,28 +69,28 @@ def _agent(db, user, code, mgr):
 
 def _case(db, agent, ref, phone="9812345678"):
     c = Customer(id=_uid(), customer_ref=ref, full_name=f"Borrower {ref}",
-                 date_of_birth="1990-01-01", gender="M", pan_masked="ABCDE1234F",
+                 date_of_birth=date(1990, 1, 1), gender="M", pan_masked="ABCDE1234F",
                  aadhaar_masked="123456789012", phone_primary=phone,
                  address_line1="Delhi", city="Delhi", state="Delhi", pincode="110001",
                  latitude=28.6315, longitude=77.2167, language_preference="HINDI")
     db.add(c); db.flush()
     loan = Loan(id=_uid(), customer_id=c.id, loan_account_number="L" + ref,
-                loan_type=LoanType.PERSONAL, bank_name="HDFC", branch_code="DL01",
+                loan_type=LoanType.PERSONAL, branch_code="DL01",
                 sanctioned_amount=100000.0, disbursed_amount=100000.0,
                 outstanding_principal=50000.0, total_outstanding=50000.0,
                 overdue_amount=10000.0, emi_amount=5000.0, interest_rate=12.0,
-                disbursement_date="2022-01-01", maturity_date="2027-01-01",
+                disbursement_date=date(2022, 1, 1), maturity_date=date(2027, 1, 1),
                 dpd=45, dpd_bucket=DPDBucket.BUCKET_2, status=LoanStatus.ACTIVE)
     db.add(loan); db.flush()
     k = Case(id=_uid(), case_number="C-" + ref, customer_id=c.id, loan_id=loan.id,
              agent_id=agent.id, status=CaseStatus.ASSIGNED, target_amount=20000.0,
-             collected_amount=0.0, allocation_date=TODAY.isoformat())
+             collected_amount=0.0, allocation_date=TODAY)
     db.add(k); return k
 
 
 @pytest.fixture(scope="module")
 def world():
-    Base.metadata.create_all(engine)
+    create_schema(engine)
     db = TestingSession()
     mgr = _user(db, "m@t.io", UserRole.AGENCY_MANAGER, "Manager", "9000000001")
     ua = _user(db, "a@t.io", UserRole.FIELD_AGENT, "Agent A", "9000000002")
@@ -102,7 +102,7 @@ def world():
     db.commit()
     yield {"db": db, "mgr": mgr, "ua": ua, "ag": ag, **cases}
     db.close()
-    Base.metadata.drop_all(engine)
+    drop_schema(engine)
 
 
 @pytest.fixture(scope="module")
@@ -245,8 +245,20 @@ def _configure_twilio(monkeypatch):
     _FakeTwilio.calls = []; _FakeTwilio.fail = False
 
 
+def _real_tenant(monkeypatch):
+    """2026-09-24 (audit gate 1): senders resolve the tenant from the rows and
+    suppress a demo one — and the test default bank IS a demo tenant. These
+    tests are about delivery reporting, so they stand in a real (non-demo)
+    tenant at the one resolver every send goes through."""
+    from app.services import brand
+    real = brand.Tenant(bank_id="bank", agency_id=None, bank_name="Narmada Peoples Bank", agency_name=None,
+                        upi_payee_name="NARMADA PEOPLES BANK", upi_vpa=None, sms_sender_id=None, is_demo=False)
+    monkeypatch.setattr(brand, "tenant_of", lambda db, **subject: real)
+
+
 def test_a_submitted_payment_leaves_one_row_and_reports_the_receipt_delivered(world, monkeypatch):
     _configure_twilio(monkeypatch)
+    _real_tenant(monkeypatch)
     db = TestingSession()
     agent = db.get(Agent, world["ag"].id); case = world["PAY"]
     out = ps.PaymentService(db).collect_payment(agent, case.id, CollectPaymentRequest(
@@ -286,18 +298,20 @@ def test_receipt_sent_is_false_when_there_is_nobody_to_send_to(world, monkeypatc
 
 
 def test_send_functions_report_truthfully(monkeypatch):
+    _real_tenant(monkeypatch)
+    subject = {"db": object(), "case_id": "case"}          # resolved by the stand-in above
     # Unconfigured: nothing sent, and it says so.
     monkeypatch.setattr(settings, "TWILIO_ACCOUNT_SID", "", raising=False)
-    assert ns.NotificationService.send_twilio("+911234567890", "a", "b") is False
-    assert ns.NotificationService.send_sms("+911234567890", "a") is False
+    assert ns.NotificationService.send_twilio("+911234567890", "a", "b", **subject) is False
+    assert ns.NotificationService.send_sms("+911234567890", "a", **subject) is False
     # Configured and working.
     _configure_twilio(monkeypatch)
-    assert ns.NotificationService.send_twilio("+911234567890", "a", "b") is True
-    assert ns.NotificationService.send_sms("+911234567890", "a") is True
+    assert ns.NotificationService.send_twilio("+911234567890", "a", "b", **subject) is True
+    assert ns.NotificationService.send_sms("+911234567890", "a", **subject) is True
     # Configured and broken: False, never an exception.
     _FakeTwilio.fail = True
-    assert ns.NotificationService.send_twilio("+911234567890", "a", "b") is False
-    assert ns.NotificationService.send_sms("+911234567890", "a") is False
+    assert ns.NotificationService.send_twilio("+911234567890", "a", "b", **subject) is False
+    assert ns.NotificationService.send_sms("+911234567890", "a", **subject) is False
 
 
 # ═══════════════════════════════════════════════════════════════════════════

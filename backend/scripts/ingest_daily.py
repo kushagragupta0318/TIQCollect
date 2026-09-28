@@ -1,6 +1,23 @@
 """
 TIQCollect Daily Data Ingestion Script
 ---------------------------------------
+2026-09-24 (standalone v2, coordinator audit items 2 and 12) — ONE BANK'S FILE.
+  A feed now belongs to a bank (`--bank CODE`) and lands in a
+  lending.bank_feed_batches row. New loans take that bank's id, and their
+  branch must be one of the bank's branches: loans carry a composite FK
+  (bank_id, branch_code) -> branches, so an unknown branch used to be an
+  IntegrityError that rolled the row back with a log line; it is now
+  QUARANTINED (lending.bank_feed_rows) with the reason, for a person to fix
+  and release. A new case is opened only on a PLACEMENT with the agency the
+  file (`--agency CODE`) or the row (`agency_code`) names, through
+  services/placement_service.py — a loan that agency cannot take is
+  quarantined, never turned into a case nobody owns. The free-text
+  `bank_name` column is ignored: the bank is the file's, not the row's.
+  Dates are parsed into DATE columns instead of being stored as strings, and
+  the `Base.metadata.create_all` at the top of every run is gone — the schema
+  is Alembic's, and create_all against a schema-qualified model on a live
+  database is the second schema authority known issue 5 warns about.
+
 Run at ~7:30 PM every evening BEFORE the 8 PM Celery allocation task fires.
 
 Real-world bank actions handled:
@@ -14,30 +31,34 @@ Real-world bank actions handled:
 DPD=0 with no bank_action also auto-closes as PAID_DIRECT.
 
 Usage:
-  python -m scripts.ingest_daily                             # today's file from ./data/incoming/
-  python -m scripts.ingest_daily --file path/to/cases.csv   # explicit path
-  python -m scripts.ingest_daily --dry-run                  # validate + preview, no DB writes
-  python -m scripts.ingest_daily --generate-sample          # write sample CSV and exit
+  python -m scripts.ingest_daily --bank MTB --agency AGENCY-TIQ-001              # today's file
+  python -m scripts.ingest_daily --bank MTB --agency AGENCY-TIQ-001 --file f.csv # explicit path
+  python -m scripts.ingest_daily --bank MTB --dry-run                             # preview only
+  python -m scripts.ingest_daily --generate-sample                                # sample CSV
 """
 
 import sys
 import os
 import csv
+import hashlib
 import uuid
 import argparse
 import logging
+from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.core.database import SessionLocal, engine
+from app.core.database import SessionLocal
 import app.models  # noqa: register all SQLAlchemy models
 
-from app.models.base import Base
 from app.models.customer import Customer, RiskCategory
 from app.models.loan import Loan, LoanType, DPDBucket, LoanStatus, dpd_bucket_for
-from app.models.case import Case, CaseStatus, CasePriority, EscalationReason, priority_for
+from app.models.case import Case, CaseStatus, CasePriority, ClosureReason, EscalationReason, priority_for
+from app.models.lending import BankFeedBatch
+from app.models.tenancy import Agency, Bank, Branch
+from app.services.placement_service import UNKNOWN_BRANCH, PlacementRefused, PlacementService
 from app.models.repayment_snapshot import (
     OUTCOME_DECEASED, OUTCOME_RECALLED, OUTCOME_REPAID, OUTCOME_SETTLED,
     OUTCOME_SOURCE_BANK_ACTION, OUTCOME_WRITTEN_OFF, RepaymentSnapshot,
@@ -132,6 +153,51 @@ def _parse_int(val: str, default: int = 0) -> int:
         return default
 
 
+def _parse_date(val) -> date | None:
+    """A feed date (YYYY-MM-DD, time part ignored) or None. The columns are
+    DATEs now; the v1 script stored the string as given."""
+    s = (val or "").strip()[:10]
+    if not s:
+        return None
+    try:
+        return date.fromisoformat(s)
+    except ValueError:
+        return None
+
+
+@dataclass
+class FeedContext:
+    """Whose file this is. Built once per run by `feed_context`."""
+    bank_id: str
+    batch: BankFeedBatch | None
+    agency_id: str | None = None                 # the file's default placement agency
+    agencies_by_code: dict[str, str] = field(default_factory=dict)
+    branch_codes: set[str] = field(default_factory=set)
+    placements: PlacementService | None = None
+    quarantined: int = 0
+
+
+def feed_context(db, *, bank_code: str, agency_code: str | None, batch: BankFeedBatch | None) -> FeedContext:
+    bank = db.query(Bank).filter(Bank.code == bank_code).first()
+    if bank is None:
+        raise SystemExit(f"Unknown bank code {bank_code!r}: a feed must name the bank it came from.")
+    agencies = {code: aid for code, aid in db.query(Agency.code, Agency.id).filter(Agency.bank_id == bank.id)}
+    if agency_code and agency_code not in agencies:
+        raise SystemExit(f"Agency {agency_code!r} does not work for bank {bank_code!r}.")
+    branches = {c for (c,) in db.query(Branch.branch_code).filter(Branch.bank_id == bank.id)}
+    return FeedContext(bank_id=bank.id, batch=batch, agency_id=agencies.get(agency_code) if agency_code else None,
+                       agencies_by_code=agencies, branch_codes=branches, placements=PlacementService(db))
+
+
+def _quarantine(ctx: FeedContext, db, row: dict, row_no: int, reason: str, detail: str,
+                loan_id: str | None = None) -> None:
+    ctx.quarantined += 1
+    if ctx.batch is not None and ctx.placements is not None:
+        ctx.placements.quarantine(ctx.batch, row_no=row_no, raw=row, reason=reason, detail=detail,
+                                  loan_id=loan_id)
+    log.warning("  QUARANTINED row %d (%s): %s", row_no, reason, detail)
+
+
 def _loan_type(val: str) -> LoanType:
     mapping = {
         "HOME": LoanType.HOME,
@@ -154,6 +220,7 @@ def _close_case_paid(case_obj: Case, settlement_amount: float = 0.0) -> str:
         return f"already_{case_obj.status.value.lower()}"
     case_obj.status = CaseStatus.PAID
     case_obj.resolved_at = datetime.now(timezone.utc)
+    case_obj.closure_reason = (ClosureReason.SETTLED if settlement_amount > 0 else ClosureReason.PAID_DIRECT).value
     if settlement_amount > 0:
         case_obj.collected_amount = settlement_amount
         case_obj.resolution_notes = f"Bank settlement: ₹{settlement_amount:,.0f} accepted"
@@ -252,6 +319,7 @@ def _close_case_recall(case_obj: Case, recall_reason: str, bank_remark: str) -> 
         return f"already_{case_obj.status.value.lower()}"
     case_obj.status = CaseStatus.CLOSED
     case_obj.resolved_at = datetime.now(timezone.utc)
+    case_obj.closure_reason = ClosureReason.RECALLED.value
     case_obj.resolution_notes = f"RECALLED by bank. Reason: {recall_reason}. {bank_remark}".strip()
     log.info("  AUTO-CLOSE RECALL → %s  (%s)", case_obj.case_number, recall_reason)
     return "auto_closed_recall"
@@ -263,6 +331,7 @@ def _close_case_written_off(case_obj: Case, bank_remark: str) -> str:
         return f"already_{case_obj.status.value.lower()}"
     case_obj.status = CaseStatus.WRITTEN_OFF
     case_obj.resolved_at = datetime.now(timezone.utc)
+    case_obj.closure_reason = ClosureReason.WRITTEN_OFF.value
     case_obj.resolution_notes = f"Written off by bank. {bank_remark}".strip()
     log.info("  AUTO-CLOSE WRITTEN_OFF → %s", case_obj.case_number)
     return "auto_closed_written_off"
@@ -274,6 +343,7 @@ def _close_case_deceased(case_obj: Case) -> str:
         return f"already_{case_obj.status.value.lower()}"
     case_obj.status = CaseStatus.CLOSED
     case_obj.resolved_at = datetime.now(timezone.utc)
+    case_obj.closure_reason = ClosureReason.DECEASED.value
     case_obj.resolution_notes = "Closed: customer deceased"
     log.info("  AUTO-CLOSE DECEASED  → %s", case_obj.case_number)
     return "auto_closed_deceased"
@@ -281,7 +351,12 @@ def _close_case_deceased(case_obj: Case) -> str:
 
 # ─── Row processor ────────────────────────────────────────────────────────────
 
-def process_row(row: dict, db, dry_run: bool, today: date) -> dict:
+def process_row(row: dict, db, dry_run: bool, today: date, ctx: FeedContext | None = None,
+                row_no: int = 0) -> dict:
+    """One feed row. `ctx` names the bank whose file this is; without it the
+    row can only UPDATE accounts that already exist (lookups are then global
+    and nothing new is created) — the shape tests use to drive one row
+    against an existing fixture."""
     result = {
         "action_customer": None,
         "action_loan": None,
@@ -295,6 +370,7 @@ def process_row(row: dict, db, dry_run: bool, today: date) -> dict:
         "loan_id": None,
         "bank_action": None,
         "state_changed": False,
+        "quarantined": None,
     }
 
     customer_ref  = row.get("customer_ref", "").strip()
@@ -333,8 +409,27 @@ def process_row(row: dict, db, dry_run: bool, today: date) -> dict:
     # DECEASED forces do_not_contact regardless of bank_action field
     is_deceased = bank_action == "DECEASED"
 
+    def _scoped(q, model):
+        return q.filter(model.bank_id == ctx.bank_id) if ctx is not None else q
+
+    # ── Gate: a NEW loan must name one of this bank's branches ───────────────
+    # Checked before anything is written, so a quarantined row leaves no
+    # half-created borrower behind.
+    loan = _scoped(db.query(Loan), Loan).filter(Loan.loan_account_number == loan_account).first()
+    branch_code = (row.get("branch_code") or "").strip()
+    if loan is None:
+        if ctx is None:
+            result["skipped_reason"] = "new account, but no feed context says whose bank it belongs to"
+            return result
+        if branch_code not in ctx.branch_codes:
+            _quarantine(ctx, db, row, row_no, UNKNOWN_BRANCH,
+                        f"branch {branch_code or '(blank)'} is not a branch of this bank")
+            result["quarantined"] = UNKNOWN_BRANCH
+            result["skipped_reason"] = f"quarantined: {UNKNOWN_BRANCH}"
+            return result
+
     # ── Customer UPSERT ───────────────────────────────────────────────────────
-    customer = db.query(Customer).filter(Customer.customer_ref == customer_ref).first()
+    customer = _scoped(db.query(Customer), Customer).filter(Customer.customer_ref == customer_ref).first()
     if customer:
         # risk_score / risk_category are deliberately NOT set here. They are
         # derived values and belong to the repayment scorer, which runs against
@@ -361,11 +456,15 @@ def process_row(row: dict, db, dry_run: bool, today: date) -> dict:
             result["skipped_reason"] = f"missing lat/lon for new customer {customer_ref}"
             return result
 
+        if ctx is None:
+            result["skipped_reason"] = "new customer, but no feed context says whose bank it belongs to"
+            return result
         customer = Customer(
             id=_uid(),
+            bank_id=ctx.bank_id,
             customer_ref=customer_ref,
             full_name=row.get("customer_name", "").strip(),
-            date_of_birth=row.get("dob", "1980-01-01").strip(),
+            date_of_birth=_parse_date(row.get("dob")) or date(1980, 1, 1),
             gender=row.get("gender", "MALE").strip().upper(),
             pan_masked=row.get("pan_masked", "XXXXX0000X").strip(),
             aadhaar_masked=row.get("aadhaar_masked", "XXXXXXXX0000").strip(),
@@ -398,7 +497,6 @@ def process_row(row: dict, db, dry_run: bool, today: date) -> dict:
 
     # ── Loan UPSERT ───────────────────────────────────────────────────────────
     result["bank_action"] = bank_action
-    loan = db.query(Loan).filter(Loan.loan_account_number == loan_account).first()
     # What the account owed BEFORE this file overwrote it. For a PAID_DIRECT row
     # that is the arrears the borrower cleared, and it is the only figure we have
     # once `loan.overdue_amount` is set to 0 twenty lines below.
@@ -413,12 +511,13 @@ def process_row(row: dict, db, dry_run: bool, today: date) -> dict:
             row.get("outstanding_principal", "0")) or loan.outstanding_principal
         loan.penal_charges    = _parse_float(
             row.get("penal_charges", "0")) or loan.penal_charges
-        last_pay = row.get("last_payment_date", "").strip()
+        last_pay = _parse_date(row.get("last_payment_date"))
         if last_pay:
             loan.last_payment_date = last_pay
-        next_due = row.get("next_due_date", "").strip()
+        next_due = _parse_date(row.get("next_due_date"))
         if next_due:
             loan.next_due_date = next_due
+        loan.dpd_as_of = today
 
         # A DPD move or a terminal bank action is the most valuable moment to
         # have a snapshot for — it is the score as it stood immediately before
@@ -454,22 +553,23 @@ def process_row(row: dict, db, dry_run: bool, today: date) -> dict:
 
         loan = Loan(
             id=_uid(),
+            bank_id=ctx.bank_id,
             loan_account_number=loan_account,
             customer_id=customer.id,
             loan_type=_loan_type(row.get("loan_type", "PERSONAL")),
-            bank_name=row.get("bank_name", "Unknown Bank").strip(),
-            branch_code=row.get("branch_code", "BR0000").strip(),
+            branch_code=branch_code,
             sanctioned_amount=sanctioned,
             disbursed_amount=disbursed,
             outstanding_principal=_parse_float(row.get("outstanding_principal", "0")) or total_outstanding,
             total_outstanding=total_outstanding,
             overdue_amount=overdue_amount,
             emi_amount=_parse_float(row.get("emi_amount", "0")),
-            disbursement_date=row.get("disbursement_date", today.isoformat()).strip(),
-            maturity_date=row.get("maturity_date", today.isoformat()).strip(),
-            last_payment_date=row.get("last_payment_date", "").strip() or None,
-            next_due_date=row.get("next_due_date", "").strip() or None,
+            disbursement_date=_parse_date(row.get("disbursement_date")) or today,
+            maturity_date=_parse_date(row.get("maturity_date")) or today,
+            last_payment_date=_parse_date(row.get("last_payment_date")),
+            next_due_date=_parse_date(row.get("next_due_date")),
             dpd=dpd,
+            dpd_as_of=today,
             dpd_bucket=_dpd_to_bucket(dpd),
             status=loan_status,
             interest_rate=_parse_float(row.get("interest_rate", "12")),
@@ -487,7 +587,7 @@ def process_row(row: dict, db, dry_run: bool, today: date) -> dict:
     result["loan_id"] = loan.id
 
     # ── Case logic by bank_action ─────────────────────────────────────────────
-    existing_case = db.query(Case).filter(Case.case_number == case_number).first()
+    existing_case = _scoped(db.query(Case), Case).filter(Case.case_number == case_number).first()
 
     if bank_action == "PAID_DIRECT":
         if existing_case:
@@ -546,26 +646,31 @@ def process_row(row: dict, db, dry_run: bool, today: date) -> dict:
             # the loan has not been scored yet, so it could only have used the
             # stale value. Priority here is PROVISIONAL — the rescore pass at the
             # end of run_ingestion() is what settles it.
-            new_case = Case(
-                id=_uid(),
-                case_number=case_number,
-                customer_id=customer.id,
-                loan_id=loan.id,
-                agent_id=None,
-                status=CaseStatus.UNASSIGNED,
-                priority=priority_for(dpd),
-                target_amount=overdue_amount if overdue_amount > 0 else total_outstanding,
-                collected_amount=0.0,
-                allocation_date=None,
-                allocation_score=0.0,
-                is_ml_allocated=False,
-                visit_count=0,
-                max_visits_allowed=3,
-                is_escalated=False,
-            )
-            if not dry_run:
-                db.add(new_case)
-            result["action_case"] = "inserted"
+            #
+            # 2026-09-24 (v2): opened ONLY on a placement, through the one
+            # service that owns the rule. The agency is the row's
+            # `agency_code` if it names one, else the file's `--agency`.
+            if ctx is None:
+                result["action_case"] = "no_case_without_feed_context"
+            elif dry_run:
+                result["action_case"] = "would_place"
+            else:
+                row_agency = (row.get("agency_code") or "").strip()
+                agency_id = ctx.agencies_by_code.get(row_agency) if row_agency else ctx.agency_id
+                try:
+                    placement = ctx.placements.place_new_loan(loan, agency_id=agency_id, on=today, source="FEED")
+                except PlacementRefused as refused:
+                    _quarantine(ctx, db, row, row_no, refused.reason, str(refused), loan_id=loan.id)
+                    result["quarantined"] = refused.reason
+                    result["action_case"] = "quarantined"
+                else:
+                    ctx.placements.open_case(
+                        placement, loan, case_number=case_number,
+                        target_amount=overdue_amount if overdue_amount > 0 else total_outstanding,
+                        id=_uid(), priority=priority_for(dpd), allocation_date=None, allocation_score=0.0,
+                        is_ml_allocated=False, visit_count=0, max_visits_allowed=3, is_escalated=False,
+                    )
+                    result["action_case"] = "inserted"
 
     return result
 
@@ -625,7 +730,8 @@ def _label_snapshots(db, verdicts: dict, today: date) -> dict:
     return labelled
 
 
-def run_ingestion(file_path: Path, dry_run: bool = False) -> None:
+def run_ingestion(file_path: Path, dry_run: bool = False, *, bank_code: str,
+                  agency_code: str | None = None) -> None:
     log.info("=" * 60)
     log.info("TIQCollect Daily Ingestion  %s", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     log.info("File    : %s", file_path)
@@ -636,11 +742,27 @@ def run_ingestion(file_path: Path, dry_run: bool = False) -> None:
         log.error("File not found: %s", file_path)
         sys.exit(1)
 
-    if not dry_run:
-        Base.metadata.create_all(bind=engine)
-
     today = date.today()
     db = SessionLocal()
+
+    # The file's batch row: what arrived, when, and — at the end — how many
+    # rows were accepted, skipped and quarantined. A re-run of the same file
+    # on the same day reuses its batch (the unique key is bank, type, business
+    # date and the file's sha256), so re-ingesting stays idempotent.
+    sha = hashlib.sha256(file_path.read_bytes()).hexdigest()
+    bank_row = db.query(Bank).filter(Bank.code == bank_code).first()
+    batch = None
+    if bank_row is not None and not dry_run:
+        batch = (db.query(BankFeedBatch)
+                 .filter(BankFeedBatch.bank_id == bank_row.id, BankFeedBatch.feed_type == "DAILY_BOOK",
+                         BankFeedBatch.business_date == today, BankFeedBatch.file_sha256 == sha).first())
+        if batch is None:
+            batch = BankFeedBatch(bank_id=bank_row.id, feed_type="DAILY_BOOK", business_date=today,
+                                  file_name=file_path.name, file_sha256=sha, received_via="UPLOAD",
+                                  status="VALIDATING")
+            db.add(batch)
+            db.commit()
+    ctx = feed_context(db, bank_code=bank_code, agency_code=agency_code, batch=batch)
 
     counters = {
         "rows_read": 0,
@@ -683,7 +805,7 @@ def run_ingestion(file_path: Path, dry_run: bool = False) -> None:
             for i, row in enumerate(reader, start=1):
                 counters["rows_read"] += 1
                 try:
-                    result = process_row(row, db, dry_run, today)
+                    result = process_row(row, db, dry_run, today, ctx=ctx, row_no=i)
 
                     if result["skipped_reason"]:
                         log.debug("Row %d skipped: %s", i, result["skipped_reason"])
@@ -739,6 +861,13 @@ def run_ingestion(file_path: Path, dry_run: bool = False) -> None:
                     db.rollback()
 
         if not dry_run:
+            if batch is not None:
+                batch.rows_total = counters["rows_read"]
+                batch.rows_quarantined = ctx.quarantined
+                batch.rows_skipped = counters["rows_skipped"]
+                batch.rows_accepted = counters["rows_read"] - counters["rows_skipped"]
+                batch.status = "PARTIAL" if (ctx.quarantined or counters["rows_skipped"]) else "LOADED"
+                batch.loaded_at = datetime.now(timezone.utc)
             db.commit()
             log.info("Final commit done.")
 
@@ -789,6 +918,7 @@ def run_ingestion(file_path: Path, dry_run: bool = False) -> None:
     log.info("─── Ingestion Summary ───────────────────────────────────────")
     log.info("  Rows read               : %d", counters["rows_read"])
     log.info("  Rows skipped/errors     : %d", counters["rows_skipped"])
+    log.info("  Rows quarantined        : %d  (lending.bank_feed_rows, awaiting release)", ctx.quarantined)
     log.info("")
     log.info("  Customers inserted      : %d", counters["customers_inserted"])
     log.info("  Customers updated       : %d", counters["customers_updated"])
@@ -827,7 +957,7 @@ FIELDNAMES = [
     "preferred_contact_start", "preferred_contact_end",
     "is_hostile", "requires_female_agent", "do_not_contact",
     # Loan
-    "loan_account_number", "loan_type", "bank_name", "branch_code",
+    "loan_account_number", "loan_type", "branch_code", "agency_code",
     "sanctioned_amount", "disbursed_amount", "outstanding_principal",
     "total_outstanding", "overdue_amount", "emi_amount",
     "disbursement_date", "maturity_date", "last_payment_date", "next_due_date",
@@ -854,7 +984,7 @@ SAMPLE_ROWS = [
         "preferred_contact_start": "9", "preferred_contact_end": "18",
         "is_hostile": "false", "requires_female_agent": "false", "do_not_contact": "false",
         "loan_account_number": "LN202401001", "loan_type": "PERSONAL",
-        "bank_name": "HDFC Bank", "branch_code": "MUM001",
+        "branch_code": "MUM001",
         "sanctioned_amount": "300000", "disbursed_amount": "295000",
         "outstanding_principal": "180000", "total_outstanding": "192500",
         "overdue_amount": "45000", "emi_amount": "9500",
@@ -877,7 +1007,7 @@ SAMPLE_ROWS = [
         "preferred_contact_start": "10", "preferred_contact_end": "17",
         "is_hostile": "false", "requires_female_agent": "true", "do_not_contact": "false",
         "loan_account_number": "LN202401002", "loan_type": "GOLD",
-        "bank_name": "State Bank of India", "branch_code": "DEL005",
+        "branch_code": "DEL005",
         "sanctioned_amount": "150000", "disbursed_amount": "150000",
         "outstanding_principal": "0", "total_outstanding": "0",
         "overdue_amount": "0", "emi_amount": "6200",
@@ -901,7 +1031,7 @@ SAMPLE_ROWS = [
         "preferred_contact_start": "9", "preferred_contact_end": "18",
         "is_hostile": "false", "requires_female_agent": "false", "do_not_contact": "false",
         "loan_account_number": "LN202401003", "loan_type": "BUSINESS",
-        "bank_name": "ICICI Bank", "branch_code": "HYD012",
+        "branch_code": "HYD012",
         "sanctioned_amount": "1000000", "disbursed_amount": "980000",
         "outstanding_principal": "750000", "total_outstanding": "815000",
         "overdue_amount": "183000", "emi_amount": "22000",
@@ -924,7 +1054,7 @@ SAMPLE_ROWS = [
         "preferred_contact_start": "10", "preferred_contact_end": "17",
         "is_hostile": "false", "requires_female_agent": "true", "do_not_contact": "false",
         "loan_account_number": "LN202401004", "loan_type": "HOME",
-        "bank_name": "Axis Bank", "branch_code": "DEL022",
+        "branch_code": "DEL022",
         "sanctioned_amount": "2500000", "disbursed_amount": "2400000",
         "outstanding_principal": "1900000", "total_outstanding": "1960000",
         "overdue_amount": "95000", "emi_amount": "28000",
@@ -949,7 +1079,7 @@ SAMPLE_ROWS = [
         "preferred_contact_start": "9", "preferred_contact_end": "18",
         "is_hostile": "true", "requires_female_agent": "false", "do_not_contact": "false",
         "loan_account_number": "LN202401005", "loan_type": "BUSINESS",
-        "bank_name": "Kotak Mahindra Bank", "branch_code": "PUN018",
+        "branch_code": "PUN018",
         "sanctioned_amount": "800000", "disbursed_amount": "780000",
         "outstanding_principal": "600000", "total_outstanding": "680000",
         "overdue_amount": "220000", "emi_amount": "18500",
@@ -973,7 +1103,7 @@ SAMPLE_ROWS = [
         "preferred_contact_start": "9", "preferred_contact_end": "18",
         "is_hostile": "false", "requires_female_agent": "false", "do_not_contact": "false",
         "loan_account_number": "LN202401006", "loan_type": "PERSONAL",
-        "bank_name": "Punjab National Bank", "branch_code": "LKO001",
+        "branch_code": "LKO001",
         "sanctioned_amount": "200000", "disbursed_amount": "200000",
         "outstanding_principal": "140000", "total_outstanding": "155000",
         "overdue_amount": "42000", "emi_amount": "7200",
@@ -998,7 +1128,7 @@ SAMPLE_ROWS = [
         "preferred_contact_start": "9", "preferred_contact_end": "18",
         "is_hostile": "false", "requires_female_agent": "false", "do_not_contact": "false",
         "loan_account_number": "LN202401007", "loan_type": "EDUCATION",
-        "bank_name": "Indian Bank", "branch_code": "CHN017",
+        "branch_code": "CHN017",
         "sanctioned_amount": "500000", "disbursed_amount": "500000",
         "outstanding_principal": "320000", "total_outstanding": "341000",
         "overdue_amount": "28000", "emi_amount": "11000",
@@ -1047,6 +1177,9 @@ def main() -> None:
     parser.add_argument("--file", type=Path, default=None, help="Path to CSV file")
     parser.add_argument("--dry-run", action="store_true", help="No DB writes — preview only")
     parser.add_argument("--generate-sample", action="store_true", help="Write sample CSV and exit")
+    parser.add_argument("--bank", default=None, help="Code of the bank whose file this is (tenancy.banks.code)")
+    parser.add_argument("--agency", default=None,
+                        help="Code of the agency new accounts are placed with (a row's agency_code overrides)")
     args = parser.parse_args()
 
     if args.generate_sample:
@@ -1065,7 +1198,9 @@ def main() -> None:
             )
             sys.exit(1)
 
-    run_ingestion(file_path, dry_run=args.dry_run)
+    if not args.bank:
+        parser.error("--bank is required: a feed belongs to one bank")
+    run_ingestion(file_path, dry_run=args.dry_run, bank_code=args.bank, agency_code=args.agency)
 
 
 def find_todays_file() -> Path | None:

@@ -1,3 +1,5 @@
+# 2026-09-28: converted to the v2 harness (tests/_db) at the merge of v1 main
+# into standalone-p1.
 """The client address behind a reverse proxy, which the auth rate limit keys on.
 
 2026-09-24. Behind Caddy every request reached uvicorn from the proxy's
@@ -18,15 +20,13 @@ import asyncio
 
 import httpx
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from app.core.config import Settings, settings
-from app.core.database import Base, get_db
+from app.core.database import get_db
 from app.core.ratelimit import limiter
 from app.main import app
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory
 
 PROXY = "172.30.0.10"       # Caddy, pinned to a fixed address on the compose network
 STRANGER = "203.0.113.7"    # a public address reaching the API port itself
@@ -34,14 +34,20 @@ NATTED = "172.17.0.1"       # an internet client that NAT made look private
 LIMIT = settings.AUTH_RATE_LIMIT_PER_MINUTE
 BAD_LOGIN = {"email": "nobody@t.io", "password": "wrong-password", "device_id": "device-000001"}
 
-engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
-                       poolclass=StaticPool)
-Session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+# This file built its own `create_engine("sqlite://")` with no schema
+# awareness, so `Base.metadata.create_all` failed outright on the v2 model
+# (real Postgres schemas, no SQLite equivalent). Every test here posts a bad
+# login for a user that never exists, so the request only needs the `users`
+# table to be reachable, not seeded — tests/_db.make_engine() +
+# create_schema() gives it a schema-mapped SQLite database the login query
+# can run against, same as every other converted file in this suite.
+engine = make_engine()
+Session = make_session_factory(engine)
 
 
 @pytest.fixture(scope="module", autouse=True)
 def _db():
-    Base.metadata.create_all(engine)
+    create_schema(engine)
 
     def override():
         db = Session()
@@ -52,7 +58,7 @@ def _db():
     app.dependency_overrides[get_db] = override
     yield
     app.dependency_overrides.pop(get_db, None)
-    Base.metadata.drop_all(engine)
+    drop_schema(engine)
 
 
 @pytest.fixture(autouse=True)

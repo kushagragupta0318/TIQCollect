@@ -60,7 +60,9 @@ import re
 from app.core.security import explicit_true
 from app.models.payment import Payment, PaymentMode, PaymentStatus
 from app.models.ptp import PTP, PTPStatus
+from app.services.scope import agent_case_or_404, sync_assignee
 from app.services.ptp_lifecycle_service import verified_paid_against
+from app.services.brand import brand_for
 from app.services.notification_service import NotificationService
 
 # ── The evidence each payment mode must carry (hotfix PAY-1, 2026-09-24) ──────
@@ -135,30 +137,9 @@ class PaymentService:
         return f"TIQ-{year}-{token}"
 
     def _get_accessible_case(self, agent, case_id: str) -> Case:
-        case = self.db.query(Case).filter(Case.id == case_id).first()
-        if not case:
-            raise AppException(404, ErrorCode.CASE_NOT_FOUND, "Case not found")
-
-        authorized = (case.agent_id == agent.id)
-        if not authorized:
-            from app.models.beat import Beat
-            beats = self.db.query(Beat).filter(Beat.agent_id == agent.id).all()
-            if any(case_id in (b.ordered_case_ids or []) for b in beats):
-                authorized = True
-            elif agent.manager_user_id and case.agent_id:
-                curr_ag = self.db.query(Agent).filter(Agent.id == case.agent_id).first()
-                if curr_ag and curr_ag.manager_user_id == agent.manager_user_id:
-                    authorized = True
-            elif case.agent_id is None:
-                authorized = True
-
-        if not authorized:
-            raise AppException(403, ErrorCode.FORBIDDEN, "Case not assigned to you")
-
-        if case.agent_id != agent.id:
-            case.agent_id = agent.id
-
-        return case
+        """2026-09-24 (A03): the one rule (services/scope). The old copy took
+        over any unassigned case in any tenant on the first payment."""
+        return agent_case_or_404(self.db, agent, case_id)
 
     # -----------------------------------------------------------------
     # POST /agent/cases/{case_id}/payment
@@ -245,6 +226,7 @@ class PaymentService:
             case.status = CaseStatus.PARTIALLY_PAID
 
         agent.current_month_collections += req.amount
+        sync_assignee(case, agent)   # at the business commit, never at the read
 
         self.db.commit()
         self.db.refresh(payment)
@@ -353,23 +335,24 @@ class PaymentService:
         masked_phone = "XXXXXX" + e164[-4:]
         masked_acct = "XXXX" + loan.loan_account_number[-4:] if loan else "XXXXXXXX"
         pay_date = payment.payment_date.strftime("%d %b %Y")
+        bn = brand_for(self.db, case=case).bank_name
         mode_label = {"CASH": "Cash", "UPI": "UPI", "CHEQUE": "Cheque", "NEFT": "NEFT", "RTGS": "RTGS"}.get(str(req.mode), str(req.mode))
         sms_body = (
-            f"Dear {customer.full_name}, ABC Bank's agent {agent.user.full_name} visited on {pay_date}. "
+            f"Dear {customer.full_name}, {bn}'s agent {agent.user.full_name} visited on {pay_date}. "
             f"Rs.{req.amount:,.0f} received via {mode_label} for loan {masked_acct}. "
-            f"Receipt: {payment.receipt_number}. Mobile: {masked_phone}. - ABC Bank"
+            f"Receipt: {payment.receipt_number}. Mobile: {masked_phone}. - {bn}"
         )
         wa_body = (
-            f"*Visit Completed & Payment Received – ABC Bank*\n\n"
+            f"*Visit Completed & Payment Received – {bn}*\n\n"
             f"Dear {customer.full_name},\n\n"
             f"Agent *{agent.user.full_name}* visited on {pay_date}.\n"
             f"Rs.{req.amount:,.0f} received via *{mode_label}*\n"
             f"Loan Account: {masked_acct}\n"
             f"Receipt No: {payment.receipt_number}\n"
             f"Mobile: {masked_phone}\n\n"
-            f"Thank you for your payment.\n– ABC Bank"
+            f"Thank you for your payment.\n– {bn}"
         )
-        return NotificationService.send_twilio(e164, sms_body, wa_body)
+        return NotificationService.send_twilio(e164, sms_body, wa_body, db=self.db, case_id=case.id)
 
     @staticmethod
     def _payment_response(payment: Payment, case: Case, *, receipt_sent: bool = False) -> dict:
@@ -394,14 +377,13 @@ class PaymentService:
     def create_payment_link(self, agent, case_id: str, amount: float) -> dict:
         # 2026-09-24 (hotfix PL-1) — this had NO access check: any agent could
         # mint a UPI payment QR for any case in the database. Now the case must
-        # be ASSIGNED to the caller (strict agent_id, the rule media/otp and
-        # the voice webhook use), checked before anything else, and "not
-        # yours" is the same 404 as "no such case".
-        case = (self.db.query(Case)
-                .filter(Case.id == case_id, Case.agent_id == agent.id)
-                .first())
-        if not case:
-            raise AppException(404, ErrorCode.CASE_NOT_FOUND, "Case not found")
+        # pass the access rule, checked before anything else, and "not yours"
+        # is the same 404 as "no such case".
+        # 2026-09-28 (merge into standalone-p1): the rule is services/scope's —
+        # the ONE definition (agency AND assigned-or-on-today's-beat) — not the
+        # strict `agent_id ==` copy hotfix-1 carried on v1, and the 404 body is
+        # scope's uniform "Not found".
+        case = agent_case_or_404(self.db, agent, case_id)
 
         import razorpay
         if not settings.RAZORPAY_TEST_API or not settings.RAZORPAY_TEST_KEY_SECRET:
@@ -437,10 +419,19 @@ class PaymentService:
         if existing:
             return self._ptp_response(existing)
 
-        remaining_target = max(0.0, case.target_amount - case.collected_amount)
-        amt = req.committed_amount
-        if remaining_target > 0 and amt > remaining_target:
-            amt = remaining_target
+        # 2026-09-24 (coordinator audit): the cap was skipped whenever the case
+        # target was already met (remaining 0) — `if remaining > 0` — so a
+        # promise of any size, ₹9.99 crore included, was stored against a case
+        # with nothing left to collect. A promise is now capped by what the
+        # CASE still needs, else by what the LOAN still owes; with neither
+        # there is nothing to promise, and saying so beats storing fiction.
+        remaining_target = max(0.0, (case.target_amount or 0.0) - (case.collected_amount or 0.0))
+        loan = self.db.get(Loan, case.loan_id)
+        loan_owed = max(0.0, float(loan.total_outstanding or 0.0)) if loan is not None else 0.0
+        ceiling = remaining_target if remaining_target > 0 else loan_owed
+        if ceiling <= 0:
+            raise AppException(400, ErrorCode.VALIDATION_ERROR, "Nothing is outstanding on this case to promise against")
+        amt = min(float(req.committed_amount), ceiling)
 
         ptp = PTP(
             case_id=case.id,
@@ -455,6 +446,7 @@ class PaymentService:
 
         case.status = CaseStatus.PTP_SET
         agent.current_month_ptps_set += 1
+        sync_assignee(case, agent)   # at the business commit, never at the read
 
         self.db.commit()
         self.db.refresh(ptp)

@@ -33,9 +33,10 @@ from sqlalchemy.orm import joinedload
 
 from app.core.dependencies import DbSession, ManagerOnly
 from app.core.config import settings
+from app.core.ids import UUIDPath, UUIDQuery, UUIDQueryRequired, UUIDStr
 from app.core import llm as _llm
 from app.ml import eligibility as _elig
-from app.models.agent import Agent, AgentStatus, AgentPerformance
+from app.models.agent import Agent, AgentStatus, AgentPerformance, month_start
 # Module level, not a local import: the audit-log endpoints below share a
 # scoping helper, and a per-function import would make it easy for one of the
 # two callers to drift onto a different model reference.
@@ -52,6 +53,7 @@ from app.models.payment import Payment, PaymentMode, PaymentStatus
 from app.models.ptp import PTP, PTPStatus
 from app.models.user import User
 from app.models.visit import Visit, VisitOutcome
+from app.services.brand import brand_for
 from app.services.notification_service import NotificationService
 from app.services.leave_service import agent_ids_on_leave, effective_status, leave_today
 
@@ -555,7 +557,8 @@ _TREND_MONTHS = 5
 def _complete_months_before(anchor: date, count: int) -> list[str]:
     """The `count` complete months immediately before `anchor`'s own month.
 
-    Oldest first, as "YYYY-MM" to match AgentPerformance.month. `anchor`'s month
+    Oldest first, as "YYYY-MM" — the API's month key (AgentPerformance.month
+    is a DATE since 2026-09-24; convert with models.agent.month_start). `anchor`'s month
     is excluded because it is still accruing — see the call site.
     """
     months: list[str] = []
@@ -687,7 +690,9 @@ def _live_monthly_metrics(db, agent_ids: list[str], months: list[str]) -> dict[s
 
     def _month_of(col):
         # Postgres-only, like the enum types and psycopg2 driver this app
-        # already depends on. Matches AgentPerformance.month's "YYYY-MM" form.
+        # already depends on. Produces the API's "YYYY-MM" month key (this
+        # comment said it matched AgentPerformance.month, which is a DATE since
+        # 2026-09-24).
         return func.to_char(col, "YYYY-MM")
 
     # 1. Collected
@@ -944,6 +949,18 @@ def list_agents(current_user: ManagerOnly, db: DbSession):
             "id_card_number": agent.id_card_number,
             "full_name": agent.user.full_name,
             "date_of_birth": agent.user.date_of_birth,
+            # G02 (Manage Agents): the table and edit drawer both need these,
+            # already on the row through the same joinedload(Agent.user)
+            # above — no new query, just two more keys off it.
+            "email": agent.user.email,
+            "phone": agent.user.phone,
+            "gender": agent.gender,
+            "vehicle_type": agent.vehicle_type,
+            "territory_region_id": agent.territory_region_id,
+            "base_latitude": agent.base_latitude,
+            "base_longitude": agent.base_longitude,
+            "suspended_at": agent.suspended_at,
+            "suspended_reason": agent.suspended_reason,
             "territory": agent.territory,
             "tier": agent.tier,
             "status": effective_status(agent, on_leave_today),
@@ -1124,7 +1141,7 @@ def list_cases(
     db: DbSession,
     status: Optional[str] = None,
     priority: Optional[str] = None,
-    agent_id: Optional[str] = None,
+    agent_id: UUIDQuery = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     # HIGH / MEDIUM / LOW. Filters on the loan's LATEST computed label, so it
@@ -1438,7 +1455,7 @@ def cases_date_range(current_user: ManagerOnly, db: DbSession):
 # ---------------------------------------------------------------------------
 
 @router.get("/cases/{case_id}")
-def get_case_detail(case_id: str, current_user: ManagerOnly, db: DbSession):
+def get_case_detail(case_id: UUIDPath, current_user: ManagerOnly, db: DbSession):
     from sqlalchemy.orm import joinedload as jl
     from app.models.visit import Visit as VisitModel
     from app.models.payment import Payment as PaymentModel
@@ -1887,7 +1904,7 @@ def ml_candidates(current_user: ManagerOnly, db: DbSession,
 
 
 @router.get("/ml/candidates/{candidate_id}")
-def ml_candidate_detail(candidate_id: str, current_user: ManagerOnly, db: DbSession):
+def ml_candidate_detail(candidate_id: UUIDPath, current_user: ManagerOnly, db: DbSession):
     from app.ml.pipeline import registry
     from app.models.model_candidate import ModelCandidate
 
@@ -1905,7 +1922,7 @@ def ml_candidate_detail(candidate_id: str, current_user: ManagerOnly, db: DbSess
 
 
 @router.post("/ml/candidates/{candidate_id}/approve")
-def ml_approve_candidate(candidate_id: str, current_user: ManagerOnly,
+def ml_approve_candidate(candidate_id: UUIDPath, current_user: ManagerOnly,
                          db: DbSession, note: Optional[str] = None):
     """Record a person's decision to accept the challenger. Does NOT promote."""
     from app.ml.pipeline.lifecycle import ApprovalRefused, approve
@@ -1930,7 +1947,7 @@ def ml_approve_candidate(candidate_id: str, current_user: ManagerOnly,
 
 
 @router.post("/ml/candidates/{candidate_id}/reject")
-def ml_reject_candidate(candidate_id: str, current_user: ManagerOnly,
+def ml_reject_candidate(candidate_id: UUIDPath, current_user: ManagerOnly,
                         db: DbSession, note: Optional[str] = None):
     from app.ml.pipeline.lifecycle import ApprovalRefused, reject
 
@@ -1953,7 +1970,7 @@ def ml_reject_candidate(candidate_id: str, current_user: ManagerOnly,
 
 
 @router.post("/ml/candidates/{candidate_id}/promote")
-def ml_promote_candidate(candidate_id: str, current_user: ManagerOnly,
+def ml_promote_candidate(candidate_id: UUIDPath, current_user: ManagerOnly,
                          db: DbSession):
     """The one write in this codebase that changes what borrowers are scored by.
 
@@ -2036,7 +2053,7 @@ from pydantic import BaseModel as _ReviewBase
 
 
 class _ReviewBody(_ReviewBase):
-    visit_id: str
+    visit_id: UUIDStr
     finding_type: str
     verdict: str                       # CONFIRMED | DISMISSED
     note: Optional[str] = None
@@ -3043,7 +3060,7 @@ def get_team_dpd_breakdown(
 # ---------------------------------------------------------------------------
 
 @router.get("/visits/{visit_id}/media-urls")
-def get_visit_media_urls(visit_id: str, current_user: ManagerOnly, db: DbSession):
+def get_visit_media_urls(visit_id: UUIDPath, current_user: ManagerOnly, db: DbSession):
     # Ownership is checked BEFORE any presigned URL is minted, and that
     # ordering is the whole point: these URLs carry borrower photographs and
     # call recordings, and once issued they are valid for an hour WITHOUT
@@ -3360,7 +3377,7 @@ def agents_live(current_user: ManagerOnly, db: DbSession):
 
 @router.get("/agents/{agent_id}/trail")
 def agent_trail(
-    agent_id: str,
+    agent_id: UUIDPath,
     current_user: ManagerOnly,
     db: DbSession,
     date: str | None = None,
@@ -3396,7 +3413,7 @@ def agent_trail(
 # ---------------------------------------------------------------------------
 
 @router.get("/agents/{agent_id}/ai-insight")
-def agent_ai_insight(agent_id: str, current_user: ManagerOnly, db: DbSession):
+def agent_ai_insight(agent_id: UUIDPath, current_user: ManagerOnly, db: DbSession):
     from app.models.loan import Loan as LoanModel
 
     my_agent_ids = [
@@ -3628,7 +3645,7 @@ def agent_ai_insight(agent_id: str, current_user: ManagerOnly, db: DbSession):
 # ---------------------------------------------------------------------------
 
 @router.get("/agents/{agent_id}/reallocation-plan")
-def reallocation_plan(agent_id: str, current_user: ManagerOnly, db: DbSession):
+def reallocation_plan(agent_id: UUIDPath, current_user: ManagerOnly, db: DbSession):
     from app.models.loan import Loan as LoanModel
     from app.models.customer import Customer as CustomerModel
 
@@ -3804,7 +3821,7 @@ class _StatusBody(_BM):
 
 @router.put("/agents/{agent_id}/status")
 def update_agent_status(
-    agent_id: str,
+    agent_id: UUIDPath,
     body: _StatusBody,
     current_user: ManagerOnly,
     db: DbSession,
@@ -3853,7 +3870,7 @@ def update_agent_status(
 
 @router.post("/agents/{agent_id}/sos/acknowledge")
 def acknowledge_agent_sos(
-    agent_id: str,
+    agent_id: UUIDPath,
     current_user: ManagerOnly,
     db: DbSession,
 ):
@@ -3877,16 +3894,17 @@ def acknowledge_agent_sos(
 
     if agent.user and agent.user.phone:
         e164 = "+" + NotificationService.normalize_phone(agent.user.phone)
+        brand = brand_for(db, agent=agent)
         sms_body = (
             f"Your manager {current_user.full_name} has acknowledged your SOS and is "
-            f"responding. Stay safe. - ABC Bank"
+            f"responding. Stay safe. - {brand.agency_name or brand.bank_name}"
         )
         wa_body = (
             f"*SOS Acknowledged*\n\n"
             f"Your manager *{current_user.full_name}* has seen your SOS alert and is responding.\n"
             f"Stay where you are if it's safe to do so."
         )
-        NotificationService.send_twilio(e164, sms_body, wa_body)
+        NotificationService.send_twilio(e164, sms_body, wa_body, db=db, agent_id=agent.id)
 
     return {
         "acknowledged": True,
@@ -3902,7 +3920,7 @@ def acknowledge_agent_sos(
 
 @router.get("/agents/{agent_id}/availability-calendar")
 def manager_get_agent_availability_calendar(
-    agent_id: str,
+    agent_id: UUIDPath,
     current_user: ManagerOnly,
     db: DbSession,
 ):
@@ -3994,7 +4012,7 @@ def manager_get_agent_availability_calendar(
 
 @router.get("/agents/{agent_id}/dpd-breakdown")
 def manager_get_agent_dpd_breakdown(
-    agent_id: str,
+    agent_id: UUIDPath,
     current_user: ManagerOnly,
     db: DbSession,
     month: Optional[str] = None,  # YYYY-MM — if provided, sums payments made in that month
@@ -4075,7 +4093,7 @@ def get_monthly_report(
     month: str,
     current_user: ManagerOnly,
     db: DbSession,
-    agent_id: Optional[str] = None,
+    agent_id: UUIDQuery = None,
 ):
     """Generate a 60-90 word eagle-view AI performance brief with DPD breakdown,
     agent spread, and month-over-month trend for the agency head."""
@@ -4138,19 +4156,19 @@ def get_monthly_report(
 
         row = (
             db.query(AgentPerformance)
-            .filter(AgentPerformance.agent_id == agent_id, AgentPerformance.month == month)
+            .filter(AgentPerformance.agent_id == agent_id, AgentPerformance.month == month_start(month))
             .first()
         )
         prev_row = (
             db.query(AgentPerformance)
-            .filter(AgentPerformance.agent_id == agent_id, AgentPerformance.month == prev_month)
+            .filter(AgentPerformance.agent_id == agent_id, AgentPerformance.month == month_start(prev_month))
             .first()
         )
 
         # Team averages for the month
         team_rows = (
             db.query(AgentPerformance)
-            .filter(AgentPerformance.agent_id.in_(my_agent_ids), AgentPerformance.month == month)
+            .filter(AgentPerformance.agent_id.in_(my_agent_ids), AgentPerformance.month == month_start(month))
             .all()
         )
         n_team = len(team_rows) or 1
@@ -4272,13 +4290,13 @@ def get_monthly_report(
 
         rows = (
             db.query(AgentPerformance)
-            .filter(AgentPerformance.agent_id.in_(my_agent_ids), AgentPerformance.month == month)
+            .filter(AgentPerformance.agent_id.in_(my_agent_ids), AgentPerformance.month == month_start(month))
             .options(joinedload(AgentPerformance.agent).joinedload(Agent.user))
             .all()
         )
         prev_rows = (
             db.query(AgentPerformance)
-            .filter(AgentPerformance.agent_id.in_(my_agent_ids), AgentPerformance.month == prev_month)
+            .filter(AgentPerformance.agent_id.in_(my_agent_ids), AgentPerformance.month == month_start(prev_month))
             .all()
         )
 
@@ -4383,7 +4401,7 @@ def get_ptp_outcomes(
     current_user: ManagerOnly,
     db: DbSession,
     months: int = 6,
-    agent_id: Optional[str] = None,
+    agent_id: UUIDQuery = None,
 ):
     """Promises grouped by the MONTH THEY FELL DUE (committed_date), split by
     how they ended: honored / partly / broken / rescheduled, plus those still
@@ -4464,6 +4482,37 @@ def get_ptp_outcomes(
             "definition": "kept_rate_pct = honored / (honored + broken); open promises are never in the rate"}
 
 
+# ─── Device binding — the manager's reset (2026-09-24, coordinator audit gate 3) ─
+# auth_service's header promised this action ("the manager's reset device
+# binding action (G01) unbinds") and no route existed, so an agent who lost a
+# phone was locked out until someone edited the database. It unbinds every
+# bound device, revokes every live login session of the agent (reason
+# DEVICE_RESET) so a stolen phone's refresh token dies with the binding, and
+# writes a DEVICE_RESET audit row. 404 for an agent that is not yours.
+
+@router.post("/agents/{agent_id}/reset-device")
+def reset_agent_device(agent_id: UUIDPath, current_user: ManagerOnly, db: DbSession):
+    from app.core.audit import write_audit
+    from app.models.agent import AgentDevice
+    from app.models.audit_log import AuditAction
+    from app.services.auth_service import revoke_user_sessions
+
+    agent = _require_own_agent(db, current_user, agent_id)
+    now = datetime.now(timezone.utc)
+    devices = (db.query(AgentDevice)
+               .filter(AgentDevice.agent_id == agent.id, AgentDevice.is_bound.is_(True)).all())
+    for d in devices:
+        d.is_bound = False
+        d.unbound_at = now
+        d.unbound_by = current_user.id
+        d.unbind_reason = "Manager reset"
+    revoked = revoke_user_sessions(db, agent.user_id, "DEVICE_RESET", by=current_user.id)
+    db.commit()
+    write_audit(db, action=AuditAction.DEVICE_RESET, user_id=current_user.id, entity_type="agent",
+                entity_id=agent.id, details={"devices_unbound": len(devices), "sessions_revoked": revoked})
+    return {"agent_id": agent.id, "devices_unbound": len(devices), "sessions_revoked": revoked,
+            "reset_at": now.isoformat()}
+
 # ---------------------------------------------------------------------------
 # Leave requests — the manager's side (2026-09-21).
 # ---------------------------------------------------------------------------
@@ -4504,7 +4553,7 @@ def list_leave_requests(current_user: ManagerOnly, db: DbSession, status: Option
 
 
 @router.post("/leave-requests/{request_id}/approve")
-def approve_leave_request(request_id: str, body: _LeaveDecisionBody, current_user: ManagerOnly, db: DbSession):
+def approve_leave_request(request_id: UUIDPath, body: _LeaveDecisionBody, current_user: ManagerOnly, db: DbSession):
     from app.services.leave_service import LeaveService, serialize
     out = LeaveService(db).approve(current_user.id, request_id, body.note)
     r = out["request"]
@@ -4512,21 +4561,21 @@ def approve_leave_request(request_id: str, body: _LeaveDecisionBody, current_use
 
 
 @router.post("/leave-requests/{request_id}/reject")
-def reject_leave_request(request_id: str, body: _LeaveDecisionBody, current_user: ManagerOnly, db: DbSession):
+def reject_leave_request(request_id: UUIDPath, body: _LeaveDecisionBody, current_user: ManagerOnly, db: DbSession):
     from app.services.leave_service import LeaveService, serialize
     r = LeaveService(db).reject(current_user.id, request_id, body.note)
     return serialize(r, _leave_names(db, [r]).get(r.agent_id))
 
 
 @router.post("/leave-requests/{request_id}/revoke")
-def revoke_leave_request(request_id: str, body: _LeaveDecisionBody, current_user: ManagerOnly, db: DbSession):
+def revoke_leave_request(request_id: UUIDPath, body: _LeaveDecisionBody, current_user: ManagerOnly, db: DbSession):
     from app.services.leave_service import LeaveService, serialize
     r = LeaveService(db).revoke(current_user.id, request_id, body.note)
     return serialize(r, _leave_names(db, [r]).get(r.agent_id))
 
 
 @router.post("/agents/{agent_id}/leave", status_code=201)
-def mark_agent_leave(agent_id: str, body: _MarkLeaveBody, current_user: ManagerOnly, db: DbSession):
+def mark_agent_leave(agent_id: UUIDPath, body: _MarkLeaveBody, current_user: ManagerOnly, db: DbSession):
     """Record leave for one of this manager's agents, approved in one step.
     ABSENT is the manager's word for a no-show and may be back-dated."""
     from app.models.leave_request import LeaveType
@@ -4939,7 +4988,7 @@ def rollback_allocation_plan(
 
 @router.get("/allocation/export-decisions")
 def export_allocation_decisions_csv(
-    run_id: str,
+    run_id: UUIDQueryRequired,
     current_user: ManagerOnly,
     db: DbSession,
 ):
@@ -5014,7 +5063,7 @@ from pydantic import BaseModel as _ReassignBase, field_validator as _reassign_va
 
 
 class _ReassignBody(_ReassignBase):
-    new_agent_id: str
+    new_agent_id: UUIDStr
     reason: str
 
     @_reassign_validator("reason")
@@ -5064,7 +5113,7 @@ def _latest_reassignments(db, case_ids: list[str]) -> dict[str, dict]:
 
 @router.post("/cases/{case_id}/reassign")
 def reassign_case(
-    case_id: str,
+    case_id: UUIDPath,
     body: _ReassignBody,
     current_user: ManagerOnly,
     db: DbSession,

@@ -35,18 +35,18 @@ from app.models.model_prediction import ModelPrediction
 # (tests/_served_champion.py); a literal "1.1.0" described nothing once 2.2.0
 # was promoted and the whole chain correctly reported not_ready.
 from tests._served_champion import served_vector, serving_version  # noqa: E402
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
 SERVING = serving_version()
-engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
-                       poolclass=StaticPool)
-Session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+engine = make_engine()
+Session = make_session_factory(autocommit=False, autoflush=False, bind=engine)
 
 
 @pytest.fixture(autouse=True)
 def setup_db():
-    Base.metadata.create_all(bind=engine)
+    create_schema(bind=engine)
     yield
-    Base.metadata.drop_all(bind=engine)
+    drop_schema(bind=engine)
 
 
 @pytest.fixture
@@ -62,7 +62,8 @@ def _pred(db, *, case, as_of, prob, outcome=None, version=SERVING,
           odv=OUTCOME_DEFINITION_VERSION, coverage=1.0):
     row = ModelPrediction(
         id=str(uuid.uuid4()), model_name="recovery_risk", model_version=version,
-        entity_type="case", entity_id=case, case_id=case, as_of_date=as_of,
+        entity_type="case", entity_id=test_id(f"case:{case}"), case_id=None,  # v2: entity_id is a UUID; no case row exists
+        as_of_date=as_of,
         probability=prob, is_modelled=True, feature_coverage=coverage,
         features=served_vector(int(prob * 100), dpd=40.0 + (prob * 100), cibil_score=600.0,
                                ptp_kept_ratio=0.5, overdue_amount=5000.0),

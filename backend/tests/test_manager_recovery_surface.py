@@ -22,11 +22,13 @@
 #
 # These tests pin that, because it is the kind of thing a well-meaning later
 # change helpfully re-adds.
+from datetime import date
 import pathlib
 import re
 from types import SimpleNamespace as NS
 
 from app.api.v1.endpoints.manager import _format_case
+from tests._db import test_id
 
 ENDPOINT = pathlib.Path(__file__).resolve().parents[1] / "app" / "api" / "v1" / "endpoints" / "manager.py"
 
@@ -44,14 +46,14 @@ def _code_only(path: pathlib.Path) -> str:
 
 def loan(**over):
     base = dict(
-        id="loan-1", loan_account_number="LN0001", loan_account_masked="****0001",
-        loan_type="HOME", bank_name="HDFC Bank", sanctioned_amount=2_000_000.0,
+        id=test_id("loan-1"), loan_account_number="LN0001", loan_account_masked="****0001",
+        loan_type="HOME", bank_name="Meridian Trust Bank", sanctioned_amount=2_000_000.0,
         outstanding_principal=1_200_000.0, outstanding_interest=40_000.0,
         penal_charges=5_842.0, total_outstanding=1_298_335.0,
         overdue_amount=118_103.0, emi_amount=18_400.0, tenure_months=240,
         interest_rate=8.5, dpd=35, dpd_bucket="BUCKET_2", status="ACTIVE",
-        npa_flag=False, last_payment_date="2026-08-21", last_payment_amount=18_400.0,
-        next_due_date="2026-09-01", legal_status="NONE", settlement_status="NONE",
+        npa_flag=False, last_payment_date=date(2026, 8, 21), last_payment_amount=18_400.0,
+        next_due_date=date(2026, 9, 1), legal_status="NONE", settlement_status="NONE",
         bank_risk_score=42.0, collection_priority_score=51.0,
     )
     base.update(over)
@@ -60,7 +62,7 @@ def loan(**over):
 
 def customer(**over):
     base = dict(
-        id="cust-1", customer_ref="C0001", full_name="R. Kumar",
+        id=test_id("cust-1"), customer_ref="C0001", full_name="R. Kumar",
         phone_primary="9876543210", phone_alternate="8765432109",
         address_line1="1 MG Road", city="Mumbai",
         state="Maharashtra", pincode="400001", latitude=19.07, longitude=72.87,
@@ -74,9 +76,9 @@ def customer(**over):
 
 def case(**over):
     base = dict(
-        id="case-1", case_number="CASE0001", status="IN_PROGRESS", priority="HIGH",
-        target_amount=48_000.0, collected_amount=0.0, allocation_date="2026-08-20",
-        visit_count=2, agent_id="agent-1", loan_id="loan-1",
+        id=test_id("case-1"), case_number="CASE0001", status="IN_PROGRESS", priority="HIGH",
+        target_amount=48_000.0, collected_amount=0.0, allocation_date=date(2026, 8, 20),
+        visit_count=2, agent_id=test_id("agent-1"), loan_id=test_id("loan-1"),
         collection_stage="FIELD", bank_ptp_date=None, bank_ptp_amount=None,
         bank_ptp_status=None, bank_agent_remarks=None,
         is_escalated=False, handover_notes=None, max_visits_allowed=6,
@@ -86,7 +88,7 @@ def case(**over):
     return NS(**base)
 
 
-SCORED = {"loan-1": {"recovery_potential": "HIGH", "rate_90": 0.821,
+SCORED = {test_id("loan-1"): {"recovery_potential": "HIGH", "rate_90": 0.821,
                      "rate_60": 0.527, "rate_30": 0.322, "is_modelled": False}}
 
 
@@ -134,7 +136,7 @@ def test_no_rupee_field_on_the_case_derives_from_rate_90():
     """Swept rather than spot-checked: no top-level value may equal the estimate,
     however it were spelled."""
     out = _format_case(case(), recovery_map=SCORED)
-    estimate = round(SCORED["loan-1"]["rate_90"] * 1_298_335.0, 2)
+    estimate = round(SCORED[test_id("loan-1")]["rate_90"] * 1_298_335.0, 2)
     numeric = [v for v in out.values() if isinstance(v, (int, float))]
     assert not any(abs(v - estimate) < 1.0 for v in numeric), out
 

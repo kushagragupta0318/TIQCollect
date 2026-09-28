@@ -122,9 +122,10 @@ from sqlalchemy import func
 from sqlalchemy.orm import joinedload
 import structlog
 
-from app.core.dependencies import DbSession, AgentOnly
+from app.core.dependencies import DbSession, AgentOnly, TokenPayload
 from app.core import llm
 from app.core.config import settings
+from app.core.ids import UUIDPath
 from app.models.agent import Agent, AgentStatus
 from app.models.beat import Beat
 from app.models.case import Case, CaseStatus, CasePriority
@@ -135,6 +136,8 @@ from app.models.ptp import PTP, PTPStatus
 from app.models.visit import Visit, VisitOutcome
 from app.models.case import EscalationReason
 from app.models.user import User
+from app.services.scope import agent_case_or_404
+from app.services.brand import brand_for
 from app.services.notification_service import NotificationService
 from app.services.media_service import MediaService
 from app.services.payment_service import PaymentService
@@ -193,6 +196,8 @@ def _effective_day(agent_id: str, db) -> date:
     Falls back to today only when no beat exists at all (brand-new install).
     This lets the demo run without daily re-seeding: if the last seed was
     yesterday, the app still shows yesterday's data as "today".
+    A DISPLAY convenience only. Case ACCESS never reads it: a beat grants
+    access on today's IST date (services/scope.access_day), 2026-09-24 (A03).
     """
     row = (
         db.query(Beat.beat_date)
@@ -417,7 +422,7 @@ def get_ranked_cases(current_user: AgentOnly, db: DbSession):
 # ---------------------------------------------------------------------------
 
 @router.get("/cases/{case_id}", response_model=CaseDetailResponse)
-def get_case_detail(case_id: str, current_user: AgentOnly, db: DbSession):
+def get_case_detail(case_id: UUIDPath, current_user: AgentOnly, db: DbSession):
     from app.services.case_service import CaseService
     agent = _get_agent_or_404(current_user, db)
     return CaseService(db).case_detail(agent, case_id)
@@ -428,7 +433,7 @@ def get_case_detail(case_id: str, current_user: AgentOnly, db: DbSession):
 # ---------------------------------------------------------------------------
 
 @router.post("/cases/{case_id}/visit", response_model=VisitResponse)
-def record_visit(case_id: str, req: RecordVisitRequest, current_user: AgentOnly, db: DbSession):
+def record_visit(case_id: UUIDPath, req: RecordVisitRequest, current_user: AgentOnly, db: DbSession):
     """Record a field visit outcome.
 
     See VisitService.record_visit for the actual logic (geo/contact-hours
@@ -445,7 +450,7 @@ def record_visit(case_id: str, req: RecordVisitRequest, current_user: AgentOnly,
 # ---------------------------------------------------------------------------
 
 @router.post("/cases/{case_id}/payment", response_model=PaymentResponse)
-def collect_payment(case_id: str, req: CollectPaymentRequest, current_user: AgentOnly, db: DbSession):
+def collect_payment(case_id: UUIDPath, req: CollectPaymentRequest, current_user: AgentOnly, db: DbSession):
     agent = _get_agent_or_404(current_user, db)
     return PaymentService(db).collect_payment(agent, case_id, req)
 
@@ -456,7 +461,7 @@ def collect_payment(case_id: str, req: CollectPaymentRequest, current_user: Agen
 # ---------------------------------------------------------------------------
 
 @router.post("/cases/{case_id}/payment/otp/send", response_model=OtpSendResponse)
-def send_payment_otp(case_id: str, req: OtpSendRequest, current_user: AgentOnly, db: DbSession):
+def send_payment_otp(case_id: UUIDPath, req: OtpSendRequest, current_user: AgentOnly, db: DbSession):
     """Send a 4-digit OTP to the borrower's REGISTERED phone to confirm a
     collection amount. `payment_id` present = re-verify an existing pending
     (offline) payment; absent = verify before collecting. See OtpService."""
@@ -465,7 +470,7 @@ def send_payment_otp(case_id: str, req: OtpSendRequest, current_user: AgentOnly,
 
 
 @router.post("/cases/{case_id}/payment/otp/verify", response_model=OtpVerifyResponse)
-def verify_payment_otp(case_id: str, req: OtpVerifyRequest, current_user: AgentOnly, db: DbSession):
+def verify_payment_otp(case_id: UUIDPath, req: OtpVerifyRequest, current_user: AgentOnly, db: DbSession):
     """Verify the borrower's OTP. For a deferred (payment-bound) OTP this
     promotes the pending Payment to VERIFIED and sends the e-receipt; for the
     pre-collection flow it marks the OTP used so collect_payment can consume it."""
@@ -481,37 +486,19 @@ class PaymentLinkRequest(BaseModel):
     amount: float
 
 @router.post("/cases/{case_id}/payment-link", response_model=PaymentLinkResponse)
-def create_payment_link(case_id: str, req: PaymentLinkRequest, current_user: AgentOnly, db: DbSession):
+def create_payment_link(case_id: UUIDPath, req: PaymentLinkRequest, current_user: AgentOnly, db: DbSession):
     # 2026-09-24 (hotfix PL-1): scoped to the caller's own case — see the service.
     agent = _get_agent_or_404(current_user, db)
     return PaymentService(db).create_payment_link(agent, case_id, req.amount)
 
 
 def _get_accessible_case_or_404(db: DbSession, agent: Agent, case_id: str) -> Case:
-    case = (
-        db.query(Case)
-        .options(joinedload(Case.customer), joinedload(Case.loan))
-        .filter(Case.id == case_id)
-        .first()
-    )
-    if not case:
-        raise HTTPException(status_code=404, detail="Case not found")
-
-    if case.agent_id == agent.id:
-        return case
-
-    beats = db.query(Beat).filter(Beat.agent_id == agent.id).all()
-    if any(case_id in (b.ordered_case_ids or []) for b in beats):
-        return case
-
-    if agent.manager_user_id and case.agent_id:
-        curr_ag = db.query(Agent).filter(Agent.id == case.agent_id).first()
-        if curr_ag and curr_ag.manager_user_id == agent.manager_user_id:
-            return case
-    elif case.agent_id is None:
-        return case
-
-    raise HTTPException(status_code=403, detail="Case not found or not assigned to you")
+    """2026-09-24 (A03): the one rule, services/scope.agent_case_or_404. This
+    copy granted any unassigned case in ANY tenant, any case on any beat the
+    agent ever had, and any teammate's case, and answered a foreign case with
+    a 403 beside a missing one's 404."""
+    return agent_case_or_404(db, agent, case_id,
+                             options=(joinedload(Case.customer), joinedload(Case.loan)))
 
 
 # ---------------------------------------------------------------------------
@@ -519,7 +506,7 @@ def _get_accessible_case_or_404(db: DbSession, agent: Agent, case_id: str) -> Ca
 # ---------------------------------------------------------------------------
 
 @router.post("/cases/{case_id}/notify-visit")
-def notify_visit(case_id: str, current_user: AgentOnly, db: DbSession):
+def notify_visit(case_id: UUIDPath, current_user: AgentOnly, db: DbSession):
     agent = _get_agent_or_404(current_user, db)
     case = _get_accessible_case_or_404(db, agent, case_id)
 
@@ -533,23 +520,27 @@ def notify_visit(case_id: str, current_user: AgentOnly, db: DbSession):
 
     e164 = "+" + NotificationService.normalize_phone(customer.phone_primary)
     visit_date = datetime.now(timezone.utc).strftime("%d %b %Y")
+    bn = brand_for(db, case=case).bank_name
     sms_body = (
-        f"Dear {customer.full_name}, ABC Bank's field agent {agent.user.full_name} "
+        f"Dear {customer.full_name}, {bn}'s field agent {agent.user.full_name} "
         f"will visit you on {visit_date} regarding loan {masked_acct} (DPD: {dpd} days). "
-        f"Target: Rs.{case.target_amount:,.0f}. Please be available. - ABC Bank"
+        f"Target: Rs.{case.target_amount:,.0f}. Please be available. - {bn}"
     )
     wa_body = (
-        f"*Visit Notice – ABC Bank*\n\n"
+        f"*Visit Notice – {bn}*\n\n"
         f"Dear {customer.full_name},\n\n"
         f"Our field agent *{agent.user.full_name}* will be visiting you shortly.\n"
         f"Date: {visit_date}\n"
         f"Target Amount: Rs.{case.target_amount:,.0f}\n"
         f"Loan Account: {masked_acct}\n"
         f"⏳ DPD: {dpd} days overdue\n\n"
-        f"Please be available and keep documents ready.\n– ABC Bank"
+        f"Please be available and keep documents ready.\n– {bn}"
     )
-    NotificationService.send_twilio(e164, sms_body, wa_body)
-    return {"status": "sent"}
+    # 2026-09-24: `status` used to be "sent" whatever happened. `sent` now
+    # says whether a message reached the transport (False when suppressed,
+    # unconfigured or failed); the status string follows it.
+    sent = NotificationService.send_twilio(e164, sms_body, wa_body, db=db, case_id=case.id)
+    return {"status": "sent" if sent else "not_sent", "sent": sent}
 
 
 # ---------------------------------------------------------------------------
@@ -561,7 +552,7 @@ class NotifyCaseRequest(BaseModel):
 
 
 @router.post("/cases/{case_id}/notify")
-def notify_case(case_id: str, req: NotifyCaseRequest, current_user: AgentOnly, db: DbSession):
+def notify_case(case_id: UUIDPath, req: NotifyCaseRequest, current_user: AgentOnly, db: DbSession):
     agent = _get_agent_or_404(current_user, db)
     case = _get_accessible_case_or_404(db, agent, case_id)
 
@@ -571,7 +562,7 @@ def notify_case(case_id: str, req: NotifyCaseRequest, current_user: AgentOnly, d
 
     loan = db.query(Loan).filter(Loan.id == case.loan_id).first()
     masked_acct = "XXXX" + loan.loan_account_number[-4:] if loan else "XXXXXXXX"
-    bank_name = loan.bank_name if loan else "ABC Bank"
+    bn = brand_for(db, case=case).bank_name   # A14: the case's bank, never a literal
     dpd = loan.dpd if loan else 0
 
     e164 = "+" + NotificationService.normalize_phone(customer.phone_primary)
@@ -579,19 +570,19 @@ def notify_case(case_id: str, req: NotifyCaseRequest, current_user: AgentOnly, d
     visit_date = datetime.now(timezone.utc).strftime("%d %b %Y")
     if req.type == "reminder":
         sms_body = (
-            f"Dear {customer.full_name}, ABC Bank's field agent {agent.user.full_name} "
+            f"Dear {customer.full_name}, {bn}'s field agent {agent.user.full_name} "
             f"will visit you on {visit_date} regarding loan {masked_acct} (DPD: {dpd} days). "
-            f"Target: Rs.{case.target_amount:,.0f}. Please be available. - ABC Bank"
+            f"Target: Rs.{case.target_amount:,.0f}. Please be available. - {bn}"
         )
         wa_body = (
-            f"*Visit Notice – ABC Bank*\n\n"
+            f"*Visit Notice – {bn}*\n\n"
             f"Dear {customer.full_name},\n\n"
             f"Our field agent *{agent.user.full_name}* will be visiting you shortly.\n"
             f"Date: {visit_date}\n"
             f"Target Amount: Rs.{case.target_amount:,.0f}\n"
             f"Loan Account: {masked_acct}\n"
             f"⏳ DPD: {dpd} days overdue\n\n"
-            f"Please be available and keep documents ready.\n– ABC Bank"
+            f"Please be available and keep documents ready.\n– {bn}"
         )
     elif req.type == "ptp":
         active_ptp = (
@@ -606,15 +597,15 @@ def notify_case(case_id: str, req: NotifyCaseRequest, current_user: AgentOnly, d
         sms_body = (
             f"Dear {customer.full_name}, this is a reminder for your commitment of "
             f"Rs.{active_ptp.committed_amount:,.0f} due on {ptp_date} against loan {masked_acct}. "
-            f"Please ensure timely payment. - ABC Bank"
+            f"Please ensure timely payment. - {bn}"
         )
         wa_body = (
-            f"*PTP Reminder – ABC Bank*\n\n"
+            f"*PTP Reminder – {bn}*\n\n"
             f"Dear {customer.full_name},\n\n"
             f"Committed Amount: Rs.{active_ptp.committed_amount:,.0f}\n"
             f"Due Date: {ptp_date}\n"
             f"Loan Account: {masked_acct}\n\n"
-            f"Please ensure timely payment on the committed date.\n– ABC Bank"
+            f"Please ensure timely payment on the committed date.\n– {bn}"
         )
     elif req.type == "receipt":
         last_payment = (
@@ -629,22 +620,25 @@ def notify_case(case_id: str, req: NotifyCaseRequest, current_user: AgentOnly, d
         sms_body = (
             f"Dear {customer.full_name}, your payment of Rs.{last_payment.amount:,.0f} "
             f"against loan {masked_acct} (Receipt: {last_payment.receipt_number}) has been received on {pay_date}. "
-            f"Thank you. - ABC Bank"
+            f"Thank you. - {bn}"
         )
         wa_body = (
-            f"*Payment Receipt – ABC Bank*\n\n"
+            f"*Payment Receipt – {bn}*\n\n"
             f"Dear {customer.full_name},\n\n"
             f"Amount Received: Rs.{last_payment.amount:,.0f}\n"
             f"Loan Account: {masked_acct}\n"
             f"Receipt No: {last_payment.receipt_number}\n"
             f"Date: {pay_date}\n\n"
-            f"Thank you for your payment.\n– ABC Bank"
+            f"Thank you for your payment.\n– {bn}"
         )
     else:
         raise HTTPException(status_code=400, detail="Invalid notification type")
 
-    NotificationService.send_twilio(e164, sms_body, wa_body)
-    return {"status": "sent"}
+    # 2026-09-24: `status` used to be "sent" whatever happened. `sent` now
+    # says whether a message reached the transport (False when suppressed,
+    # unconfigured or failed); the status string follows it.
+    sent = NotificationService.send_twilio(e164, sms_body, wa_body, db=db, case_id=case.id)
+    return {"status": "sent" if sent else "not_sent", "sent": sent}
 
 
 # ---------------------------------------------------------------------------
@@ -652,7 +646,7 @@ def notify_case(case_id: str, req: NotifyCaseRequest, current_user: AgentOnly, d
 # ---------------------------------------------------------------------------
 
 @router.post("/cases/{case_id}/ptp", response_model=PTPResponse)
-def set_ptp(case_id: str, req: SetPTPRequest, current_user: AgentOnly, db: DbSession):
+def set_ptp(case_id: UUIDPath, req: SetPTPRequest, current_user: AgentOnly, db: DbSession):
     agent = _get_agent_or_404(current_user, db)
     return PaymentService(db).set_ptp(agent, case_id, req)
 
@@ -709,7 +703,7 @@ def cancel_sos(current_user: AgentOnly, db: DbSession):
 # ---------------------------------------------------------------------------
 
 @router.post("/cases/{case_id}/handover", response_model=HandoverResponse)
-def handover_case(case_id: str, req: HandoverRequest, current_user: AgentOnly, db: DbSession):
+def handover_case(case_id: UUIDPath, req: HandoverRequest, current_user: AgentOnly, db: DbSession):
     from app.services.case_service import CaseService
     agent = _get_agent_or_404(current_user, db)
     return CaseService(db).handover_case(agent, case_id, req)
@@ -720,7 +714,7 @@ def handover_case(case_id: str, req: HandoverRequest, current_user: AgentOnly, d
 # ---------------------------------------------------------------------------
 
 @router.post("/cases/{case_id}/call-log", status_code=201, response_model=LogCallResponse)
-def log_call(case_id: str, req: LogCallRequest, current_user: AgentOnly, db: DbSession):
+def log_call(case_id: UUIDPath, req: LogCallRequest, current_user: AgentOnly, db: DbSession):
     """Record a phone call attempt and any scheduling/payment intel gathered."""
     from app.models.call_log import CallLog
 
@@ -765,7 +759,7 @@ def log_call(case_id: str, req: LogCallRequest, current_user: AgentOnly, db: DbS
 # ---------------------------------------------------------------------------
 
 @router.patch("/customers/{customer_id}/flag", response_model=FlagCustomerResponse)
-def flag_customer(customer_id: str, req: CustomerFlagRequest, current_user: AgentOnly, db: DbSession):
+def flag_customer(customer_id: UUIDPath, req: CustomerFlagRequest, current_user: AgentOnly, db: DbSession):
     from app.services.case_service import CaseService
     agent = _get_agent_or_404(current_user, db)
     return CaseService(db).flag_customer(agent, customer_id, req)
@@ -778,13 +772,13 @@ def flag_customer(customer_id: str, req: CustomerFlagRequest, current_user: Agen
 # ---------------------------------------------------------------------------
 
 @router.post("/cases/{case_id}/photo-upload-url")
-def get_photo_upload_url(case_id: str, subject: str, current_user: AgentOnly, db: DbSession):
+def get_photo_upload_url(case_id: UUIDPath, subject: str, current_user: AgentOnly, db: DbSession):
     agent = _get_agent_or_404(current_user, db)
     return MediaService(db).get_photo_upload_url(agent, case_id, subject)
 
 
 @router.get("/cases/{case_id}/photos")
-def get_case_photos(case_id: str, current_user: AgentOnly, db: DbSession):
+def get_case_photos(case_id: UUIDPath, current_user: AgentOnly, db: DbSession):
     """Return latest geo-tagged photo per type for this case, extracted from visits."""
     agent = _get_agent_or_404(current_user, db)
     return MediaService(db).get_case_photos(agent, case_id)
@@ -797,7 +791,7 @@ def get_case_photos(case_id: str, current_user: AgentOnly, db: DbSession):
 # ---------------------------------------------------------------------------
 
 @router.post("/cases/{case_id}/recording-upload-url")
-def get_recording_upload_url(case_id: str, recorder: str, current_user: AgentOnly, db: DbSession):
+def get_recording_upload_url(case_id: UUIDPath, recorder: str, current_user: AgentOnly, db: DbSession):
     agent = _get_agent_or_404(current_user, db)
     return MediaService(db).get_recording_upload_url(agent, case_id, recorder)
 
@@ -808,7 +802,7 @@ def get_recording_upload_url(case_id: str, recorder: str, current_user: AgentOnl
 # ---------------------------------------------------------------------------
 
 @router.get("/visits/{visit_id}/recording-urls")
-def get_recording_playback_urls(visit_id: str, current_user: AgentOnly, db: DbSession):
+def get_recording_playback_urls(visit_id: UUIDPath, current_user: AgentOnly, db: DbSession):
     agent = _get_agent_or_404(current_user, db)
     return MediaService(db).get_recording_playback_urls(agent, visit_id)
 
@@ -822,7 +816,7 @@ def get_recording_playback_urls(visit_id: str, current_user: AgentOnly, db: DbSe
 # ---------------------------------------------------------------------------
 
 @router.post("/visits/{visit_id}/transcribe", status_code=202, response_model=TranscribeQueuedResponse)
-def transcribe_visit_recording(visit_id: str, current_user: AgentOnly, db: DbSession, recorder: str = "both"):
+def transcribe_visit_recording(visit_id: UUIDPath, current_user: AgentOnly, db: DbSession, recorder: str = "both"):
     """Enqueue transcription; returns immediately with a task id.
 
     See MediaService.queue_visit_transcription for the actual logic (why
@@ -871,7 +865,7 @@ def transcribe_audio(current_user: AgentOnly, db: DbSession, audio: UploadFile =
 # ---------------------------------------------------------------------------
 
 @router.post("/cases/{case_id}/visit-extraction", response_model=VisitExtractionResponse)
-def extract_visit_fields(case_id: str, body: VisitExtractionRequest, current_user: AgentOnly, db: DbSession):
+def extract_visit_fields(case_id: UUIDPath, body: VisitExtractionRequest, current_user: AgentOnly, db: DbSession):
     # TODO(A02): take RequestContext once it exists. Scoped STRICTLY: the case
     # must be assigned to the caller (visit_report_extraction.own_case), the
     # rule media_service, otp_service and the voice webhook use. (Until the
@@ -902,7 +896,7 @@ def extract_visit_fields(case_id: str, body: VisitExtractionRequest, current_use
 # ---------------------------------------------------------------------------
 
 @router.get("/cases/{case_id}/visit-strategy")
-def get_visit_strategy(case_id: str, current_user: AgentOnly, db: DbSession):
+def get_visit_strategy(case_id: UUIDPath, current_user: AgentOnly, db: DbSession):
     """Generate an LLM-powered customer approach strategy for this case.
 
     Reads the last 3 visits (transcripts + ai_visit_note) and last 5 call logs,
@@ -1094,17 +1088,22 @@ def get_availability_calendar(current_user: AgentOnly, db: DbSession):
 # GET /agent/voice/token  — Twilio Voice access token for browser calling
 # POST /agent/voice/outbound — TwiML for the call (called by TWILIO, not us)
 #
-# 2026-09-24 (hotfix AU-2) — rebuilt; the old pair dialled any client-sent
+# 2026-09-24 (audit gate 2) — rebuilt; the old pair dialled any client-sent
 # number unauthenticated. Rules and reasons: services/voice_service.py.
 # ---------------------------------------------------------------------------
 
 @router.get("/voice/token")
-def get_voice_token(current_user: AgentOnly, db: DbSession):
+def get_voice_token(current_user: AgentOnly, payload: TokenPayload, db: DbSession):
     from app.services import voice_service as voice
     if not voice.voice_configured():
         raise HTTPException(status_code=503, detail="Twilio Voice not configured")
+    sid = payload.get("sid")
+    if not sid:
+        # The token is bound to a login session so that ending the session
+        # ends calling. A session-less token cannot be bound, so it gets none.
+        raise HTTPException(status_code=403, detail="Voice calling needs a signed-in session")
     try:
-        return {"token": voice.mint_token(str(current_user.id)), "ttl_seconds": voice.VOICE_TOKEN_TTL_SECONDS}
+        return {"token": voice.mint_token(str(current_user.id), sid), "ttl_seconds": voice.VOICE_TOKEN_TTL_SECONDS}
     except Exception as exc:  # noqa: BLE001 — never echo SDK internals to the client
         logger.error("voice.token_failed", error_type=type(exc).__name__, exc_info=True)
         raise HTTPException(status_code=503, detail="Twilio Voice unavailable") from exc
@@ -1114,24 +1113,15 @@ def _twiml(body) -> FastAPIResponse:
     return FastAPIResponse(content=str(body), media_type="application/xml")
 
 
-def _voice_refusal_action(reason: str):
-    """v1 has no VOICE_CALL_REFUSED (audit_action_enum is a native Postgres
-    enum; a new value is a migration). The nearest existing actions stand in,
-    with the precise reason in failure_reason."""
-    from app.models.audit_log import AuditAction
-    from app.services import voice_service as voice
-    if reason == voice.OUTSIDE_CONTACT_HOURS:
-        return AuditAction.CONTACT_HOUR_VIOLATION_ATTEMPT
-    return AuditAction.ROLE_VIOLATION_ATTEMPT
-
-
 @router.post("/voice/outbound")
 async def voice_outbound(request: Request, db: DbSession):
     """Twilio's webhook for a browser call. Honoured only with a valid
-    X-Twilio-Signature, for a CASE assigned to the calling agent; the number
-    dialled is resolved here, never taken from the request (a client
-    `PhoneTo` is ignored)."""
+    X-Twilio-Signature, from our account and TwiML app, for a CASE the live
+    session's agent may act on (services/scope); the number dialled is
+    resolved here, never taken from the request (a client `PhoneTo` is
+    ignored)."""
     from app.core.audit import write_audit
+    from app.models.audit_log import AuditAction
     from app.services import voice_service as voice
 
     try:
@@ -1160,20 +1150,17 @@ async def voice_outbound(request: Request, db: DbSession):
 
     resp = VoiceResponse()
     try:
-        if not voice.from_our_app(params):
+        if not voice.from_our_app(params):          # d4 hotfix-1: our account AND our TwiML app
             raise voice.VoiceRefused(voice.NOT_OUR_APP)
         dest = voice.resolve_destination(db, from_param=params.get("From"), case_id=params.get("CaseId"))
     except voice.VoiceRefused as refused:
-        write_audit(db, action=_voice_refusal_action(refused.reason), user_id=refused.user_id,
-                    entity_type="voice_call", entity_id=refused.case_id, success=False,
-                    failure_reason=refused.reason)
+        write_audit(db, action=AuditAction.VOICE_CALL_REFUSED, user_id=refused.user_id, entity_type="case",
+                    entity_id=refused.case_id, success=False, failure_reason=refused.reason)
         resp.say("This call cannot be placed.")
         return _twiml(resp)
 
-    # No audit row for a PLACED call on v1 (no fitting action without a
-    # migration); p1 writes VOICE_CALL_PLACED. The log line names the case,
-    # never the number.
-    logger.info("voice.call_placed", user_id=dest.user_id, case_id=dest.case_id)
+    write_audit(db, action=AuditAction.VOICE_CALL_PLACED, user_id=dest.user_id, entity_type="case",
+                entity_id=dest.case_id)   # the case, never the number (not even its last 4)
     dial = Dial(caller_id=settings.TWILIO_PHONE_NUMBER)
     dial.number(dest.e164)
     resp.append(dial)
@@ -1230,7 +1217,7 @@ def create_leave_request(body: _LeaveRequestBody, current_user: AgentOnly, db: D
 
 
 @router.delete("/leave-requests/{request_id}")
-def withdraw_leave_request(request_id: str, current_user: AgentOnly, db: DbSession):
+def withdraw_leave_request(request_id: UUIDPath, current_user: AgentOnly, db: DbSession):
     from app.services.leave_service import LeaveService, serialize
     agent = _get_agent_or_404(current_user, db)
     return serialize(LeaveService(db).withdraw(agent, request_id), agent.user.full_name if agent.user else None)

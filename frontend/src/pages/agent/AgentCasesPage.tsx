@@ -270,7 +270,7 @@ export default function AgentCasesPage() {
               rankReason={ranked?.rank_reason}
               onNavigate={(e) => openGoogleMaps(c.customer.latitude, c.customer.longitude, c.customer.full_name, e)}
               onCall={(e) => callCustomer(c.id, c.customer.phone_primary, c.customer.full_name, e)}
-              onWhatsapp={async (e) => { e.stopPropagation(); try { await notifyVisit(c.id); toast.success("Visit notification sent"); } catch { toast.error("Could not send notification"); } }}
+              onWhatsapp={async (e) => { e.stopPropagation(); try { const r = await notifyVisit(c.id); if (r.sent) toast.success("Visit notification sent"); else toast("Not sent: messaging is off for this borrower"); } catch { toast.error("Could not send notification"); } }}
               onOpen={() => navigate(`/agent/cases/${c.id}`)}
               distanceM={here ? haversineM(here.lat, here.lon, c.customer.latitude, c.customer.longitude) : null}
             />

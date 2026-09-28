@@ -150,16 +150,35 @@ def _point_near(lat: float, lon: float) -> tuple[float, float]:
     return round(lat + dlat, 6), round(lon + dlon, 6)
 
 
-def _territory_anchors(db) -> list[tuple[float, float, str]]:
-    """(base_lat, base_lon, territory) for every active agent with a base."""
+def _territory_anchors(db) -> list[tuple[float, float, str, str, str]]:
+    """(base_lat, base_lon, territory, bank_id, agency_id) for every active
+    agent with a base. 2026-09-24: carries the agent's tenant, because a new
+    case now belongs to an AGENCY (the one whose territory it lands in) and a
+    borrower to that agency's bank."""
     from app.models.agent import Agent, AgentStatus
     rows = (
-        db.query(Agent.base_latitude, Agent.base_longitude, Agent.territory)
+        db.query(Agent.base_latitude, Agent.base_longitude, Agent.territory, Agent.bank_id, Agent.agency_id)
         .filter(Agent.base_latitude.isnot(None), Agent.base_longitude.isnot(None),
                 Agent.status != AgentStatus.SUSPENDED)
         .all()
     )
-    return [(float(la), float(lo), t) for la, lo, t in rows]
+    return [(float(la), float(lo), t, b, a) for la, lo, t, b, a in rows]
+
+
+def _demo_batch(db, bank_id: str, day: date, batches: dict):
+    """One DEMO feed batch per (bank, day): this feed stands in for the bank's
+    file, so a row it cannot place is quarantined exactly as a real one is."""
+    import hashlib
+    from app.models.lending import BankFeedBatch
+    if bank_id not in batches:
+        tag = f"demo_daily_feed:{bank_id}:{day.isoformat()}"
+        batch = BankFeedBatch(bank_id=bank_id, feed_type="DAILY_BOOK", business_date=day,
+                              file_name=f"demo-feed-{day:%Y%m%d}.csv", received_via="DEMO",
+                              file_sha256=hashlib.sha256(tag.encode()).hexdigest(), status="RECEIVED")
+        db.add(batch)
+        db.flush()
+        batches[bank_id] = batch
+    return batches[bank_id]
 
 _FIRST = ["Amit", "Pooja", "Sanjay", "Neha", "Rahul", "Divya", "Manish", "Kiran",
           "Vijay", "Anjali", "Deepak", "Sneha", "Rohan", "Preeti", "Nikhil"]
@@ -194,6 +213,18 @@ def _seed_day(db, day: date) -> int:
 
     n = random.randint(NEW_CASES_MIN, NEW_CASES_MAX)
     anchors = _territory_anchors(db)
+    if not anchors:
+        # 2026-09-24: a case must belong to an agency, and an agency is known
+        # only through its agents. With none, there is nobody to place with —
+        # say so rather than invent an unowned case (the v1 feed fell back to a
+        # Gurugram box with no owner).
+        logger.info("demo_daily_feed.skip_no_agents", day=str(day))
+        return 0
+    from app.services.placement_service import PlacementRefused, PlacementService
+    placements = PlacementService(db)
+    batches: dict = {}
+    held_by_bank: dict[str, int] = {}
+    quarantined = 0
     created = 0
     new_loan_ids: list[str] = []
     for i in range(n):
@@ -221,17 +252,13 @@ def _seed_day(db, day: date) -> int:
         outstanding = round(emi * months_left, 2)
         priority = priority_for(dpd)   # 2026-09-21: the one rule (models/case.py)
 
-        if anchors:
-            base_lat, base_lon, territory = random.choice(anchors)
-            lat, lon = _point_near(base_lat, base_lon)
-            city, state, pincode = _city_for(territory)
-        else:
-            lat, lon = round(random.uniform(*_GGN_LAT), 6), round(random.uniform(*_GGN_LON), 6)
-            city, state, pincode = "Gurugram", "Haryana", "122001"
+        base_lat, base_lon, territory, bank_id, agency_id = random.choice(anchors)
+        lat, lon = _point_near(base_lat, base_lon)
+        city, state, pincode = _city_for(territory)
         cust = Customer(
-            id=_uid(), customer_ref=f"{ref_prefix}{i:02d}",
+            id=_uid(), bank_id=bank_id, customer_ref=f"{ref_prefix}{i:02d}",
             full_name=f"{random.choice(_FIRST)} {random.choice(_LAST)}",
-            date_of_birth="1986-03-10", gender=random.choice(["MALE", "FEMALE"]),
+            date_of_birth=date(1986, 3, 10), gender=random.choice(["MALE", "FEMALE"]),
             pan_masked="XXXXX1234X", aadhaar_masked="XXXXXXXX5678",
             phone_primary=f"9{random.randint(100000000, 999999999):09d}",
             address_line1=f"{random.randint(1, 200)}, Sector {random.randint(1, 70)}",
@@ -249,9 +276,9 @@ def _seed_day(db, day: date) -> int:
         db.flush()
 
         loan = Loan(
-            id=_uid(), loan_account_number=f"{ref_prefix}LN{i:02d}",
+            id=_uid(), bank_id=bank_id, loan_account_number=f"{ref_prefix}LN{i:02d}",
             customer_id=cust.id, loan_type=loan_type,
-            bank_name="ABC Bank", branch_code="GGN044",
+            branch_code="GGN044",
             sanctioned_amount=round(outstanding * 1.4, 2),
             disbursed_amount=round(outstanding * 1.3, 2),
             outstanding_principal=outstanding,
@@ -262,8 +289,8 @@ def _seed_day(db, day: date) -> int:
             # matched to how late the account is — not a flat share of the balance.
             overdue_amount=round(emi * max(1, dpd // 30), 2),
             emi_amount=emi,
-            disbursement_date="2022-01-15", maturity_date="2025-01-15",
-            last_payment_date="2025-11-10", next_due_date=day.strftime("%Y-%m-%d"),
+            disbursement_date=date(2022, 1, 15), maturity_date=date(2025, 1, 15),
+            last_payment_date=date(2025, 11, 10), next_due_date=day,
             dpd=dpd,
             # Was an inline chain with no CURRENT and no BUCKET_1 branch, so
             # any DPD at or below 30 would have been written BUCKET_2.
@@ -278,20 +305,34 @@ def _seed_day(db, day: date) -> int:
         db.flush()
         new_loan_ids.append(loan.id)
 
-        case = Case(
-            id=_uid(), case_number=f"{ref_prefix}C{i:02d}",
-            customer_id=cust.id, loan_id=loan.id,
-            agent_id=None, status=CaseStatus.UNASSIGNED,
-            priority=priority,
-            target_amount=emi, collected_amount=0.0,
-            allocation_date=day.strftime("%Y-%m-%d"),
+        # The bank places the loan with the agency whose territory it lands in;
+        # the case is that agency's work item on the placement. A loan the
+        # agency cannot take (no contract in force, product not authorised,
+        # contract full) is quarantined, never turned into an unowned case —
+        # services/placement_service.py is the one place that rule lives.
+        try:
+            placement = placements.place_new_loan(loan, agency_id=agency_id, on=day, source="FEED")
+        except PlacementRefused as refused:
+            placements.quarantine(
+                _demo_batch(db, bank_id, day, batches), row_no=i + 1,
+                raw={"loan_account_number": loan.loan_account_number, "customer_ref": cust.customer_ref,
+                     "case_number": f"{ref_prefix}C{i:02d}", "agency_id": agency_id},
+                reason=refused.reason, detail=str(refused), loan_id=loan.id)
+            quarantined += 1
+            held_by_bank[bank_id] = held_by_bank.get(bank_id, 0) + 1
+            continue
+        placements.open_case(
+            placement, loan, case_number=f"{ref_prefix}C{i:02d}", target_amount=emi,
+            id=_uid(), priority=priority, allocation_date=day,
             allocation_score=float({"CRITICAL": 95, "HIGH": 75, "MEDIUM": 45, "LOW": 20}[priority.value]),
             is_ml_allocated=False, visit_count=0, max_visits_allowed=5,
             collection_stage="NPA_RECOVERY" if dpd > 90 else "FIELD",
         )
-        db.add(case)
         created += 1
 
+    for bank_id, batch in batches.items():
+        batch.status = "PARTIAL"
+        batch.rows_quarantined = held_by_bank.get(bank_id, 0)
     db.commit()
 
     # Score the accounts this batch created, the same way ingest_daily.py does
@@ -318,7 +359,7 @@ def _seed_day(db, day: date) -> int:
                     customers_written=scored["customers_written"],
                     write_gate_open=scored["write_risk_score_enabled"])
 
-    logger.info("demo_daily_feed.created", day=str(day), new_cases=created)
+    logger.info("demo_daily_feed.created", day=str(day), new_cases=created, quarantined=quarantined)
     return created
 
 

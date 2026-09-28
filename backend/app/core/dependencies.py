@@ -1,5 +1,5 @@
 from typing import Annotated
-from fastapi import Depends, HTTPException, Header, Request, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
@@ -28,8 +28,11 @@ def _get_token_payload(
     return payload
 
 
+TokenPayload = Annotated[dict, Depends(_get_token_payload)]
+
+
 def get_current_user(
-    payload: Annotated[dict, Depends(_get_token_payload)],
+    payload: TokenPayload,
     db: DbSession,
 ) -> User:
     user_id: str | None = payload.get("sub")
@@ -38,6 +41,16 @@ def get_current_user(
     user = db.get(User, user_id)
     if not user or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
+    # 2026-09-24 (A05) — a token issued under a session stops working the
+    # moment that session is revoked (logout, admin revoke, reuse detected),
+    # not 15 minutes later when it expires. A token with no sid (minted
+    # directly: service accounts, tests) has no session to check.
+    sid = payload.get("sid")
+    if sid:
+        from app.models.identity import UserSession
+        session = db.get(UserSession, sid)
+        if session is None or session.user_id != user.id or session.revoked_at is not None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session ended")
     return user
 
 
@@ -80,12 +93,3 @@ ManagerOnly = Annotated[User, Depends(require_roles(UserRole.AGENCY_MANAGER, Use
 AgentOnly = Annotated[User, Depends(require_roles(UserRole.FIELD_AGENT))]
 AnyRole = Annotated[User, Depends(require_roles(UserRole.FIELD_AGENT, UserRole.AGENCY_MANAGER, UserRole.AGENCY_ADMIN))]
 
-
-def get_command_centre_key(x_api_key: str = Header(..., alias="X-API-Key")) -> str:
-    from app.core.config import settings
-    if x_api_key != settings.COMMAND_CENTRE_API_KEY:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
-    return x_api_key
-
-
-CommandCentreKey = Annotated[str, Depends(get_command_centre_key)]

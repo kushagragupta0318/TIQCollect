@@ -43,6 +43,7 @@ from app.models.payment import Payment, PaymentMode, PaymentStatus
 from app.models.ptp import PTP, PTPStatus
 from app.models.visit import Visit, VisitOutcome
 from app.services.ml_scoring_service import MLScoringService
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
 #: The world the audited model was fitted on, in miniature. Every observability
 #: channel on, disposition at the audited read noise.
@@ -231,10 +232,9 @@ def test_the_inclusive_lower_window_edge_is_exact(world):
 @pytest.fixture(scope="module")
 def served(world):
     led, panel = world
-    engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
-                           poolclass=StaticPool)
-    Base.metadata.create_all(bind=engine)
-    db = sessionmaker(bind=engine)()
+    engine = make_engine()
+    create_schema(bind=engine)
+    db = make_session_factory(bind=engine)()
     mat = Materialiser(led, CFG)
     mat.load(db)
     day = MONTH * CFG.cycle_days
@@ -243,7 +243,7 @@ def served(world):
     rows = _rows(panel)
     loan = None
     for lid in rows.index:
-        cand = db.query(Loan).filter(Loan.id == lid).first()
+        cand = db.query(Loan).filter(Loan.loan_account_number == lid).first()
         if cand is not None:
             loan = cand
             break
@@ -253,7 +253,7 @@ def served(world):
         yield db, svc, loan, as_of_date
     finally:
         db.close()
-        Base.metadata.drop_all(bind=engine)
+        drop_schema(bind=engine)
 
 
 MIDNIGHT = time(0, 0, 0, 0)
@@ -274,8 +274,8 @@ def test_adapter_call_boundary_to_the_microsecond(served, delta, visible):
     before = _vector(svc, loan, as_of_date)
     cut = datetime.combine(as_of_date, MIDNIGHT, tzinfo=timezone.utc)
     case_id = db.query(Payment.case_id).first()
-    row = CallLog(id=f"K-PIT-{delta.microseconds}-{int(delta.total_seconds())}",
-                  case_id=f"C-{loan.id}", agent_id=db.query(Visit.agent_id).first()[0],
+    row = CallLog(id=test_id(f"K-PIT-{delta.microseconds}-{int(delta.total_seconds())}"),
+                  case_id=Materialiser.db_id("case", loan.loan_account_number), agent_id=db.query(Visit.agent_id).first()[0],
                   customer_id=loan.customer_id, called_at=cut + delta,
                   outcome=CallOutcome.ANSWERED, duration_seconds=90,
                   payment_intent_signalled=True)
@@ -295,7 +295,7 @@ def test_adapter_payment_boundary_to_the_microsecond(served, delta, visible):
     db, svc, loan, as_of_date = served
     before = _vector(svc, loan, as_of_date)
     cut = datetime.combine(as_of_date, MIDNIGHT, tzinfo=timezone.utc)
-    row = Payment(id=f"P-PIT-{delta.microseconds}", case_id=f"C-{loan.id}",
+    row = Payment(id=test_id(f"P-PIT-{delta.microseconds}"), case_id=Materialiser.db_id("case", loan.loan_account_number),
                   agent_id=None, amount=12_345.0, mode=PaymentMode.CASH,
                   status=PaymentStatus.VERIFIED, receipt_number=f"RCP-PIT-{delta.microseconds}",
                   payment_date=cut + delta)
@@ -313,7 +313,7 @@ def test_adapter_visit_boundary_to_the_microsecond(served, delta, visible):
     db, svc, loan, as_of_date = served
     before = _vector(svc, loan, as_of_date)
     cut = datetime.combine(as_of_date, MIDNIGHT, tzinfo=timezone.utc)
-    row = Visit(id=f"V-PIT-{delta.microseconds}", case_id=f"C-{loan.id}",
+    row = Visit(id=test_id(f"V-PIT-{delta.microseconds}"), case_id=Materialiser.db_id("case", loan.loan_account_number),
                 agent_id=db.query(Visit.agent_id).first()[0],
                 check_in_latitude=28.4, check_in_longitude=77.0,
                 check_in_time=cut + delta, distance_from_customer_metres=50.0,
@@ -332,7 +332,7 @@ def test_adapter_ptp_boundary_to_the_microsecond(served, delta, visible):
     db, svc, loan, as_of_date = served
     before = _vector(svc, loan, as_of_date)
     cut = datetime.combine(as_of_date, MIDNIGHT, tzinfo=timezone.utc)
-    row = PTP(id=f"T-PIT-{delta.microseconds}", case_id=f"C-{loan.id}",
+    row = PTP(id=test_id(f"T-PIT-{delta.microseconds}"), case_id=Materialiser.db_id("case", loan.loan_account_number),
               agent_id=db.query(Visit.agent_id).first()[0], committed_amount=5_000.0,
               committed_date=as_of_date + timedelta(days=5), status=PTPStatus.ACTIVE)
     db.add(row); db.flush()

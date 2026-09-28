@@ -199,12 +199,26 @@ class ExtractionResult:
 
 # ── Access ───────────────────────────────────────────────────────────────────
 def own_case(db, agent_id: str, case_id: str):
-    """The case, only if it is ASSIGNED to this agent; else None. Strict, like
-    media_service, otp_service and the voice webhook — not the looser
-    _get_accessible_case_or_404 (team's and unassigned cases), which A03
-    replaces. "Not yours" and "no such case" are the same None."""
-    from app.models.case import Case
-    return db.query(Case).filter(Case.id == case_id, Case.agent_id == agent_id).first()
+    """The case, only if this agent may act on it; else None. "Not yours" and
+    "no such case" are the same None.
+
+    2026-09-28 (merge into standalone-p1): this was a strict copy of the rule
+    (`Case.agent_id == agent_id`), written on v1 before A03 existed. On v2 the
+    rule has ONE definition, services/scope.agent_case_or_404 (the agent's own
+    agency, AND assigned or on today's IST beat), and this delegates to it.
+    """
+    from app.core.errors import AppException
+    from app.models.agent import Agent
+    from app.services.scope import agent_case_or_404
+    agent = db.get(Agent, agent_id)
+    if agent is None:
+        return None
+    try:
+        return agent_case_or_404(db, agent, case_id)
+    except AppException as exc:
+        if exc.status_code == 404:
+            return None
+        raise
 
 
 # ── Public entry point ───────────────────────────────────────────────────────

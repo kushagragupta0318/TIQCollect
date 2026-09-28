@@ -30,23 +30,21 @@ from app.models.customer import Customer, RiskCategory
 from app.models.loan import DPDBucket, Loan, LoanStatus, LoanType
 from app.models.payment import Payment, PaymentMode, PaymentStatus
 from app.models.ptp import PTP, PTPStatus
+from app.models.tenancy import Agency
 from app.models.user import User, UserRole
 from app.models.visit import PersonMet, Visit, VisitOutcome
 from app.services.planner_service import PlannerService, get_target_plan_date
+from tests._db import TEST_BANK_ID, create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
-test_engine = create_engine(
-    "sqlite://",
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
-)
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
+test_engine = make_engine()
+TestingSessionLocal = make_session_factory(autocommit=False, autoflush=False, bind=test_engine)
 
 
 @pytest.fixture(autouse=True)
 def setup_db():
-    Base.metadata.create_all(bind=test_engine)
+    create_schema(bind=test_engine)
     yield
-    Base.metadata.drop_all(bind=test_engine)
+    drop_schema(bind=test_engine)
 
 
 @pytest.fixture
@@ -97,7 +95,7 @@ def test_data(db_session):
     db_session.add(u1)
     ag1 = Agent(
         id=str(uuid.uuid4()), user_id=u1.id, employee_code="EMP001",
-        id_card_number="TIQ001", agency_id="AG01", manager_user_id=mgr.id,
+        id_card_number="TIQ001", manager_user_id=mgr.id,
         gender="M", base_latitude=28.6139, base_longitude=77.2090, territory="Delhi",
         languages_spoken=["HINDI", "ENGLISH"], specialization=AgentSpecialization.SECURED,
         max_cases_per_day=3, status=AgentStatus.ON_DUTY, tier=AgentTier.TIER_1,
@@ -114,7 +112,7 @@ def test_data(db_session):
     db_session.add(u2)
     ag2 = Agent(
         id=str(uuid.uuid4()), user_id=u2.id, employee_code="EMP002",
-        id_card_number="TIQ002", agency_id="AG01", manager_user_id=mgr.id,
+        id_card_number="TIQ002", manager_user_id=mgr.id,
         gender="F", base_latitude=28.4595, base_longitude=77.0266, territory="Gurugram",
         languages_spoken=["HINDI", "PUNJABI"], specialization=AgentSpecialization.UNSECURED,
         max_cases_per_day=3, status=AgentStatus.ON_DUTY, tier=AgentTier.TIER_2,
@@ -125,17 +123,17 @@ def test_data(db_session):
     # Customer 1: Normal Auto Loan (near Delhi)
     c1 = Customer(
         id=str(uuid.uuid4()), customer_ref="CUST01", full_name="Aarav Sharma",
-        date_of_birth="1990-01-01", gender="M", pan_masked="ABCDE1234F", aadhaar_masked="123456789012",
+        date_of_birth=date(1990, 1, 1), gender="M", pan_masked="ABCDE1234F", aadhaar_masked="123456789012",
         phone_primary="9900000001", address_line1="Connaught Place, Delhi", city="Delhi", state="Delhi",
         pincode="110001", latitude=28.6315, longitude=77.2167, language_preference="HINDI",
     )
     db_session.add(c1)
     l1 = Loan(
         id=str(uuid.uuid4()), customer_id=c1.id, loan_account_number="LN001",
-        loan_type=LoanType.AUTO, bank_name="HDFC Bank", branch_code="DL01",
+        loan_type=LoanType.AUTO, branch_code="DL01",
         sanctioned_amount=500000.0, disbursed_amount=500000.0, outstanding_principal=250000.0,
         total_outstanding=250000.0, overdue_amount=50000.0, emi_amount=15000.0, interest_rate=12.5,
-        disbursement_date="2022-01-01", maturity_date="2027-01-01",
+        disbursement_date=date(2022, 1, 1), maturity_date=date(2027, 1, 1),
         dpd=45, dpd_bucket=DPDBucket.BUCKET_2, status=LoanStatus.ACTIVE,
     )
     db_session.add(l1)
@@ -149,7 +147,7 @@ def test_data(db_session):
     # Customer 2: Requires Female Agent (Gurugram)
     c2 = Customer(
         id=str(uuid.uuid4()), customer_ref="CUST02", full_name="Sunita Devi",
-        date_of_birth="1992-05-15", gender="F", pan_masked="ABCDE5678G", aadhaar_masked="987654321098",
+        date_of_birth=date(1992, 5, 15), gender="F", pan_masked="ABCDE5678G", aadhaar_masked="987654321098",
         phone_primary="9900000002", address_line1="Sector 44, Gurugram", city="Gurugram", state="Haryana",
         pincode="122003", latitude=28.4551, longitude=77.0716, language_preference="HINDI",
         requires_female_agent=True,
@@ -157,10 +155,10 @@ def test_data(db_session):
     db_session.add(c2)
     l2 = Loan(
         id=str(uuid.uuid4()), customer_id=c2.id, loan_account_number="LN002",
-        loan_type=LoanType.PERSONAL, bank_name="ICICI Bank", branch_code="GG01",
+        loan_type=LoanType.PERSONAL, branch_code="GG01",
         sanctioned_amount=200000.0, disbursed_amount=200000.0, outstanding_principal=120000.0,
         total_outstanding=120000.0, overdue_amount=35000.0, emi_amount=8000.0, interest_rate=14.0,
-        disbursement_date="2023-01-01", maturity_date="2026-01-01",
+        disbursement_date=date(2023, 1, 1), maturity_date=date(2026, 1, 1),
         dpd=80, dpd_bucket=DPDBucket.BUCKET_3, status=LoanStatus.ACTIVE,
     )
     db_session.add(l2)
@@ -174,17 +172,17 @@ def test_data(db_session):
     # Customer 3: Do-Not-Contact
     c3 = Customer(
         id=str(uuid.uuid4()), customer_ref="CUST03", full_name="Blocked Borrower",
-        date_of_birth="1985-11-20", gender="M", pan_masked="ABCDE9999Z", aadhaar_masked="112233445566",
+        date_of_birth=date(1985, 11, 20), gender="M", pan_masked="ABCDE9999Z", aadhaar_masked="112233445566",
         phone_primary="9900000003", address_line1="Noida Sector 18", city="Noida", state="Uttar Pradesh",
         pincode="201301", latitude=28.5677, longitude=77.3285, do_not_contact=True, language_preference="HINDI",
     )
     db_session.add(c3)
     l3 = Loan(
         id=str(uuid.uuid4()), customer_id=c3.id, loan_account_number="LN003",
-        loan_type=LoanType.PERSONAL, bank_name="Axis Bank", branch_code="NO01",
+        loan_type=LoanType.PERSONAL, branch_code="NO01",
         sanctioned_amount=100000.0, disbursed_amount=100000.0, outstanding_principal=80000.0,
         total_outstanding=80000.0, overdue_amount=25000.0, emi_amount=5000.0, interest_rate=15.0,
-        disbursement_date="2023-06-01", maturity_date="2025-06-01",
+        disbursement_date=date(2023, 6, 1), maturity_date=date(2025, 6, 1),
         dpd=95, dpd_bucket=DPDBucket.NPA, status=LoanStatus.ACTIVE,
     )
     db_session.add(l3)
@@ -272,6 +270,96 @@ def test_planner_hard_gates_and_allocation(db_session, test_data):
         assert b.status == BeatStatus.PLANNED
         assert b.beat_date == tomorrow
         assert b.total_cases >= 1
+
+
+def test_planner_pool_is_scoped_to_the_managers_own_agency(db_session, test_data):
+    """A04 (standalone plan, coordinator audit 2026-09-28): the unassigned
+    half of the candidate-case query used to carry no tenant filter at all,
+    so an unassigned case belonging to a DIFFERENT agency's book would enter
+    every manager's nightly plan and could be handed to their agent. Reuses
+    test_planner_hard_gates_and_allocation's exact fixture and its exact
+    expected counts (2 allocated, 1 blocked) — a case belonging to another
+    agency, added here, must change NEITHER."""
+    other_agency_id = test_id("agency:planner-scope-other")
+    db_session.add(Agency(id=other_agency_id, bank_id=TEST_BANK_ID, code="AGENCY-OTHER-A04",
+                          legal_name="Nilgiri Field Recovery LLP", trade_name="Nilgiri Field Recovery",
+                          status="ACTIVE", contacts=[], is_demo=True))
+    db_session.flush()
+    other_case = Case(
+        id=str(uuid.uuid4()), case_number="CASE-OTHER-AGENCY", customer_id=test_data["case1"].customer_id,
+        loan_id=test_data["case1"].loan_id, agent_id=None, agency_id=other_agency_id,
+        status=CaseStatus.UNASSIGNED, priority=CasePriority.HIGH, target_amount=60000, collected_amount=0,
+    )
+    db_session.add(other_case)
+    db_session.commit()
+
+    planner = PlannerService(db_session, manager_user_id=test_data["manager"].id)
+    tomorrow = date.today() + timedelta(days=1)
+    run = planner.plan_next_day(plan_date=tomorrow, strategy="SMART")
+
+    assert run.total_cases_allocated == 2   # unchanged: case1, case2 — NOT case_other
+    assert run.total_cases_blocked == 1     # unchanged: case3 (DNC)
+    decided_case_ids = {d.case_id for d in run.decisions}
+    assert other_case.id not in decided_case_ids
+    db_session.refresh(other_case)
+    assert other_case.agent_id is None      # never claimed by an out-of-agency agent
+
+
+def test_a_manager_whose_agency_is_suspended_is_not_planned(db_session, test_data, monkeypatch):
+    """MED, coordinator audit on c041835: the nightly task selected managers
+    by role + is_active only, with no Agency join — a manager whose agency
+    had been SUSPENDED (offboarded, contract lapsed, under review) was still
+    planned every night regardless. test_data's own manager sits under the
+    default ACTIVE test agency and must still be planned; a second manager
+    under a SUSPENDED agency must not be attempted at all — not planned, not
+    recorded as a failure either, simply excluded from the query."""
+    from app.workers.tasks import allocation as mod
+
+    suspended_agency_id = test_id("agency:suspended-a04")
+    db_session.add(Agency(id=suspended_agency_id, bank_id=TEST_BANK_ID, code="AGENCY-SUSPENDED",
+                          legal_name="Kumaon Debt Solutions Pvt. Ltd.", trade_name="Kumaon Debt Solutions",
+                          status="SUSPENDED", contacts=[], is_demo=True))
+    db_session.flush()
+    suspended_mgr = User(
+        id=str(uuid.uuid4()), email="suspended_mgr@tiqcollect.in", phone="9800009999",
+        full_name="Manager Of A Suspended Agency", hashed_password="hash", role=UserRole.AGENCY_MANAGER,
+        agency_id=suspended_agency_id, is_active=True, is_verified=True,
+    )
+    db_session.add(suspended_mgr)
+    db_session.commit()
+
+    monkeypatch.setattr("app.core.database.SessionLocal", lambda: db_session)
+    monkeypatch.setattr(db_session, "close", lambda: None)   # the fixture owns closing it
+
+    out = mod.run_nightly_allocation.__wrapped__(
+        strategy="SMART", plan_date_str=str(date.today() + timedelta(days=1)))
+
+    assert test_data["manager"].email in out["planned"]
+    assert suspended_mgr.email not in out["planned"]
+    assert suspended_mgr.email not in out["failed"]
+
+
+def test_a_manager_with_no_resolvable_agency_raises_without_touching_a_beat(db_session, test_data):
+    """LOW, coordinator audit on c041835: manager_agency_id is resolved by
+    looking up the manager's own User row; a manager_user_id that names
+    nobody (a stale reference — the realistic shape this branch actually
+    takes, since a live AGENCY_MANAGER/AGENCY_ADMIN row can't carry a NULL
+    agency_id past ck_users_role_scope) makes that lookup return None the
+    same way an explicit NULL would. This must raise immediately — before
+    the plan lock, before any Beat query — not fall through to the
+    "no active agents" branch's zero-run AllocationRun row, which describes
+    a different, legitimate state (a real manager with nobody to plan for
+    today), not a manager who could not be resolved at all."""
+    ghost_manager_id = str(uuid.uuid4())
+    planner = PlannerService(db_session, manager_user_id=ghost_manager_id)
+    tomorrow = date.today() + timedelta(days=1)
+
+    with pytest.raises(ValueError, match="no agency_id"):
+        planner.plan_next_day(plan_date=tomorrow, strategy="SMART")
+
+    assert db_session.query(AllocationRun).filter(
+        AllocationRun.manager_user_id == ghost_manager_id).count() == 0
+    assert db_session.query(Beat).count() == 0
 
 
 def test_planner_rollback(db_session, test_data):
@@ -429,7 +517,8 @@ def test_planning_does_not_stamp_a_future_date_on_a_case(client, db_session, tes
                        headers=headers)
     assert resp.status_code == 200
     plan_date = resp.json()["plan_date"]
-    today = _date.today().isoformat()
+    today_date = _date.today()
+    today = today_date.isoformat()
     assert plan_date > today, "the plan is for a future day, or this test proves nothing"
 
     body = client.get("/api/v1/manager/allocation/latest", headers=headers).json()
@@ -441,10 +530,12 @@ def test_planning_does_not_stamp_a_future_date_on_a_case(client, db_session, tes
     rows = db_session.query(_Case).filter(_Case.id.in_(ids)).all()
     assert rows
     for c in rows:
-        assert c.allocation_date == today, (
+        # allocation_date is a real Date column (v2); compare date objects, not
+        # a date against its own isoformat() string — those are never equal.
+        assert c.allocation_date == today_date, (
             f"case {c.case_number} stamped {c.allocation_date}, but the assignment "
             f"was made {today} — a manager would see a date that has not arrived")
-        assert c.allocation_date <= today
+        assert c.allocation_date <= today_date
 
     # The beat still carries the schedule, so nothing about WHEN the work is due
     # was lost by taking it off the case. Asserted against the Beat rows rather
@@ -795,9 +886,15 @@ def test_one_managers_failure_does_not_abort_the_others(monkeypatch):
                         lambda *a, **k: failed.append(a[3].id))
 
     class _Q:
+        def join(self, *a, **k): return self
         def filter(self, *a, **k): return self
-        def all(self): return [type("U", (), {"id": i, "email": f"{i}@t.io"})()
-                               for i in ("m1", "m2", "m3")]
+        def all(self):
+            # A04: two agencies (m1/m2 in one, m3 in another), so this also
+            # exercises the agency-then-manager grouping — m2's failure must
+            # not touch m3's agency any more than it touched m1's.
+            agency_of = {"m1": "agA", "m2": "agA", "m3": "agB"}
+            return [type("U", (), {"id": i, "email": f"{i}@t.io", "agency_id": agency_of[i]})()
+                   for i in ("m1", "m2", "m3")]
 
     class _DB:
         def query(self, *a, **k): return _Q()

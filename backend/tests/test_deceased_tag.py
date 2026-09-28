@@ -26,6 +26,9 @@ ALLOWED = {
     "ml/simulation/ledger/simulator.py": "the simulator's death EVENT name",
     "ml/simulation/ledger/materialise.py": "comparing that simulator EVENT name",
     "services/ai_report_service.py": "the VisitOutcome -> wording map key",
+    # v2 (standalone-p1, 2026-09-28): two more DIFFERENT things spelled the same.
+    "models/case.py": "ClosureReason.DECEASED, why a case stopped being worked",
+    "models/lookups.py": "the DECEASED bank_action_types lookup row (a bank's feed action)",
 }
 
 

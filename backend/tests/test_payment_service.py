@@ -12,6 +12,7 @@ from datetime import datetime, date, timezone
 from types import SimpleNamespace
 
 from app.services.payment_service import PaymentService
+from tests._db import test_id
 
 
 def test_generate_receipt_format():
@@ -26,7 +27,7 @@ def test_generate_receipt_unique_across_calls():
 
 def test_payment_response_shape():
     payment = SimpleNamespace(
-        id="pay-1",
+        id=test_id("pay-1"),
         receipt_number="TIQ-2026-ABCDEF12",
         amount=500.0,
         mode="UPI",
@@ -36,7 +37,7 @@ def test_payment_response_shape():
     case = SimpleNamespace(status="PARTIALLY_PAID", collected_amount=1500.0)
     resp = PaymentService._payment_response(payment, case)
     assert resp == {
-        "id": "pay-1",
+        "id": test_id("pay-1"),
         "receipt_number": "TIQ-2026-ABCDEF12",
         "amount": 500.0,
         "mode": "UPI",
@@ -52,8 +53,8 @@ def test_payment_response_shape():
 
 def test_ptp_response_shape_with_follow_up():
     ptp = SimpleNamespace(
-        id="ptp-1",
-        case_id="case-1",
+        id=test_id("ptp-1"),
+        case_id=test_id("case-1"),
         committed_amount=2000.0,
         committed_date=date(2026, 8, 1),
         follow_up_date=date(2026, 8, 3),
@@ -61,8 +62,8 @@ def test_ptp_response_shape_with_follow_up():
     )
     resp = PaymentService._ptp_response(ptp)
     assert resp == {
-        "id": "ptp-1",
-        "case_id": "case-1",
+        "id": test_id("ptp-1"),
+        "case_id": test_id("case-1"),
         "committed_amount": 2000.0,
         "committed_date": "2026-08-01",
         "follow_up_date": "2026-08-03",
@@ -72,8 +73,8 @@ def test_ptp_response_shape_with_follow_up():
 
 def test_ptp_response_shape_without_follow_up():
     ptp = SimpleNamespace(
-        id="ptp-2",
-        case_id="case-2",
+        id=test_id("ptp-2"),
+        case_id=test_id("case-2"),
         committed_amount=750.0,
         committed_date=date(2026, 8, 5),
         follow_up_date=None,

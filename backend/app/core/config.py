@@ -24,11 +24,21 @@
 #   Case.priority on an existing case and turning that on is new behaviour,
 #   not a like-for-like swap. Wiring the nightly task must not be what makes
 #   either of them live.
+# 2026-09-28 (A15) — Added PRODUCT_MODE (standalone plan §2.3): "standalone"
+#   turns on the bank portal; "embedded" is today's behaviour — this repo
+#   serving Command Center at /api/v1/manager/* and /api/field-ops/*, and
+#   nothing else new. Default is "embedded": the deployed system (CLAUDE.md's
+#   provenance section) is embedded in the Collections platform today, so a
+#   fresh checkout with no override must keep behaving exactly as it does now
+#   rather than silently exposing a bank portal nobody asked for. A standalone
+#   deployment sets it explicitly. Rejects anything else at STARTUP (fail
+#   loud, not "silently read as embedded" — a typo'd env var must not make a
+#   standalone deployment quietly serve as embedded, or vice versa).
 # ───────────────────────────────────────────────────────────────────────────
 import os
 from functools import lru_cache
-from typing import List
-from pydantic import field_validator
+from typing import List, Literal
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -42,14 +52,14 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # Agency identity — shown on the public agent-verification page.
-    AGENCY_NAME: str = "TIQ Financial Services Pvt. Ltd."
-    AGENCY_RBI_REG: str = "RB-2024-0192"
-
     # App
     APP_NAME: str = "TIQCollect"
     APP_ENV: str = "development"
     DEBUG: bool = False
+    # standalone plan §2.3 — see the 2026-09-28 CHANGELOG entry above. Literal
+    # rather than a plain str + hand-rolled check: pydantic itself refuses any
+    # other value at startup, before a single request is served.
+    PRODUCT_MODE: Literal["standalone", "embedded"] = "embedded"
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
@@ -57,6 +67,23 @@ class Settings(BaseSettings):
 
     # Database
     DATABASE_URL: str
+
+    # 2026-09-28 (B14) — connection budget and time limits (docs/RESTRUCTURE-PLAN.md).
+    # Pool: each process held 20 + 40; four API workers and two Celery children
+    # could open 360 connections against Postgres' max_connections = 100. 5 + 5
+    # per process, and PgBouncer in front for anything larger.
+    DB_POOL_SIZE: int = 5
+    DB_MAX_OVERFLOW: int = 5
+    # Statement timeouts, applied with SET LOCAL at the start of every
+    # transaction (PgBouncer-safe: a session-level SET leaks or vanishes under
+    # transaction pooling). The API's is short, a request never needs more; the
+    # Celery workers' is long (allocation, ingest, retraining), set on worker start.
+    API_STATEMENT_TIMEOUT_MS: int = 15_000
+    JOB_STATEMENT_TIMEOUT_MS: int = 600_000
+    # The analytics read path (C*/D* bank screens). Unset = the primary; set it
+    # to a read replica when there is one. Every analytics transaction is
+    # READ ONLY either way.
+    ANALYTICS_DATABASE_URL: str = ""
 
     # Redis
     REDIS_URL: str = "redis://localhost:16379/0"
@@ -156,9 +183,9 @@ class Settings(BaseSettings):
     # its own switch: a public deployment running DEMO_MODE must not get it too.
     DEMO_OTP_ECHO: bool = False
 
-    @field_validator("DEMO_OTP_ECHO", mode="before")
+    @field_validator("DEMO_OTP_ECHO", "DEMO_DEVICE_REBIND", mode="before")
     @classmethod
-    def _unset_echo_is_off(cls, v):
+    def _unset_demo_switch_is_off(cls, v):
         # Empty, or a literal "${DEMO_OTP_ECHO}" (`docker run --env-file` does not
         # interpolate), means "not set". That is off, not a start-up failure.
         if v is None or (isinstance(v, str) and (not v.strip() or v.strip().startswith("${"))):
@@ -176,7 +203,9 @@ class Settings(BaseSettings):
     # DEMO_MODE cannot be it: .env.example ships DEMO_MODE=true and compose
     # defaults it on, so a real deployment may well run with it.
     DEMO_MASTER_DISABLE_OTHERS: str = ""
-    DEMO_EMAIL_DOMAINS: str = "tiqcollect.in"     # accounts outside these are never retired
+    # Accounts outside these are never retired. The v2 demo book (B15, 2026-09-28):
+    # Girivan Finance's bank users and Aravalli's staff and agents. (Was "tiqcollect.in", the v1 book.)
+    DEMO_EMAIL_DOMAINS: str = "girivanfinance.test,aravallifs.test"
     # 2026-09-24 (hotfix PAY-1) — accept the demo auto-confirm's DEMO-UPI-
     # reference. A flag production never sets: NOT DEMO_MODE, which the live
     # site runs with. Off => every UPI reference must be a 12-digit UTR.
@@ -185,6 +214,31 @@ class Settings(BaseSettings):
     # number here — no reseed, no rebuild; a backend restart applies it.
     DEMO_CONTACT_NAME: str = "Balraj Singh"
     DEMO_CONTACT_PHONE: str = "8015935790"
+    # 2026-09-24 (B22) — while DEMO_MODE is on (or the tenant is a demo
+    # tenant), SMS/WhatsApp go ONLY to DEMO_CONTACT_PHONE and to the numbers
+    # listed here (comma-separated, any format). Every other recipient is
+    # invented demo data and is suppressed, never contacted.
+    DEMO_NOTIFY_ALLOWLIST: str = ""
+    # 2026-09-24 (coordinator audit MED 7) — two SECURITY controls used to be
+    # switched off by DEMO_MODE as a side effect, and docker-compose defaults
+    # DEMO_MODE to true. Each now has its own flag, default OFF, set
+    # explicitly where a demo needs it:
+    #   DEMO_DEVICE_REBIND — an agent logging in from a new device re-binds
+    #     (recorded as DEVICE_MISMATCH success=True) instead of being refused.
+    #     This switches device binding OFF, A09b's secret included: anyone
+    #     with the password re-binds. Refused at start-up without DEMO_MODE.
+    #   DEMO_OTP_ECHO — the borrower's payment OTP is returned to the AGENT
+    #     in the API response (`demo_otp`), i.e. the second factor is shown
+    #     to the person it exists to check.
+    DEMO_DEVICE_REBIND: bool = False
+
+    @model_validator(mode="after")
+    def _device_rebind_needs_demo_mode(self):
+        # A09b audit: a deployment must not lose device binding to one stray flag.
+        if self.DEMO_DEVICE_REBIND and not self.DEMO_MODE:
+            raise ValueError("DEMO_DEVICE_REBIND=true switches device binding off and needs "
+                             "DEMO_MODE=true as well; unset it on a real deployment.")
+        return self
     # customer_ref of that showcase customer. Also what _sync_demo_contact()
     # renames on startup, so the name/phone and the anchoring agree by
     # construction instead of by two copies of the same literal.
@@ -603,6 +657,19 @@ class Settings(BaseSettings):
     OTP_MAX_ATTEMPTS: int = 3                 # wrong tries before the code is burned (brute-force cap)
     OTP_RESEND_THROTTLE_SECONDS: int = 30     # min gap between two sends for the same collection
     OTP_MAX_SENDS: int = 4                    # 1 initial send + up to 3 resends per collection
+
+    # ── Accounts: invites, passwords, MFA (P1 A06-A08, d4) ─────────────────
+    # The Fernet key TOTP secrets are encrypted under
+    # (`python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`).
+    # UNSET, or an unresolved ${VAR} => MFA enrollment is refused
+    # (MFA_NOT_CONFIGURED): a secret is never stored in plaintext. Rotating it
+    # invalidates every enrolled secret, so enrolled users re-enroll.
+    TOTP_ENC_KEY: str = ""
+    # "true" (any case) makes TOTP mandatory for bank roles: a bank user
+    # without it cannot sign in until enrolled. Read as a string, like every
+    # demo switch, so a literal ${VAR} reads as OFF instead of failing boot.
+    # Default off, so the demo master login keeps working.
+    BANK_MFA_REQUIRED: str = ""
 
 
 @lru_cache

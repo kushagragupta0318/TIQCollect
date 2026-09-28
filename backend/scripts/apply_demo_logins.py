@@ -12,6 +12,12 @@
 #     - the three accounts in DEMO_MASTER_ACCOUNTS — one AGENCY_ADMIN, one
 #       AGENCY_MANAGER, one FIELD_AGENT (the roles v1 has) — log in with
 #       DEMO_MASTER_PASSWORD;
+#       *(2026-09-28, merge into standalone-p1 / v2: the owner's decision for
+#       v2 is a BANK user, an agency manager and a field agent. The three are
+#       now matched against role GROUPS — any BANK_* role, AGENCY_MANAGER,
+#       FIELD_AGENT — one account per group. FIXTURE_USER_COUNT and the
+#       default demo domain below are still the v1 book's; B16/B18 replace
+#       them with the v2 roster's.)*
 #     - accounts in DEMO_MASTER_KEEP_ACCOUNTS are NEVER touched: the Collections
 #       Command Center logs in here as agency managers with its own passwords
 #       (its TIQCOLLECT_AGENCY_ACCOUNTS), and changing theirs 502s every
@@ -24,6 +30,11 @@
 #       and the compose file defaults it on — so a real deployment that set the
 #       master password would otherwise lock out every real user, every boot.
 #   A password change clears that user's refresh token; quick-login refuses a
+#   *(v2, 2026-09-28: "clears the refresh token" now means REVOKES EVERY LIVE
+#   SESSION of the user (auth_service.revoke_user_sessions, PASSWORD_CHANGED).
+#   v2 keeps sessions in tenancy.user_sessions. The v1 line
+#   `user.hashed_refresh_token = None` only set a plain attribute there and
+#   silently ended nothing; found at the merge.)*
 #   retired account (auth_service.quick_login).
 #
 #   REFUSES — logs an error, changes nothing, exit 1 — on DEMO_MODE off, a
@@ -51,12 +62,35 @@ from app.models.user import User, UserRole
 
 logger = structlog.get_logger()
 
+
+def _end_sessions(db: Session, user: User) -> None:
+    """A changed or retired password ends every live session of the user, in
+    the caller's transaction (committed with the password change)."""
+    from app.services.auth_service import revoke_user_sessions
+    revoke_user_sessions(db, user.id, "PASSWORD_CHANGED")
+
+
 MIN_PASSWORD_LENGTH = 16
-REQUIRED_ROLES = (UserRole.AGENCY_ADMIN, UserRole.AGENCY_MANAGER, UserRole.FIELD_AGENT)
-# The committed demo book (backend/fixtures/tables/users.csv, 2026-09-24): 21
-# users, every one @tiqcollect.in. A box with more users than that has users
-# the demo did not create, and is not one whose passwords this may retire.
-FIXTURE_USER_COUNT = 21
+# One account per group, in this order (v2, owner's decision): a bank-side
+# user, an agency manager, a field agent.
+REQUIRED_ROLE_GROUPS: tuple[tuple[str, frozenset[UserRole]], ...] = (
+    ("a bank user (BANK_ADMIN / BANK_ANALYST / BANK_TECHOPS)",
+     frozenset({UserRole.BANK_ADMIN, UserRole.BANK_ANALYST, UserRole.BANK_TECHOPS})),
+    ("an AGENCY_MANAGER", frozenset({UserRole.AGENCY_MANAGER})),
+    ("a FIELD_AGENT", frozenset({UserRole.FIELD_AGENT})),
+)
+
+
+def _group_of(role: UserRole) -> int | None:
+    return next((i for i, (_, roles) in enumerate(REQUIRED_ROLE_GROUPS) if role in roles), None)
+
+
+# The committed demo book: backend/fixtures/fieldops-demo-v2.dump (B15,
+# 2026-09-28) holds 24 users, every one @girivanfinance.test or
+# @aravallifs.test. A box with more users than that has users the demo did
+# not create, and is not one whose passwords this may retire. (Was 21, the v1
+# book's users.csv, all @tiqcollect.in.) B16-B18's generator raises it.
+FIXTURE_USER_COUNT = 24
 
 EXIT_APPLIED, EXIT_REFUSED, EXIT_NOT_CONFIGURED = 0, 1, 3
 
@@ -94,7 +128,7 @@ def _domain(email: str) -> str:
 
 def apply(db: Session, *, password: str | None, accounts_raw: str | None, demo_mode: bool,
           keep_raw: str | None = "", disable_others: bool = False,
-          demo_domains: str | None = "tiqcollect.in", max_users: int = FIXTURE_USER_COUNT) -> Outcome:
+          demo_domains: str | None = None, max_users: int = FIXTURE_USER_COUNT) -> Outcome:
     """Give the three named accounts the master password; with disable_others,
     retire every other demo account's password. Changes nothing unless every
     precondition holds."""
@@ -106,8 +140,8 @@ def apply(db: Session, *, password: str | None, accounts_raw: str | None, demo_m
         return Outcome(applied=False, reason=f"DEMO_MASTER_PASSWORD is shorter than {MIN_PASSWORD_LENGTH} characters")
 
     emails = parse_accounts(accounts_raw)
-    if len(emails) != len(REQUIRED_ROLES) or len(set(emails)) != len(emails):
-        return Outcome(applied=False, reason=f"DEMO_MASTER_ACCOUNTS must name exactly {len(REQUIRED_ROLES)} distinct emails")
+    if len(emails) != len(REQUIRED_ROLE_GROUPS) or len(set(emails)) != len(emails):
+        return Outcome(applied=False, reason=f"DEMO_MASTER_ACCOUNTS must name exactly {len(REQUIRED_ROLE_GROUPS)} distinct emails")
     keep = set(parse_accounts(keep_raw))
     # A keep-list that is set but names nobody (or carries an unresolved
     # ${VAR}) is a mistake that would retire the very accounts it meant to
@@ -131,13 +165,18 @@ def apply(db: Session, *, password: str | None, accounts_raw: str | None, demo_m
     missing = [e for e in [*emails, *sorted(keep)] if e not in users]
     if missing:
         return Outcome(applied=False, reason=f"unknown accounts: {', '.join(missing)}")
-    roles = sorted(users[e].role.value for e in emails)
-    if roles != sorted(r.value for r in REQUIRED_ROLES):
-        return Outcome(applied=False, reason=f"DEMO_MASTER_ACCOUNTS must be one {', one '.join(r.value for r in REQUIRED_ROLES)}; got {roles}")
+    groups = sorted((g for g in (_group_of(users[e].role) for e in emails) if g is not None))
+    if groups != list(range(len(REQUIRED_ROLE_GROUPS))):
+        roles = sorted(users[e].role.value for e in emails)
+        wanted = ", ".join(name for name, _ in REQUIRED_ROLE_GROUPS)
+        return Outcome(applied=False, reason=f"DEMO_MASTER_ACCOUNTS must be one each of: {wanted}; got {roles}")
 
     master = set(emails)
     others = [e for e in users if e not in master and e not in keep]
     if disable_others:
+        if demo_domains is None:                  # the one definition: settings (core/config.py)
+            from app.core.config import settings
+            demo_domains = settings.DEMO_EMAIL_DOMAINS
         domains = {d.strip().lower() for d in (demo_domains or "").split(",") if d.strip()}
         foreign = sorted(e for e in others if _domain(e) not in domains)
         if foreign:
@@ -155,7 +194,7 @@ def apply(db: Session, *, password: str | None, accounts_raw: str | None, demo_m
             out.master_unchanged.append(email)
             continue
         user.hashed_password = hash_password(password)
-        user.hashed_refresh_token = None
+        _end_sessions(db, user)
         out.master_set.append(email)
     for email in others:
         user = users[email]
@@ -165,7 +204,7 @@ def apply(db: Session, *, password: str | None, accounts_raw: str | None, demo_m
             out.already_disabled += 1
         else:
             user.hashed_password = disabled_password_hash()
-            user.hashed_refresh_token = None
+            _end_sessions(db, user)
             out.disabled += 1
     db.commit()
     return out

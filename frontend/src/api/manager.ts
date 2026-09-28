@@ -987,3 +987,86 @@ export async function markAgentLeave(agentId: string, body: { from_date: string;
   const { data } = await api.post(`/manager/agents/${agentId}/leave`, body);
   return data;
 }
+
+// ─── Manage Agents: create / edit / suspend / reactivate / reset-login (2026-09-28) ─
+// Backed by manager_agents_admin.py, a separate router file sharing manager.py's
+// "/manager" prefix — see that file's own changelog for why. `territory_region_id`
+// is deliberately not in either body: there is no regions-list endpoint yet, so
+// the field is left out of the UI entirely and the backend treats it as optional.
+
+export interface CreateAgentBody {
+  full_name: string;
+  email: string;
+  phone: string;
+  employee_code: string;
+  id_card_number: string;
+  base_latitude: number;
+  base_longitude: number;
+  territory: string;
+  gender?: string;
+  specialization?: "SECURED" | "UNSECURED" | "BOTH";
+  vehicle_type?: string;
+  max_cases_per_day?: number;
+  languages_spoken?: string[];
+}
+
+export interface CreateAgentResult {
+  agent_id: string;
+  user_id: string;
+  employee_code: string;
+  full_name: string;
+  email: string;
+  phone: string;
+  territory: string;
+  status: string;
+  /** Whether the one-time set-password link was texted to the new agent.
+   *  `sent: false` most often means no PUBLIC_BASE_URL is configured in this
+   *  environment — the agent row still exists; Reset Login is the recovery path. */
+  activation: { sent: boolean; expires_at?: string; error?: string };
+}
+
+export async function createAgent(body: CreateAgentBody): Promise<CreateAgentResult> {
+  const { data } = await api.post<CreateAgentResult>("/manager/agents", body);
+  return data;
+}
+
+/** Same shape as CreateAgentBody minus email/employee_code/id_card_number/
+ *  territory (not editable — see manager_agents_admin.EditAgentRequest) — and
+ *  every field optional: omitted means "leave unchanged", never "clear it".
+ *  base_latitude/base_longitude must be sent together or not at all. */
+export interface EditAgentBody {
+  full_name?: string;
+  phone?: string;
+  territory?: string;
+  base_latitude?: number;
+  base_longitude?: number;
+  gender?: string;
+  specialization?: "SECURED" | "UNSECURED" | "BOTH";
+  vehicle_type?: string;
+  max_cases_per_day?: number;
+  languages_spoken?: string[];
+}
+
+export async function editAgent(agentId: string, body: EditAgentBody): Promise<{ agent_id: string; changed: string[] }> {
+  const { data } = await api.patch(`/manager/agents/${agentId}`, body);
+  return data;
+}
+
+export async function suspendAgent(agentId: string, reason: string): Promise<{ agent_id: string; status: "SUSPENDED"; suspended_reason: string }> {
+  const { data } = await api.post(`/manager/agents/${agentId}/suspend`, { reason });
+  return data;
+}
+
+export async function reactivateAgent(agentId: string): Promise<{ agent_id: string; status: string }> {
+  const { data } = await api.post(`/manager/agents/${agentId}/reactivate`);
+  return data;
+}
+
+/** Ends the agent's current sessions and texts them a fresh set-password
+ *  link. Can answer 503 (no PUBLIC_BASE_URL configured) or 429 (rate-limited,
+ *  shared with create's own activation SMS) — both real on a local preview
+ *  and neither a crash; callers surface them through errorDetail(). */
+export async function resetAgentLogin(agentId: string): Promise<{ sent: boolean; expires_at?: string }> {
+  const { data } = await api.post(`/manager/agents/${agentId}/reset-login`);
+  return data;
+}

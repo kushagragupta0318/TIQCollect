@@ -1,5 +1,6 @@
 import axios, { type AxiosError, type InternalAxiosRequestConfig } from "axios";
 import { useAuthStore } from "@/store/authStore";
+import { isPublicAuthRequest } from "@/lib/authFlow";
 
 const api = axios.create({
   baseURL: "/api/v1",
@@ -59,7 +60,10 @@ api.interceptors.response.use(
   async (error: AxiosError) => {
     const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean };
 
-    if (error.response?.status === 401 && !originalRequest._retry) {
+    // 2026-09-28 (A11, d4) — a 401 from a credentials endpoint (a wrong TOTP
+    // code at /auth/login, an expired invite link) is an answer about the
+    // ATTEMPT, not an expired session: never refresh-and-retry it.
+    if (error.response?.status === 401 && !originalRequest._retry && !isPublicAuthRequest(originalRequest.url)) {
       if (isRefreshing) {
         return new Promise((resolve, reject) => {
           failedQueue.push({ resolve, reject });
@@ -74,6 +78,11 @@ api.interceptors.response.use(
 
       const refreshToken = useAuthStore.getState().refreshToken;
       if (!refreshToken) {
+        // 2026-09-28 (A11, d4) — this branch left isRefreshing = true for good,
+        // so every later 401 queued behind a refresh that never ran: the page
+        // hung. Reset it, and fail anything already queued.
+        isRefreshing = false;
+        processQueue(error, null);
         useAuthStore.getState().logout();
         return Promise.reject(error);
       }

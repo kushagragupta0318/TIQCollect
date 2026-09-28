@@ -17,14 +17,22 @@
 #   written to `beats.leave_type`; the beat column stays a String so no enum
 #   migration is needed, and services/leave_service.py is the one place that
 #   copies the value across.
+# 2026-09-24 (B07) — workforce schema, tenant columns with composite FKs;
+#   manager_user_id / requested_by / decided_by are NO ACTION (this said
+#   RESTRICT; corrected 2026-09-24, see base.uuid_fk) (were SET NULL:
+#   users are never deleted, so SET NULL could only erase who decided).
+#   DEFERRED to B23: beat_ids → workforce.attendance.leave_request_id, with
+#   leave days moving from beats to attendance (design §4.4).
 # ───────────────────────────────────────────────────────────────────────────
 import enum
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, Enum as SAEnum, ForeignKey, Index, JSON, String, Text
+from sqlalchemy import (
+    CheckConstraint, Date, DateTime, Enum as SAEnum, ForeignKeyConstraint, Index, String, Text, text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.base import Base, TimestampMixin, UUIDPrimaryKey
+from app.models.base import PUBLIC, Base, JsonDoc, TimestampMixin, UUIDPrimaryKey, UUIDType, uuid_fk
 
 
 class LeaveType(str, enum.Enum):
@@ -50,37 +58,49 @@ class LeaveStatus(str, enum.Enum):
 OPEN_LEAVE_STATUSES = frozenset({LeaveStatus.REQUESTED, LeaveStatus.APPROVED})
 
 
+LEAVE_TYPE_SQL = SAEnum(LeaveType, name="leave_type_enum", schema=PUBLIC, metadata=Base.metadata)
+LEAVE_STATUS_SQL = SAEnum(LeaveStatus, name="leave_status_enum", schema=PUBLIC, metadata=Base.metadata)
+
+
 class LeaveRequest(Base, UUIDPrimaryKey, TimestampMixin):
     """One agent's request (or a manager's record) to be off the field for a
     date range. Inclusive dates. Approval writes one leave Beat per day and
     records their ids in `beat_ids`, so revoking removes exactly those."""
     __tablename__ = "leave_requests"
+    __tenant_parents__ = (("agent_id", "Agent"),)
 
-    agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"), nullable=False, index=True)
+    bank_id: Mapped[str] = mapped_column(UUIDType, nullable=False)
+    agency_id: Mapped[str] = mapped_column(UUIDType, nullable=False)
+    agent_id: Mapped[str] = mapped_column(UUIDType, nullable=False)
     # Denormalised from the agent at write time, like Agent.manager_user_id:
     # the manager router scopes on it directly.
-    manager_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    manager_user_id: Mapped[str | None] = mapped_column(UUIDType)
 
     from_date: Mapped[date] = mapped_column(Date, nullable=False)
     to_date: Mapped[date] = mapped_column(Date, nullable=False)
-    leave_type: Mapped[LeaveType] = mapped_column(SAEnum(LeaveType, name="leave_type_enum"), nullable=False)
+    leave_type: Mapped[LeaveType] = mapped_column(LEAVE_TYPE_SQL, nullable=False)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     status: Mapped[LeaveStatus] = mapped_column(
-        SAEnum(LeaveStatus, name="leave_status_enum"), default=LeaveStatus.REQUESTED, nullable=False, index=True
+        LEAVE_STATUS_SQL, default=LeaveStatus.REQUESTED, server_default=text("'REQUESTED'"), nullable=False
     )
     # Who filed it: the agent's user for a request, the manager's for a mark.
-    requested_by_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
-    decided_by_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    requested_by_id: Mapped[str | None] = uuid_fk("tenancy.users.id", nullable=True)
+    decided_by_id: Mapped[str | None] = uuid_fk("tenancy.users.id", nullable=True)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     decision_note: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     # The leave beats approval wrote, so a revoke undoes exactly them.
-    beat_ids: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    beat_ids: Mapped[list] = mapped_column(JsonDoc, default=list, nullable=False)
 
-    agent = relationship("Agent", foreign_keys=[agent_id])
+    agent = relationship("Agent", foreign_keys=[agent_id], primaryjoin="LeaveRequest.agent_id == Agent.id")
 
     __table_args__ = (
+        ForeignKeyConstraint(["agent_id", "agency_id"], ["workforce.agents.id", "workforce.agents.agency_id"]),
+        ForeignKeyConstraint(["manager_user_id", "agency_id"], ["tenancy.users.id", "tenancy.users.agency_id"]),
+        CheckConstraint("to_date >= from_date", name="dates"),
         Index("ix_leave_agent_dates", "agent_id", "from_date", "to_date"),
         Index("ix_leave_manager_status", "manager_user_id", "status"),
+        Index(None, "agency_id", "status"),
+        {"schema": "workforce"},
     )

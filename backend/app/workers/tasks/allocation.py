@@ -44,6 +44,7 @@ logger = structlog.get_logger()
 def run_nightly_allocation(self, strategy: str = "SMART", plan_date_str: str | None = None):
     from app.core.database import SessionLocal
     from app.models.allocation_run import AllocationRun, AllocationRunStatus
+    from app.models.tenancy import Agency
     from app.models.user import User, UserRole
     from app.services.planner_service import PlannerService, get_target_plan_date
 
@@ -55,9 +56,17 @@ def run_nightly_allocation(self, strategy: str = "SMART", plan_date_str: str | N
     failures: dict[str, str] = {}
     try:
         try:
-            managers = db.query(User).filter(
+            # MED, coordinator audit on c041835: this used to select by role
+            # and is_active alone, with no Agency join at all — a manager
+            # whose agency had been SUSPENDED or OFFBOARDED was still
+            # planned every night. Inner-joining Agency and requiring
+            # ACTIVE means a manager whose agency_id is somehow NULL (should
+            # not occur — ck_users_role_scope requires it) is excluded the
+            # same way, rather than needing a separate check.
+            managers = db.query(User).join(Agency, User.agency_id == Agency.id).filter(
                 User.role.in_([UserRole.AGENCY_MANAGER, UserRole.AGENCY_ADMIN]),
                 User.is_active.is_(True),
+                Agency.status == "ACTIVE",
             ).all()
         except Exception as exc:
             # Nothing manager-specific to record against — the run could not
@@ -65,31 +74,54 @@ def run_nightly_allocation(self, strategy: str = "SMART", plan_date_str: str | N
             logger.error("nightly_allocation.managers_unavailable", error=str(exc))
             raise self.retry(exc=exc, countdown=300)
 
+        # A04 (standalone plan) — group by agency and plan each agency's
+        # managers together, rather than one flat list spanning every
+        # agency (and every bank) in the deployment. PlannerService itself
+        # now binds its candidate pool to the manager's own agency_id
+        # (services/planner_service.py), so this loop shape is not what
+        # closes the cross-tenant leak — it makes the tenant boundary a
+        # structural property of WHO gets planned together, rather than
+        # something that only lived inside one query deep in the service,
+        # so a future change to this task (a per-agency lock, a per-agency
+        # summary, a partial retry) inherits the boundary instead of having
+        # to remember it. The `by_agency` key can no longer be None in
+        # practice — the inner join above already excludes a NULL
+        # agency_id — but the dict grouping stays generic rather than
+        # assuming that, the same way a defensive filter stays even once a
+        # constraint makes its branch unreachable.
+        by_agency: dict[str | None, list[User]] = {}
         for manager in managers:
-            try:
-                run = PlannerService(db, manager_user_id=manager.id).plan_next_day(
-                    plan_date=target_date,
-                    strategy=strategy,
-                    force_replan=True,
-                )
-                results[manager.email] = {
-                    "run_id": run.id,
-                    "allocated": run.total_cases_allocated,
-                    "deferred": run.total_cases_deferred,
-                    "blocked": run.total_cases_blocked,
-                    "agents_planned": run.total_agents_planned,
-                    "expected_recovery_total": run.expected_recovery_total,
-                }
-            except Exception as exc:
-                failures[manager.email] = f"{type(exc).__name__}: {exc}"
-                logger.error("nightly_allocation.manager_failed",
-                             manager=manager.email, target_date=str(target_date),
-                             error=str(exc), exc_info=True)
-                _record_failure(db, AllocationRun, AllocationRunStatus,
-                                manager, target_date, strategy, exc)
+            by_agency.setdefault(manager.agency_id, []).append(manager)
+
+        for agency_id, agency_managers in by_agency.items():
+            logger.info("nightly_allocation.agency_start", agency_id=agency_id,
+                       target_date=str(target_date), managers=len(agency_managers))
+            for manager in agency_managers:
+                try:
+                    run = PlannerService(db, manager_user_id=manager.id).plan_next_day(
+                        plan_date=target_date,
+                        strategy=strategy,
+                        force_replan=True,
+                    )
+                    results[manager.email] = {
+                        "run_id": run.id,
+                        "allocated": run.total_cases_allocated,
+                        "deferred": run.total_cases_deferred,
+                        "blocked": run.total_cases_blocked,
+                        "agents_planned": run.total_agents_planned,
+                        "expected_recovery_total": run.expected_recovery_total,
+                    }
+                except Exception as exc:
+                    failures[manager.email] = f"{type(exc).__name__}: {exc}"
+                    logger.error("nightly_allocation.manager_failed",
+                                 manager=manager.email, agency_id=agency_id,
+                                 target_date=str(target_date),
+                                 error=str(exc), exc_info=True)
+                    _record_failure(db, AllocationRun, AllocationRunStatus,
+                                    manager, target_date, strategy, exc)
 
         logger.info("nightly_allocation.complete", target_date=str(target_date),
-                    planned=len(results), failed=len(failures),
+                    agencies=len(by_agency), planned=len(results), failed=len(failures),
                     results=results, failures=failures)
         # Reported, never raised. Every failure is already a row, and retrying
         # the whole task would replan the managers that succeeded — force_replan

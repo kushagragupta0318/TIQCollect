@@ -1,3 +1,5 @@
+# 2026-09-28: converted to the v2 harness (tests/_db) at the merge of v1 main
+# into standalone-p1.
 """ML-1 option A, 2026-09-24: the borrower's stance (BorrowerDisposition).
 
 recovery_risk 2.2.0 reads `latest_disposition` — its strongest behavioural
@@ -15,11 +17,8 @@ from datetime import date, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
-from app.core.database import Base, get_db
+from app.core.database import get_db
 from app.core.errors import AppException, ErrorCode
 from app.core.security import create_access_token
 from app.main import app
@@ -33,9 +32,19 @@ from app.models.visit import PersonMet, Visit, VisitOutcome
 from app.schemas.agent import RecordVisitRequest
 from app.services import visit_service as vs
 from app.services.ml_scoring_service import MLScoringService
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory
 
-engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
-Session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+# This file built its own `create_engine("sqlite://")` with no schema
+# awareness, so `Base.metadata.create_all` failed outright on the v2 model
+# (ten real Postgres schemas — collections.cases, workforce.agents, …; SQLite
+# has none). tests/_db.make_engine() maps every schema onto SQLite's single
+# namespace and turns foreign keys on; create_schema() (called inside the
+# `world` fixture, matching tests/test_verify_agent.py) adds the lookup rows
+# (collection_stages, etc.) and the default test bank/agency that every root
+# row (User, Agent, Customer, Loan) inherits its tenant from when not given
+# one explicitly (models/tenancy_listener.py).
+engine = make_engine()
+Session = make_session_factory(engine)
 
 
 def _uid():
@@ -44,7 +53,7 @@ def _uid():
 
 @pytest.fixture(scope="module")
 def world():
-    Base.metadata.create_all(engine)
+    create_schema(engine)
     db = Session()
     mgr = User(id=_uid(), email="rekha.suri@aravallifs.in", phone="9000000301", full_name="Rekha Suri",
                hashed_password="x", role=UserRole.AGENCY_MANAGER, is_active=True, is_verified=True)
@@ -52,7 +61,9 @@ def world():
               hashed_password="x", role=UserRole.FIELD_AGENT, is_active=True, is_verified=True)
     db.add_all([mgr, ua])
     db.flush()
-    ag = Agent(id=_uid(), user_id=ua.id, employee_code="EMP301", id_card_number="EMP301-ID", agency_id="AG1",
+    # agency_id left unset: Agent is a v2 root and takes the test default
+    # tenant (tests/_db.create_schema), same as tests/test_agent_case_scope.py.
+    ag = Agent(id=_uid(), user_id=ua.id, employee_code="EMP301", id_card_number="EMP301-ID",
                manager_user_id=mgr.id, gender="M", base_latitude=28.45, base_longitude=77.07, territory="Gurugram",
                languages_spoken=["HINDI"], status=AgentStatus.ON_DUTY, tier=AgentTier.TIER_1,
                specialization=AgentSpecialization.BOTH, ranking_score=80.0, max_cases_per_day=5)
@@ -60,28 +71,33 @@ def world():
     db.commit()
     yield {"ua": ua, "ag_id": ag.id}
     db.close()
-    Base.metadata.drop_all(engine)
+    drop_schema(engine)
 
 
 def _case(world) -> dict:
     db = Session()
     ref = "S" + uuid.uuid4().hex[:8].upper()
-    c = Customer(id=_uid(), customer_ref=ref, full_name="Pradeep Rawat", date_of_birth="1984-02-11", gender="M",
+    # date_of_birth/disbursement_date/maturity_date/allocation_date are Date
+    # columns in v2 (v1 had them as free strings) — real date objects below.
+    c = Customer(id=_uid(), customer_ref=ref, full_name="Pradeep Rawat", date_of_birth=date(1984, 2, 11), gender="M",
                  pan_masked="ABCDE1234F", aadhaar_masked="123456789012", phone_primary="9812300301",
                  address_line1="Sector 21", city="Gurugram", state="Haryana", pincode="122016",
                  latitude=28.45, longitude=77.07, language_preference="HINDI")
     db.add(c)
     db.flush()
+    # bank_name is now a read-only property over Bank.display_name (v1 stored
+    # it as a free string); branch_code must be one of tests/_db's seeded
+    # TEST_BRANCH_CODES, since (bank_id, branch_code) -> branches is a real FK.
     loan = Loan(id=_uid(), customer_id=c.id, loan_account_number="L" + ref, loan_type=LoanType.PERSONAL,
-                bank_name="HDFC", branch_code="GGN021", sanctioned_amount=100000.0, disbursed_amount=100000.0,
+                branch_code="GGN044", sanctioned_amount=100000.0, disbursed_amount=100000.0,
                 outstanding_principal=50000.0, total_outstanding=50000.0, overdue_amount=10000.0,
-                emi_amount=5000.0, interest_rate=12.0, disbursement_date="2022-01-01",
-                maturity_date="2027-01-01", dpd=45, dpd_bucket=DPDBucket.BUCKET_2, status=LoanStatus.ACTIVE)
+                emi_amount=5000.0, interest_rate=12.0, disbursement_date=date(2022, 1, 1),
+                maturity_date=date(2027, 1, 1), dpd=45, dpd_bucket=DPDBucket.BUCKET_2, status=LoanStatus.ACTIVE)
     db.add(loan)
     db.flush()
     k = Case(id=_uid(), case_number="C-" + ref, customer_id=c.id, loan_id=loan.id, agent_id=world["ag_id"],
              status=CaseStatus.ASSIGNED, target_amount=20000.0, collected_amount=0.0,
-             allocation_date=date.today().isoformat())
+             allocation_date=date.today())
     db.add(k)
     db.commit()
     out = {"case_id": k.id, "loan_id": loan.id}

@@ -375,8 +375,9 @@ export default function AgentCaseDetailPage() {
 
   async function openWhatsApp(type: "reminder" | "ptp" | "receipt") {
     try {
-      await notifyCase(c.id, type);
-      toast.success("Message sent via WhatsApp & SMS");
+      const r = await notifyCase(c.id, type);
+      if (r.sent) toast.success("Message sent via WhatsApp & SMS");
+      else toast("Not sent: messaging is off for this borrower");
     } catch {
       toast.error("Could not send message");
     }

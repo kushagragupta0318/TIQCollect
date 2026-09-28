@@ -2,6 +2,7 @@
 cases.priority — one rule, re-derived nightly. 2026-09-21.
 """
 from __future__ import annotations
+from datetime import date
 
 import pathlib
 import re
@@ -16,6 +17,7 @@ from app.models.case import Case, CasePriority, CaseStatus, priority_for
 from app.models.customer import Customer, RiskCategory
 from app.models.loan import DPDBucket, Loan, LoanStatus, LoanType, dpd_bucket_for
 from app.services.case_priority_service import restamp
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
 
 @pytest.mark.parametrize("dpd,want", [
@@ -58,18 +60,18 @@ def test_nobody_restates_the_ladder():
 
 
 def _book():
-    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
-    Base.metadata.create_all(bind=engine)
-    db = sessionmaker(autocommit=False, autoflush=False, bind=engine)()
-    cust = Customer(customer_ref="CP1", full_name="B", date_of_birth="1990-01-01", gender="M", pan_masked="X",
+    engine = make_engine()
+    create_schema(bind=engine)
+    db = make_session_factory(autocommit=False, autoflush=False, bind=engine)()
+    cust = Customer(customer_ref="CP1", full_name="B", date_of_birth=date(1990, 1, 1), gender="M", pan_masked="X",
                     aadhaar_masked="X", phone_primary="9000000001", address_line1="1", city="Delhi", state="DL",
                     pincode="110001", latitude=28.6, longitude=77.2, risk_category=RiskCategory.MEDIUM)
     db.add(cust); db.flush()
 
     def loan(dpd):
-        l = Loan(loan_account_number=f"CPL{dpd}-{db.query(Loan).count()}", customer_id=cust.id, loan_type=LoanType.PERSONAL, bank_name="B",
+        l = Loan(loan_account_number=f"CPL{dpd}-{db.query(Loan).count()}", customer_id=cust.id, loan_type=LoanType.PERSONAL,
                  branch_code="BR", sanctioned_amount=1.0, disbursed_amount=1.0, outstanding_principal=1.0, total_outstanding=1.0,
-                 overdue_amount=1.0, emi_amount=1.0, disbursement_date="2025-01-01", maturity_date="2027-01-01", dpd=dpd,
+                 overdue_amount=1.0, emi_amount=1.0, disbursement_date=date(2025, 1, 1), maturity_date=date(2027, 1, 1), dpd=dpd,
                  dpd_bucket=dpd_bucket_for(dpd), status=LoanStatus.ACTIVE, interest_rate=1.0, penal_charges=0.0)
         db.add(l); db.flush(); return l
 

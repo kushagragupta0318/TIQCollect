@@ -25,10 +25,10 @@ from app.core.security import _make_token, create_access_token, create_agent_ver
 from app.main import app
 from app.models.agent import Agent, AgentSpecialization, AgentStatus, AgentTier
 from app.models.user import User, UserRole
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
-engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
-                       poolclass=StaticPool)
-TestingSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+engine = make_engine()
+TestingSession = make_session_factory(autocommit=False, autoflush=False, bind=engine)
 URL = "/api/v1/verify-agent"
 ALLOWED = {"agent_name", "employee_code", "agency", "active"}
 
@@ -50,7 +50,7 @@ def _fresh_rate_limit_window():
 
 @pytest.fixture(scope="module")
 def world():
-    Base.metadata.create_all(engine)
+    create_schema(engine)
     db = TestingSession()
     mgr = User(id=_uid(), email="m@t.io", phone="9000000001", full_name="Manager",
                hashed_password="x", role=UserRole.AGENCY_MANAGER, is_active=True, is_verified=True)
@@ -66,7 +66,7 @@ def world():
 
     def agent(u, code, status):
         a = Agent(id=_uid(), user_id=u.id, employee_code=code, id_card_number=code + "-ID",
-                  agency_id="TIQ-DELHI-01", manager_user_id=mgr.id, gender="M",
+                  manager_user_id=mgr.id, gender="M",   # agency: the test default (v2)
                   base_latitude=28.63, base_longitude=77.21, territory="Delhi",
                   languages_spoken=["HINDI"], status=status, tier=AgentTier.TIER_1,
                   specialization=AgentSpecialization.BOTH, ranking_score=80.0)
@@ -78,7 +78,7 @@ def world():
     db.commit()
     yield {"db": db, "ok": ok, "susp": susp, "off": off, "dis": dis, "u_ok": u_ok}
     db.close()
-    Base.metadata.drop_all(engine)
+    drop_schema(engine)
 
 
 @pytest.fixture(scope="module")
@@ -101,7 +101,7 @@ def test_a_genuine_card_verifies_with_exactly_the_four_allowed_fields(client, wo
     body = r.json()
     assert set(body) == ALLOWED
     assert body == {"agent_name": "Arjun Mehta", "employee_code": "EMP0101",
-                    "agency": "TIQ-DELHI-01", "active": True}
+                    "agency": "Aravalli Field Services", "active": True}
 
 
 def test_no_authentication_is_needed_and_a_token_header_changes_nothing(client, world):

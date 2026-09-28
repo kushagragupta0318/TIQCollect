@@ -51,7 +51,9 @@ from app.models.case import Case, CaseStatus, EscalationReason
 from app.models.customer import CUSTOMER_TAG_DECEASED
 from app.models.visit import Visit, VisitOutcome
 from app.schemas.agent import RecordVisitRequest
+from app.services.scope import agent_case_or_404, sync_assignee
 from app.services.ai_report_service import AIReportService
+from app.services.brand import brand_for
 from app.services.borrower_stance import check_visit_stance
 from app.services.notification_service import NotificationService
 
@@ -102,34 +104,12 @@ class VisitService:
           6. Notify the customer by SMS/WhatsApp for non-payment outcomes
              (payment outcomes are notified by collect_payment instead).
         """
-        case = (
-            self.db.query(Case)
-            .options(joinedload(Case.customer), joinedload(Case.loan))
-            .filter(Case.id == case_id)
-            .first()
-        )
-        if not case:
-            raise HTTPException(status_code=404, detail="Case not found")
-
-        authorized = (case.agent_id == agent.id)
-        if not authorized:
-            from app.models.beat import Beat
-            beats = self.db.query(Beat).filter(Beat.agent_id == agent.id).all()
-            if any(case_id in (b.ordered_case_ids or []) for b in beats):
-                authorized = True
-            elif agent.manager_user_id and case.agent_id:
-                curr_ag = self.db.query(Agent).filter(Agent.id == case.agent_id).first()
-                if curr_ag and curr_ag.manager_user_id == agent.manager_user_id:
-                    authorized = True
-            elif case.agent_id is None:
-                authorized = True
-
-        if not authorized:
-            raise HTTPException(status_code=403, detail="Case not found or not assigned to you")
-
-        # Sync case agent if working on assigned beat case
-        if case.agent_id != agent.id:
-            case.agent_id = agent.id
+        # 2026-09-24 (A03): the one access rule. The old copy here granted any
+        # unassigned case in any tenant and then RE-ASSIGNED it to the caller,
+        # so recording a visit took the case over. A stale assignee is synced
+        # only for a case on the caller's beat today, inside their agency.
+        case = agent_case_or_404(self.db, agent, case_id,
+                                 options=(joinedload(Case.customer), joinedload(Case.loan)))
 
         if case.customer.do_not_contact:
             raise HTTPException(status_code=403, detail="Customer is marked Do Not Contact")
@@ -201,6 +181,11 @@ class VisitService:
                 ),
             )
 
+        # Every refusal is behind us: only now may a same-day handover move the
+        # case to the caller (scope.sync_assignee — never at the read, because
+        # the contact-hours refusal above commits its audit row).
+        sync_assignee(case, agent)
+
         visit_num = case.visit_count + 1
         visit = Visit(
             case_id=case.id,
@@ -258,7 +243,7 @@ class VisitService:
 
         agent.last_known_latitude = req.check_in_latitude
         agent.last_known_longitude = req.check_in_longitude
-        agent.last_location_update = now_utc.isoformat()
+        agent.last_location_update = now_utc
         agent.current_month_visits += 1
 
         self.db.commit()
@@ -433,10 +418,16 @@ class VisitService:
         # Fail closed on the lender's name (coordinator re-audit of bb4371a): a
         # blank one or an unresolved ${VAR} sends nothing, rather than a
         # message about "your lender" from a number the borrower cannot place.
-        lender = ((case.loan.bank_name if case.loan else None) or "").strip()
+        # 2026-09-28 (merge into standalone-p1): on v2 the lender is the case's
+        # TENANT (services/brand), not the free-text Loan.bank_name; an
+        # unresolved tenant is the same refusal. The send goes through the
+        # tenant-gated send_twilio, so a demo tenant's borrower is never texted.
+        from app.services.brand import tenant_of
+        tenant = tenant_of(self.db, case=case)
+        lender = ((tenant.bank_name if tenant else None) or "").strip()
         if not lender or lender.startswith("${"):
             logger.warning("visit.notice_skipped", case_id=case.id, reason="no lender name")
             return
         text = NotificationService.visit_notice_text(lender)
         e164 = "+" + NotificationService.normalize_phone(case.customer.phone_primary)
-        NotificationService.send_twilio(e164, text, text)
+        NotificationService.send_twilio(e164, text, text, db=self.db, case_id=case.id)

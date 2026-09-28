@@ -28,6 +28,7 @@ from app.ml.pipeline.missingness import (ACTION_ON_BREACH, MISSINGNESS_ABS_FLOOR
 from app.ml.pipeline.outcomes import OUTCOME_DEFINITION_VERSION, OutcomeStatus
 from app.models.base import Base
 from app.models.model_prediction import ModelPrediction
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
 BASELINE_RATE, CURRENT_RATE = 0.492, 0.372          # the audited case
 
@@ -161,25 +162,26 @@ def test_evaluate_psi_is_unchanged_by_this_module():
 # wired into monitor_model
 # ---------------------------------------------------------------------------
 
-engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
-Session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+engine = make_engine()
+Session = make_session_factory(autocommit=False, autoflush=False, bind=engine)
 
 
 @pytest.fixture
 def db():
-    Base.metadata.create_all(bind=engine)
+    create_schema(bind=engine)
     s = Session()
     try:
         yield s
     finally:
         s.close()
-        Base.metadata.drop_all(bind=engine)
+        drop_schema(bind=engine)
 
 
 def _pred(db, *, case, as_of, prob, outcome, contact):
     row = ModelPrediction(
         id=str(uuid.uuid4()), model_name="recovery_risk", model_version="1.1.0",
-        entity_type="case", entity_id=case, case_id=case, as_of_date=as_of,
+        entity_type="case", entity_id=test_id(f"case:{case}"), case_id=None,  # v2: entity_id is a UUID; no case row exists
+        as_of_date=as_of,
         probability=prob, is_modelled=True, feature_coverage=1.0,
         features={"dpd": 40.0 + prob * 100, "cibil_score": 600.0, "ptp_kept_ratio": 0.5,
                   "overdue_amount": 5000.0, "days_since_last_contact": contact},

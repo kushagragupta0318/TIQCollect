@@ -23,18 +23,28 @@ from alembic.migration import MigrationContext
 from alembic.operations import Operations
 
 from app.models.repayment_snapshot import RepaymentSnapshot
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
-MIGRATIONS = pathlib.Path(__file__).resolve().parents[1] / "alembic" / "versions"
+# 2026-09-24 (B11): the v1 chain moved to alembic/versions_v1/ (history, off
+# the upgrade path) and alembic/versions/ now holds the v2 baseline. This
+# file's parity tests are about the v1 revision, so they read it there; the
+# single-head test reads the LIVE chain.
+MIGRATIONS = pathlib.Path(__file__).resolve().parents[1] / "alembic" / "versions_v1"
+LIVE_CHAIN = pathlib.Path(__file__).resolve().parents[1] / "alembic" / "versions"
 REVISION = "f4b7d9c1e832"
 PARENT = "e91b4c2d70af"
 TABLE = "repayment_score_snapshots"
 RECOVERY_INDEX = "ix_repayment_snapshot_recovery_unlabelled"
 
 
-def _load(revision: str):
+def _load(revision: str, where: pathlib.Path = MIGRATIONS):
     """Import a migration module by revision id, without alembic's env."""
-    path = next(p for p in MIGRATIONS.glob("*.py") if p.name.startswith(revision))
-    spec = importlib.util.spec_from_file_location(f"mig_{revision}", path)
+    path = next(p for p in where.glob("*.py") if p.name.startswith(revision + "_"))
+    return _load_path(path)
+
+
+def _load_path(path: pathlib.Path):
+    spec = importlib.util.spec_from_file_location(f"mig_{path.stem}", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -83,9 +93,19 @@ def test_nullability_matches_the_model(migration):
 
 
 def test_types_match_the_model(migration):
+    """2026-09-24 (v2): money moved from DOUBLE to NUMERIC(14,2) in the model
+    (design §2.3). This v1 revision is history and still says Float for the
+    rupee columns; the v2 baseline creates them as NUMERIC. So: every non-money
+    column must still agree, and every money column must be Float here and
+    Numeric in the model — a third type on either side is a real drift."""
+    import sqlalchemy as sa
     model = _model_recovery_columns()
     for column in migration._recovery_columns():
-        assert type(column.type) is type(model[column.name].type), column.name
+        mt = model[column.name].type
+        if isinstance(mt, sa.Numeric) and not isinstance(mt, sa.Float):
+            assert isinstance(column.type, sa.Float), column.name
+        else:
+            assert type(column.type) is type(mt), column.name
 
 
 def test_the_not_null_column_has_a_server_default(migration):
@@ -107,8 +127,8 @@ def test_it_revises_the_snapshot_table_migration(migration):
 def test_there_is_exactly_one_head():
     """Two heads make `alembic upgrade head` ambiguous and it refuses to run."""
     revisions, parents = set(), set()
-    for path in MIGRATIONS.glob("*.py"):
-        module = _load(path.name.split("_")[0])
+    for path in LIVE_CHAIN.glob("*.py"):
+        module = _load_path(path)
         revisions.add(module.revision)
         if module.down_revision:
             parents.add(module.down_revision)
@@ -119,9 +139,11 @@ def test_there_is_exactly_one_head():
     # of this particular revision is already covered by
     # test_it_revises_the_snapshot_table_migration.
     assert len(heads) == 1, f"expected a single head, found {sorted(heads)}"
-    # ...and this migration is still on the chain rather than orphaned by a
-    # later one rewriting its own down_revision.
-    assert REVISION in revisions
+    # (2026-09-24: this also asserted REVISION was on the chain. The v1
+    # revision is history now; the v2 baseline creates the same columns, and
+    # test_migration_adds_exactly_the_model_recovery_columns still holds the
+    # v1 revision to the model.)
+    assert "v2_0001" in revisions
 
 
 # ── Round trip against a real database ──────────────────────────────────────
@@ -144,13 +166,13 @@ def _table_without_recovery(metadata):
 @pytest.fixture()
 def legacy_db():
     """A pre-feature database with one existing snapshot row in it."""
-    engine = sa.create_engine("sqlite://")
+    engine = make_engine()
     metadata = sa.MetaData()
     table = _table_without_recovery(metadata)
     metadata.create_all(engine)
     with engine.begin() as conn:
         conn.execute(table.insert().values(
-            id="snap-1", loan_id="loan-1", customer_id="cust-1",
+            id=test_id("snap-1"), loan_id=test_id("loan-1"), customer_id=test_id("cust-1"),
             as_of_date=date(2026, 8, 1), likelihood=61.5, outcome=None,
         ))
     return engine
@@ -187,8 +209,8 @@ def test_existing_rows_survive_with_null_recovery_fields(legacy_db, migration):
             " recovery_labelled_through_days FROM repayment_score_snapshots"
         )).mappings().one()
 
-    assert row["id"] == "snap-1"
-    assert row["loan_id"] == "loan-1"
+    assert row["id"] == test_id("snap-1")
+    assert row["loan_id"] == test_id("loan-1")
     assert row["likelihood"] == 61.5
     for field in ("recovery_potential", "recovery_rate_30", "recovery_rate_60",
                   "recovery_rate_90", "recovered_amount_30"):
@@ -224,7 +246,7 @@ def test_downgrade_keeps_the_data(legacy_db, migration):
     with legacy_db.connect() as conn:
         row = conn.execute(sa.text(
             "SELECT id, likelihood FROM repayment_score_snapshots")).mappings().one()
-    assert row["id"] == "snap-1" and row["likelihood"] == 61.5
+    assert row["id"] == test_id("snap-1") and row["likelihood"] == 61.5
 
 
 def test_downgrade_is_idempotent(legacy_db, migration):

@@ -249,7 +249,9 @@ def _end_of(as_of: date):
 
 
 def _parse_iso_date(value: Any) -> date | None:
-    """Loan.last_payment_date is a String(10), not a Date. Parse defensively.
+    """Parse a date defensively. Loan.last_payment_date was a String(10) until
+    2026-09-24 and is a DATE now (the date branch below); strings still arrive
+    from feed rows and payloads.
 
     Returns None rather than raising on anything unparseable: a malformed date on
     one loan must not take down the nightly scoring pass for the whole book.

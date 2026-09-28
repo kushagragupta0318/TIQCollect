@@ -41,6 +41,7 @@ from app.models.payment import Payment, PaymentMode, PaymentStatus
 from app.models.ptp import PTP, PTPStatus
 from app.models.visit import Visit, VisitOutcome
 from app.services.ml_scoring_service import MLScoringService, _PTP_STATUS_LEVEL, _ptp_status_level
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
 #: The wd10 recipe (every observability channel on, read noise 0.10) in
 #: miniature — the world the 2.2.0 features were developed on.
@@ -54,14 +55,13 @@ NEW = ["latest_disposition", "disposition_recency_class", "last_commit_status",
        "recent_ptp_status"]
 MODEL = RECOVERY_RISK_GAM.all_features
 
-engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
-                       poolclass=StaticPool)
-Session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+engine = make_engine()
+Session = make_session_factory(autocommit=False, autoflush=False, bind=engine)
 
 
 @pytest.fixture(scope="module")
 def world():
-    Base.metadata.create_all(bind=engine)
+    create_schema(bind=engine)
     led = LedgerSimulator(CFG).run(intercept=-4.23438)
     panel = build_panel(led, CFG)
     db = Session()
@@ -71,7 +71,7 @@ def world():
         yield led, panel, db, mat
     finally:
         db.close()
-        Base.metadata.drop_all(bind=engine)
+        drop_schema(bind=engine)
 
 
 def _as_of(day: int) -> datetime:
@@ -87,7 +87,7 @@ def matched(world):
         mat.rewind_to(db, day)
         want = panel[panel.month_index == day // CFG.cycle_days].set_index("loan_id")
         for lid in want.index:
-            loan = db.query(Loan).filter(Loan.id == lid).first()
+            loan = db.query(Loan).filter(Loan.loan_account_number == lid).first()
             if loan is not None:
                 pairs.append((day, lid, want.loc[lid], svc.build_features(loan, as_of=_as_of(day))))
     return pairs
@@ -227,7 +227,7 @@ def served(world):
     mat.rewind_to(db, day)
     as_of_date = CFG.start_date + timedelta(days=day)
     want = panel[panel.month_index == day // CFG.cycle_days]
-    loans = [db.query(Loan).filter(Loan.id == lid).first() for lid in want.loan_id]
+    loans = [db.query(Loan).filter(Loan.loan_account_number == lid).first() for lid in want.loan_id]
     loans = [ln for ln in loans if ln is not None]
     return db, MLScoringService(db), loans, as_of_date
 
@@ -242,7 +242,7 @@ def _quiet_loan(db, loans, cut: datetime, days: int = 12) -> Loan:
     only the test's own money can keep it."""
     since = cut - timedelta(days=days)
     for loan in loans:
-        cid = f"C-{loan.id}"
+        cid = Materialiser.db_id("case", loan.loan_account_number)
         pays = db.query(Payment).filter(Payment.case_id == cid, Payment.payment_date >= since,
                                         Payment.payment_date < cut).count()
         named = db.query(CallLog).filter(CallLog.case_id == cid, CallLog.called_at >= since,
@@ -259,7 +259,7 @@ def test_a_disposition_on_a_call_at_the_boundary(served, delta, visible):
     loan = loans[0]
     cut = datetime.combine(as_of_date, MIDNIGHT, tzinfo=timezone.utc)
     before = svc.build_features(loan, as_of=as_of_date)
-    row = CallLog(id=f"K-DISP-{int(delta.total_seconds()*1e6)}", case_id=f"C-{loan.id}",
+    row = CallLog(id=test_id(f"K-DISP-{int(delta.total_seconds()*1e6)}"), case_id=Materialiser.db_id("case", loan.loan_account_number),
                   agent_id=_agent(db), customer_id=loan.customer_id, called_at=cut + delta,
                   outcome=CallOutcome.ANSWERED, duration_seconds=60,
                   borrower_disposition=BorrowerDisposition.DISPUTE)
@@ -283,7 +283,7 @@ def test_a_disposition_on_a_visit_at_the_boundary(served, delta, visible):
     loan = loans[1]
     cut = datetime.combine(as_of_date, MIDNIGHT, tzinfo=timezone.utc)
     before = svc.build_features(loan, as_of=as_of_date)
-    row = Visit(id=f"V-DISP-{int(delta.total_seconds()*1e6)}", case_id=f"C-{loan.id}",
+    row = Visit(id=test_id(f"V-DISP-{int(delta.total_seconds()*1e6)}"), case_id=Materialiser.db_id("case", loan.loan_account_number),
                 agent_id=_agent(db), check_in_latitude=28.4, check_in_longitude=77.0,
                 check_in_time=cut + delta, distance_from_customer_metres=50.0,
                 customer_met=True, outcome=VisitOutcome.RTP,
@@ -304,22 +304,22 @@ def test_a_reading_older_than_the_window_is_stale(served):
     cut = datetime.combine(as_of_date, MIDNIGHT, tzinfo=timezone.utc)
     # Push every existing reading out of the way with a newer, deliberately
     # stale one: DISPOSITION_FRESH_DAYS + 1 days before the cut.
-    row = CallLog(id="K-STALE", case_id=f"C-{loan.id}", agent_id=_agent(db),
+    row = CallLog(id=test_id("K-STALE"), case_id=Materialiser.db_id("case", loan.loan_account_number), agent_id=_agent(db),
                   customer_id=loan.customer_id,
                   called_at=cut - timedelta(days=DISPOSITION_FRESH_DAYS + 1),
                   outcome=CallOutcome.ANSWERED, duration_seconds=60,
                   borrower_disposition=BorrowerDisposition.WILL_PAY)
-    fresh = CallLog(id="K-FRESH", case_id=f"C-{loan.id}", agent_id=_agent(db),
+    fresh = CallLog(id=test_id("K-FRESH"), case_id=Materialiser.db_id("case", loan.loan_account_number), agent_id=_agent(db),
                     customer_id=loan.customer_id,
                     called_at=cut - timedelta(days=DISPOSITION_FRESH_DAYS),
                     outcome=CallOutcome.ANSWERED, duration_seconds=60,
                     borrower_disposition=BorrowerDisposition.MAY_PAY)
     # Anything the world recorded later than these must be cleared for the
     # test to read; delete newer readings on this loan inside a savepoint.
-    newer = (db.query(CallLog).filter(CallLog.case_id == f"C-{loan.id}",
+    newer = (db.query(CallLog).filter(CallLog.case_id == Materialiser.db_id("case", loan.loan_account_number),
                                       CallLog.called_at >= row.called_at,
                                       CallLog.called_at < cut).all()
-             + db.query(Visit).filter(Visit.case_id == f"C-{loan.id}",
+             + db.query(Visit).filter(Visit.case_id == Materialiser.db_id("case", loan.loan_account_number),
                                       Visit.check_in_time >= row.called_at,
                                       Visit.check_in_time < cut).all())
     saved = [(type(r), {c.name: getattr(r, c.name) for c in r.__table__.columns}) for r in newer]
@@ -347,11 +347,11 @@ def test_a_call_and_a_visit_on_the_same_day_the_call_wins(served):
     db, svc, loans, as_of_date = served
     loan = loans[3]
     day = datetime.combine(as_of_date - timedelta(days=1), MIDNIGHT, tzinfo=timezone.utc)
-    v = Visit(id="V-TIE", case_id=f"C-{loan.id}", agent_id=_agent(db), check_in_latitude=28.4,
+    v = Visit(id=test_id("V-TIE"), case_id=Materialiser.db_id("case", loan.loan_account_number), agent_id=_agent(db), check_in_latitude=28.4,
               check_in_longitude=77.0, check_in_time=day + timedelta(hours=18),
               distance_from_customer_metres=50.0, customer_met=True, outcome=VisitOutcome.PTP,
               borrower_disposition=BorrowerDisposition.WILL_PAY)
-    k = CallLog(id="K-TIE", case_id=f"C-{loan.id}", agent_id=_agent(db), customer_id=loan.customer_id,
+    k = CallLog(id=test_id("K-TIE"), case_id=Materialiser.db_id("case", loan.loan_account_number), agent_id=_agent(db), customer_id=loan.customer_id,
                 called_at=day + timedelta(hours=9), outcome=CallOutcome.ANSWERED, duration_seconds=60,
                 borrower_disposition=BorrowerDisposition.REFUSES)
     db.add_all([v, k]); db.flush()
@@ -370,7 +370,7 @@ def test_a_commitment_is_open_then_kept_then_broken_by_the_ledger_not_by_a_colum
     loan = _quiet_loan(db, loans, cut)
     emi = float(loan.emi_amount)
     named = as_of_date + timedelta(days=1)                    # named date still ahead at as_of
-    call = CallLog(id="K-COMMIT", case_id=f"C-{loan.id}", agent_id=_agent(db),
+    call = CallLog(id=test_id("K-COMMIT"), case_id=Materialiser.db_id("case", loan.loan_account_number), agent_id=_agent(db),
                    customer_id=loan.customer_id, called_at=cut - timedelta(days=3),
                    outcome=CallOutcome.ANSWERED, duration_seconds=60, verbal_payment_date=named)
     db.add(call); db.flush()
@@ -378,7 +378,7 @@ def test_a_commitment_is_open_then_kept_then_broken_by_the_ledger_not_by_a_colum
     try:
         assert svc.build_features(loan, as_of=as_of_date)["last_commit_status"] == "OPEN"
         # Enough verified money between the call and the deadline: KEPT.
-        pay = Payment(id="P-COMMIT", case_id=f"C-{loan.id}", agent_id=None,
+        pay = Payment(id=test_id("P-COMMIT"), case_id=Materialiser.db_id("case", loan.loan_account_number), agent_id=None,
                       amount=COMMITMENT_KEPT_RATIO * emi, mode=PaymentMode.CASH,
                       status=PaymentStatus.VERIFIED, receipt_number="RCP-COMMIT",
                       payment_date=cut - timedelta(days=1))
@@ -408,11 +408,11 @@ def test_a_payment_that_would_keep_a_commitment_at_the_boundary(served, delta, v
     db, svc, loans, as_of_date = served
     cut = datetime.combine(as_of_date, MIDNIGHT, tzinfo=timezone.utc)
     loan = _quiet_loan(db, loans[5:], cut)
-    call = CallLog(id=f"K-KEEP-{int(delta.total_seconds()*1e6)}", case_id=f"C-{loan.id}",
+    call = CallLog(id=test_id(f"K-KEEP-{int(delta.total_seconds()*1e6)}"), case_id=Materialiser.db_id("case", loan.loan_account_number),
                    agent_id=_agent(db), customer_id=loan.customer_id,
                    called_at=cut - timedelta(days=2), outcome=CallOutcome.ANSWERED,
                    duration_seconds=60, verbal_payment_date=as_of_date + timedelta(days=1))
-    pay = Payment(id=f"P-KEEP-{int(delta.total_seconds()*1e6)}", case_id=f"C-{loan.id}", agent_id=None,
+    pay = Payment(id=test_id(f"P-KEEP-{int(delta.total_seconds()*1e6)}"), case_id=Materialiser.db_id("case", loan.loan_account_number), agent_id=None,
                   amount=float(loan.emi_amount), mode=PaymentMode.CASH, status=PaymentStatus.VERIFIED,
                   receipt_number=f"RCP-KEEP-{int(delta.total_seconds()*1e6)}", payment_date=cut + delta)
     db.add_all([call, pay]); db.flush()
@@ -429,7 +429,7 @@ def test_a_commitment_named_at_the_boundary(served, delta, visible):
     loan = loans[6]
     cut = datetime.combine(as_of_date, MIDNIGHT, tzinfo=timezone.utc)
     before = svc.build_features(loan, as_of=as_of_date)["last_commit_status"]
-    call = CallLog(id=f"K-NAME-{int(delta.total_seconds()*1e6)}", case_id=f"C-{loan.id}",
+    call = CallLog(id=test_id(f"K-NAME-{int(delta.total_seconds()*1e6)}"), case_id=Materialiser.db_id("case", loan.loan_account_number),
                    agent_id=_agent(db), customer_id=loan.customer_id, called_at=cut + delta,
                    outcome=CallOutcome.ANSWERED, duration_seconds=60,
                    verbal_payment_date=as_of_date + timedelta(days=5))
@@ -447,7 +447,7 @@ def test_a_promise_created_at_the_boundary(served, delta, visible):
     loan = loans[7]
     cut = datetime.combine(as_of_date, MIDNIGHT, tzinfo=timezone.utc)
     before = svc.build_features(loan, as_of=as_of_date)["recent_ptp_status"]
-    row = PTP(id=f"T-NEW-{int(delta.total_seconds()*1e6)}", case_id=f"C-{loan.id}",
+    row = PTP(id=test_id(f"T-NEW-{int(delta.total_seconds()*1e6)}"), case_id=Materialiser.db_id("case", loan.loan_account_number),
               agent_id=_agent(db), committed_amount=5_000.0,
               committed_date=as_of_date + timedelta(days=5), status=PTPStatus.RESCHEDULED)
     db.add(row); db.flush()
@@ -469,7 +469,7 @@ def test_a_promise_resolved_after_as_of_reads_open_on_the_rewound_book(world):
     if p.empty:
         pytest.skip("no promise straddles day 150 on this world")
     r = p.sort_values("created_day").iloc[-1]
-    loan = db.query(Loan).filter(Loan.id == r.loan_id).first()
+    loan = db.query(Loan).filter(Loan.loan_account_number == r.loan_id).first()
     svc = MLScoringService(db)
     mat.rewind_to(db, 150)
     early = svc.build_features(loan, as_of=_as_of(150))["recent_ptp_status"]
@@ -483,12 +483,12 @@ def test_a_promise_resolved_after_as_of_reads_open_on_the_rewound_book(world):
 
 def test_no_cases_means_none_for_every_status():
     """A loan with no case has no contact history; the levels say so."""
-    Base.metadata.create_all(bind=engine)
+    create_schema(bind=engine)
     db = Session()
     try:
         svc = MLScoringService(db)
         from types import SimpleNamespace
-        loan = SimpleNamespace(id="L-NOCASE", emi_amount=1000.0)
+        loan = SimpleNamespace(id=test_id("L-NOCASE"), emi_amount=1000.0)
         f = svc._history_features(loan, datetime(2026, 1, 1, tzinfo=timezone.utc))
         assert f["latest_disposition"] == "NONE" and f["disposition_recency_class"] == "NONE"
         assert f["last_commit_status"] == "NONE" and f["recent_ptp_status"] == "NONE"

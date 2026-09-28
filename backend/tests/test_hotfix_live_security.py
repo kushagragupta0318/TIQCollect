@@ -1,3 +1,9 @@
+# 2026-09-28: converted to the v2 harness (tests/_db) at the merge of v1 main
+# into standalone-p1. This file used to build its own schema-less
+# `create_engine("sqlite://")` (tests/_db.py's header explains why that always
+# fails against the v2, schema-qualified model: "unknown database tenancy").
+# Converted in place, one fixture at a time — see the section notes below for
+# what each one had to become and why.
 """Live-site hotfix, 2026-09-24: board AU-2 (browser calling) and PAY-1/PAY-2 (UPI).
 
 AU-2. POST /agent/voice/outbound was unauthenticated, ignored Twilio's
@@ -21,15 +27,13 @@ from datetime import date
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
+from starlette.requests import Request
 from twilio.request_validator import RequestValidator
 
 from app.core.config import settings
-from app.core.database import Base, get_db
+from app.core.database import get_db
 from app.core.errors import AppException, ErrorCode
-from app.core.security import create_access_token
+from app.core.security import create_access_token, decode_token
 from app.main import app
 from app.models.agent import Agent, AgentSpecialization, AgentStatus, AgentTier
 from app.models.audit_log import AuditAction, AuditLog
@@ -37,13 +41,13 @@ from app.models.case import Case, CaseStatus
 from app.models.customer import Customer
 from app.models.loan import DPDBucket, Loan, LoanStatus, LoanType
 from app.models.payment import Payment, PaymentMode
+from app.models.tenancy import Agency, Bank, Branch
 from app.models.user import User, UserRole
 from app.schemas.agent import CollectPaymentRequest
 from app.services import payment_service as ps
 from app.services import voice_service as voice
-
-engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
-TestingSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+from app.services.auth_service import open_session
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id
 
 AUTH_TOKEN = "test-twilio-auth-token-0123456789"
 ACCOUNT_SID = "ACtest00000000000000000000000000"
@@ -52,71 +56,123 @@ PUBLIC = "https://fieldops.example.in"
 PATH = "/api/v1/agent/voice/outbound"
 
 
-def _uid():
-    return str(uuid.uuid4())
+def _request() -> Request:
+    """A stub Starlette Request good enough for auth_service's logging (it only
+    reads .headers.get(...) and .client.host) — used both to open the login
+    sessions the voice tests need and, further down, by quick_login()."""
+    return Request({"type": "http", "method": "POST", "path": "/api/v1/auth/quick-login", "headers": [],
+                    "client": ("127.0.0.1", 5000), "query_string": b""})
 
 
-def _user(db, email, role, name, phone):
-    u = User(id=_uid(), email=email, phone=phone, full_name=name, hashed_password="x",
-             role=role, is_active=True, is_verified=True)
+# ── Fixture builders (module-level: reused by the world fixture and, for
+# _user, by the quick-login tests further down, which mint their own users). ──
+
+def _user(db, tenant, tag, email, role, name, phone):
+    u = User(id=test_id(f"hotfix:user:{tag}"), email=email, phone=phone, full_name=name,
+             hashed_password="x", role=role, is_active=True, is_verified=True, **tenant)
     db.add(u)
     return u
 
 
-def _agent(db, user, code, mgr):
-    a = Agent(id=_uid(), user_id=user.id, employee_code=code, id_card_number=code + "-ID",
-              agency_id="AG1", manager_user_id=mgr.id, gender="M",
+def _agent(db, tenant, tag, user, code, mgr):
+    a = Agent(id=test_id(f"hotfix:agent:{tag}"), user_id=user.id, employee_code=code,
+              id_card_number=code + "-ID", manager_user_id=mgr.id, gender="M",
               base_latitude=28.63, base_longitude=77.21, territory="Delhi",
               languages_spoken=["HINDI"], status=AgentStatus.ON_DUTY, tier=AgentTier.TIER_1,
-              specialization=AgentSpecialization.BOTH, ranking_score=80.0, max_cases_per_day=5)
+              specialization=AgentSpecialization.BOTH, ranking_score=80.0, max_cases_per_day=5, **tenant)
     db.add(a)
     return a
 
 
-def _case(db, agent, ref, name, phone, dnc=False):
-    c = Customer(id=_uid(), customer_ref=ref, full_name=name, date_of_birth="1988-04-12", gender="F",
-                 pan_masked="ABCDE1234F", aadhaar_masked="123456789012", phone_primary=phone,
-                 address_line1="Sector 44", city="Gurugram", state="Haryana", pincode="122003",
-                 latitude=28.45, longitude=77.07, language_preference="HINDI", do_not_contact=dnc)
+def _case(db, tenant, tag, agent, ref, name, phone, dnc=False):
+    c = Customer(id=test_id(f"hotfix:cust:{tag}"), bank_id=tenant["bank_id"], customer_ref=ref, full_name=name,
+                 date_of_birth=date(1988, 4, 12), gender="F", pan_masked="ABCDE1234F",
+                 aadhaar_masked="123456789012", phone_primary=phone, address_line1="Sector 44",
+                 city="Gurugram", state="Haryana", pincode="122003", latitude=28.45, longitude=77.07,
+                 language_preference="HINDI", do_not_contact=dnc)
     db.add(c)
     db.flush()
-    loan = Loan(id=_uid(), customer_id=c.id, loan_account_number="L" + ref, loan_type=LoanType.PERSONAL,
-                bank_name="HDFC", branch_code="GGN044", sanctioned_amount=100000.0, disbursed_amount=100000.0,
-                outstanding_principal=50000.0, total_outstanding=50000.0, overdue_amount=10000.0,
-                emi_amount=5000.0, interest_rate=12.0, disbursement_date="2022-01-01",
-                maturity_date="2027-01-01", dpd=45, dpd_bucket=DPDBucket.BUCKET_2, status=LoanStatus.ACTIVE)
+    loan = Loan(id=test_id(f"hotfix:loan:{tag}"), bank_id=tenant["bank_id"], customer_id=c.id,
+                loan_account_number="L" + ref, loan_type=LoanType.PERSONAL, branch_code="GGN044",
+                sanctioned_amount=100000.0, disbursed_amount=100000.0, outstanding_principal=50000.0,
+                total_outstanding=50000.0, overdue_amount=10000.0, emi_amount=5000.0, interest_rate=12.0,
+                disbursement_date=date(2022, 1, 1), maturity_date=date(2027, 1, 1), dpd=45,
+                dpd_bucket=DPDBucket.BUCKET_2, status=LoanStatus.ACTIVE)
     db.add(loan)
     db.flush()
-    k = Case(id=_uid(), case_number="C-" + ref, customer_id=c.id, loan_id=loan.id,
+    k = Case(id=test_id(f"hotfix:case:{tag}"), case_number="C-" + ref, customer_id=c.id, loan_id=loan.id,
              agent_id=agent.id if agent else None, status=CaseStatus.ASSIGNED, target_amount=20000.0,
-             collected_amount=0.0, allocation_date=date.today().isoformat())
+             collected_amount=0.0, allocation_date=date.today(), **tenant)
     db.add(k)
     return k
 
 
 @pytest.fixture(scope="module")
 def world():
-    Base.metadata.create_all(engine)
-    db = TestingSession()
-    mgr = _user(db, "vikram.malhotra@aravallifs.in", UserRole.AGENCY_MANAGER, "Vikram Malhotra", "9000000101")
-    ua = _user(db, "neha.bansal@aravallifs.in", UserRole.FIELD_AGENT, "Neha Bansal", "9000000102")
-    ub = _user(db, "arjun.sehgal@aravallifs.in", UserRole.FIELD_AGENT, "Arjun Sehgal", "9000000103")
+    """Its own tenant, NOT the shared tests._db default (TEST_BANK_ID /
+    TEST_AGENCY_ID), and deliberately `is_demo=False`: `outbound_allowed()`
+    (services/notification_service.py) suppresses every send to a demo
+    tenant, and every AU-2 dial test needs a call to actually go through.
+    See tests/test_voice_calls.py, which the same fixture shape is taken from.
+
+    Also seeds a live login (tenancy.user_sessions) for `ua` and `mgr` — the
+    v2 voice webhook identity is agent_<user hex>_<session hex>
+    (services/voice_service.identity_for), and resolve_destination refuses
+    unless that session is still live (2026-09-24, A05). `open_session` is
+    the one function that mints one (auth_service.py), used here exactly as
+    a real login would.
+    """
+    bank_id, agency_id = test_id("hotfix:bank"), test_id("hotfix:agency")
+    tenant = {"bank_id": bank_id, "agency_id": agency_id}
+
+    engine = make_engine()
+    create_schema(engine)
+    Session = make_session_factory(engine, info={})
+    db = Session()
+
+    db.add(Bank(id=bank_id, code="ARVFS", legal_name="Aravalli Financial Services Ltd.",
+                display_name="HDFC", timezone="Asia/Kolkata", brand={}, status="ACTIVE", is_demo=False))
     db.flush()
-    ag = _agent(db, ua, "EMP101", mgr)
-    peer = _agent(db, ub, "EMP102", mgr)          # same manager: the loose helper would let A reach these
+    db.add(Agency(id=agency_id, bank_id=bank_id, code="AG-HOTFIX-01",
+                  legal_name="Aravalli Field Services Pvt. Ltd.", trade_name="Aravalli Field Services",
+                  status="ACTIVE", contacts=[], is_demo=False))
+    db.add(Branch(bank_id=bank_id, branch_code="GGN044", name="Gurugram Sector 44"))
     db.flush()
+
+    mgr = _user(db, tenant, "mgr", "vikram.malhotra@aravallifs.in", UserRole.AGENCY_MANAGER, "Vikram Malhotra",
+               "9000000101")
+    ua = _user(db, tenant, "ua", "neha.bansal@aravallifs.in", UserRole.FIELD_AGENT, "Neha Bansal", "9000000102")
+    ub = _user(db, tenant, "ub", "arjun.sehgal@aravallifs.in", UserRole.FIELD_AGENT, "Arjun Sehgal", "9000000103")
+    db.flush()
+    ag = _agent(db, tenant, "ag", ua, "EMP101", mgr)
+    # Same agency, different agent, same manager: exercises "assigned to a
+    # teammate, not to me" under v2's rule (services/scope.agent_case_or_404
+    # — agency membership plus assignment-or-today's-beat). The v1 comment
+    # here ("the loose helper would let A reach these") described a since-
+    # replaced rule keyed on manager rather than on the case's own agent_id.
+    peer = _agent(db, tenant, "peer", ub, "EMP102", mgr)
+    db.flush()
+
     world = {
-        "db": db, "mgr": mgr, "ua": ua, "ub": ub, "ag": ag,
-        "own": _case(db, ag, "OWN", "Kavita Rathore", "9812300001"),
-        "peer": _case(db, peer, "PEER", "Sunil Dahiya", "9812300002"),
-        "pool": _case(db, None, "POOL", "Meena Chauhan", "9812300003"),
-        "dnc": _case(db, ag, "DNC", "Harish Tomar", "9812300004", dnc=True),
-        "pay": _case(db, ag, "PAY", "Anjali Kohli", "9812300005"),
+        "db": db, "Session": Session, "bank_id": bank_id, "agency_id": agency_id, "tenant": tenant,
+        "mgr": mgr, "ua": ua, "ub": ub, "ag": ag,
+        "own": _case(db, tenant, "own", ag, "OWN", "Kavita Rathore", "9812300001"),
+        "peer": _case(db, tenant, "peer", peer, "PEER", "Sunil Dahiya", "9812300002"),
+        "pool": _case(db, tenant, "pool", None, "POOL", "Meena Chauhan", "9812300003"),
+        "dnc": _case(db, tenant, "dnc", ag, "DNC", "Harish Tomar", "9812300004", dnc=True),
+        "pay": _case(db, tenant, "pay", ag, "PAY", "Anjali Kohli", "9812300005"),
     }
     db.commit()
+
+    tok_ua = open_session(db, ua, "dev-ua", _request())
+    tok_mgr = open_session(db, mgr, "dev-mgr", _request())
+    db.commit()
+    world["sids"] = {"ua": decode_token(tok_ua["access_token"])["sid"],
+                     "mgr": decode_token(tok_mgr["access_token"])["sid"]}
+
     yield world
     db.close()
-    Base.metadata.drop_all(engine)
+    drop_schema(engine)
 
 
 @pytest.fixture
@@ -132,7 +188,7 @@ def configured(monkeypatch):
 @pytest.fixture
 def client(world):
     def override():
-        db = TestingSession()
+        db = world["Session"]()
         try:
             yield db
         finally:
@@ -142,14 +198,15 @@ def client(world):
     app.dependency_overrides.pop(get_db, None)
 
 
-def _rows(action=None):
-    db = TestingSession()
-    q = db.query(AuditLog)
-    if action:
-        q = q.filter(AuditLog.action == action)
-    out = q.order_by(AuditLog.created_at).all()
-    db.close()
-    return out
+def _rows(world, action=None):
+    db = world["Session"]()
+    try:
+        q = db.query(AuditLog)
+        if action:
+            q = q.filter(AuditLog.action == action)
+        return q.order_by(AuditLog.created_at).all()
+    finally:
+        db.close()
 
 
 def _call(client, params, *, sign_url=PUBLIC + PATH, token=AUTH_TOKEN, signature=None):
@@ -161,17 +218,20 @@ def _call(client, params, *, sign_url=PUBLIC + PATH, token=AUTH_TOKEN, signature
     return client.post(PATH, data=params, headers=headers)
 
 
-def _from(user):
-    return f"client:agent_{uuid.UUID(user.id).hex}"
+def _from(world, tag):
+    # v2: the caller's identity is agent_<user hex>_<session hex>
+    # (voice_service.identity_for takes the sid the live session was opened
+    # under, not just the user id).
+    return f"client:{voice.identity_for(world[tag].id, world['sids'][tag])}"
 
 
-def _count(action):
-    return len(_rows(action))
+def _count(world, action):
+    return len(_rows(world, action))
 
 
 # ── AU-2: the webhook ────────────────────────────────────────────────────────
 def test_a_signed_call_dials_the_borrower_resolved_on_the_server(client, world, configured):
-    r = _call(client, {"From": _from(world["ua"]), "CaseId": world["own"].id, "PhoneTo": "+15559990000"})
+    r = _call(client, {"From": _from(world, "ua"), "CaseId": world["own"].id, "PhoneTo": "+15559990000"})
     assert r.status_code == 200
     assert "<Dial" in r.text and "+919812300001" in r.text
     assert "+15559990000" not in r.text            # the client's number is ignored
@@ -179,7 +239,7 @@ def test_a_signed_call_dials_the_borrower_resolved_on_the_server(client, world, 
 
 def test_phone_to_alone_dials_nothing(client, world, configured):
     """The old contract: a number and no case. There is nothing to dial."""
-    r = _call(client, {"From": _from(world["ua"]), "PhoneTo": "+15559990000"})
+    r = _call(client, {"From": _from(world, "ua"), "PhoneTo": "+15559990000"})
     assert r.status_code == 200 and "<Dial" not in r.text
 
 
@@ -187,25 +247,25 @@ def test_phone_to_alone_dials_nothing(client, world, configured):
 def test_a_case_not_assigned_to_the_caller_is_refused(client, world, configured, which):
     """Strict Case.agent_id == agent.id: a teammate's case and an unassigned
     one both pass the looser _get_accessible_case_or_404, and both must fail here."""
-    before = len(_rows(AuditAction.ROLE_VIOLATION_ATTEMPT))
-    r = _call(client, {"From": _from(world["ua"]), "CaseId": world[which].id})
+    before = _count(world, AuditAction.VOICE_CALL_REFUSED)
+    r = _call(client, {"From": _from(world, "ua"), "CaseId": world[which].id})
     assert r.status_code == 200 and "<Dial" not in r.text and "cannot be placed" in r.text
-    rows = _rows(AuditAction.ROLE_VIOLATION_ATTEMPT)
+    rows = _rows(world, AuditAction.VOICE_CALL_REFUSED)
     assert len(rows) == before + 1
     assert rows[-1].failure_reason == voice.NOT_YOUR_CASE and rows[-1].entity_id == world[which].id
 
 
 def test_a_do_not_contact_borrower_is_never_dialled(client, world, configured):
-    r = _call(client, {"From": _from(world["ua"]), "CaseId": world["dnc"].id})
+    r = _call(client, {"From": _from(world, "ua"), "CaseId": world["dnc"].id})
     assert "<Dial" not in r.text
-    assert _rows(AuditAction.ROLE_VIOLATION_ATTEMPT)[-1].failure_reason == voice.DO_NOT_CONTACT
+    assert _rows(world, AuditAction.VOICE_CALL_REFUSED)[-1].failure_reason == voice.DO_NOT_CONTACT
 
 
 def test_outside_contact_hours_is_refused_and_recorded_as_such(client, world, configured, monkeypatch):
     monkeypatch.setattr(voice, "is_within_contact_hours", lambda now=None: False)
-    r = _call(client, {"From": _from(world["ua"]), "CaseId": world["own"].id})
+    r = _call(client, {"From": _from(world, "ua"), "CaseId": world["own"].id})
     assert "<Dial" not in r.text
-    assert _rows(AuditAction.CONTACT_HOUR_VIOLATION_ATTEMPT)[-1].failure_reason == voice.OUTSIDE_CONTACT_HOURS
+    assert _rows(world, AuditAction.VOICE_CALL_REFUSED)[-1].failure_reason == voice.OUTSIDE_CONTACT_HOURS
 
 
 @pytest.mark.parametrize("from_param", ["", "client:someone", "client:agent_not-hex", "+919812300001",
@@ -217,15 +277,20 @@ def test_a_caller_that_is_not_an_agent_token_is_refused(client, world, configure
 
 def test_the_identity_is_twilio_safe_and_round_trips(world):
     """Alphanumerics and underscore only (audit of 4dcd9dc: ':' and '-' may be
-    rejected by Twilio, which would fail every call as BAD_IDENTITY)."""
+    rejected by Twilio, which would fail every call as BAD_IDENTITY).
+
+    v2: identity_for(user_id, sid) — the identity now names the LOGIN SESSION
+    too (so a logout ends calling), and parse_identity returns the
+    (user_id, sid) pair rather than a single id."""
     import re
-    ident = voice.identity_for(world["ua"].id)
+    sid = world["sids"]["ua"]
+    ident = voice.identity_for(world["ua"].id, sid)
     assert re.fullmatch(r"[A-Za-z0-9_]+", ident)
-    assert voice.parse_identity("client:" + ident) == world["ua"].id
+    assert voice.parse_identity("client:" + ident) == (world["ua"].id, sid)
 
 
 def test_a_manager_identity_cannot_dial(client, world, configured):
-    r = _call(client, {"From": _from(world["mgr"]), "CaseId": world["own"].id})
+    r = _call(client, {"From": _from(world, "mgr"), "CaseId": world["own"].id})
     assert "<Dial" not in r.text
 
 
@@ -235,47 +300,55 @@ def test_a_manager_identity_cannot_dial(client, world, configured):
 def test_a_request_from_another_account_or_app_cannot_dial(client, world, configured, override):
     """Signed with our auth token, but not from our TwiML app: another app in
     the account could otherwise send identities of its own."""
-    before = _count(AuditAction.ROLE_VIOLATION_ATTEMPT)
-    r = _call(client, {"From": _from(world["ua"]), "CaseId": world["own"].id, **override})
+    before = _count(world, AuditAction.VOICE_CALL_REFUSED)
+    r = _call(client, {"From": _from(world, "ua"), "CaseId": world["own"].id, **override})
     assert r.status_code == 200 and "<Dial" not in r.text
-    rows = _rows(AuditAction.ROLE_VIOLATION_ATTEMPT)
+    rows = _rows(world, AuditAction.VOICE_CALL_REFUSED)
     assert len(rows) == before + 1 and rows[-1].failure_reason == voice.NOT_OUR_APP
 
 
 def test_an_unknown_user_is_audited_without_a_dangling_user_id(client, world, configured):
     """Audit of 4dcd9dc: a user id with no users row violates the audit FK on
-    Postgres, and the refusal row would be lost."""
+    Postgres, and the refusal row would be lost.
+
+    v2: AuditLog.user_id is a real FK, so a well-formed identity naming an
+    unknown user would hit exactly that violation via resolve_destination's
+    SESSION_ENDED path (no live session -> write_audit rolls back and the row
+    is silently lost — the very failure mode this test exists to rule out).
+    This single-hex form fails parse_identity's 3-part shape check outright,
+    landing on BAD_IDENTITY with no user_id at all — no dangling id, by
+    construction, which is the same guarantee the v1 test asserted."""
     ghost = f"client:agent_{uuid.uuid4().hex}"
     r = _call(client, {"From": ghost, "CaseId": world["own"].id})
     assert "<Dial" not in r.text
-    row = _rows(AuditAction.ROLE_VIOLATION_ATTEMPT)[-1]
+    row = _rows(world, AuditAction.VOICE_CALL_REFUSED)[-1]
     assert row.failure_reason == voice.BAD_IDENTITY and row.user_id is None
 
 
 def test_an_invalid_signature_is_403_and_logged_not_audited(client, world, configured):
     """Anyone can POST to the webhook; an audit row per junk request would let
     them fill the table (audit of 4dcd9dc). Refused requests are logged."""
-    before = _count(AuditAction.ROLE_VIOLATION_ATTEMPT)
-    r = _call(client, {"From": _from(world["ua"]), "CaseId": world["own"].id}, token="not-the-real-token")
+    before = _count(world, AuditAction.VOICE_CALL_REFUSED)
+    r = _call(client, {"From": _from(world, "ua"), "CaseId": world["own"].id}, token="not-the-real-token")
     assert r.status_code == 403
-    assert _count(AuditAction.ROLE_VIOLATION_ATTEMPT) == before
+    assert _count(world, AuditAction.VOICE_CALL_REFUSED) == before
 
 
 def test_a_missing_signature_is_403(client, world, configured):
-    r = _call(client, {"From": _from(world["ua"]), "CaseId": world["own"].id}, signature="")
+    r = _call(client, {"From": _from(world, "ua"), "CaseId": world["own"].id}, signature="")
     assert r.status_code == 403
 
 
 def test_a_signature_over_the_internal_url_is_not_accepted(client, world, configured):
     """Behind Caddy the app sees http://api:8000/...; Twilio signed the public
     URL. A signature over the internal URL must not verify."""
-    r = _call(client, {"From": _from(world["ua"]), "CaseId": world["own"].id},
+    r = _call(client, {"From": _from(world, "ua"), "CaseId": world["own"].id},
               sign_url="http://testserver" + PATH)
     assert r.status_code == 403
 
 
 def test_tampered_params_break_the_signature(client, world, configured):
-    params = {"From": _from(world["ua"]), "CaseId": world["own"].id}
+    params = {"From": _from(world, "ua"), "CaseId": world["own"].id}
     sig = RequestValidator(AUTH_TOKEN).compute_signature(PUBLIC + PATH, params)
     r = client.post(PATH, data={**params, "CaseId": world["peer"].id}, headers={"X-Twilio-Signature": sig})
     assert r.status_code == 403
@@ -284,18 +357,21 @@ def test_tampered_params_break_the_signature(client, world, configured):
 @pytest.mark.parametrize("unset", [{"PUBLIC_BASE_URL": ""}, {"PUBLIC_BASE_URL": "${PUBLIC_BASE_URL}"},
                                    {"TWILIO_AUTH_TOKEN": ""}, {"TWILIO_AUTH_TOKEN": "${TWILIO_AUTH_TOKEN}"}])
 def test_the_webhook_fails_closed_when_not_configured(client, world, configured, monkeypatch, unset):
-    params = {"From": _from(world["ua"]), "CaseId": world["own"].id}
+    params = {"From": _from(world, "ua"), "CaseId": world["own"].id}
     for k, v in unset.items():
         monkeypatch.setattr(settings, k, v)
-    before = _count(AuditAction.ROLE_VIOLATION_ATTEMPT)
+    before = _count(world, AuditAction.VOICE_CALL_REFUSED)
     r = _call(client, params)                   # signed correctly with the real token and URL
     assert r.status_code == 403
-    assert _count(AuditAction.ROLE_VIOLATION_ATTEMPT) == before       # logged, not audited
+    assert _count(world, AuditAction.VOICE_CALL_REFUSED) == before       # logged, not audited
 
 
 # ── AU-2: the token ──────────────────────────────────────────────────────────
 def _agent_hdr(world):
-    return {"Authorization": f"Bearer {create_access_token(world['ua'].id, 'FIELD_AGENT', 'dev')}"}
+    # v2: /agent/voice/token requires a sid in the token (the endpoint 403s
+    # without one), and dependencies.get_current_user checks it against a
+    # LIVE tenancy.user_sessions row — the one the world fixture opened.
+    return {"Authorization": f"Bearer {create_access_token(world['ua'].id, 'FIELD_AGENT', 'dev', sid=world['sids']['ua'])}"}
 
 
 @pytest.mark.parametrize("unset", ["TWILIO_API_KEY_SECRET", "TWILIO_TWIML_APP_SID", "PUBLIC_BASE_URL"])
@@ -310,13 +386,13 @@ def test_the_token_is_short_lived_and_names_the_agent(client, world, configured)
     r = client.get("/api/v1/agent/voice/token", headers=_agent_hdr(world))
     assert r.status_code == 200 and r.json()["ttl_seconds"] == 300
     claims = pyjwt.decode(r.json()["token"], options={"verify_signature": False})
-    assert claims["grants"]["identity"] == f"agent_{uuid.UUID(world['ua'].id).hex}"
+    assert claims["grants"]["identity"] == voice.identity_for(world["ua"].id, world["sids"]["ua"])
     import time
     assert claims["exp"] - time.time() <= 300 + 5     # Twilio's JWT has no iat; exp is now + ttl
 
 
 def test_a_token_failure_does_not_echo_sdk_internals(client, world, configured, monkeypatch):
-    def boom(_uid):
+    def boom(_uid, _sid):          # v2: mint_token(user_id, sid) — two args
         raise RuntimeError("secret=SKtest... internal detail")
     monkeypatch.setattr(voice, "mint_token", boom)
     r = client.get("/api/v1/agent/voice/token", headers=_agent_hdr(world))
@@ -326,7 +402,7 @@ def test_a_token_failure_does_not_echo_sdk_internals(client, world, configured, 
 # ── PAY-1: a UPI payment carries its reference ───────────────────────────────
 @pytest.mark.parametrize("ref", [None, "", "   "])
 def test_a_upi_payment_without_a_reference_is_refused_and_writes_nothing(world, ref):
-    db = TestingSession()
+    db = world["Session"]()
     agent = db.get(Agent, world["ag"].id)
     before = db.query(Payment).count()
     with pytest.raises(AppException) as e:
@@ -339,7 +415,7 @@ def test_a_upi_payment_without_a_reference_is_refused_and_writes_nothing(world, 
 
 def test_a_upi_payment_with_its_reference_is_recorded(world, monkeypatch):
     monkeypatch.setattr(ps.NotificationService, "send_twilio", staticmethod(lambda *a, **k: False))
-    db = TestingSession()
+    db = world["Session"]()
     agent = db.get(Agent, world["ag"].id)
     out = ps.PaymentService(db).collect_payment(
         agent, world["pay"].id, CollectPaymentRequest(amount=500.0, mode=PaymentMode.UPI, upi_reference="412345678901"))
@@ -350,7 +426,7 @@ def test_a_upi_payment_with_its_reference_is_recorded(world, monkeypatch):
 
 def test_cash_needs_no_upi_reference(world, monkeypatch):
     monkeypatch.setattr(ps.NotificationService, "send_twilio", staticmethod(lambda *a, **k: False))
-    db = TestingSession()
+    db = world["Session"]()
     agent = db.get(Agent, world["ag"].id)
     ps.PaymentService(db).collect_payment(agent, world["pay"].id,
                                           CollectPaymentRequest(amount=300.0, mode=PaymentMode.CASH))
@@ -405,7 +481,10 @@ def test_a_payment_link_for_a_case_not_assigned_to_the_caller_is_the_same_404(cl
     case_id = str(uuid.uuid4()) if which == "missing" else world[which].id
     r = client.post(f"/api/v1/agent/cases/{case_id}/payment-link", headers=_agent_hdr(world), json={"amount": 500})
     assert r.status_code == 404
-    assert r.json()["detail"] == "Case not found"       # "not yours" reads exactly like "no such case"
+    # v2: scope's uniform body (merge 2026-09-28) — "not yours" and "no such
+    # case" answer identically by construction (services/scope.py), not
+    # merely by coincidence of wording.
+    assert r.json()["detail"] == "Not found"
 
 
 def test_the_ownership_check_runs_before_anything_else(client, world, monkeypatch):
@@ -454,7 +533,7 @@ def test_a_demo_upi_reference_is_refused_without_demo_upi_accept(world, monkeypa
     (audit of 4dcd9dc), so DEMO_MODE cannot be what admits a fake UTR."""
     monkeypatch.setattr(settings, "DEMO_MODE", True)
     monkeypatch.setattr(settings, "DEMO_UPI_ACCEPT", False)
-    db = TestingSession()
+    db = world["Session"]()
     agent = db.get(Agent, world["ag"].id)
     before = db.query(Payment).count()
     with pytest.raises(AppException) as e:
@@ -468,7 +547,7 @@ def test_a_demo_upi_reference_is_refused_without_demo_upi_accept(world, monkeypa
 def test_a_demo_upi_reference_is_accepted_only_with_demo_upi_accept(world, monkeypatch):
     monkeypatch.setattr(settings, "DEMO_UPI_ACCEPT", True)
     monkeypatch.setattr(ps.NotificationService, "send_twilio", staticmethod(lambda *a, **k: False))
-    db = TestingSession()
+    db = world["Session"]()
     agent = db.get(Agent, world["ag"].id)
     ps.PaymentService(db).collect_payment(agent, world["pay"].id,
                                           CollectPaymentRequest(amount=100.0, mode=PaymentMode.UPI,
@@ -490,7 +569,7 @@ def test_a_body_the_form_parser_cannot_read_is_403_not_500(client, world, config
 # ── PAY-1 (round 3): every mode carries the evidence the server requires ──────
 @pytest.mark.parametrize("ref", ["12345", "41234567890", "4123456789012", "41234567890a", "UTR412345678901"])
 def test_a_upi_reference_that_is_not_a_12_digit_utr_is_refused(world, ref):
-    db = TestingSession()
+    db = world["Session"]()
     agent = db.get(Agent, world["ag"].id)
     before = db.query(Payment).count()
     with pytest.raises(AppException) as e:
@@ -503,7 +582,7 @@ def test_a_upi_reference_that_is_not_a_12_digit_utr_is_refused(world, ref):
 
 def test_a_utr_typed_with_spaces_is_accepted(world, monkeypatch):
     monkeypatch.setattr(ps.NotificationService, "send_twilio", staticmethod(lambda *a, **k: False))
-    db = TestingSession()
+    db = world["Session"]()
     agent = db.get(Agent, world["ag"].id)
     ps.PaymentService(db).collect_payment(agent, world["pay"].id,
                                           CollectPaymentRequest(amount=100.0, mode=PaymentMode.UPI,
@@ -518,7 +597,7 @@ def test_a_utr_typed_with_spaces_is_accepted(world, monkeypatch):
 def test_a_bank_or_cheque_payment_without_its_reference_is_refused(world, mode, fields):
     """201 of the demo book's 1,036 payments are NEFT rows with no reference:
     the page asked for one, the server never did."""
-    db = TestingSession()
+    db = world["Session"]()
     agent = db.get(Agent, world["ag"].id)
     before = db.query(Payment).count()
     with pytest.raises(AppException) as e:
@@ -553,10 +632,10 @@ def _mgr_hdr(world):
 @pytest.mark.parametrize("step", ["approve", "promote"])
 def test_model_approval_and_promotion_are_refused_while_the_master_login_is_on(client, world, master_login_on, step):
     cid = str(uuid.uuid4())
-    before = _count(AuditAction.ROLE_VIOLATION_ATTEMPT)
+    before = _count(world, AuditAction.ROLE_VIOLATION_ATTEMPT)
     r = client.post(f"/api/v1/manager/ml/candidates/{cid}/{step}", headers=_mgr_hdr(world))
     assert r.status_code == 409
-    rows = _rows(AuditAction.ROLE_VIOLATION_ATTEMPT)
+    rows = _rows(world, AuditAction.ROLE_VIOLATION_ATTEMPT)
     assert len(rows) == before + 1
     assert rows[-1].entity_type == "ModelCandidate" and rows[-1].entity_id == cid
     assert rows[-1].user_id == world["mgr"].id
@@ -568,16 +647,10 @@ def test_without_the_master_login_the_ml_gate_is_not_the_refusal(client, world, 
     """No master login: the request reaches the candidate lookup (404 for an
     id that does not exist), not the demo refusal."""
     monkeypatch.setattr(settings, "DEMO_MASTER_PASSWORD", value)
-    before = _count(AuditAction.ROLE_VIOLATION_ATTEMPT)
+    before = _count(world, AuditAction.ROLE_VIOLATION_ATTEMPT)
     r = client.post(f"/api/v1/manager/ml/candidates/{uuid.uuid4()}/{step}", headers=_mgr_hdr(world))
     assert r.status_code == 404
-    assert _count(AuditAction.ROLE_VIOLATION_ATTEMPT) == before
-
-
-def _request():
-    from starlette.requests import Request
-    return Request({"type": "http", "method": "POST", "path": "/api/v1/auth/quick-login", "headers": [],
-                    "client": ("127.0.0.1", 5000), "query_string": b""})
+    assert _count(world, AuditAction.ROLE_VIOLATION_ATTEMPT) == before
 
 
 def test_a_retired_password_retires_the_accounts_quick_login_links(world):
@@ -586,8 +659,9 @@ def test_a_retired_password_retires_the_accounts_quick_login_links(world):
     from fastapi import HTTPException
     from app.core.security import create_quick_login_token, disabled_password_hash
     from app.services import auth_service
-    db = TestingSession()
-    u = _user(db, "retired.manager@aravallifs.in", UserRole.AGENCY_MANAGER, "Rohit Khanna", "9000000199")
+    db = world["Session"]()
+    u = _user(db, world["tenant"], "retired-mgr", "retired.manager@aravallifs.in", UserRole.AGENCY_MANAGER,
+             "Rohit Khanna", "9000000199")
     u.hashed_password = disabled_password_hash()
     db.commit()
     with pytest.raises(HTTPException) as e:
@@ -603,8 +677,9 @@ def test_a_retired_password_retires_the_accounts_quick_login_links(world):
 def test_a_live_accounts_quick_login_still_works(world):
     from app.core.security import create_quick_login_token, hash_password
     from app.services import auth_service
-    db = TestingSession()
-    u = _user(db, "live.manager@aravallifs.in", UserRole.AGENCY_MANAGER, "Pooja Saini", "9000000198")
+    db = world["Session"]()
+    u = _user(db, world["tenant"], "live-mgr", "live.manager@aravallifs.in", UserRole.AGENCY_MANAGER,
+             "Pooja Saini", "9000000198")
     u.hashed_password = hash_password("a-real-password-0123")
     db.commit()
     out = auth_service.quick_login(db, create_quick_login_token(u.id, "AG1"), _request())
@@ -621,24 +696,50 @@ from app.services import visit_service as vs  # noqa: E402
 @pytest.fixture
 def sent(monkeypatch):
     out = []
+    # v2: NotificationService.send_twilio/send_sms require db= and a subject
+    # keyword (case_id= etc.) — a replacement must accept them.
     monkeypatch.setattr(vs.NotificationService, "send_twilio",
-                        staticmethod(lambda phone, sms, wa: out.append((phone, sms, wa)) or True))
+                        staticmethod(lambda phone, sms, wa, **kwargs: out.append((phone, sms, wa)) or True))
     monkeypatch.setattr(vs, "is_within_contact_hours", lambda *a, **k: True)
     monkeypatch.setattr(vs.AIReportService, "generate_visit_report", staticmethod(lambda *a, **k: None))
     monkeypatch.setattr(settings, "BORROWER_HELPLINE", "")
     return out
 
 
-def _new_case(world, *, hostile=False, tags=None, bank="HDFC"):
-    db = TestingSession()
+@pytest.fixture
+def _bank_name(world):
+    """Temporarily overrides this world's own Bank.display_name.
+
+    v2: Loan.bank_name is now a read-only property sourced from
+    tenancy.banks.display_name via services.brand.tenant_of (the lender is
+    the case's TENANT, not a free-text column on the loan — see
+    visit_service._notify_visit_completed's 2026-09-28 note). Since this
+    world's bank is private to this module's own in-memory database, it is
+    safe to rename here and restore afterwards."""
+    db = world["Session"]()
+    original = db.get(Bank, world["bank_id"]).display_name
+
+    def _set(name):
+        b = db.get(Bank, world["bank_id"])
+        b.display_name = name
+        db.commit()
+
+    yield _set
+    b = db.get(Bank, world["bank_id"])
+    b.display_name = original
+    db.commit()
+    db.close()
+
+
+def _new_case(world, *, hostile=False, tags=None):
+    db = world["Session"]()
     agent = db.get(Agent, world["ag"].id)
     ref = "V" + uuid.uuid4().hex[:8].upper()
-    case = _case(db, agent, ref, "Ritu Bhardwaj", "9812300077")
+    case = _case(db, world["tenant"], ref, agent, ref, "Ritu Bhardwaj", "9812300077")
     db.flush()
     cust = db.get(Customer, case.customer_id)
     cust.is_hostile = hostile
     cust.tags = tags
-    db.get(Loan, case.loan_id).bank_name = bank
     db.commit()
     loan = db.get(Loan, case.loan_id)
     facts = {"case_id": case.id, "loan_number": loan.loan_account_number, "agent": world["ua"].full_name}
@@ -647,7 +748,7 @@ def _new_case(world, *, hostile=False, tags=None, bank="HDFC"):
 
 
 def _record(world, case_id, outcome, **extra):
-    db = TestingSession()
+    db = world["Session"]()
     agent = db.get(Agent, world["ag"].id)
     vs.VisitService(db).record_visit(agent, case_id, RecordVisitRequest(
         check_in_latitude=28.45, check_in_longitude=77.07, customer_met=True, outcome=outcome, **extra))
@@ -733,9 +834,10 @@ def test_a_visit_to_an_rtp_escalated_case_still_notifies(world, sent):
     assert len(sent) == 2
 
 
-@pytest.mark.parametrize("bank", ["", "   ", "${BANK_NAME}"])        # bank_name is NOT NULL
-def test_no_lender_name_means_no_message(world, sent, bank):
-    c = _new_case(world, bank=bank)
+@pytest.mark.parametrize("bank", ["", "   ", "${BANK_NAME}"])
+def test_no_lender_name_means_no_message(world, sent, _bank_name, bank):
+    _bank_name(bank)
+    c = _new_case(world)
     _record(world, c["case_id"], VisitOutcome.RTP)
     assert sent == []
 
@@ -768,7 +870,7 @@ def test_an_unresolved_demo_upi_accept_refuses_the_demo_reference(world, monkeyp
 
 def test_the_stored_utr_is_the_one_the_rule_checked(world, monkeypatch):
     monkeypatch.setattr(ps.NotificationService, "send_twilio", staticmethod(lambda *a, **k: False))
-    db = TestingSession()
+    db = world["Session"]()
     agent = db.get(Agent, world["ag"].id)
     ps.PaymentService(db).collect_payment(agent, world["pay"].id,
                                           CollectPaymentRequest(amount=137.0, mode=PaymentMode.UPI,   # its own amount:

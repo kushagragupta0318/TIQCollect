@@ -85,14 +85,24 @@ def verify_agent(request: Request, db: DbSession,
         raise _NOT_FOUND
 
     agent, user = row
+    # 2026-09-24 (standalone plan) — agency_id is a UUID FK now (it was the
+    # free string 'AGENCY-TIQ-001'), so the borrower is shown the agency's
+    # NAME, which is what a person at the door needs to check.
+    from app.models.tenancy import Agency
+    from app.services import brand
+    agency = db.get(Agency, agent.agency_id)
     # "Active" is the borrower's question — may this person be at my door today?
     # A suspended agent is not, whatever their card says; an agent whose login
-    # has been disabled is not either. Off duty and on leave are still
-    # employed and still genuine, so they read as active: the card is real.
-    active = bool(user.is_active) and agent.status != AgentStatus.SUSPENDED
+    # has been disabled is not either; and nor is anyone from an agency the bank
+    # has suspended or offboarded (plan §6.1: suspension blocks the agency's
+    # logins). Off duty and on leave are still employed and still genuine, so
+    # they read as active: the card is real.
+    active = (bool(user.is_active) and agent.status != AgentStatus.SUSPENDED
+              and agency is not None and agency.status == "ACTIVE")
+    tenant = brand.tenant_of(db, agent=agent)
     return AgentVerification(
         agent_name=user.full_name,
         employee_code=agent.employee_code,
-        agency=agent.agency_id,
+        agency=(tenant.agency_name if tenant and tenant.agency_name else ""),
         active=active,
     )

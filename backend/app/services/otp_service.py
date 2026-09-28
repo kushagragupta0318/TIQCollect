@@ -56,6 +56,8 @@ from app.core.geo import is_within_contact_hours
 from app.models.audit_log import AuditLog, AuditAction
 from app.models.case import Case
 from app.models.payment import Payment, PaymentStatus
+from app.services.brand import brand_for
+from app.services.scope import agent_case_or_404
 from app.services.notification_service import NotificationService
 import structlog
 
@@ -236,14 +238,11 @@ class OtpService:
         # channel (UPI/RTGS/cash), so the code binds to the AMOUNT — the field
         # fraud turns on — not the mode. The deferred flow (payment_id set) pins
         # amount+mode from the existing payment below.
-        case = (
-            self.db.query(Case)
-            .options(joinedload(Case.customer), joinedload(Case.loan))
-            .filter(Case.id == case_id, Case.agent_id == agent.id)
-            .first()
-        )
-        if not case:
-            raise AppException(404, ErrorCode.CASE_NOT_FOUND, "Case not found or not assigned to you")
+        # 2026-09-24 (A03): the one access rule (services/scope). This copy was
+        # stricter than the visit path's, so a same-day handover case could
+        # record a visit but not verify its payment.
+        case = agent_case_or_404(self.db, agent, case_id,
+                                 options=(joinedload(Case.customer), joinedload(Case.loan)))
 
         customer = case.customer
         if not customer or not customer.phone_primary:
@@ -295,10 +294,11 @@ class OtpService:
 
         e164 = "+" + NotificationService.normalize_phone(customer.phone_primary)
         ttl_min = max(1, settings.OTP_TTL_SECONDS // 60)
+        bn = brand_for(self.db, case=case).bank_name
         sms_body = (
-            f"ABC Bank: {code} is your OTP to confirm Rs.{amount:,.0f} collected against your loan. "
+            f"{bn}: {code} is your OTP to confirm Rs.{amount:,.0f} collected against your loan. "
             f"Valid {ttl_min} min. Share it ONLY with the visiting agent to confirm YOUR own payment. "
-            f"Never share otherwise. - ABC Bank"
+            f"Never share otherwise. - {bn}"
         )
         # 2026-09-11 — the result was discarded, so this method answered 200
         # whether or not the borrower could ever receive the code, and the
@@ -307,7 +307,7 @@ class OtpService:
         # way: a borrower who is told the code by another route can still
         # confirm with it, the throttle and cap still apply, and nothing
         # about verification changes. What changes is that the caller is told.
-        sms_sent = NotificationService.send_sms(e164, sms_body)
+        sms_sent = NotificationService.send_sms(e164, sms_body, db=self.db, case_id=case.id)
         if not sms_sent:
             # send_sms has already logged a real transport failure at ERROR.
             # This is the OTP-specific consequence, and it fires for the
@@ -326,6 +326,9 @@ class OtpService:
             # (demo/dev, where DEMO_OTP_ECHO may carry the code instead).
             "sms_sent": bool(sms_sent),
         }
+        # 2026-09-24 (audit MED 7): its own flag, not DEMO_MODE and not an
+        # ENVIRONMENT string — echoing the borrower's code to the agent defeats
+        # the control, so it happens only where someone switched it on by name.
         if settings.DEMO_OTP_ECHO:
             ret["demo_otp"] = code
         return ret
@@ -349,10 +352,18 @@ class OtpService:
     # POST /agent/cases/{case_id}/payment/otp/verify
     # -----------------------------------------------------------------
     def verify(self, agent, case_id: str, otp_id: str, code: str) -> dict:
+        # 2026-09-24 (coordinator MED 2): verify called no access check and
+        # never compared the OTP's issuing agent with the caller, so any agent
+        # holding an otp_id could confirm ANOTHER agent's deferred payment (and
+        # spend its wrong-code attempts). Now: the case must pass scope (the
+        # uniform 404), and an OTP issued by someone else reads exactly like a
+        # missing one — same status, same body — so the answer says nothing
+        # about whether that otp_id exists.
+        case = agent_case_or_404(self.db, agent, case_id)
         key = self._otp_key(otp_id)
         data = self.store.hgetall(key)
         # Missing key = never issued OR already expired (5-min TTL) OR burned.
-        if not data or data.get("case_id") != case_id:
+        if not data or data.get("case_id") != case.id or data.get("agent_id") != agent.id:
             raise AppException(400, ErrorCode.VALIDATION_ERROR, "OTP not found or expired. Please request a new one.")
 
         # Idempotent: a second verify of an already-verified pre-collection OTP
@@ -376,7 +387,9 @@ class OtpService:
         if payment_id:
             # Deferred flow: promote the already-created pending payment now, and
             # consume the OTP (single-use) — nothing left to collect afterwards.
-            payment = self.db.query(Payment).filter(Payment.id == payment_id).first()
+            # Bound to THIS case (A03 re-audit MED 2), as well as PAY-1's evidence check below.
+            payment = (self.db.query(Payment)
+                       .filter(Payment.id == payment_id, Payment.case_id == case.id).first())
             # 2026-09-24 (hotfix PAY-1) — never promote a payment that lacks the
             # evidence its mode needs: rows written before the server required
             # references could otherwise become VERIFIED by a borrower OTP.

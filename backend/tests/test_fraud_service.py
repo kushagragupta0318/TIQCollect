@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from app.core.config import settings
+from tests._db import test_id
 from app.services.fraud_service import (
     DUPLICATE_PHOTO, FAR_FROM_CUSTOMER, HIGH, IMPOSSIBLE_TRAVEL, LOW, MEDIUM,
     OVERLAPPING_VISITS, PHOTO_LOCATION_MISMATCH, VISIT_TOO_SHORT,
@@ -29,7 +30,7 @@ def visit(vid="v1", *, lat=CP[0], lon=CP[1], t_in=T0, mins=20, met=True,
     p = photos or {}
     h = hashes or {}
     return SimpleNamespace(
-        id=vid, agent_id="a1", case_id="c1",
+        id=vid, agent_id=test_id("a1"), case_id=test_id("c1"),
         check_in_latitude=lat, check_in_longitude=lon,
         check_in_time=t_in, check_out_time=t_in + timedelta(minutes=mins),
         customer_met=met, distance_from_customer_metres=dist, geo_verified=verified,

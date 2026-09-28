@@ -508,11 +508,11 @@ def test_route_refuses_an_empty_or_oversized_transcript(api, payload):
 
 def test_route_answers_a_malformed_case_id_with_404_not_500(api):
     """Ids become native UUIDs in v2; on Postgres a malformed one would reach
-    the database as a DataError. It must stop at the boundary, and look exactly
-    like an unknown case."""
+    the database as a DataError. It must stop at the boundary as a 404, the
+    same UUIDPath answer every other case route gives (test_ids tripwire)."""
     client, state = api
     r = _post(client, case_id="not-a-uuid")
-    assert r.status_code == 404 and r.json()["detail"] == "Case not found"
+    assert r.status_code == 404 and r.json()["detail"] == "Not found"
     assert "case_lookup" not in state
 
 
@@ -622,24 +622,32 @@ def test_a_slow_model_is_abandoned_at_the_deadline(llm_says, monkeypatch):
     assert _by_field(res)["outcome"] == "PTP"
 
 
-def test_own_case_filters_on_the_callers_agent_id():
-    """The route's access rule, read from the query it builds: the case must
-    carry THIS agent's id. (The permissive helper it replaced also admitted a
-    teammate's and an unassigned case.)"""
-    seen = {}
+def test_own_case_is_the_scope_rule_not_a_copy_of_it(monkeypatch):
+    """2026-09-28 (merge into standalone-p1): own_case was a strict copy of the
+    access rule (`Case.agent_id == agent_id`, read from its SQL by this test's
+    v1 form). On v2 it delegates to services/scope.agent_case_or_404, the ONE
+    definition: it passes the loaded agent and the case id through, returns
+    the case scope grants, and maps scope's uniform 404 to None."""
+    from app.core.errors import AppException, ErrorCode
+    from app.services import scope
 
-    class _Q:
-        def filter(self, *criteria):
-            seen["sql"] = [str(c.compile(compile_kwargs={"literal_binds": True})) for c in criteria]
-            return self
-
-        def first(self):
-            return None
+    agent = SimpleNamespace(id="agent-aravalli-017", agency_id="agency-1")
+    granted = SimpleNamespace(id=CASE_ID)
+    calls = []
 
     class _DB:
-        def query(self, _model):
-            return _Q()
+        def get(self, _model, ident):
+            return agent if ident == agent.id else None
 
-    assert vre.own_case(_DB(), "agent-7", CASE_ID) is None
-    assert "cases.agent_id = 'agent-7'" in seen["sql"]
-    assert f"cases.id = '{CASE_ID}'" in seen["sql"]
+    def fake_scope(db, a, cid, **kw):
+        calls.append((a, cid))
+        if cid == CASE_ID:
+            return granted
+        raise AppException(404, ErrorCode.NOT_FOUND, "Not found")
+
+    monkeypatch.setattr(scope, "agent_case_or_404", fake_scope)
+    assert vre.own_case(_DB(), agent.id, CASE_ID) is granted
+    assert vre.own_case(_DB(), agent.id, "someone-elses-case") is None
+    assert calls == [(agent, CASE_ID), (agent, "someone-elses-case")]
+    assert vre.own_case(_DB(), "no-such-agent", CASE_ID) is None     # unknown agent: no lookup at all
+    assert len(calls) == 2

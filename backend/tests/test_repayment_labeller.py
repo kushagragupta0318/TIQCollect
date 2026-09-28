@@ -27,9 +27,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.models.base import Base
-from app.models.customer import RiskCategory
+from app.models.customer import Customer, RiskCategory
+from app.models.loan import Loan, LoanType
 from app.models.repayment_snapshot import RepaymentSnapshot
 from app.services.repayment_service import RepaymentService, _CENSORING_STATUSES
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
 SVC = RepaymentService(db=None)
 AS_OF = date(2026, 7, 1)
@@ -37,16 +39,16 @@ HORIZON = settings.REPAYMENT_OUTCOME_HORIZON_DAYS
 
 
 def snap(**over):
-    base = dict(loan_id="l1", case_id="c1", as_of_date=AS_OF, outcome=None)
+    base = dict(loan_id=test_id("l1"), case_id=test_id("c1"), as_of_date=AS_OF, outcome=None)
     base.update(over)
     return NS(**base)
 
 
-def case(status=CaseStatus.IN_PROGRESS, target=10_000.0, cid="c1"):
+def case(status=CaseStatus.IN_PROGRESS, target=10_000.0, cid=test_id("c1")):
     return NS(id=cid, status=status, target_amount=target)
 
 
-def payment(*, days_after, amount, cid="c1", status="VERIFIED"):
+def payment(*, days_after, amount, cid=test_id("c1"), status="VERIFIED"):
     """A received payment. VERIFIED by default: these tests are about WINDOWS,
     and the status rule has its own tests further down. Payment.status is NOT
     NULL on the real model, so a stub without one tests a shape that cannot
@@ -91,8 +93,8 @@ def test_part_payment_is_partial_not_a_failure():
 
 
 def test_payments_across_several_cases_are_summed():
-    cases = [case(cid="c1", target=5_000.0), case(cid="c2", target=5_000.0)]
-    outcome, amount = infer(cases, [payment(days_after=2, amount=5_000.0, cid="c1"),
+    cases = [case(cid=test_id("c1"), target=5_000.0), case(cid="c2", target=5_000.0)]
+    outcome, amount = infer(cases, [payment(days_after=2, amount=5_000.0, cid=test_id("c1")),
                                     payment(days_after=4, amount=5_000.0, cid="c2")])
     assert outcome == OUTCOME_REPAID and amount == 10_000.0
 
@@ -145,7 +147,7 @@ def test_an_open_case_with_no_payment_is_a_genuine_negative():
 def test_one_open_case_is_enough_to_stop_censoring():
     """Censoring requires that EVERY case was taken off the table. If one is
     still live, the borrower could have paid and chose not to."""
-    cases = [case(cid="c1", status=CaseStatus.CLOSED),
+    cases = [case(cid=test_id("c1"), status=CaseStatus.CLOSED),
              case(cid="c2", status=CaseStatus.IN_PROGRESS)]
     assert infer(cases, [])[0] == OUTCOME_NO_PAYMENT
 
@@ -185,7 +187,7 @@ RECOVERY_HORIZONS = settings.RECOVERY_OUTCOME_HORIZONS
 
 def rec_snap(**over):
     """A snapshot row that DID carry a recovery prediction."""
-    base = dict(loan_id="l1", case_id="c1", as_of_date=AS_OF, outcome=None,
+    base = dict(loan_id=test_id("l1"), case_id=test_id("c1"), as_of_date=AS_OF, outcome=None,
                 recovery_rate_90=0.42, recovery_labelled_through_days=0)
     base.update(over)
     return NS(**base)
@@ -243,7 +245,7 @@ def test_recovery_counts_only_money_arriving_after_the_score():
     """The question is what came back once the prediction was made, not what had
     already been collected. Counting the latter scores the scorecard on history it
     was handed rather than on anything it foresaw."""
-    payments = {"c1": [payment(days_after=-3, amount=50_000.0),   # before the score
+    payments = {test_id("c1"): [payment(days_after=-3, amount=50_000.0),   # before the score
                        payment(days_after=10, amount=7_000.0)]}
     got = SVC._received_within(AS_OF, 30, [case()], payments)
     assert got == 7_000.0
@@ -253,12 +255,12 @@ def test_the_window_is_half_open_at_the_scoring_date():
     """A payment on the scoring date itself was already known when the score was
     computed, so it belongs to the features, not to the outcome. Matches
     _infer_outcome's window exactly — the two must not disagree about a day."""
-    payments = {"c1": [payment(days_after=0, amount=5_000.0)]}
+    payments = {test_id("c1"): [payment(days_after=0, amount=5_000.0)]}
     assert SVC._received_within(AS_OF, 30, [case()], payments) == 0.0
 
 
 def test_the_window_is_closed_at_the_horizon():
-    payments = {"c1": [payment(days_after=30, amount=5_000.0)]}
+    payments = {test_id("c1"): [payment(days_after=30, amount=5_000.0)]}
     assert SVC._received_within(AS_OF, 30, [case()], payments) == 5_000.0
     assert SVC._received_within(AS_OF, 29, [case()], payments) == 0.0
 
@@ -267,7 +269,7 @@ def test_longer_horizons_are_supersets_of_shorter_ones():
     """Cumulative, not per-period. rate_90 is the share recovered BY 90 days, so
     the label it is scored against must be the same shape — a 60-day figure that
     excluded the first 30 days would be measuring something else entirely."""
-    payments = {"c1": [payment(days_after=d, amount=1_000.0)
+    payments = {test_id("c1"): [payment(days_after=d, amount=1_000.0)
                        for d in (10, 40, 70)]}
     at_30 = SVC._received_within(AS_OF, 30, [case()], payments)
     at_60 = SVC._received_within(AS_OF, 60, [case()], payments)
@@ -290,24 +292,61 @@ def db():
     test_otp_service.py. This is what proves the recovery columns survive the
     JSON .with_variant fallback and that the scan predicate does what the pure
     tests above say it does."""
-    engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
-    Base.metadata.create_all(engine)
-    session = sessionmaker(bind=engine)()
+    engine = make_engine()
+    create_schema(engine)
+    session = make_session_factory(bind=engine)()
     try:
         yield session
     finally:
         session.close()
 
 
-def _case_row(db, loan_id="l1", case_id="case-1"):
+def _ensure_customer(db, customer_id=test_id("cu1")):
+    """The Customer a loan's composite FK requires. Idempotent: several tests
+    build their loan/case fixtures in the same session and must not insert the
+    same borrower twice."""
+    if db.get(Customer, customer_id) is None:
+        db.add(Customer(
+            id=customer_id, customer_ref=f"REF-{customer_id[:8]}", full_name="Borrower",
+            date_of_birth=date(1985, 1, 1), gender="M", pan_masked="XXXXX1234X",
+            aadhaar_masked="XXXXXXXX5678", phone_primary="9800000000",
+            address_line1="1 Road", city="Delhi", state="Delhi", pincode="110001",
+            latitude=28.6, longitude=77.2,
+        ))
+        db.flush()
+    return customer_id
+
+
+def _ensure_loan(db, loan_id=test_id("l1"), customer_id=test_id("cu1")):
+    """The Loan a snapshot's (and a case's) composite FK requires. SQLite now
+    enforces `(loan_id, bank_id) -> lending.loans` on RepaymentSnapshot, so a
+    row naming a loan that was never inserted fails at flush rather than at a
+    validation query later."""
+    _ensure_customer(db, customer_id)
+    if db.get(Loan, loan_id) is None:
+        db.add(Loan(
+            id=loan_id, customer_id=customer_id, loan_account_number=f"LN-{loan_id[:8]}",
+            loan_type=LoanType.PERSONAL, branch_code="BR1",
+            sanctioned_amount=100_000.0, disbursed_amount=100_000.0,
+            outstanding_principal=80_000.0, total_outstanding=90_000.0,
+            overdue_amount=10_000.0, emi_amount=5_000.0,
+            disbursement_date=date(2024, 1, 1), maturity_date=date(2027, 1, 1),
+            interest_rate=12.0,
+        ))
+        db.flush()
+    return loan_id
+
+
+def _case_row(db, loan_id=test_id("l1"), case_id=test_id("case-1")):
     """A minimal Case, so a snapshot's loan is OBSERVABLE.
 
     Added 2026-08-24. Without it a loan has no case, payments are unreachable
     (Payment.case_id is NOT NULL) and the labeller now correctly treats the row
     as unobservable rather than recovering zero — which is right, but it is not
     what the horizon-advancement tests are trying to measure."""
+    _ensure_loan(db, loan_id)
     case_row = Case(
-        id=case_id, case_number=f"C-{case_id}", customer_id="cu1", loan_id=loan_id,
+        id=case_id, case_number=f"C-{case_id}", customer_id=test_id("cu1"), loan_id=loan_id,
         status=CaseStatus.IN_PROGRESS, priority=CasePriority.MEDIUM,
         target_amount=10_000.0, collected_amount=0.0,
     )
@@ -316,9 +355,10 @@ def _case_row(db, loan_id="l1", case_id="case-1"):
     return case_row
 
 
-def _row(db, *, days_ago, rate_90=0.42, through=0, loan_id="l1"):
+def _row(db, *, days_ago, rate_90=0.42, through=0, loan_id=test_id("l1")):
+    _ensure_loan(db, loan_id)
     row = RepaymentSnapshot(
-        loan_id=loan_id, customer_id="cu1", case_id=None,
+        loan_id=loan_id, customer_id=test_id("cu1"), case_id=None,
         as_of_date=date.today() - timedelta(days=days_ago),
         trigger="MANUAL", source="SCORECARD", model_version="scorecard-1.1.0",
         likelihood=60.0, risk_score=40.0, band="UNCERTAIN",
@@ -417,7 +457,7 @@ from app.models.payment import PaymentStatus
 from app.services.repayment_service import _RECOVERED_PAYMENT_STATUSES
 
 
-def paid(*, days_after, amount, status=PaymentStatus.VERIFIED, cid="c1"):
+def paid(*, days_after, amount, status=PaymentStatus.VERIFIED, cid=test_id("c1")):
     return NS(case_id=cid, amount=amount, status=status,
               payment_date=datetime.combine(AS_OF + timedelta(days=days_after),
                                             datetime.min.time(), tzinfo=timezone.utc))
@@ -547,7 +587,7 @@ def test_null_and_zero_are_distinguishable_after_labelling(db):
     """The three states the model comment promises. Without this distinction a
     validation query cannot tell "we could not see" from "nothing came back", and
     the scorecard's separation is flattered by every caseless LOW loan."""
-    unobservable = _row(db, days_ago=200, loan_id="no-case-loan")
+    unobservable = _row(db, days_ago=200, loan_id=test_id("no-case-loan"))
     RepaymentService(db).attach_recovery_outcomes()
 
     # matured + NULL  ->  unobservable

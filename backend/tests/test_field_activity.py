@@ -27,6 +27,7 @@ from app.models.user import User, UserRole
 from app.models.visit import PersonMet, Visit, VisitOutcome
 from app.services import field_activity_service as fa
 from app.services.field_activity_service import VisitRow, classify
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
 # ── the pure classifier ──────────────────────────────────────────────────────
 
@@ -139,7 +140,7 @@ def test_window_bounds_anchor_on_the_effective_date():
 
 # ── the API, on a controlled book ────────────────────────────────────────────
 
-engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+engine = make_engine()
 
 
 @event.listens_for(engine, "connect")
@@ -149,7 +150,7 @@ def _sqlite_helpers(dbapi_conn, _):
     dbapi_conn.create_function("to_char", 2, to_char)
 
 
-Session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Session = make_session_factory(autocommit=False, autoflush=False, bind=engine)
 
 TODAY = date.today()
 NOW = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
@@ -163,7 +164,7 @@ def _user(db, email, role, name):
 
 
 def _agent(db, code, user, mgr):
-    a = Agent(user_id=user.id, employee_code=code, id_card_number=code + "-ID", agency_id="AG1",
+    a = Agent(user_id=user.id, employee_code=code, id_card_number=code + "-ID", 
               base_latitude=28.6, base_longitude=77.2, tier=AgentTier.TIER_1,
               specialization=AgentSpecialization.BOTH, status=AgentStatus.ON_DUTY,
               territory="Delhi", languages_spoken=["HINDI"], ranking_score=80.0,
@@ -174,7 +175,7 @@ def _agent(db, code, user, mgr):
 def _case(db, num, agent, cust, loan):
     c = Case(case_number=num, customer_id=cust.id, loan_id=loan.id, agent_id=agent.id,
              status=CaseStatus.IN_PROGRESS, target_amount=10000.0, collected_amount=0.0,
-             allocation_date=TODAY.isoformat())
+             allocation_date=TODAY)
     db.add(c); db.flush(); return c
 
 
@@ -188,7 +189,7 @@ def _visit(db, case, agent, outcome, when, n=1):
 
 @pytest.fixture(scope="module")
 def book():
-    Base.metadata.create_all(bind=engine)
+    create_schema(bind=engine)
     db = Session()
     mgr = _user(db, "fa_mgr@t.in", UserRole.AGENCY_MANAGER, "Mgr")
     other = _user(db, "fa_other@t.in", UserRole.AGENCY_MANAGER, "Other")
@@ -196,15 +197,15 @@ def book():
     au2 = _user(db, "fa_a2@t.in", UserRole.FIELD_AGENT, "A2")
     ag = _agent(db, "FA001", au1, mgr)
     ag_other = _agent(db, "FA002", au2, other)
-    cust = Customer(customer_ref="FAC1", full_name="B", date_of_birth="1990-01-01", gender="M",
+    cust = Customer(customer_ref="FAC1", full_name="B", date_of_birth=date(1990, 1, 1), gender="M",
                     pan_masked="X", aadhaar_masked="X", phone_primary="9000000001", address_line1="1",
                     city="Delhi", state="DL", pincode="110001", latitude=28.6, longitude=77.2,
                     risk_category=RiskCategory.MEDIUM)
     db.add(cust); db.flush()
     loan = Loan(loan_account_number="FAL1", customer_id=cust.id, loan_type=LoanType.PERSONAL,
-                bank_name="B", branch_code="BR", sanctioned_amount=1.0, disbursed_amount=1.0,
+                branch_code="BR", sanctioned_amount=1.0, disbursed_amount=1.0,
                 outstanding_principal=1.0, total_outstanding=1.0, overdue_amount=1.0, emi_amount=1.0,
-                disbursement_date="2025-01-01", maturity_date="2027-01-01", dpd=45,
+                disbursement_date=date(2025, 1, 1), maturity_date=date(2027, 1, 1), dpd=45,
                 dpd_bucket=DPDBucket.BUCKET_2, status=LoanStatus.ACTIVE, interest_rate=1.0, penal_charges=0.0)
     db.add(loan); db.flush()
 

@@ -37,6 +37,7 @@ from app.models.loan import Loan, LoanStatus
 from app.models.model_prediction import ModelPrediction
 from app.models.payment import Payment, PaymentStatus
 from app.services.ml_scoring_service import MLScoringService
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
 # Sized so ONE cohort clears `MIN_MATURED_FOR_MONITORING` (500). At 260
 # borrowers the monitoring assertion skipped, which is the same as not having
@@ -45,15 +46,14 @@ CFG = LedgerConfig(n_borrowers=900, months=20, seed=23)
 AS_OF_DAY = 400
 HORIZON = 30
 
-engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
-                       poolclass=StaticPool)
-Session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+engine = make_engine()
+Session = make_session_factory(autocommit=False, autoflush=False, bind=engine)
 
 
 @pytest.fixture(scope="module")
 def lifecycle():
     """Score one cohort, advance 30 days, label it — the production sequence."""
-    Base.metadata.create_all(bind=engine)
+    create_schema(bind=engine)
     prev = settings.ML_MODEL_VERSION
     settings.ML_MODEL_VERSION = "1.2.0-ledger"
     DecisionEngine.clear_cache()
@@ -73,7 +73,7 @@ def lifecycle():
     closed = term.groupby("loan_id").day.min().to_dict()
     live = [r.loan_id for r in ledger.loans.itertuples()
             if r.opened_day <= AS_OF_DAY < closed.get(r.loan_id, 10 ** 9)]
-    cases = [c for c in (db.query(Case).filter(Case.id == f"C-{lid}").first()
+    cases = [c for c in (db.query(Case).filter(Case.id == Materialiser.db_id("case", lid)).first()
                          for lid in live) if c is not None]
     _, rows = MLScoringService(db).score_cases_and_log(cases, as_of=as_of)
     db.commit()
@@ -86,7 +86,7 @@ def lifecycle():
         yield ledger, db, mat, rows, summary, mature_as_of
     finally:
         db.close()
-        Base.metadata.drop_all(bind=engine)
+        drop_schema(bind=engine)
         settings.ML_MODEL_VERSION = prev
         DecisionEngine.clear_cache()
 
@@ -128,7 +128,7 @@ def test_the_frozen_baseline_is_not_the_balance_at_labelling_time(lifecycle):
     _, db, _, rows, _, _ = lifecycle
     moved = 0
     for r in rows[:200]:
-        loan = db.query(Loan).filter(Loan.id == r.loan_id).first()
+        loan = db.get(Loan, r.loan_id)                  # v2: loan_id is the loan's id, not its account number
         if abs(float(loan.overdue_amount) -
                float(r.outcome_baseline["overdue_amount"])) > 1.0:
             moved += 1

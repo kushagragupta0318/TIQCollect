@@ -39,6 +39,7 @@
 #   prototype_to_product/30.07.md and /changelog.md.
 # ───────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
+from app.core.ids import UUIDStr
 from pydantic import BaseModel, ConfigDict, Field
 from datetime import date, datetime
 from typing import Optional
@@ -114,7 +115,7 @@ class RecordVisitRequest(BaseModel):
 class CollectPaymentRequest(BaseModel):
     amount: float = Field(gt=0)
     mode: PaymentMode
-    visit_id: Optional[str] = None           # link payment to the visit that triggered it
+    visit_id: Optional[UUIDStr] = None       # link payment to the visit that triggered it
     upi_reference: Optional[str] = None
     cheque_number: Optional[str] = None
     cheque_date: Optional[str] = None        # ISO date, for post-dated cheques
@@ -253,7 +254,7 @@ class OtpSendRequest(BaseModel):
     mode: Optional[PaymentMode] = None
     # Present → deferred flow: re-verify an already-created PENDING payment.
     # Absent  → pre-collection flow: verify first, then collect.
-    payment_id: Optional[str] = None
+    payment_id: Optional[UUIDStr] = None
 
 
 class OtpSendResponse(BaseModel):
@@ -369,9 +370,9 @@ class LoanSummary(BaseModel):
     emi_amount: float
     tenure_months: Optional[int] = None
     interest_rate: float
-    last_payment_date: Optional[str] = None
+    last_payment_date: Optional[date] = None
     last_payment_amount: float
-    next_due_date: Optional[str] = None
+    next_due_date: Optional[date] = None
     legal_status: str
     settlement_status: str
 
@@ -419,7 +420,7 @@ class CaseSummaryResponse(BaseModel):
     priority: CasePriority
     target_amount: float
     collected_amount: float
-    allocation_date: Optional[str] = None
+    allocation_date: Optional[date] = None
     visit_count: int
     is_escalated: bool
     agent_id: Optional[str] = None
@@ -428,7 +429,7 @@ class CaseSummaryResponse(BaseModel):
     customer: CustomerSummary
     loan: LoanSummary
     collection_stage: str
-    bank_ptp_date: Optional[str] = None
+    bank_ptp_date: Optional[date] = None
     bank_ptp_amount: Optional[float] = None
     bank_ptp_status: Optional[str] = None
     bank_agent_remarks: Optional[str] = None
@@ -611,7 +612,7 @@ class ProfileResponse(BaseModel):
     full_name: str
     email: str
     phone: str
-    date_of_birth: Optional[str] = None
+    date_of_birth: Optional[date] = None
     territory: str
     tier: AgentTier
     status: AgentStatus
@@ -628,6 +629,8 @@ class ProfileResponse(BaseModel):
     last_known_longitude: Optional[float] = None
     sos_active: bool
     cases_today: int
+    agency_name: Optional[str] = None
+    agency_rbi_registration_no: Optional[str] = None
 
 
 class AvailabilityDay(BaseModel):

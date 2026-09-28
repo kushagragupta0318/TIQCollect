@@ -35,16 +35,16 @@ from app.models.ptp import PTP, PTPStatus
 from app.models.repayment_snapshot import TRIGGER_SEED, RepaymentSnapshot
 from app.models.user import User, UserRole
 from app.services.visit_priority_service import score_cases
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
-engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
-                       poolclass=StaticPool)
-Session = sessionmaker(bind=engine, autoflush=False)
+engine = make_engine()
+Session = make_session_factory(bind=engine, autoflush=False)
 TODAY = date.today()
 
 
 def _customer(db, i, *, dnc=False, needs_female=False):
-    c = Customer(id=f"cu{i}", customer_ref=f"CUST{i:04d}", full_name=f"Borrower {i}",
-                 date_of_birth="1985-06-01", gender="M", pan_masked="XXXXX1234X",
+    c = Customer(id=test_id(f"cu{i}"), customer_ref=f"CUST{i:04d}", full_name=f"Borrower {i}",
+                 date_of_birth=date(1985, 6, 1), gender="M", pan_masked="XXXXX1234X",
                  aadhaar_masked="XXXXXXXX5678", phone_primary=f"98000000{i:02d}",
                  address_line1="1 Road", city="Gurugram", state="HR",
                  pincode="122001", latitude=28.45, longitude=77.02,
@@ -56,14 +56,14 @@ def _customer(db, i, *, dnc=False, needs_female=False):
 
 
 def _loan(db, i, *, dpd, outstanding):
-    ln = Loan(id=f"ln{i}", customer_id=f"cu{i}", loan_account_number=f"LN{i:06d}",
-              loan_type=LoanType.PERSONAL, bank_name="HDFC", branch_code="BR1",
+    ln = Loan(id=test_id(f"ln{i}"), customer_id=test_id(f"cu{i}"), loan_account_number=f"LN{i:06d}",
+              loan_type=LoanType.PERSONAL, branch_code="BR1",
               sanctioned_amount=outstanding * 1.4, disbursed_amount=outstanding * 1.3,
               outstanding_principal=outstanding * 0.9,
               outstanding_interest=outstanding * 0.1, penal_charges=500.0,
               total_outstanding=outstanding, overdue_amount=outstanding * 0.3,
               emi_amount=12_000.0, tenure_months=36, interest_rate=14.0,
-              disbursement_date="2024-01-01", maturity_date="2027-01-01",
+              disbursement_date=date(2024, 1, 1), maturity_date=date(2027, 1, 1),
               dpd=dpd, dpd_bucket=(DPDBucket.NPA if dpd > 90 else DPDBucket.BUCKET_3),
               status=LoanStatus.ACTIVE, npa_flag=dpd > 90)
     db.add(ln)
@@ -72,7 +72,7 @@ def _loan(db, i, *, dpd, outstanding):
 
 def _snapshot(db, i, *, rate_90, as_of=None):
     db.add(RepaymentSnapshot(
-        loan_id=f"ln{i}", customer_id=f"cu{i}", as_of_date=as_of or TODAY,
+        loan_id=test_id(f"ln{i}"), customer_id=test_id(f"cu{i}"), as_of_date=as_of or TODAY,
         trigger=TRIGGER_SEED, source="SCORECARD", model_version="scorecard-1.1.0",
         likelihood=50.0, risk_score=50.0, band="UNCERTAIN",
         risk_category=RiskCategory.MEDIUM, evidence_coverage=0.8,
@@ -96,47 +96,52 @@ _PLAN = [
 
 
 def _build(db, *, n=None, dnc_idx=(), female_idx=(), ptp_idx=()):
-    mgr = User(id="u-mgr", email="m@x.io", phone="9111111111", full_name="Mgr",
+    mgr = User(id=test_id("u-mgr"), email="m@x.io", phone="9111111111", full_name="Mgr",
                hashed_password="x", role=UserRole.AGENCY_MANAGER)
     db.add(mgr)
     for a in range(2):
-        u = User(id=f"u-a{a}", email=f"a{a}@x.io", phone=f"90000000{a:02d}",
+        u = User(id=test_id(f"u-a{a}"), email=f"a{a}@x.io", phone=f"90000000{a:02d}",
                  full_name=f"Agent {a}", hashed_password="x",
                  role=UserRole.FIELD_AGENT)
         db.add(u)
-        db.add(Agent(id=f"ag{a}", user_id=u.id, employee_code=f"EMP{a:04d}",
-                     id_card_number=f"IC{a}", agency_id="AG1", gender="MALE",
+        db.add(Agent(id=test_id(f"ag{a}"), user_id=u.id, employee_code=f"EMP{a:04d}",
+                     id_card_number=f"IC{a}", gender="MALE",
                      base_latitude=28.4, base_longitude=77.0, territory="Gurugram",
                      languages_spoken=["HINDI"], max_cases_per_day=50,
                      status=AgentStatus.ON_DUTY, tier=AgentTier.TIER_1,
                      specialization=AgentSpecialization.BOTH,
                      ranking_score=50.0, manager_user_id=mgr.id))
+    db.flush()
 
     plan = _PLAN if n is None else [_PLAN[i % len(_PLAN)] for i in range(n)]
     for i, (tag, dpd, outstanding, rate, visits) in enumerate(plan):
         _customer(db, i, dnc=i in dnc_idx, needs_female=i in female_idx)
         _loan(db, i, dpd=dpd, outstanding=outstanding)
+        # 2026-09-24 (v2): flush the parents first. RepaymentSnapshot has no ORM
+        # relationship to Loan, so one flush may INSERT the snapshot before its
+        # loan — invisible until the suite enforced foreign keys.
+        db.flush()
         _snapshot(db, i, rate_90=rate)
-        db.add(Case(id=f"c{i}", case_number=f"CASE{i:07d}", customer_id=f"cu{i}",
-                    loan_id=f"ln{i}", agent_id=None,
+        db.add(Case(id=test_id(f"c{i}"), case_number=f"CASE{i:07d}", customer_id=test_id(f"cu{i}"),
+                    loan_id=test_id(f"ln{i}"), agent_id=None,
                     status=CaseStatus.UNASSIGNED, priority=CasePriority.MEDIUM,
                     target_amount=50_000.0, collected_amount=0.0,
                     visit_count=visits, max_visits_allowed=3,
                     is_escalated=False, allocation_score=0.0,
                     is_ml_allocated=False))
         if i in ptp_idx:
-            db.add(PTP(id=f"p{i}", case_id=f"c{i}", agent_id="ag0",
+            db.add(PTP(id=test_id(f"p{i}"), case_id=test_id(f"c{i}"), agent_id=test_id("ag0"),
                        committed_amount=10_000.0,
                        committed_date=TODAY + timedelta(days=1),
                        actual_paid_amount=0.0, status=PTPStatus.ACTIVE))
     db.commit()
-    return {tag: f"c{i}" for i, (tag, *_rest) in enumerate(plan)}
+    return {tag: test_id(f"c{i}") for i, (tag, *_rest) in enumerate(plan)}
 
 
 @pytest.fixture
 def db():
-    Base.metadata.drop_all(engine)
-    Base.metadata.create_all(engine)
+    drop_schema(engine)
+    create_schema(engine)
     s = Session()
     yield s
     s.close()
@@ -206,7 +211,7 @@ def test_only_the_newest_snapshot_per_loan_is_used(db):
     # An older, deliberately different rate for the same loan.
     _snapshot(db, 1, rate_90=0.01, as_of=TODAY - timedelta(days=30))
     db.commit()
-    case = db.query(Case).filter(Case.id == "c1").one()
+    case = db.query(Case).filter(Case.id == test_id("c1")).one()
     result = score_cases(db, [case], today=TODAY)[case.id]
     value = next(c for c in result["components"] if c["code"] == "RECOVERABLE_VALUE")
     assert value["evidence"]["rate_90"] == 0.50, value
@@ -216,7 +221,7 @@ def test_only_the_newest_snapshot_per_loan_is_used(db):
 def test_an_imminent_ptp_is_scored_with_amount_and_a_distant_one_is_not(db):
     """Only today/tomorrow PTPs receive a follow-up lift, never a penalty waiver."""
     _build(db, ptp_idx={0})
-    db.add(PTP(id="pfar", case_id="c2", agent_id="ag0", committed_amount=1.0,
+    db.add(PTP(id=test_id("pfar"), case_id=test_id("c2"), agent_id=test_id("ag0"), committed_amount=1.0,
                committed_date=TODAY + timedelta(days=40),
                actual_paid_amount=0.0, status=PTPStatus.ACTIVE))
     db.commit()
@@ -226,11 +231,11 @@ def test_an_imminent_ptp_is_scored_with_amount_and_a_distant_one_is_not(db):
     def effort(cid):
         return next(c for c in scored[cid]["components"] if c["code"] == "EFFORT")
 
-    assert effort("c0")["evidence"]["penalty_waived"] is False
-    assert effort("c0")["evidence"]["ptp_committed_amount"] == 10_000.0
-    assert effort("c0")["evidence"]["ptp_follow_up_points"] > 0
-    assert effort("c2")["evidence"]["penalty_waived"] is False
-    assert "ptp_follow_up_points" not in effort("c2")["evidence"]
+    assert effort(test_id("c0"))["evidence"]["penalty_waived"] is False
+    assert effort(test_id("c0"))["evidence"]["ptp_committed_amount"] == 10_000.0
+    assert effort(test_id("c0"))["evidence"]["ptp_follow_up_points"] > 0
+    assert effort(test_id("c2"))["evidence"]["penalty_waived"] is False
+    assert "ptp_follow_up_points" not in effort(test_id("c2"))["evidence"]
 
 
 # ── The allocator queue ─────────────────────────────────────────────────────
@@ -330,7 +335,7 @@ def test_a_do_not_contact_case_is_still_never_allocated(db):
     whole change would need re-certifying rather than reasoning about."""
     _build(db, dnc_idx={1})   # the highest-scoring case, so order cannot hide it
     res = CaseAllocator(db).run()
-    blocked = db.query(Case).filter(Case.customer_id == "cu1").one()
+    blocked = db.query(Case).filter(Case.customer_id == test_id("cu1")).one()
     assert blocked.status == CaseStatus.UNASSIGNED
     assert blocked.agent_id is None
     assert res["blocked_by_rule"].get("DO_NOT_CONTACT") == 1
@@ -342,7 +347,7 @@ def test_a_female_agent_requirement_is_still_honoured(db):
     to whoever is free — even though it is the top-scoring case."""
     _build(db, female_idx={1})
     res = CaseAllocator(db).run()
-    assert db.query(Case).filter(Case.customer_id == "cu1").one().agent_id is None
+    assert db.query(Case).filter(Case.customer_id == test_id("cu1")).one().agent_id is None
     assert res["no_eligible_agent"] >= 1
 
 

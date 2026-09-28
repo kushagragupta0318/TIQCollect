@@ -37,17 +37,17 @@ from app.models.model_prediction import ModelPrediction
 from app.models.ptp import PTP, PTPStatus
 from app.models.user import User, UserRole
 from app.services.ml_scoring_service import MLScoringService, _as_date
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
-test_engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
-                            poolclass=StaticPool)
-TestingSession = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
+test_engine = make_engine()
+TestingSession = make_session_factory(autocommit=False, autoflush=False, bind=test_engine)
 
 
 @pytest.fixture(autouse=True)
 def setup_db():
-    Base.metadata.create_all(bind=test_engine)
+    create_schema(bind=test_engine)
     yield
-    Base.metadata.drop_all(bind=test_engine)
+    drop_schema(bind=test_engine)
 
 
 @pytest.fixture
@@ -63,8 +63,12 @@ def db():
 def book(db):
     """One borrower with a loan, a case, and PTP history.
 
-    Dates are STRINGS throughout, because that is what this schema stores —
-    Customer.date_of_birth and every Loan date column are String(10).
+    v2 CORRECTION, 2026-09-24: this used to say dates were STRINGS throughout
+    "because that is what this schema stores" — true under v1, when
+    Customer.date_of_birth and every Loan date column were String(10). The v2
+    migration made them real Date columns, so the fixture below passes real
+    `date(...)` objects; see test_the_schema_really_does_store_dates_as_strings
+    for the schema-level assertion this now backs.
     """
     # PTP.agent_id is NOT NULL, so the history this test is about cannot exist
     # without a real agent behind it.
@@ -78,7 +82,7 @@ def book(db):
     db.flush()
     agent = Agent(
         id=str(uuid.uuid4()), user_id=usr.id, employee_code="EMPML",
-        id_card_number="TIQML", agency_id="AG01", manager_user_id=mgr.id,
+        id_card_number="TIQML", manager_user_id=mgr.id,
         gender="F", base_latitude=28.4595, base_longitude=77.0266,
         territory="Gurugram", languages_spoken=["HINDI"],
         specialization=AgentSpecialization.UNSECURED, max_cases_per_day=10,
@@ -90,7 +94,7 @@ def book(db):
 
     cust = Customer(
         id=str(uuid.uuid4()), customer_ref="CUSTML", full_name="Meena Iyer",
-        date_of_birth="1988-04-12", gender="F", pan_masked="ZZZZZ1111A",
+        date_of_birth=date(1988, 4, 12), gender="F", pan_masked="ZZZZZ1111A",
         aadhaar_masked="111122223333", phone_primary="9900001111",
         address_line1="Sector 29, Gurugram", city="Gurugram", state="Haryana",
         pincode="122001", latitude=28.4595, longitude=77.0266,
@@ -98,13 +102,13 @@ def book(db):
     )
     loan = Loan(
         id=str(uuid.uuid4()), customer_id=cust.id, loan_account_number="LNML1",
-        loan_type=LoanType.PERSONAL, bank_name="HDFC Bank", branch_code="GG01",
+        loan_type=LoanType.PERSONAL, branch_code="GG01",
         sanctioned_amount=250000.0, disbursed_amount=250000.0,
         outstanding_principal=180000.0, total_outstanding=205000.0,
         overdue_amount=24000.0, penal_charges=1200.0, emi_amount=8000.0,
         interest_rate=16.5, tenure_months=36,
-        disbursement_date="2022-01-15", maturity_date="2025-01-15",
-        last_payment_date="2026-06-01",
+        disbursement_date=date(2022, 1, 15), maturity_date=date(2025, 1, 15),
+        last_payment_date=date(2026, 6, 1),
         dpd=62, dpd_bucket=DPDBucket.BUCKET_3, status=LoanStatus.ACTIVE,
     )
     case = Case(
@@ -146,10 +150,20 @@ def test_as_date_never_raises_on_bad_input():
 
 
 def test_the_schema_really_does_store_dates_as_strings():
-    """If these ever become Date columns the coercion is dead weight — and this
-    test says so rather than leaving it unexplained."""
-    assert isinstance(Loan.__table__.c.disbursement_date.type.python_type(), str)
-    assert isinstance(Customer.__table__.c.date_of_birth.type.python_type(), str)
+    """v2 CORRECTION, 2026-09-24. This test used to assert the opposite of what
+    it says now: that `Loan.disbursement_date` and `Customer.date_of_birth`
+    were `String(10)`, which was true under the v1 schema and is the entire
+    reason `_as_date` above has to coerce a string at all. The v2 data-model
+    migration made both real `Date` columns.
+
+    Corrected visibly rather than deleted, per this repo's convention: a test
+    that silently started asserting the opposite of its old name would be
+    exactly the kind of drift this file exists to catch in the app it tests.
+    `build_features` still has to handle a real `date` object — that is what
+    `test_build_features_survives_string_dates` below now exercises — the
+    schema just no longer forces the string path."""
+    assert Loan.__table__.c.disbursement_date.type.python_type is date
+    assert Customer.__table__.c.date_of_birth.type.python_type is date
 
 
 def test_build_features_survives_string_dates(db, book):

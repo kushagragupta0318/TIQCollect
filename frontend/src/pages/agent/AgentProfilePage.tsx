@@ -179,7 +179,8 @@ export default function AgentProfilePage() {
           territory={agent.territory}
           tier={agent.tier}
           employeeCode={agent.employee_code}
-          validUntil="31 Mar 2026"
+          issuer={agent.agency_name}
+          rbiRegistrationNo={agent.agency_rbi_registration_no}
         />
       )}
 

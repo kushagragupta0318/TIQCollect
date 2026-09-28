@@ -119,7 +119,7 @@ def replay(cfg: LedgerConfig) -> dict:
         # predictions (34.9%) at NO_BASELINE — accounts with nothing billed, so
         # no overdue, so no threshold to measure an outcome against. That was
         # the harness inventing a population, not the labeller failing.
-        cases = [db.query(Case).filter(Case.id == f"C-{lid}").first()
+        cases = [db.query(Case).filter(Case.id == Materialiser.db_id("case", lid)).first()
                  for lid in live_loans(ledger, day)]
         cases = [c for c in cases if c is not None]
         probs, rows = svc.score_cases_and_log(cases, as_of=as_of)

@@ -34,10 +34,10 @@ from app.core.security import create_access_token
 from app.main import app
 from app.models.agent import Agent, AgentSpecialization, AgentStatus, AgentTier
 from app.models.user import User, UserRole
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
-engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
-                       poolclass=StaticPool)
-TestingSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+engine = make_engine()
+TestingSession = make_session_factory(autocommit=False, autoflush=False, bind=engine)
 
 
 class FakeStore:
@@ -74,7 +74,7 @@ def store():
 
 
 def _agent(mgr="mgr-1"):
-    return SimpleNamespace(id="agent-1", manager_user_id=mgr,
+    return SimpleNamespace(id=test_id("agent-1"), manager_user_id=mgr,
                            user=SimpleNamespace(full_name="Asha Verma"))
 
 
@@ -85,7 +85,7 @@ def test_an_event_goes_to_the_agents_manager_channel(store):
     [(channel, event)] = store.published
     assert channel == ev.manager_channel("mgr-1")
     assert event["type"] == "visit.recorded"
-    assert event["agent_id"] == "agent-1"
+    assert event["agent_id"] == test_id("agent-1")
     assert event["agent_name"] == "Asha Verma"
     assert event["data"] == {"case_id": "c1"}
     assert event["id"] and event["at"]
@@ -124,7 +124,7 @@ def test_recent_is_newest_first_and_capped(store):
 
 @pytest.fixture(scope="module")
 def world():
-    Base.metadata.create_all(engine)
+    create_schema(engine)
     db = TestingSession()
 
     def user(email, role, name):
@@ -138,7 +138,7 @@ def world():
     au = user("a1@t.io", UserRole.FIELD_AGENT, "Asha Verma")
     db.flush()
     agent = Agent(id=str(uuid.uuid4()), user_id=au.id, employee_code="EMP9001",
-                  id_card_number="EMP9001-ID", agency_id="AG-1", manager_user_id=m1.id,
+                  id_card_number="EMP9001-ID", manager_user_id=m1.id,
                   gender="F", base_latitude=28.45, base_longitude=77.07, territory="Gurugram",
                   languages_spoken=["HINDI"], status=AgentStatus.OFF_DUTY, tier=AgentTier.TIER_1,
                   specialization=AgentSpecialization.BOTH, ranking_score=80.0)
@@ -146,7 +146,7 @@ def world():
     db.commit()
     yield {"db": db, "m1": m1, "m2": m2, "au": au, "agent": agent}
     db.close()
-    Base.metadata.drop_all(engine)
+    drop_schema(engine)
 
 
 def test_check_in_publishes_with_its_position(store, world, monkeypatch):

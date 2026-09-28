@@ -1,9 +1,17 @@
 # TIQCollect Data Model v2 — schema design (task B01)
 
-**Status:** design for review, 2026-09-24. **No code, model or migration has
-changed.** This document implements [STANDALONE-PRODUCT-PLAN.md](STANDALONE-PRODUCT-PLAN.md)
-§2 (roles, tenancy), §3 (identity) and §4 (data platform). No migration for
-B02–B21 is written until this document is agreed.
+**Status:** agreed 2026-09-24, and the ORM half is BUILT on branch
+`standalone-p1` (B02–B10). Where the build departs from this design, §0.1
+lists it. No Alembic migration exists yet (B11): the models run on SQLite in
+the test suite and nowhere else. This document implements
+[STANDALONE-PRODUCT-PLAN.md](STANDALONE-PRODUCT-PLAN.md) §2 (roles, tenancy),
+§3 (identity) and §4 (data platform).
+
+*(This paragraph read "design for review … **No code, model or migration has
+changed.** … No migration for B02–B21 is written until this document is
+agreed." It was true when written and stopped being true the same day. It is
+corrected rather than deleted, because a reader who trusts "no code changed"
+will look for the old schema and not find it.)*
 
 **How it was built.** Every statement about today's schema comes from one of these:
 - the model files in `backend/app/models/`, cited as `file.py:line`;
@@ -75,6 +83,64 @@ appears, and each is also an open question in §10.
 - **`placement_decisions` is partition-ready but not partitioned.** It is
   designed with the partition key in its PK, but the plan's partition list does
   not include it (Q9).
+
+### 0.1 Where the build departs from this design (B02–B10, 2026-09-24)
+
+Each item is decided, built and tested on `standalone-p1`. Items marked
+DEFERRED are not built and are tracked as tasks.
+
+- **Branch FK is a natural key.** `lending.loans` keeps `branch_code` and
+  carries a composite FK `(bank_id, branch_code) → tenancy.branches(bank_id,
+  branch_code)`, instead of the surrogate `branch_id` + read-only
+  `branch_code` property proposed in §4.2. Same integrity; every reader of
+  `branch_code` (the ML adapter among them) is untouched. A feed row naming an
+  unknown branch is QUARANTINED (`lending.bank_feed_rows`), never inserted.
+- **`cases.placement_id` is nullable in P1.** A case must still have an
+  agency (`agency_id NOT NULL`), and every new case is opened through
+  `services/placement_service.py`, which opens one only on a placement made
+  against a contract in force. The nullable column carries v1 cases through
+  the transform; B15 decides whether it becomes NOT NULL.
+- **The tenant listener refuses, it does not only fill.** §2.5 is implemented
+  in `models/tenancy_listener.py`: it fills a child's tenant columns from the
+  first declared parent and raises `TenantMismatchError` when ANY declared
+  parent disagrees, on INSERT and on an UPDATE that changes a tenant column or
+  a parent FK. One IN query per parent class per flush (5,000 visits: 0.87 s,
+  against 0.76 s with the tenant given).
+- **Relationships over composite FKs join on `id` only.** Inferred joins
+  compared the tenant column too, which made `loan.customer` silently `None`
+  on a mismatch. Pinned: `configure_mappers()` raises zero SAWarnings.
+- **Two FK cycles use `use_alter`:** `cases.closed_by_bank_action_id` and
+  `ml.model_predictions.case_id`.
+- **SQLite enforces foreign keys in the suite** (`PRAGMA foreign_keys=ON` in
+  `tests/_db.make_engine`); the test bank carries the branch codes fixtures use.
+- **Ids from outside are validated in one place,** `app/core/ids.py`:
+  `UUIDPath`/`UUIDQuery` answer a malformed path/query id with the same 404 a
+  missing row gets; `UUIDStr` makes a malformed body id a 422. No malformed id
+  reaches Postgres as a `DataError` 500.
+- **Sessions:** `tenancy.user_sessions.revoked_reason` gains `DEVICE_RESET`
+  (the manager's reset, audit gate 3). Refresh rotation is a compare-and-swap
+  UPDATE.
+- **`audit_action_enum` gains** `VOICE_CALL_PLACED`, `VOICE_CALL_REFUSED` and
+  `DEVICE_RESET`, each with a write site.
+- **Placement quarantine reasons** (`bank_feed_rows.dq_errors[].reason`):
+  `NO_AGENCY`, `AGENCY_NOT_ACTIVE`, `NO_CONTRACT_IN_FORCE`, `NOT_AUTHORISED`,
+  `CONTRACT_FULL`, `PLACED_ELSEWHERE`, `UNKNOWN_BRANCH`.
+- **`strategy.simulation_runs` carries the engine's honesty fields** (E02,
+  engine `mc-1.1.0`): `calibrated_by_backtest BOOLEAN`, `synthetic_inputs
+  BOOLEAN`, `synthetic_warning TEXT NULL` (`SYNTHETIC: …` / `UNCALIBRATED: …`),
+  `calibration JSONB NULL` (engine_version, origin, horizon_months, nominal,
+  coverage, passes, synthetic), `assumptions JSONB` (list), `numpy_version`,
+  `chunk_paths`. The warning clears only for a passing, non-synthetic
+  backtest on the same engine version.
+- **DEFERRED (B23):** `customer_addresses` / `customer_contacts`,
+  `visit_media`, `beat_stops`, `attendance` (and the leave move),
+  `escalations`, `case_assignments`, and `fcm_token` → `agent_devices`. The
+  columns stay where v1 had them until their ~50 readers move, so there is
+  never a second source of truth for one address.
+- **Correction pending in §9.2/§9.3/Q1/Q4:** those sections still name the
+  transform's output tenant "ABC Bank"/"ABC Collections". Appendix C is the
+  decision (invented, realistic names; no placeholders); B15 follows
+  Appendix C.
 
 ---
 
@@ -2657,6 +2723,9 @@ being decorative (known issue 11):
 `2P` means `requires_second_person`: a second holder must complete the
 action. `S` means `is_sensitive`: every use is audited.
 
+*(2026-09-28: `service.field_ops.read` removed with the `/api/field-ops/*`
+router at the v1-main merge; it listed 76 capabilities.)*
+
 | Code | Allows | Flags |
 |---|---|---|
 | `self.profile` | read and edit own profile | |
@@ -2732,7 +2801,6 @@ action. `S` means `is_sensitive`: every use is audited.
 | `field.location.report` | location pings and check-in | |
 | `field.leave.request` | request leave | |
 | `field.sos` | raise SOS | |
-| `service.field_ops.read` | the `/api/field-ops/*` contract (embedded mode) | |
 | `service.manager_api.read` | read-only `/api/v1/manager/*` for Command Center (replaces `TIQCOLLECT_AGENCY_ACCOUNTS` manager passwords, plan §2.1) | |
 
 ### 5.2 Role → capability matrix (seed of `tenancy.role_permissions`)
@@ -2785,7 +2853,7 @@ Legend:
 | `settlements.approve` | · | Y | · | · | · | · | · | · |
 | `agency.audit.read` | · | · | · | · | Y | · | · | · |
 | `field.*` (8) | · | · | · | · | · | · | S | · |
-| `service.field_ops.read`, `service.manager_api.read` | · | · | · | · | · | · | · | Y |
+| `service.manager_api.read` | · | · | · | · | · | · | · | Y |
 
 **Consequences worth stating.**
 - **The promote exposure closes.** `ml.approve` and `ml.promote` belong to
@@ -3477,6 +3545,20 @@ Of the 476 columns:
 
 ## Appendix C — demo tenant roster (decided 2026-09-24)
 
+*(Renamed 2026-09-24, after screening by the business lead (REVIEW.md §6)
+and the owner's pick of the lender. This appendix first named the primary
+tenant "Meridian Trust Bank Ltd." — the brand of a real US credit union —
+and the second "Northfield Small Finance Bank Ltd." (Northfield Bank is a
+real US bank); agency 5 was "Konkan Asset Recovery Pvt. Ltd.", which
+collides with a real Mumbai/Pune/Goa collections agency; the second tenant's
+agency was "Sahyadri Recovery Desk LLP", renamed to avoid two "Sahyadri"
+agencies ("Nainital" was rejected: Nainital Bank is real and publishes its
+recovery-agent list). Every email domain is `.test`. The checks were web and
+MCA searches only — formal trademark / NBFC-name clearance is legal's step.
+Demo passwords: one private DEMO_MASTER_PASSWORD for three accounts, per the
+owner, never documented here; every other seeded user gets an unusable
+hash.)*
+
 **Everything below is fictional and invented for the prototype.** The names
 were chosen to sound like real Indian firms without being any real bank,
 NBFC or collection agency. Where a name could plausibly collide with a small
@@ -3494,10 +3576,10 @@ the UPI QR (task A14).
 
 | Bank | Role in the demo | HQ | Notes |
 |---|---|---|---|
-| **Meridian Trust Bank Ltd.** ("Meridian Trust") | the primary tenant; replaces "ABC Bank" | Meridian House, G Block, Bandra Kurla Complex, Mumbai 400051 | private-sector style; retail book across 4 zones; branch codes keep v1's `GGN044` format |
-| **Northfield Small Finance Bank Ltd.** | second, small tenant; exists only so tenant isolation is demonstrable and testable (plan §4.7) | Baner Road, Pune 411045 | one agency, ~2k loans |
+| **Girivan Finance Ltd** ("Girivan") | the primary tenant (a fictional NBFC); replaces "ABC Bank" | Girivan House, G Block, Bandra Kurla Complex, Mumbai 400051 | private-sector style; retail book across 4 zones; branch codes keep v1's `GGN044` format |
+| **Kumaon Finance Ltd** | second, small tenant; exists only so tenant isolation is demonstrable and testable (plan §4.7) | Baner Road, Pune 411045 | one agency, ~2k loans |
 
-### C.2 Agencies of Meridian Trust
+### C.2 Agencies of Girivan Finance
 
 Seven are active, one is suspended and one is mid-onboarding, so every
 lifecycle state in the portal has real data behind it.
@@ -3508,15 +3590,15 @@ lifecycle state in the portal has real data behind it.
 | 2 | **Sarthak Recovery Services LLP** | LLP | Noida | North | Noida, Ghaziabad, East Delhi | ACTIVE | 2026-01-12 | 22 |
 | 3 | **Rajputana Credit Solutions Pvt. Ltd.** | Pvt Ltd | Jaipur | North | Jaipur, Ajmer | ACTIVE | 2026-02-02 | 16 |
 | 4 | **Awadh Field Collections Pvt. Ltd.** | Pvt Ltd | Lucknow | North | Lucknow, Kanpur | SUSPENDED 2026-09-02 (geofence-failure spike under review) | 2026-02-20 | 14 |
-| 5 | **Konkan Asset Recovery Pvt. Ltd.** | Pvt Ltd | Mumbai | West | Mumbai, Thane, Navi Mumbai, Pune | ACTIVE | 2025-12-08 | 28 |
+| 5 | **Sahyadri Field Recovery Pvt. Ltd.** | Pvt Ltd | Mumbai | West | Mumbai, Thane, Navi Mumbai, Pune | ACTIVE | 2025-12-08 | 28 |
 | 6 | **Sabarmati Collection Services LLP** | LLP | Ahmedabad | West | Ahmedabad, Surat, Vadodara | ACTIVE | 2026-03-16 | 17 |
 | 7 | **Deccan Resolve Associates Pvt. Ltd.** | Pvt Ltd | Hyderabad | South | Hyderabad, Bengaluru | ACTIVE | 2026-01-26 | 24 |
 | 8 | **Coromandel Recovery Partners LLP** | LLP | Chennai | South | Chennai, Coimbatore | ACTIVE | 2026-04-06 | 15 |
 | 9 | **Hooghly Credit Management Pvt. Ltd.** | Pvt Ltd | Kolkata | East | Kolkata, Bhubaneswar | ONBOARDING — invite sent 2026-09-18, 2 documents pending | — | 0 |
 
-Northfield SFB has one agency: **Sahyadri Recovery Desk LLP** (Pune, 8 agents).
+Kumaon Finance has one agency: **Almora Recovery Desk LLP** (Pune, 8 agents).
 
-Workforce: 154 agents at Meridian Trust plus 8 at Northfield. That meets the
+Workforce: 154 agents at Girivan Finance plus 8 at Kumaon Finance. That meets the
 plan's "~160".
 
 ### C.3 Invented details every agency carries
@@ -3529,7 +3611,7 @@ plan's "~160".
   - a registered address: a fictional building on a real locality's street.
 - **People:** Director, Operations Head and Compliance Officer, each with a
   realistic en_IN name, `+91 9xxxxxxxxx` phone and an email on the agency's
-  own domain (e.g. `ops@aravallifs.in`).
+  own domain (e.g. `ops@aravallifs.test`).
 - **Coverage:** regions and cities served; authorised products (of the 8
   loan types); authorised DPD buckets.
 - **Contract:**
@@ -3547,7 +3629,7 @@ plan's "~160".
   verification policy, and the DRA-certification register.
   - Each is generated as a specimen PDF, footed "Specimen — fictional demo
     document", stored in MinIO, with realistic issue and expiry dates.
-  - Konkan's insurance expires in 21 days, so the expiry alert has something
+  - Sahyadri Field Recovery's insurance expires in 21 days, so the expiry alert has something
     to show. Hooghly is missing 2 documents.
 - **Workforce:** realistic en_IN names; an IIBF-style DRA certificate number
   and expiry per agent (a few expired, for the compliance tile); joining dates
@@ -3561,7 +3643,7 @@ plan's "~160".
 Each agency and agent gets a hidden skill, drawn per §4.7 of the plan, so the
 scorecards differ for a reason the generator's ground-truth manifest can
 prove:
-- Konkan: strong across the board.
+- Sahyadri Field Recovery: strong across the board.
 - Deccan: high contact rate, weak conversion.
 - Sabarmati: small but efficient.
 - Awadh: weak, with an evidence-integrity problem (which is why it is
@@ -3574,14 +3656,17 @@ The case-mix-adjusted ranking (H01) is scored against this truth.
 
 | Who | Role | Login |
 |---|---|---|
-| Ananya Iyer, Head of Collections | BANK_ADMIN | `ananya.iyer@meridiantrust.in` |
-| Rohan Mehta, Collections Analytics | BANK_ANALYST | `rohan.mehta@meridiantrust.in` |
-| Farah Siddiqui, Tech Ops & MLOps | BANK_TECHOPS | `farah.siddiqui@meridiantrust.in` |
-| Vikram Malhotra (v1 `manager1`) | AGENCY_ADMIN, Aravalli | `vikram.malhotra@aravallifs.in` |
-| v1 `manager2` | AGENCY_MANAGER, Aravalli | `<first>.<last>@aravallifs.in` |
+| Ananya Iyer, Head of Collections | BANK_ADMIN | `ananya.iyer@girivanfinance.test` |
+| Rohan Mehta, Collections Analytics | BANK_ANALYST | `rohan.mehta@girivanfinance.test` |
+| Farah Siddiqui, Tech Ops & MLOps | BANK_TECHOPS | `farah.siddiqui@girivanfinance.test` |
+| Vikram Malhotra (v1 `manager1`) | AGENCY_ADMIN, Aravalli | `vikram.malhotra@aravallifs.test` |
+| v1 `manager2` | AGENCY_MANAGER, Aravalli | `<first>.<last>@aravallifs.test` |
 | each agency's Operations Head | AGENCY_ADMIN (its master login) | `<first>.<last>@<agency domain>` |
-| every agent | FIELD_AGENT | `<first>.<last>@<agency domain>`; v1 agents keep their names (e.g. `piyush.sharma@aravallifs.in`) |
+| every agent | FIELD_AGENT | `<first>.<last>@<agency domain>`; v1 agents keep their names (e.g. `piyush.sharma@aravallifs.test`) |
 
-Passwords (one per role) are documented only in `backend/fixtures/README.md`.
-There is no UI shortcut (plan §3.1). The v1 `admin@tiqcollect.in` becomes
+Passwords: superseded 2026-09-24 by the owner's decision — one master password
+from the private setting `DEMO_MASTER_PASSWORD`, for the three accounts listed
+in `DEMO_MASTER_ACCOUNTS` (a bank user, an agency manager, a field agent);
+every other seeded user has an unusable hash. There is no UI shortcut (plan
+§3.1). *(This said "one per role, documented only in fixtures/README.md".)* The v1 `admin@tiqcollect.in` becomes
 Ananya Iyer's account (Q1).

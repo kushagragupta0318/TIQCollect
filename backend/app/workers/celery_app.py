@@ -26,6 +26,8 @@ celery_app = Celery(
         "app.workers.tasks.beat_reconciliation",
         "app.workers.tasks.model_outcomes",
         "app.workers.tasks.model_retraining",
+        "app.workers.tasks.partition_maintenance",
+        "app.workers.tasks.analytics_refresh",
     ],
 )
 
@@ -103,6 +105,19 @@ celery_app.conf.update(
             "task": "app.workers.tasks.model_outcomes.attach_model_outcomes",
             "schedule": crontab(hour=19, minute=15),
         },
+        # 20:30 — analytics MV refresh (B13): after ingest, scoring and the 20:00
+        # allocation; it also waits for allocation runs to leave RUNNING.
+        "analytics-refresh": {
+            "task": "app.workers.tasks.analytics_refresh.refresh_analytics",
+            "schedule": crontab(hour=20, minute=30),
+        },
+        # 01:30 — partition maintenance (B12, core/partitions.py): pre-create
+        # month partitions, report DEFAULT rows, apply DECIDED retention. Before
+        # the 02:00 reconciliation, which reads yesterday's trail.
+        "partition-maintenance": {
+            "task": "app.workers.tasks.partition_maintenance.maintain_partitions",
+            "schedule": crontab(hour=1, minute=30),
+        },
         # Reconcile yesterday's beats — planned route against the GPS trail and
         # the visit timestamps that actually happened. At 2 AM, after the trail
         # for the day has finished arriving and before the 3 AM retention sweep
@@ -135,3 +150,15 @@ celery_app.conf.update(
         },
     },
 )
+
+
+# 2026-09-28 (B14): Celery worker processes run nightly jobs that legitimately
+# take minutes; the API's 15 s statement timeout would kill them. Each worker
+# process switches to JOB_STATEMENT_TIMEOUT_MS as it starts.
+from celery.signals import worker_process_init  # noqa: E402
+
+
+@worker_process_init.connect
+def _use_job_timeouts(**_kwargs):
+    from app.core.database import use_job_statement_timeout
+    use_job_statement_timeout()

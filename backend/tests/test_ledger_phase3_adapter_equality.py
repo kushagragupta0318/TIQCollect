@@ -32,6 +32,7 @@ from app.ml.simulation.ledger.panel import build_panel
 from app.models.base import Base
 from app.models.loan import Loan
 from app.services.ml_scoring_service import MLScoringService
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
 CFG = LedgerConfig(n_borrowers=300, months=12, seed=17)
 #: Snapshot days to compare. Enough (loan, as_of) pairs to clear the 1,000
@@ -71,14 +72,13 @@ RATIO = ["arrears_ratio", "penal_ratio", "outstanding_to_sanction",
 MONEY_TOL = 0.01
 RATIO_TOL = 0.002
 
-engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
-                       poolclass=StaticPool)
-Session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+engine = make_engine()
+Session = make_session_factory(autocommit=False, autoflush=False, bind=engine)
 
 
 @pytest.fixture(scope="module")
 def world():
-    Base.metadata.create_all(bind=engine)
+    create_schema(bind=engine)
     ledger = LedgerSimulator(CFG).run(intercept=-4.1562)
     panel = build_panel(ledger, CFG)
     db = Session()
@@ -88,7 +88,7 @@ def world():
         yield ledger, panel, db, mat
     finally:
         db.close()
-        Base.metadata.drop_all(bind=engine)
+        drop_schema(bind=engine)
 
 
 def _adapter_rows(db, mat, panel, day):
@@ -100,7 +100,7 @@ def _adapter_rows(db, mat, panel, day):
     svc = MLScoringService(db)
     out = {}
     for lid in want.loan_id:
-        loan = db.query(Loan).filter(Loan.id == lid).first()
+        loan = db.query(Loan).filter(Loan.loan_account_number == lid).first()
         if loan is not None:
             out[lid] = svc.build_features(loan, as_of=as_of)
     return want.set_index("loan_id"), out
@@ -300,16 +300,16 @@ def test_a_payment_after_as_of_does_not_move_the_features(world):
     pay_date = CFG.start_date + timedelta(days=pay_day)
 
     mat.rewind_to(db, 150)
-    at150 = db.query(Loan).filter(Loan.id == lid).first()
+    at150 = db.query(Loan).filter(Loan.loan_account_number == lid).first()
     # The sharpest statement of the property: at as_of the ledger cannot name a
     # payment that has not happened yet.
     if at150.last_payment_date:
-        assert _date.fromisoformat(at150.last_payment_date) < pay_date
+        assert at150.last_payment_date < pay_date
 
     mat.rewind_to(db, 210)
-    at210 = db.query(Loan).filter(Loan.id == lid).first()
+    at210 = db.query(Loan).filter(Loan.loan_account_number == lid).first()
     assert at210.last_payment_date is not None
-    assert _date.fromisoformat(at210.last_payment_date) >= pay_date
+    assert at210.last_payment_date >= pay_date
 
 
 def test_a_promise_resolved_after_as_of_still_reads_as_active(world):
@@ -325,9 +325,9 @@ def test_a_promise_resolved_after_as_of_still_reads_as_active(world):
     pid = late.iloc[0].ptp_id
 
     mat.rewind_to(db, 150)
-    assert db.query(PTP).filter(PTP.id == pid).first().status is PTPStatus.ACTIVE
+    assert db.query(PTP).filter(PTP.id == Materialiser.db_id("ptp", pid)).first().status is PTPStatus.ACTIVE
     mat.rewind_to(db, 270)
-    assert db.query(PTP).filter(PTP.id == pid).first().status is not PTPStatus.ACTIVE
+    assert db.query(PTP).filter(PTP.id == Materialiser.db_id("ptp", pid)).first().status is not PTPStatus.ACTIVE
 
 
 # ---------------------------------------------------------------------------
@@ -349,10 +349,10 @@ def test_a_reversal_is_invisible_before_it_takes_effect(world):
 
     mat.rewind_to(db, int(r.payment_day) + 1)
     assert db.query(Payment).filter(
-        Payment.id == r.payment_id).first().status is PaymentStatus.VERIFIED
+        Payment.id == Materialiser.db_id("payment", r.payment_id)).first().status is PaymentStatus.VERIFIED
     mat.rewind_to(db, int(r.status_effective_day) + 1)
     assert db.query(Payment).filter(
-        Payment.id == r.payment_id).first().status is PaymentStatus.REVERSED
+        Payment.id == Materialiser.db_id("payment", r.payment_id)).first().status is PaymentStatus.REVERSED
 
 
 def test_opening_balances_reach_the_materialised_state(world):
@@ -365,7 +365,7 @@ def test_opening_balances_reach_the_materialised_state(world):
                 if ledger.loans.set_index("loan_id").loc[lid, "opening_paid"] > 0]
     assert seasoned, "no seasoned accounts in this book"
     for lid in seasoned[:20]:
-        loan = db.query(Loan).filter(Loan.id == lid).first()
+        loan = db.query(Loan).filter(Loan.loan_account_number == lid).first()
         assert abs(loan.overdue_amount - rows.loc[lid, "overdue_amount"]) <= MONEY_TOL
 
 
@@ -375,7 +375,7 @@ def test_dpd_transitions_agree_at_every_snapshot(world, day):
     mat.rewind_to(db, day)
     rows = panel[panel.month_index == day // CFG.cycle_days].set_index("loan_id")
     for lid in rows.index:
-        loan = db.query(Loan).filter(Loan.id == lid).first()
+        loan = db.query(Loan).filter(Loan.loan_account_number == lid).first()
         assert loan.dpd == rows.loc[lid, "dpd"], (day, lid)
 
 
@@ -392,3 +392,28 @@ def test_missing_values_are_missing_on_both_sides(matched):
                 feats["days_since_last_payment"] is None, (lid, feats.get(
                     "days_since_last_payment"))
     assert seen > 0, "no never-paid accounts in the sample to check"
+
+
+# ── The product rule both sides share (coordinator decision (a), 2026-09-28) ──
+
+def test_a_zero_promise_is_in_neither_the_panel_nor_the_database():
+    """The simulator promises min(overdue, ...), which is 0 with nothing
+    overdue; v2's CHECK refuses that row. The panel and the materialiser both
+    drop it through ONE predicate (models/ptp.promise_is_for_money), so the
+    harness compares one world. Rounded as NUMERIC(14,2) stores it."""
+    import pandas as pd
+    from app.ml.simulation.ledger.product_rules import product_promises
+    from app.models.ptp import promise_is_for_money
+
+    assert [promise_is_for_money(a) for a in (0, 0.0, 0.004, 0.005, 0.01, 5000)] == \
+        [False, False, False, True, True, True]
+    frame = pd.DataFrame({"ptp_id": [1, 2, 3], "committed_amount": [0.0, 0.004, 1200.0]})
+    assert list(product_promises(frame).ptp_id) == [3]
+    assert product_promises(frame.iloc[0:0]).empty
+
+
+def test_panel_and_materialiser_import_the_same_filter():
+    """One definition: a second copy of the rule would let the two sides drift."""
+    from app.ml.simulation.ledger import materialise, panel, product_rules
+    assert panel.product_promises is product_rules.product_promises
+    assert materialise.product_promises is product_rules.product_promises

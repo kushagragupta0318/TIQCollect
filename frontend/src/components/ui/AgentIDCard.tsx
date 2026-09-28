@@ -9,6 +9,10 @@ interface Props {
   tier: string;
   employeeCode: string;
   validUntil?: string;
+  /** The issuing agency and its RBI registration, from the agency record.
+   *  Either may be absent; nothing is printed in its place (A14). */
+  issuer?: string | null;
+  rbiRegistrationNo?: string | null;
 }
 
 /* Deterministic pseudo-QR grid from a seed string */
@@ -65,7 +69,7 @@ function MiniQR({ value, size = 18 }: { value: string; size?: number }) {
   );
 }
 
-export default function AgentIDCard({ agentId, name, idCardNumber, territory, tier, employeeCode, validUntil }: Props) {
+export default function AgentIDCard({ agentId, name, idCardNumber, territory, tier, employeeCode, validUntil, issuer, rbiRegistrationNo }: Props) {
   const [flipped, setFlipped] = useState(false);
 
   return (
@@ -149,10 +153,13 @@ export default function AgentIDCard({ agentId, name, idCardNumber, territory, ti
             <p className="text-xs font-mono font-bold text-slate-700">{idCardNumber}</p>
             <p className="text-[10px] text-slate-400 mt-0.5">Agent · {territory}</p>
           </div>
-          <div className="flex items-center gap-1.5 text-[10px] text-slate-400">
-            <Shield className="w-3 h-3 text-success-500" />
-            Issued by TIQCollect · RBI Reg. No. RB-2024-0192
-          </div>
+          {(issuer || rbiRegistrationNo) && (
+            <div className="flex items-center gap-1.5 text-[10px] text-slate-400">
+              <Shield className="w-3 h-3 text-success-500" />
+              {[issuer && `Issued by ${issuer}`, rbiRegistrationNo && `RBI Reg. No. ${rbiRegistrationNo}`]
+                .filter(Boolean).join(" · ")}
+            </div>
+          )}
         </div>
       )}
     </div>

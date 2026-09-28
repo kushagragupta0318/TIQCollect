@@ -35,6 +35,7 @@ from app.services.ptp_lifecycle_service import (
     GRACE_DAYS, REASON_GRACE_EXPIRED, SOURCE_BACKFILL, SOURCE_NIGHTLY, process_scope,
 )
 from app.workers.tasks.ptp_lifecycle import run_for_all_managers
+from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
 EFF = date(2026, 9, 17)                      # the business date every test judges against
 D_TODAY, D_YESTERDAY, D_ELIGIBLE = EFF, EFF - timedelta(days=1), EFF - timedelta(days=2)
@@ -47,9 +48,9 @@ def _at(d: date, hour=12, minute=0):
 
 
 def _session():
-    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
-    Base.metadata.create_all(bind=engine)
-    return sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    engine = make_engine()
+    create_schema(bind=engine)
+    return make_session_factory(autocommit=False, autoflush=False, bind=engine)
 
 
 class World:
@@ -62,15 +63,15 @@ class World:
         self.agent = self._agent("A001", self._user("a1@t.in", UserRole.FIELD_AGENT, "A1"), self.mgr)
         self.agent2 = self._agent("A002", self._user("a2@t.in", UserRole.FIELD_AGENT, "A2"), self.mgr)
         self.other_agent = self._agent("B001", self._user("b1@t.in", UserRole.FIELD_AGENT, "B1"), self.other_mgr)
-        self.cust = Customer(customer_ref="C1", full_name="B", date_of_birth="1990-01-01", gender="M",
+        self.cust = Customer(customer_ref="C1", full_name="B", date_of_birth=date(1990, 1, 1), gender="M",
                              pan_masked="X", aadhaar_masked="X", phone_primary="9000000001", address_line1="1",
                              city="Delhi", state="DL", pincode="110001", latitude=28.6, longitude=77.2,
                              risk_category=RiskCategory.MEDIUM, cibil_score=650)
         db.add(self.cust); db.flush()
         self.loan = Loan(loan_account_number="L1", customer_id=self.cust.id, loan_type=LoanType.PERSONAL,
-                         bank_name="B", branch_code="BR", sanctioned_amount=100000.0, disbursed_amount=100000.0,
+                         branch_code="BR", sanctioned_amount=100000.0, disbursed_amount=100000.0,
                          outstanding_principal=50000.0, total_outstanding=52000.0, overdue_amount=12000.0,
-                         emi_amount=4000.0, disbursement_date="2025-01-01", maturity_date="2027-01-01", dpd=45,
+                         emi_amount=4000.0, disbursement_date=date(2025, 1, 1), maturity_date=date(2027, 1, 1), dpd=45,
                          dpd_bucket=DPDBucket.BUCKET_2, status=LoanStatus.ACTIVE, interest_rate=12.0, penal_charges=0.0)
         db.add(self.loan); db.flush()
         self._n = 0
@@ -82,7 +83,7 @@ class World:
         self.db.add(u); self.db.flush(); return u
 
     def _agent(self, code, user, mgr):
-        a = Agent(user_id=user.id, employee_code=code, id_card_number=code + "-ID", agency_id="AG1",
+        a = Agent(user_id=user.id, employee_code=code, id_card_number=code + "-ID", 
                   base_latitude=28.6, base_longitude=77.2, tier=AgentTier.TIER_1,
                   specialization=AgentSpecialization.BOTH, status=AgentStatus.ON_DUTY,
                   territory="Delhi", languages_spoken=["HINDI"], ranking_score=80.0, manager_user_id=mgr.id)
@@ -92,7 +93,7 @@ class World:
         self._n += 1
         c = Case(case_number=f"CASE{self._n:04d}", customer_id=self.cust.id, loan_id=self.loan.id,
                  agent_id=(agent or self.agent).id, status=status, target_amount=20000.0, collected_amount=0.0,
-                 allocation_date=EFF.isoformat())
+                 allocation_date=EFF)
         self.db.add(c); self.db.flush(); return c
 
     def visit(self, case, when, outcome=VisitOutcome.PTP, agent=None):

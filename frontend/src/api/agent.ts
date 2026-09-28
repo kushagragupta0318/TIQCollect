@@ -230,12 +230,15 @@ export async function recordVisit(caseId: string, payload: {
   return data;
 }
 
-export async function notifyVisit(caseId: string): Promise<{ status: string }> {
+// `sent` (2026-09-24): whether a message reached the transport. False when
+// messaging is suppressed for this borrower (demo data) or not configured —
+// the server used to answer "sent" either way.
+export async function notifyVisit(caseId: string): Promise<{ status: string; sent: boolean }> {
   const { data } = await api.post(`/agent/cases/${caseId}/notify-visit`);
   return data;
 }
 
-export async function notifyCase(caseId: string, type: "reminder" | "ptp" | "receipt"): Promise<{ status: string }> {
+export async function notifyCase(caseId: string, type: "reminder" | "ptp" | "receipt"): Promise<{ status: string; sent: boolean }> {
   const { data } = await api.post(`/agent/cases/${caseId}/notify`, { type });
   return data;
 }

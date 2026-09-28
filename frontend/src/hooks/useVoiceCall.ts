@@ -32,7 +32,10 @@ export function useVoiceCall() {
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
   };
 
-  /** `caseId` is what the server dials from; `phone` is only displayed. */
+  // 2026-09-24 (audit gate 2): the call is placed for a CASE. The server
+  // resolves the borrower's number from it (and refuses a case that is not
+  // yours, outside contact hours, do-not-contact or demo data); `phone` is
+  // display only and is never sent.
   const startCall = useCallback(async (caseId: string, phone: string, customerName: string) => {
     try {
       setActiveCall({ customerName, phone, status: "connecting", duration: 0 });
