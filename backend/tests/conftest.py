@@ -26,6 +26,9 @@ for _name, _value in {
     "DATABASE_URL": "postgresql+psycopg2://nobody:nothing@127.0.0.1:1/none",
     "MINIO_ACCESS_KEY": "test",
     "MINIO_SECRET_KEY": "test-secret",
+    # Per process: the default is REDIS_URL, and on a dev machine that is the
+    # shared stack's Redis on loopback, which the network guard lets through.
+    "RATE_LIMIT_STORAGE_URI": "memory://",
 }.items():
     os.environ.setdefault(_name, _value)
 

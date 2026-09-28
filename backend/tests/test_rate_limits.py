@@ -98,3 +98,46 @@ def test_authenticated_routes_are_not_globally_limited(client):
     codes = _hammer(client, "get", "/api/v1/manager/dashboard", settings.RATE_LIMIT_PER_MINUTE + 5)
     assert 429 not in codes
     assert set(codes) <= {401, 403}
+
+
+# ── Where the counts live (RESTRUCTURE-PLAN 1.8) ─────────────────────────────
+# Per-process counts multiply the limit by the number of uvicorn workers, so the
+# limiter defaults to Redis; tests use "memory://" (conftest).
+
+@pytest.mark.parametrize("configured, expected", [
+    ("", "redis://cache:6379/0"),
+    ("   ", "redis://cache:6379/0"),
+    ("${RATE_LIMIT_STORAGE_URI}", "redis://cache:6379/0"),     # unresolved platform reference
+    ("memory://", "memory://"),
+    ("redis://other:6379/3", "redis://other:6379/3"),
+])
+def test_the_limiter_counts_in_redis_unless_told_otherwise(monkeypatch, configured, expected):
+    from app.core import ratelimit
+    monkeypatch.setattr(settings, "REDIS_URL", "redis://cache:6379/0")
+    monkeypatch.setattr(settings, "RATE_LIMIT_STORAGE_URI", configured)
+    assert ratelimit.storage_uri() == expected
+
+
+def test_an_unreachable_redis_still_limits_and_never_500s():
+    """Redis down must not turn the login limit off (fail open) or into a 500
+    (fail closed): the limiter falls back to counting per process."""
+    from fastapi import FastAPI, Request
+    from slowapi import _rate_limit_exceeded_handler
+    from slowapi.errors import RateLimitExceeded
+
+    from app.core.ratelimit import AUTH_LIMIT, build_limiter
+
+    dead = build_limiter("redis://127.0.0.1:1/0")      # loopback, nothing listening
+    mini = FastAPI()
+    mini.state.limiter = dead
+    mini.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+    @mini.post("/login")
+    @dead.limit(AUTH_LIMIT)
+    def login(request: Request):
+        return {"ok": True}
+
+    with TestClient(mini) as c:
+        codes = [c.post("/login").status_code for _ in range(LIMIT + 2)]
+    assert codes[:LIMIT] == [200] * LIMIT, codes
+    assert codes[LIMIT:] == [429, 429]

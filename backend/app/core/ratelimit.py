@@ -31,10 +31,28 @@ from slowapi.util import get_remote_address
 
 from app.core.config import settings
 
-limiter = Limiter(
-    key_func=get_remote_address,
-    default_limits=[f"{settings.RATE_LIMIT_PER_MINUTE}/minute"],
-)
+
+def storage_uri() -> str:
+    """Redis unless RATE_LIMIT_STORAGE_URI names something else. A count kept
+    in process memory is multiplied by the number of uvicorn workers."""
+    uri = settings.RATE_LIMIT_STORAGE_URI.strip()
+    if not uri or uri.startswith("${"):
+        return settings.REDIS_URL
+    return uri
+
+
+def build_limiter(uri: str) -> Limiter:
+    # in_memory_fallback_enabled: with Redis unreachable, count per process until
+    # it returns (slowapi re-checks it) — limits still apply, login never 500s.
+    return Limiter(
+        key_func=get_remote_address,
+        default_limits=[f"{settings.RATE_LIMIT_PER_MINUTE}/minute"],
+        storage_uri=uri,
+        in_memory_fallback_enabled=True,
+    )
+
+
+limiter = build_limiter(storage_uri())
 
 #: Per client address, on the routes that need no token to reach.
 AUTH_LIMIT = f"{settings.AUTH_RATE_LIMIT_PER_MINUTE}/minute"

@@ -49,6 +49,6 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 USER app
 EXPOSE 8300
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-# WEB_CONCURRENCY > 1 only once the rate limiter keeps its counts in Redis
-# (RESTRUCTURE-PLAN step 1.8); until then each process would count separately.
+# WEB_CONCURRENCY: uvicorn workers. The rate limiter counts in Redis (REDIS_URL),
+# so every worker shares one limit.
 CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port 8300 --workers ${WEB_CONCURRENCY:-1}"]

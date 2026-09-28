@@ -603,6 +603,10 @@ class Settings(BaseSettings):
 
     RATE_LIMIT_PER_MINUTE: int = 60
     AUTH_RATE_LIMIT_PER_MINUTE: int = 10
+    # Where the limiter keeps its counts (a `limits` storage URI). Empty, or an
+    # unresolved ${VAR}: REDIS_URL, so every API worker and replica shares one
+    # count. "memory://" counts per process (tests, a single-worker laptop).
+    RATE_LIMIT_STORAGE_URI: str = ""
     # Peers whose X-Forwarded-For is believed: IPs or CIDRs, in uvicorn's
     # FORWARDED_ALLOW_IPS format. uvicorn's own server-level check reads the
     # same variable, so the two always agree. The limiter keys on the client
