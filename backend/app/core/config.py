@@ -35,14 +35,18 @@
 #   loud, not "silently read as embedded" — a typo'd env var must not make a
 #   standalone deployment quietly serve as embedded, or vice versa).
 # ───────────────────────────────────────────────────────────────────────────
+import os
 from functools import lru_cache
 from typing import List, Literal
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        # TIQ_ENV_FILE="" reads no file: tests/conftest.py sets it so a developer's
+        # backend/.env cannot change what the suite sees.
+        env_file=os.environ.get("TIQ_ENV_FILE", ".env") or None,
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
@@ -132,16 +136,6 @@ class Settings(BaseSettings):
     def allowed_origins_list(self) -> List[str]:
         return [o.strip() for o in self.ALLOWED_ORIGINS.split(",")]
 
-    # Bank Command Centre
-    COMMAND_CENTRE_API_KEY: str
-
-    # Gate the /api/field-ops/* contract endpoints behind COMMAND_CENTRE_API_KEY.
-    # Off by default so a local Command Centre works with no configuration —
-    # its proxy sends no auth header. Turn on in any deployment reachable
-    # beyond localhost: those endpoints expose live agent GPS and collections
-    # figures. See api/v1/endpoints/field_ops.py.
-    FIELD_OPS_REQUIRE_API_KEY: bool = False
-
     # OpenAI (Whisper transcription)
     OPENAI_API_KEY: str = ""
 
@@ -171,6 +165,38 @@ class Settings(BaseSettings):
     # contact (DEMO0003) name/phone is synced from the vars below on startup.
     # Leave false in real deployments — none of this touches non-demo data.
     DEMO_MODE: bool = False
+    # Return the borrower's payment OTP to the agent's app, for a demo with no SMS
+    # transport. It lets an agent confirm a payment without the borrower, so it is
+    # its own switch: a public deployment running DEMO_MODE must not get it too.
+    DEMO_OTP_ECHO: bool = False
+
+    @field_validator("DEMO_OTP_ECHO", mode="before")
+    @classmethod
+    def _unset_echo_is_off(cls, v):
+        # Empty, or a literal "${DEMO_OTP_ECHO}" (`docker run --env-file` does not
+        # interpolate), means "not set". That is off, not a start-up failure.
+        if v is None or (isinstance(v, str) and (not v.strip() or v.strip().startswith("${"))):
+            return False
+        return v
+    # 2026-09-24 (hotfix DEMO-LOGIN) — the demo's ONE master login. Read only
+    # by scripts/apply_demo_logins.py at boot; never logged, printed or
+    # defaulted. Unset = nothing changes. See that script for the rules.
+    DEMO_MASTER_PASSWORD: str = ""
+    DEMO_MASTER_ACCOUNTS: str = ""        # three emails, comma-separated: one admin, one manager, one agent
+    # Never touched by the script: the Collections Command Center's service
+    # logins (its TIQCOLLECT_AGENCY_ACCOUNTS), comma-separated emails.
+    DEMO_MASTER_KEEP_ACCOUNTS: str = ""
+    # The second, explicit opt-in to RETIRE every other account's password.
+    # DEMO_MODE cannot be it: .env.example ships DEMO_MODE=true and compose
+    # defaults it on, so a real deployment may well run with it.
+    DEMO_MASTER_DISABLE_OTHERS: str = ""
+    # Accounts outside these are never retired. The v2 demo book (B15, 2026-09-28):
+    # Girivan Finance's bank users and Aravalli's staff and agents. (Was "tiqcollect.in", the v1 book.)
+    DEMO_EMAIL_DOMAINS: str = "girivanfinance.test,aravallifs.test"
+    # 2026-09-24 (hotfix PAY-1) — accept the demo auto-confirm's DEMO-UPI-
+    # reference. A flag production never sets: NOT DEMO_MODE, which the live
+    # site runs with. Off => every UPI reference must be a 12-digit UTR.
+    DEMO_UPI_ACCEPT: str = ""
     # The showcase customer (DEMO0003). Swap the phone to your CEO's / manager's
     # number here — no reseed, no rebuild; a backend restart applies it.
     DEMO_CONTACT_NAME: str = "Balraj Singh"
@@ -251,8 +277,10 @@ class Settings(BaseSettings):
     # silently served a written-in answer when the key was missing, so a dead
     # integration was indistinguishable from a working one. See core/llm.py.
     #
-    # "groq" | "openai" | "none". Groq is OpenAI-compatible, so both run through
-    # the same SDK and differ only by base_url and model name.
+    # "groq" | "openai" | "anthropic" | "none". Groq is OpenAI-compatible, so
+    # groq and openai run through the same SDK and differ only by base_url and
+    # model name; anthropic has its own SDK (block below). "none" is a kill
+    # switch: nothing calls out, LLM_FALLBACK_PROVIDER included.
     LLM_PROVIDER: str = "groq"
     GROQ_API_KEY: str = ""
     GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
@@ -285,6 +313,37 @@ class Settings(BaseSettings):
     # Answers are cached by (purpose, model, prompt). Not an optimisation: Groq's
     # limits are tight, and the same question was previously billed every time.
     LLM_CACHE_TTL_SECONDS: int = 3600
+
+    # ── Anthropic provider (2026-09-24, F01) ─────────────────────────────
+    # LLM_PROVIDER="anthropic" selects it. Two tiers, because the product makes
+    # two kinds of call: short single-shot extraction/briefing prompts (the
+    # six existing features, llm.complete) and multi-step tool-using agents
+    # (llm.chat, for the agent runtime of §8.1). A cheap fast model for the
+    # first and a stronger one for the second, each configuration rather than
+    # a literal, for the same reason LLM_MODEL is.
+    ANTHROPIC_API_KEY: str = ""
+    # Ids as the plan names them (§8.1): Haiku pinned to its dated snapshot so
+    # a high-volume path does not move under an alias; Sonnet 5 has no dated id.
+    LLM_MODEL_ANTHROPIC: str = "claude-haiku-4-5-20251001"
+    LLM_MODEL_ANTHROPIC_AGENT: str = "claude-sonnet-5"
+    # Thinking depth for agent turns on models that accept `effort`. Valid
+    # values depend on the model: low | medium | high everywhere effort exists
+    # (Opus 4.5 stops there), + max on the 4.6 line, + xhigh from Opus 4.7 /
+    # Sonnet 5 on. "medium" rather than the API's own default of "high": these
+    # agents read KPI tables and draft briefs, and an agent that needs more can
+    # pass effort= per call. Empty = API default. complete() does not use this;
+    # it reuses LLM_REASONING_EFFORT ("low", valid on every effort model).
+    LLM_AGENT_EFFORT: str = "medium"
+    # chat() gets its own timeout: a Sonnet 5 turn with adaptive thinking and a
+    # 16k-token ceiling can legitimately run well past the 20 s sized for short
+    # complete() prompts — and TIMEOUT is a fallback trigger, so a too-short
+    # value would switch provider in the middle of an agent's loop.
+    LLM_AGENT_TIMEOUT_SECONDS: float = 120.0
+    # A second provider tried once when the first is unusable or fails on its
+    # side (no key, auth, rate limit, timeout, outage) — e.g. "groq" behind
+    # "anthropic". Never tried for a caller-shaped failure (bad JSON, invalid
+    # request, refusal): another model would not make those right. Empty = off.
+    LLM_FALLBACK_PROVIDER: str = ""
 
     # Fraud / anomaly detection (2026-08-19)
     # Thresholds are deliberately conservative. A detector that cries wolf is
@@ -522,6 +581,17 @@ class Settings(BaseSettings):
 
     RATE_LIMIT_PER_MINUTE: int = 60
     AUTH_RATE_LIMIT_PER_MINUTE: int = 10
+    # Peers whose X-Forwarded-For is believed: IPs or CIDRs, in uvicorn's
+    # FORWARDED_ALLOW_IPS format. uvicorn's own server-level check reads the
+    # same variable, so the two always agree. The limiter keys on the client
+    # address. Behind a reverse proxy, set this to the PROXY'S OWN ADDRESS, so
+    # each user gets their own bucket (deploy step: docs/MERGING-INTO-PLATFORM.md).
+    # The default is loopback only, which fails safe: a proxy nobody configured
+    # means one shared bucket, not a bypass. Never a whole range, and never "*".
+    # A NATted client arriving from a private address could then write its own
+    # X-Forwarded-For, and with every entry trusted uvicorn takes the leftmost,
+    # client-controlled one.
+    FORWARDED_ALLOW_IPS: str = "127.0.0.1"
 
     # Razorpay
     RAZORPAY_TEST_API: str = ""
@@ -541,12 +611,23 @@ class Settings(BaseSettings):
     TWILIO_API_KEY_SID: str = ""
     TWILIO_API_KEY_SECRET: str = ""
     TWILIO_TWIML_APP_SID: str = ""
-    # 2026-09-24 (audit gate 2) — the PUBLIC origin Twilio calls webhooks on,
+    # 2026-09-24 (hotfix AU-2) — the PUBLIC origin Twilio calls webhooks on,
     # e.g. https://fieldops.example.in. X-Twilio-Signature is computed over
-    # that exact URL; behind a proxy the app sees an internal http host, so
-    # the signature can only be checked against this. Unset => the voice
-    # webhook refuses every call (fail closed).
+    # that exact URL; behind Caddy the app sees an internal http host, so the
+    # signature can only be checked against this. Unset => the voice webhook
+    # refuses every call (fail closed).
     PUBLIC_BASE_URL: str = ""
+
+    # 2026-09-24 (hotfix PAY-2) — the UPI payee the collection QR pays. NO
+    # default, deliberately: the QR used to hardcode a personal-looking VPA and
+    # "ABC Bank", so every borrower who scanned it paid whoever owned that VPA.
+    # Unset => the QR is not offered and the agent records the UTR by hand.
+    # Per-bank payees are A14 (brand as data) in the standalone plan.
+    UPI_VPA: str = ""
+    UPI_PAYEE_NAME: str = ""
+    # 2026-09-24 (hotfix BL-5) — the number the borrower's post-visit message
+    # tells them to call. Unset => the message leaves that sentence out.
+    BORROWER_HELPLINE: str = ""
 
     # Borrower payment-verification OTP (see services/otp_service.py)
     OTP_LENGTH: int = 4                       # product decision: 4-digit code

@@ -280,7 +280,7 @@ def test_a_failed_receipt_is_reported_false_and_does_not_block_the_payment(world
     db = TestingSession()
     agent = db.get(Agent, world["ag"].id); case = world["PAY2"]
     out = ps.PaymentService(db).collect_payment(agent, case.id, CollectPaymentRequest(
-        amount=700.0, mode=PaymentMode.UPI))
+        amount=700.0, mode=PaymentMode.UPI, upi_reference="412345678901"))   # a UTR: required since hotfix PAY-1
     assert db.get(Payment, out["id"]) is not None                             # recorded anyway
     assert out["receipt_sent"] is False
     assert len(_rows(db, AuditAction.PAYMENT_SUBMITTED, out["id"])) == 1     # still audited

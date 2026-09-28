@@ -1,24 +1,16 @@
 import { Navigate } from "react-router";
 import { useAuthStore } from "@/store/authStore";
-import type { UserRole } from "@/types";
+import { guardRedirect } from "@/lib/roles";
 
 interface Props {
   children: React.ReactNode;
-  allowedRoles: UserRole[];
+  allowedRoles: readonly string[];
 }
 
 export function ProtectedRoute({ children, allowedRoles }: Props) {
   const { isAuthenticated, user } = useAuthStore();
-
-  if (!isAuthenticated || !user) {
-    return <Navigate to="/login" replace />;
-  }
-
-  if (!allowedRoles.includes(user.role)) {
-    // Redirect to correct home based on role
-    if (user.role === "FIELD_AGENT") return <Navigate to="/agent/home" replace />;
-    return <Navigate to="/manager/overview" replace />;
-  }
-
+  // Signed out → /login; wrong portal → the role's own home (lib/roles.ts).
+  const redirect = guardRedirect(user, isAuthenticated, allowedRoles);
+  if (redirect) return <Navigate to={redirect} replace />;
   return <>{children}</>;
 }

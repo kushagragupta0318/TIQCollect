@@ -21,3 +21,17 @@ certs/
 data/incoming/
 .pytest_cache/
 *.log
+
+# Not needed at run time, so not shipped (RESTRUCTURE-PLAN 1.7, D6).
+# Tests run from the source tree, never inside the prod image.
+backend/tests/
+# Unread CSV copy of the demo dump; fieldops-demo.dump itself IS needed.
+backend/fixtures/tables/
+backend/docs/
+# Model artifacts: serving loads only the pipeline and calibrator (*.joblib),
+# metadata.json and the champion pointer. The development evidence (EDA plots,
+# evaluation tables, reports) stays in git and out of the image.
+backend/app/ml/artifacts/**
+!backend/app/ml/artifacts/**/*.joblib
+!backend/app/ml/artifacts/**/metadata.json
+!backend/app/ml/artifacts/**/champion.txt

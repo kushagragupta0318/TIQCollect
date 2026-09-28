@@ -62,6 +62,7 @@ OUTSIDE_CONTACT_HOURS = "OUTSIDE_CONTACT_HOURS"
 DO_NOT_CONTACT = "DO_NOT_CONTACT"
 NO_NUMBER = "NO_NUMBER"
 DEMO_SUPPRESSED = "DEMO_SUPPRESSED"
+NOT_OUR_APP = "NOT_OUR_APP"          # from d4's hotfix-1 voice_service (merged 2026-09-28)
 
 
 class VoiceRefused(Exception):
@@ -105,6 +106,20 @@ def parse_identity(from_param: str | None) -> tuple[str, str] | None:
         return None
     user_id, sid = _hex_uuid(parts[1]), _hex_uuid(parts[2])
     return (user_id, sid) if user_id and sid else None
+
+
+def from_our_app(params: dict) -> bool:
+    """The signed request came from OUR Twilio account and OUR TwiML app. The
+    signature proves the account's auth token signed it; any other TwiML app
+    in the same account could otherwise point here with identities of its own.
+    (Carried over from d4's hotfix-1 voice_service at the 2026-09-28 merge; the
+    rest of this module is the session-bound AU-2 version the owner kept.)"""
+    # Fail closed on its own (audit LOW, 2026-09-28): an unset or "${VAR}" SID
+    # must not match a request that carries the same empty or literal value,
+    # whatever the caller checked first.
+    account, app_sid = settings.TWILIO_ACCOUNT_SID, settings.TWILIO_TWIML_APP_SID
+    return (_real(account) and _real(app_sid)
+            and params.get("AccountSid") == account and params.get("ApplicationSid") == app_sid)
 
 
 def public_url(path: str, query: str = "") -> str | None:
@@ -162,12 +177,18 @@ def resolve_destination(db: Session, *, from_param: str | None, case_id: str | N
     expires = session.expires_at if session is not None else None
     if expires is not None and expires.tzinfo is None:
         expires = expires.replace(tzinfo=timezone.utc)
+    # user_id reaches the audit row only when it is PROVEN to exist (a
+    # matching session row, or a loaded user): an identity naming an unknown
+    # user would otherwise violate audit_logs' user FK, and write_audit would
+    # roll the refusal's row back silently (found converting the hotfix tests
+    # at the 2026-09-28 merge).
     if (session is None or session.user_id != user_id or session.revoked_at is not None
             or expires is None or expires <= now):
-        raise VoiceRefused(SESSION_ENDED, user_id=user_id)
+        known = user_id if session is not None and session.user_id == user_id else None
+        raise VoiceRefused(SESSION_ENDED, user_id=known)
     user = db.get(User, user_id)
     if user is None or not user.is_active or user.role != UserRole.FIELD_AGENT:
-        raise VoiceRefused(SESSION_ENDED, user_id=user_id)
+        raise VoiceRefused(SESSION_ENDED, user_id=user_id if user is not None else None)
 
     cid = parse_uuid(case_id)
     agent = db.query(Agent).filter(Agent.user_id == user_id).first()

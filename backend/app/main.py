@@ -4,10 +4,20 @@
 # `detail` message string, per final_changes.md §8 ("typed error codes,
 # not free text"). Nothing else in this file changed. See changelog.md
 # for full context.
-# 2026-07-31 — Mounted the Command Centre contract router (bottom of file).
-# It hangs off the app directly rather than off api_router because the
-# integration contract fixes its paths at /api/field-ops/*, outside our
-# /api/v1 namespace. See api/v1/endpoints/field_ops.py for the mapping.
+# 2026-09-24 — The SPA catch-all keeps static file serving inside the
+#   static root (_spa_target); mounting moved into _mount_spa so it can be
+#   tested over HTTP. See the note at _spa_target.
+# 2026-09-24 — ProxyHeadersMiddleware with settings.FORWARDED_ALLOW_IPS.
+# The prod container runs plain uvicorn, which believes X-Forwarded-For only
+# from 127.0.0.1, while Caddy reaches it from another container. Every request
+# therefore carried Caddy's address, and the per-client auth limit (10/min)
+# was one bucket shared by every user of the deployment. The default trusts
+# loopback only (fail-safe); the deployment pins the proxy's address.
+# Knock-on: request.client is now the real client, so the login audit row's
+# ip_address and auth_service's device_fingerprint (sha256 of user-agent and
+# IP) change meaning, from "the proxy" to "the client". Device binding is
+# dormant (registered_device_fingerprint is never written), and A09 takes the
+# IP out of device identity.
 import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, status
@@ -17,13 +27,13 @@ from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 import structlog
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from app.core.config import settings
 from app.core.database import engine
 from app.core.errors import AppException
 from app.core.ratelimit import limiter
 from app.api.v1.router import api_router
-from app.api.v1.endpoints import field_ops
 
 logger = structlog.get_logger()
 
@@ -94,6 +104,11 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+# The limiter keys on request.client, so the client must be the real one.
+# Takes the rightmost X-Forwarded-For entry that is not a trusted proxy, so a
+# value a client writes into the header itself is never picked up.
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=settings.FORWARDED_ALLOW_IPS)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins_list,
@@ -154,9 +169,6 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 app.include_router(api_router)
-# Command Centre integration contract — paths are fixed at /api/field-ops/*,
-# so this cannot sit under api_router's /api/v1 prefix.
-app.include_router(field_ops.router)
 
 
 # ── Serve the built React SPA (production / Docker only) ────────────────────
@@ -172,27 +184,76 @@ app.include_router(field_ops.router)
 # entry — the browser only ever talks to one host.
 _STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
 
-if os.path.isdir(_STATIC_DIR):
+
+def _within(path: str, root: str) -> bool:
+    return path == root or path.startswith(root + os.sep)
+
+
+# 2026-09-24 — static file serving could read outside the static root. The
+# requested path is now checked on its face (no NUL byte, not absolute, still
+# under static/ after normpath) and then resolved with realpath, which also
+# follows symlinks; anything that does not land inside static/ answers the
+# normal 404. The api/ and ws/ refusal is unchanged.
+def _spa_target(full_path: str, static_dir: str) -> str | None:
+    """What the SPA catch-all should serve for `full_path`, or None for a 404."""
+    # Never let an unmatched API path fall through to index.html: a caller
+    # would get 200 and a page of HTML instead of an honest 404.
+    if full_path.startswith(("api/", "ws/")):
+        return None
+    # Refused before the filesystem is touched: a NUL byte (realpath raises on
+    # it), an absolute path (os.path.join would drop the root), and a path
+    # that leaves static/ on its face. splitdrive only ever finds a drive on
+    # Windows; on Linux the lexical normpath check below is what catches a
+    # drive-looking path.
+    if "\x00" in full_path or os.path.isabs(full_path) or os.path.splitdrive(full_path)[0]:
+        return None
+    # Both realpath calls sit inside one guard: anything the filesystem layer
+    # cannot resolve is a 404, never a 500.
+    try:
+        root = os.path.realpath(static_dir)
+        if not _within(os.path.normpath(os.path.join(root, full_path)), root):
+            return None
+        candidate = os.path.realpath(os.path.join(root, full_path))
+    except (ValueError, OSError):
+        return None
+    if not _within(candidate, root):
+        return None                  # a symlink that leaves static/
+    if full_path and os.path.isfile(candidate):
+        return candidate
+    # 2026-09-24 (I01) — a MISSING *.js is an honest 404, not index.html: a
+    # stale client asking for an old hashed chunk after a deploy, or a service
+    # worker polling a rolled-back /sw.js, must read "gone", not get a page of
+    # HTML it tries to run as a script. A real .js file is served above.
+    if full_path.lower().endswith(".js"):
+        return None
+    return os.path.join(root, "index.html")
+
+
+def _mount_spa(app: FastAPI, static_dir: str) -> None:
+    """Serve the built SPA from `static_dir`: /assets as static files, every
+    other unmatched path through _spa_target. A function so a test can mount
+    it on a fresh app over a temporary directory and go through HTTP."""
     from fastapi.responses import FileResponse
     from fastapi.staticfiles import StaticFiles
 
-    _assets = os.path.join(_STATIC_DIR, "assets")
-    if os.path.isdir(_assets):
-        app.mount("/assets", StaticFiles(directory=_assets), name="assets")
+    assets = os.path.join(static_dir, "assets")
+    if os.path.isdir(assets):
+        app.mount("/assets", StaticFiles(directory=assets), name="assets")
 
     @app.get("/{full_path:path}")
     def spa(full_path: str):
-        """Serve a real file when one exists, otherwise index.html.
+        """Serve a real file when one exists, otherwise index.html — except a
+        missing *.js path, which is an honest 404 (see _spa_target above).
 
         The fallback is what makes client-side routes like /agent/cases work on
         a hard refresh or a pasted link — the server has no such route, so
         without it every deep link would 404.
         """
-        # Never let an unmatched API path fall through to index.html: a caller
-        # would get 200 and a page of HTML instead of an honest 404.
-        if full_path.startswith(("api/", "ws/")):
+        target = _spa_target(full_path, static_dir)
+        if target is None:
             raise HTTPException(status_code=404, detail="Not Found")
-        candidate = os.path.join(_STATIC_DIR, full_path)
-        if full_path and os.path.isfile(candidate):
-            return FileResponse(candidate)
-        return FileResponse(os.path.join(_STATIC_DIR, "index.html"))
+        return FileResponse(target)
+
+
+if os.path.isdir(_STATIC_DIR):
+    _mount_spa(app, _STATIC_DIR)

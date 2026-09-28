@@ -9,7 +9,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useIsBelowLg, useMediaQuery } from "@/hooks/useMediaQuery";
-import { TrendingUp, BarChart2, IndianRupee, Users, Calendar, X, Brain, Loader2 } from "lucide-react";
+import { TrendingUp, BarChart2, IndianRupee, Users, Calendar, X } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { shortAmount, shortMoney } from "@/lib/money";
 import {
@@ -18,22 +18,24 @@ import {
 } from "recharts";
 import {
   getAnalytics, getAgentsPerformance, getDashboard,
-  getManagerAgentCalendar, getAgentDPDBreakdown, getTeamDPDBreakdown, getTeamAttendance, getMonthlyReport,
+  getManagerAgentCalendar, getAgentDPDBreakdown, getTeamDPDBreakdown, getTeamAttendance,
 } from "@/api/manager";
 import { CasePipelineCard } from "./CasePipelineCard";
 import { CashTrendCard, PaymentMixCard } from "./PaymentModesCard";
 import { PtpOutcomesCard } from "./PtpOutcomesCard";
+import { DutyCalendarCard } from "./DutyCalendarCard";
+import { MonthlyReportSection } from "./MonthlyReportSection";
+import { CAL_MUTED } from "./calendarTheme";
+import { EASE } from "@/lib/motion";
 import { Reveal } from "@/components/ui/Reveal";
-import { AiBadge } from "@/components/ui/AiBadge";
 import type {
   AnalyticsData, AgentsPerformanceData, AgentPerfEntry, AgentMonthlyPerf,
-  AgentAvailabilityCalendar, AgentCalendarDay, TeamAttendance,
+  TeamAttendance,
   RecoveryBreakdown,
 } from "@/api/manager";
 import { TierBadge } from "@/components/ui/Badge";
 import { LIVE, useLiveRefresh } from "@/lib/liveQuery";
 
-const EASE = "cubic-bezier(0.16,1,0.3,1)";
 
 const LINE_COLORS = [
   "#1677FF", "#16a34a", "#d97706", "#dc2626", "#7c3aed",
@@ -1176,161 +1178,6 @@ function DPDBreakdownCard({ rows, loading, barReady, agentName, selMonth }: {
 // blank on screen. Slate-500 clears 4.5:1 while staying desaturated, so future
 // days still recede next to the saturated on/off-duty green and red instead of
 // competing with them. Both calendars read it from here so they cannot drift.
-const CAL_MUTED = "#64748B";
-
-// ── Agent Duty Calendar — proper month calendar with navigation ────────────────
-
-function DutyCalendarCard({ cal, loading, jumpToMonth }: { cal: AgentAvailabilityCalendar; loading: boolean; jumpToMonth?: string }) {
-  const monthsAvailable = [...new Set(cal.calendar.map((d) => d.date.slice(0, 7)))].sort();
-  const [visibleMonth, setVisibleMonth] = useState(
-    monthsAvailable[monthsAvailable.length - 1] ?? ""
-  );
-
-  useEffect(() => {
-    if (!jumpToMonth) return;
-    const available = [...new Set(cal.calendar.map((d) => d.date.slice(0, 7)))].sort();
-    if (available.includes(jumpToMonth)) setVisibleMonth(jumpToMonth);
-  }, [jumpToMonth, cal]);
-
-  const monthIdx   = monthsAvailable.indexOf(visibleMonth);
-  const canPrev    = monthIdx > 0;
-  const canNext    = monthIdx < monthsAvailable.length - 1;
-  const isOn       = cal.current_status === "ON_DUTY";
-
-  const dayMap = new Map(
-    cal.calendar.filter((d) => d.date.startsWith(visibleMonth)).map((d) => [d.date, d])
-  );
-
-  const today = new Date().toISOString().split("T")[0];
-  const [year, month] = visibleMonth ? visibleMonth.split("-").map(Number) : [0, 0];
-  const lastDay = year ? new Date(year, month, 0).getDate() : 0;
-  const firstDow = year ? new Date(year, month - 1, 1).getDay() : 1; // 0=Sun
-  const padCols = firstDow === 0 ? 0 : firstDow - 1;
-
-  type Cell = null | { dayNum: number; dateStr: string; data: AgentCalendarDay | null; isFuture: boolean };
-
-  const allCells: Cell[] = Array(padCols).fill(null);
-  for (let d = 1; d <= lastDay; d++) {
-    const dow = new Date(year, month - 1, d).getDay();
-    if (dow === 0) continue;
-    const dateStr = `${year}-${String(month).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-    allCells.push({ dayNum: d, dateStr, data: dayMap.get(dateStr) ?? null, isFuture: dateStr > today });
-  }
-  while (allCells.length % 6 !== 0) allCells.push(null);
-  const calRows: Cell[][] = [];
-  for (let i = 0; i < allCells.length; i += 6) calRows.push(allCells.slice(i, i + 6));
-
-  // Attendance: count from actual rendered cells — on = has beat data, off = past working day with no data
-  const pastCells = allCells.filter((c): c is NonNullable<Cell> => c !== null && !c.isFuture);
-  const onDutyDays    = pastCells.filter((c) => c.data !== null).length;
-  const offDutyDays   = pastCells.filter((c) => c.data === null).length;
-  const attendancePct = pastCells.length > 0 ? Math.round(onDutyDays / pastCells.length * 100) : 0;
-
-  const DOW_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  const visibleLabel = visibleMonth
-    ? new Date(visibleMonth + "-01").toLocaleDateString("en-IN", { month: "long", year: "numeric" })
-    : "";
-
-  return (
-    <div className="card p-4">
-      <div className="flex items-center justify-between mb-1">
-        <div className="flex items-center gap-2">
-          <Calendar className="w-4 h-4 text-brand-600" />
-          <h2 className="text-base font-bold" style={{ color: "#1C1C1F" }}>Duty Calendar</h2>
-        </div>
-        <span className="text-xs px-2 py-0.5 rounded-full font-semibold"
-          style={{ background: isOn ? "rgba(22,163,74,0.10)" : "rgba(220,38,38,0.10)", color: isOn ? "#16a34a" : "#dc2626" }}>
-          {isOn ? "● On Duty" : "○ Off Duty"}
-        </span>
-      </div>
-      <p className="text-xs mb-4" style={{ color: "#6B6D76" }}>
-        <span className="font-semibold" style={{ color: "#1677FF" }}>{cal.agent_name}</span>
-        {" · "}{attendancePct}% attendance · {onDutyDays} on / {offDutyDays} off
-      </p>
-
-      {loading ? (
-        <div className="h-48 rounded-xl animate-pulse" style={{ background: "#EFF0F4" }} />
-      ) : (
-        <>
-          {/* Month navigator */}
-          <div className="flex items-center justify-between mb-3">
-            <button
-              onClick={() => canPrev && setVisibleMonth(monthsAvailable[monthIdx - 1])}
-              disabled={!canPrev}
-              style={{
-                width: 28, height: 28, borderRadius: 8, border: "1px solid #EAEBEF",
-                background: canPrev ? "#F5F6F9" : "transparent",
-                color: canPrev ? "#1C1C1F" : "#D1D5DB",
-                cursor: canPrev ? "pointer" : "default",
-                fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center",
-                fontWeight: 600,
-              }}
-            >‹</button>
-            <p className="text-sm font-semibold" style={{ color: "#1C1C1F" }}>{visibleLabel}</p>
-            <button
-              onClick={() => canNext && setVisibleMonth(monthsAvailable[monthIdx + 1])}
-              disabled={!canNext}
-              style={{
-                width: 28, height: 28, borderRadius: 8, border: "1px solid #EAEBEF",
-                background: canNext ? "#F5F6F9" : "transparent",
-                color: canNext ? "#1C1C1F" : "#D1D5DB",
-                cursor: canNext ? "pointer" : "default",
-                fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center",
-                fontWeight: 600,
-              }}
-            >›</button>
-          </div>
-
-          {/* Calendar grid */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: "2px 0" }}>
-            {DOW_LABELS.map((lbl) => (
-              <div key={lbl} style={{ textAlign: "center", fontSize: "var(--cal-dow)", fontWeight: 600, color: CAL_MUTED, paddingBottom: 3 }}>
-                {lbl}
-              </div>
-            ))}
-            {calRows.flatMap((row, ri) =>
-              row.map((cell, ci) => {
-                if (!cell) return <div key={`${ri}-${ci}`} style={{ height: "var(--cal-cell-agent)" }} />;
-                const hasData = !!cell.data;
-                const numColor = cell.isFuture ? CAL_MUTED : hasData ? "#16a34a" : "#ef4444";
-
-                return (
-                  <div
-                    key={`${ri}-${ci}`}
-                    title={
-                      cell.isFuture ? cell.dateStr
-                      : hasData     ? `${cell.dateStr} · On Duty · ${cell.data!.cases} cases`
-                      :               `${cell.dateStr} · Off Duty`
-                    }
-                    style={{ textAlign: "center", height: "var(--cal-cell-agent)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}
-                  >
-                    <p style={{ fontSize: 11, fontWeight: 600, color: numColor, lineHeight: 1 }}>
-                      {cell.dayNum}
-                    </p>
-                  </div>
-                );
-              })
-            )}
-          </div>
-
-          {/* Legend */}
-          <div className="flex items-center gap-3 mt-2 pt-2" style={{ borderTop: "1px solid #F3F4F6" }}>
-            {[
-              { label: "On Duty",  color: "#16a34a" },
-              { label: "Off Duty", color: "#ef4444" },
-              { label: "Upcoming", color: CAL_MUTED },
-            ].map(({ label, color: c }) => (
-              <div key={label} className="flex items-center gap-1">
-                <span style={{ fontSize: 11, fontWeight: 600, color: c }}>●</span>
-                <span className="text-xs" style={{ color: "#94a3b8" }}>{label}</span>
-              </div>
-            ))}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
 
 // ── Agency Duty Overview (no agent selected) ──────────────────────────────────
 
@@ -1570,130 +1417,6 @@ function TeamLeaveSummaryCard({ months, selTeamMonth, todayOnDuty, totalAgents }
               </div>
             );
           })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── AI Monthly Report Section ─────────────────────────────────────────────────
-
-function MonthlyReportSection({ months, selectedAgent, preSelectedMonth }: { months: string[]; selectedAgent: AgentPerfEntry | null; preSelectedMonth?: string }) {
-  const defaultMonth = months[months.length - 2] ?? months[months.length - 1] ?? "";
-  const [month, setMonth] = useState(defaultMonth);
-  const [loading, setLoading] = useState(false);
-  const [report, setReport] = useState<{
-    text: string; month: string; scope: string;
-    aiGenerated?: boolean; aiStatus?: string; model?: string | null;
-  } | null>(null);
-
-  useEffect(() => { setReport(null); }, [selectedAgent?.agent_id]);
-  useEffect(() => {
-    if (preSelectedMonth && months.includes(preSelectedMonth)) {
-      setMonth(preSelectedMonth);
-      setReport(null);
-    }
-  }, [preSelectedMonth]);
-
-  async function generate() {
-    setLoading(true);
-    try {
-      const data = await getMonthlyReport(month, selectedAgent?.agent_id);
-      setReport({
-        text: data.report_text, month: data.month, scope: data.scope,
-        aiGenerated: data.ai_generated, aiStatus: data.ai_status, model: data.ai_model,
-      });
-    } catch {
-      toast.error("Could not generate report");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  return (
-    <div className="card p-4 sm:p-6" style={{ animation: `enter 420ms ${EASE} 360ms both` }}>
-      <div className="flex flex-wrap items-center gap-3 mb-4">
-        <div className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0"
-          style={{ background: "#EFF6FF" }}>
-          <Brain className="w-4 h-4 text-primary" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <h2 className="text-base font-bold" style={{ color: "#1C1C1F" }}>AI Monthly Performance Report</h2>
-          <p className="text-xs mt-0.5" style={{ color: "#6B6D76" }}>
-            {selectedAgent ? `Scoped to ${selectedAgent.agent_name}` : "Agency-level summary"}
-            {" · "}60–100 word AI performance brief
-          </p>
-        </div>
-        <div className="flex items-center gap-2 flex-shrink-0 w-full sm:w-auto">
-          <select
-            value={month}
-            onChange={(e) => { setMonth(e.target.value); setReport(null); }}
-            aria-label="Report month"
-            className="tap-target-h text-xs rounded-xl px-3 py-1.5 font-semibold flex-1 sm:flex-none min-w-0"
-            style={{ border: "1px solid #EAEBEF", color: "#1C1C1F", background: "#F5F6F9", outline: "none" }}
-          >
-            {months.map((m) => (
-              <option key={m} value={m}>
-                {new Date(m + "-01").toLocaleDateString("en-IN", { month: "long", year: "numeric" })}
-              </option>
-            ))}
-          </select>
-          <button
-            onClick={generate}
-            disabled={loading}
-            className="tap-target flex flex-shrink-0 items-center justify-center gap-1.5 rounded-control border border-primary bg-white px-4 py-1.5 text-xs font-semibold text-primary transition-opacity hover:bg-brand-100"
-            style={{ opacity: loading ? 0.7 : 1 }}
-          >
-            {loading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Brain className="w-3 h-3" />}
-            Generate Report
-          </button>
-        </div>
-      </div>
-
-      {!report && !loading && (
-        <div className="rounded-xl py-10 text-center" style={{ background: "#F5F6F9", border: "1.5px dashed #DDDFE8" }}>
-          <Brain className="w-6 h-6 mx-auto mb-2" style={{ color: "#C4C6CF" }} />
-          <p className="text-sm" style={{ color: "#94a3b8" }}>Choose a month and click Generate to get an AI summary</p>
-        </div>
-      )}
-
-      {loading && (
-        <div className="rounded-xl py-10 text-center"
-          style={{ background: "#F7F8FA", border: "1px solid #ECEDF1" }}>
-          <Loader2 className="w-5 h-5 mx-auto mb-2 animate-spin" style={{ color: "#7c3aed" }} />
-          <p className="text-sm font-medium" style={{ color: "#7c3aed" }}>Analysing performance data…</p>
-        </div>
-      )}
-
-      {report && !loading && (
-        <div className="rounded-xl p-5" style={{ background: "#F7F8FA", border: "1px solid #ECEDF1" }}>
-          <div className="flex items-center gap-2 mb-3 flex-wrap">
-            <span className="text-xs px-2 py-0.5 rounded-full font-semibold"
-              style={{ background: "rgba(124,58,237,0.10)", color: "#7c3aed" }}>
-              {new Date(report.month + "-01").toLocaleDateString("en-IN", { month: "long", year: "numeric" })}
-            </span>
-            <span className="text-xs px-2 py-0.5 rounded-full font-semibold"
-              style={{ background: "#F5F6F9", color: "#6B6D76" }}>
-              {report.scope}
-            </span>
-            {/* The model that actually answered, not a name typed in once and
-                left to rot. Shows the fallback badge instead when no model did. */}
-            <span className="ml-auto flex items-center gap-2">
-              <AiBadge aiGenerated={report.aiGenerated} status={report.aiStatus} />
-              {report.aiGenerated !== false && report.model && (
-                <span className="text-xs px-2 py-0.5 rounded-full font-semibold"
-                  style={{ background: "rgba(124,58,237,0.06)", color: "#9333ea" }}>
-                  {report.model}
-                </span>
-              )}
-            </span>
-          </div>
-          <p className="text-sm leading-loose" style={{ color: "#1f2937", whiteSpace: "pre-line" }}>
-            {report.text}
-          </p>
-          <p className="text-xs mt-3 pt-3" style={{ color: "#9ca3af", borderTop: "1px solid rgba(124,58,237,0.08)" }}>
-            Eagle-view AI brief · Based on live performance data · For internal use only
-          </p>
         </div>
       )}
     </div>

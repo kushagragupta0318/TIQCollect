@@ -49,6 +49,7 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
 from app.core.dependencies import DbSession
+from app.core.emails import AccountEmail
 from app.core.errors import AppException, ErrorCode
 from app.core.ids import UUIDPath, UUIDStr
 from app.core.permissions import require_perm
@@ -63,7 +64,7 @@ router = APIRouter(prefix="/manager", tags=["manager-agents-admin"])
 
 class CreateAgentRequest(BaseModel):
     full_name: str
-    email: str
+    email: AccountEmail   # 43's B15/core.emails — .test demo domains allowed
     phone: str
     employee_code: str
     id_card_number: str

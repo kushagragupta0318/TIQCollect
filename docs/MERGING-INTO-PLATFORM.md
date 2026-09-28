@@ -109,6 +109,41 @@ true` in the Collections checkout before applying.
   Confirm with `docker image inspect collections-field-ops --format '{{.Created}}'`
   — the container's own created time tells you nothing about the code inside.
 
+### Client address behind Caddy (FORWARDED_ALLOW_IPS), from 2026-09-24
+
+The login rate limit (10 per minute per client) keys on the client's address. That address is
+read from `X-Forwarded-For` **only when the request comes from an address listed in
+`FORWARDED_ALLOW_IPS`**. The default is `127.0.0.1`. On the platform, Caddy connects from its
+own container, so until this is set every user shares one login bucket.
+
+Pin Caddy to a fixed address and trust that address alone. uvicorn matches IPs and CIDRs,
+never hostnames, so `caddy` or `field-ops` will not work.
+
+```yaml
+# collections-platform/docker-compose.yml
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+services:
+  caddy:
+    networks:
+      default:
+        ipv4_address: 172.30.0.10
+```
+
+```
+# field-ops-stub/backend/.env  (read by field-ops, field-ops-worker, field-ops-beat)
+FORWARDED_ALLOW_IPS=172.30.0.10
+```
+
+- **Never a range, and never `*`.** If every entry in the header is trusted, uvicorn takes the
+  leftmost one, which the client wrote. Behind NAT (published ports, Docker Desktop, an SNAT
+  load balancer) a client can arrive from a private address.
+- **Check:** from outside, 11 failed logins with 11 different forged `X-Forwarded-For` values
+  must end in `429`. From two different real clients, both must still get `401`.
+
 ## Related drift — the hand-maintained ports
 
 `command-center/frontend/src/pages/FieldAnalytics.jsx` and `FieldCases.jsx` in

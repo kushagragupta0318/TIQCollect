@@ -50,10 +50,19 @@ const RULES: { name: string; re: RegExp }[] = [
   { name: "manager-bridge route", re: /["'`]\/manager-bridge\b/ },
 ];
 
+// Plus the served entry page and any env file at the frontend root (the audit
+// of 4dcd9dc: a credential in .env.local or index.html is just as served).
+function rootFiles(): string[] {
+  return readdirSync(FRONTEND)
+    .filter((n) => n === "index.html" || n.startsWith(".env"))
+    .map((n) => join(FRONTEND, n))
+    .filter((p) => statSync(p).isFile());
+}
+
 function scan(): string[] {
   const hits: string[] = [];
   for (const root of ROOTS) {
-    for (const f of files(root)) {
+    for (const f of [...files(root), ...(root === ROOTS[0] ? rootFiles() : [])]) {
       const rel = relative(FRONTEND, f).split(sep).join("/");
       readFileSync(f, "utf8")
         .split("\n")
@@ -68,7 +77,7 @@ function scan(): string[] {
 }
 
 describe("no hardcoded credentials in what the browser is served", () => {
-  it("finds none in src/, public/ or e2e/", () => {
+  it("finds none in src/, public/, e2e/, index.html or .env*", () => {
     expect(scan()).toEqual([]);
   });
 

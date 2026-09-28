@@ -1397,3 +1397,67 @@ The stray `dark:` classes (`AICoPilot.jsx`) should be dropped. The bank portal i
 **Pairing rule for diffs.** Compare the bank screen against the CC screen in the right-hand column at the same viewport
 and sidebar state. Mask live numbers only where the bank data legitimately differs. **Never mask chrome, spacing or
 colour.**
+
+---
+
+## 9. Deviations recorded in the port (UI02–UI05, 2026-09-24)
+
+§7.6 says a divergence from what CC renders is a deliberate decision, never a
+side effect of the port. This is the list of every one the port made, so a
+parity diff (UI06) that shows one is an expected result, not a regression. The
+code carries the same reasons at each site; in `src/bank/**`, search for "UI spec §9".
+
+**None of these changes a pixel of CC's resting state unless marked VISIBLE.**
+
+### Build and CSS
+
+| Where | CC | Port | Why |
+|---|---|---|---|
+| `tailwind.bank.config.js` | the `container` core plugin is on | **off** | `important: ".bank-root"` does not wrap the components layer, so it came out as a bare, global `.container`. CC's pages do not use it (§1.12). This is a fifth config change beyond §7.2's four |
+| `bank.css` | `.app-content > .p-6`, `.font-bold/-extrabold/-black` | written as `[class~="…"]`, and the 4 rules CC's `@apply` derives from them written out ("Derived") | Ported literally they trip Tailwind's circular-`@apply` check. The compiled result is CC's |
+| `bank.css` | — | **TIQCollect → bank leak guards** | TIQ's global CSS (badge `::before` dots, `label`, `select`/`textarea`, focus rings, `.btn-ghost`, the (0,3,1) text-input rule) reaches inside `.bank-root`. The guards restore what CC renders |
+| `bank.css` | — | `.bank-root[data-bank-portal] { display: contents }` | The portal container (§7.3) must not paint a 100vh block |
+| `lib/cva.ts` | `class-variance-authority` 0.7.1 | a local equivalent of its `variants`/`defaultVariants` resolution | No new dependency; the variant tables and output are identical (tested) |
+
+### Accessibility (added, and CC has none of it)
+
+| Where | Port adds |
+|---|---|
+| `ui/dialog.tsx`, `DrillPanel`, `WorkspaceModal` | `role="dialog"`, `aria-modal`, `aria-labelledby` its title (`aria-describedby` on Dialog). One focus hook (`lib/useModalFocus.ts`): focus moves in, Tab is trapped, Escape closes, focus returns to the opener, page scroll locks, and overlays stack |
+| `WorkspaceModal` | Escape and scroll lock (CC had neither); accessible names on the icon-only Download/Share; toast `role="status"` |
+| `BankSidebar` | a `navigation` landmark, `aria-current="page"`, `aria-expanded` on the rail toggles. The collapsed-rail flyout is a disclosure: hover still opens it as in CC, and so do click, Enter and Space, with `aria-expanded`/`aria-controls`. Closed, it is `invisible`, so its links leave the tab order (CC leaves them focusable at opacity 0). Escape and focus-out close it. The rail stays collapsed by default (CC's default, state S1) |
+| `DataTable`, `HeatGrid` | clickable `<tr>`s are focusable and open on Enter or Space, with a keyboard-only focus ring and an optional `aria-label` (`rowActivation.ts`) |
+| `AnalyticsTabBar` | `role="tablist"` / `tab` / `aria-selected` |
+| `DecisionAlerts` | `aria-expanded` on each card toggle |
+
+### Honesty (the bank tree must not claim data it does not have)
+
+| Where | CC | Port |
+|---|---|---|
+| `BankTopBar` | a hard-coded pulsing "Live System" | **VISIBLE**: absent unless an optional `systemStatus` is passed; it will be driven by real state (e.g. the last bank-feed ingest) |
+| `ExecutiveHeader` | the green pulsing dot, always on | **VISIBLE**: opt-in (`live`), off on placeholder and sample pages |
+| `DecisionAlerts` | title "AI Alerts"; subtitle "Derived live from the loan book…" | **VISIBLE**: default title "Alerts", because the bank's alerts are SQL rules and CLAUDE.md forbids a rule presenting itself as AI. No default subtitle: provenance is the caller's to state |
+| `WorkspaceModal` share text | "Decision Center — …", "(live simulation, …)" | "Command Center — …", "(unsaved simulation, …)". The bank has no Decision Center, and nothing is live |
+| `PulseKpiFlow`, `DecisionAlerts`, `DrillPanel`, `WorkspaceModal` | — | **VISIBLE when set**: a `sampleData` prop shows a "Sample data" badge (CC's warning colours). The gallery sets it on all four, and on its analytics heading |
+| `WorkspaceModal` with `sampleData` | — | the CSV export opens with a one-cell "Sample data — …" line and is named `SAMPLE-<file>`; the clipboard summary ends with the same line. An export travels without the badge beside it (`components/sampleData.ts` holds the one wording) |
+| `/bank/_gallery` | — | dev-only, like `/simulator` (`VITE_ENABLE_BANK_GALLERY=1` in production); off, the route, its links and its chunk are absent |
+
+### Data-driven props (CC fetched; the port takes data)
+
+`PulseKpiFlow` (rows as a prop, since the bank's twelve KPIs differ), `DecisionAlerts`, `DrillPanel` (`data`, `null` =
+loading; splits as a list so agency/region/agent drills need no markup), `WorkspaceModal` (`children` instead of
+CC's ten built-in workshops; `mode`, `onRunAnalysis`, `getExport`), `HeatGrid` (`rowHeader`; a missing cell reads 0),
+`TransitionMatrix` (the observed count is optional; the "pooled across the 12-month account panel" phrase is dropped,
+because it describes CC's data, not the component).
+
+### Smaller behaviour differences
+
+| Where | CC | Port |
+|---|---|---|
+| `BucketChip` | an unknown bucket renders `color: undefined`, background `"undefined15"` (inherited colour, no fill) | falls back to `BRAND.slate`, so an unmapped bucket is still a chip |
+| `WorkspaceModal` CSV | headers joined bare; values `"${v}"` | headers quoted; `"` doubled (RFC 4180); a text cell starting `= + - @`, tab or CR is prefixed `'` (CSV injection). Numbers untouched |
+| `WorkspaceModal` | storage key `decisionCenter:scenario:<panel>`; timers not cleared | `bankWorkspace:scenario:<panel>`; timers cleared on unmount |
+| charts | fixed gradient ids (`delqFill`, `recFill`) | `useId`-based, so two charts on a page cannot share one gradient |
+| `BankSearchBar` | indexes routes, tools, live KPIs/alerts and accounts; arrow keys on `window` | indexes the bank pages plus `extra` entries; arrow keys on the input (equivalent, as the list is open only while it has focus); placeholder "Search pages, KPIs, alerts…" |
+| `BankTopBar` | date recomputed every render; slippage pill from its own fetch | date fixed at mount; the pill is the `standingAlert` prop |
+| "Raise a Query" | `RaiseQueryModal` | a Dialog built from the primitives, with Submit disabled and labelled "not connected yet" |

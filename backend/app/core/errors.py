@@ -44,6 +44,15 @@ class ErrorCode(str, Enum):
     MFA_NOT_CONFIGURED = "MFA_NOT_CONFIGURED"
     MFA_ENROLLMENT_REQUIRED = "MFA_ENROLLMENT_REQUIRED"
     SIGN_IN_REQUIRED = "SIGN_IN_REQUIRED"      # quick-login / refresh refused: use /auth/login
+    # 2026-09-24 (hotfix PAY-1) — a UPI collection without its transaction
+    # reference (UTR). The only evidence a UPI payment happened is that
+    # reference; the demo QR used to waive it after a 10-second timer.
+    UPI_REFERENCE_REQUIRED = "UPI_REFERENCE_REQUIRED"
+    # NEFT / RTGS / DD without a bank reference, CHEQUE without its number.
+    PAYMENT_REFERENCE_REQUIRED = "PAYMENT_REFERENCE_REQUIRED"
+    # ML-1: a borrower's stance sent on a contact that did not reach the
+    # borrower (services/borrower_stance.py).
+    DISPOSITION_WITHOUT_BORROWER = "DISPOSITION_WITHOUT_BORROWER"
 
 
 class AppException(HTTPException):
