@@ -143,6 +143,9 @@ def test_accepting_creates_the_account_in_the_inviters_bank_and_signs_it_in(worl
     assert len(_audits(world["db"], AuditAction.INVITE_ACCEPTED)) == 1
     created = _audits(world["db"], AuditAction.USER_CREATED)
     assert len(created) == 1 and created[0].details["invited_by"] == world["bank_admin"].id
+    # Signed in through the same path as /auth/login (audit MED): a LOGIN row naming the route.
+    login_row = world["db"].query(AuditLog).filter(AuditLog.action == AuditAction.LOGIN).one()
+    assert login_row.user_id == user.id and login_row.details == {"method": "invite"}
 
 
 def test_a_used_link_cannot_create_a_second_account(world):
@@ -340,3 +343,33 @@ def test_a_manager_cannot_reach_the_admin_routes(world):
     c = TestClient(app)
     r = c.get("/api/v1/admin/invites", headers=_hdr(world["manager"]))
     assert r.status_code == 403
+
+
+
+def test_the_accept_swap_itself_refuses_an_expired_invite(world, monkeypatch):
+    """Expiry is inside the compare-and-swap, not only in the read before it
+    (audit LOW): an invite that expires between the two is still refused."""
+    out = _invite(world)
+    row = world["db"].get(UserInvite, out["invite"]["id"])
+    row.expires_at = invite_service.now() - timedelta(seconds=1)
+    world["db"].commit()
+    monkeypatch.setattr(invite_service, "_open_by_token", lambda db, token: db.get(UserInvite, row.id))
+    with pytest.raises(AppException) as e:
+        invite_service.accept_invite(world["db"], out["token"], PASSWORD, DEVICE, _request())
+    assert e.value.code == ErrorCode.INVITE_INVALID
+    assert world["db"].query(User).filter(User.email == "neha.kapoor@example.in").count() == 0
+
+
+def test_a_failed_accept_leaves_no_audit_rows(world):
+    """The rows are staged with the account, so a clash that rolls the
+    account back rolls them back too (audit MED)."""
+    out = _invite(world)
+    world["db"].add(User(id=test_id("u:squatter"), email="squatter@example.in", phone="9811100001",
+                         full_name="Squatter", hashed_password=hash_password(PASSWORD),
+                         role=UserRole.BANK_ANALYST, bank_id=TEST_BANK_ID))
+    world["db"].commit()
+    with pytest.raises(AppException) as e:
+        invite_service.accept_invite(world["db"], out["token"], PASSWORD, DEVICE, _request())
+    assert e.value.status_code == 409
+    assert _audits(world["db"], AuditAction.INVITE_ACCEPTED) == []
+    assert _audits(world["db"], AuditAction.USER_CREATED) == []

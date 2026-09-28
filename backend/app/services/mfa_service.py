@@ -36,7 +36,7 @@ from fastapi import Request
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from app.core.audit import write_audit
+from app.core.audit import stage_audit
 from app.core.config import settings
 from app.core.errors import AppException, ErrorCode
 from app.core.security import token_sha256
@@ -144,9 +144,9 @@ def confirm_enrollment(db: Session, user: User, code: str, *, request: Request |
     user.totp_enabled = True
     from app.services import auth_service
     ended = auth_service.revoke_user_sessions(db, user.id, "MFA_CHANGED", except_sid=keep_sid)
-    db.commit()
-    write_audit(db, action=AuditAction.MFA_ENABLED, user_id=user.id, entity_type="User", entity_id=user.id,
+    stage_audit(db, action=AuditAction.MFA_ENABLED, user_id=user.id, entity_type="User", entity_id=user.id,
                 ip_address=_client_ip(request), details={"other_sessions_ended": ended})
+    db.commit()
 
 
 def disable(db: Session, user: User, code: str, *, request: Request | None = None) -> None:
@@ -157,23 +157,26 @@ def disable(db: Session, user: User, code: str, *, request: Request | None = Non
     if not _claim_step(db, user, code):
         raise AppException(400, ErrorCode.MFA_INVALID, "That code is not right.")
     _clear(user)
-    db.commit()
-    write_audit(db, action=AuditAction.MFA_DISABLED, user_id=user.id, entity_type="User", entity_id=user.id,
+    stage_audit(db, action=AuditAction.MFA_DISABLED, user_id=user.id, entity_type="User", entity_id=user.id,
                 ip_address=_client_ip(request), details={"by": "self"})
+    db.commit()
 
 
 def admin_reset(db: Session, admin: User, target: User, *, request: Request | None = None) -> None:
-    """A bank admin clears another bank user's MFA (lost phone). They must
-    enroll again; with BANK_MFA_REQUIRED on, before their next session."""
-    if (admin.role != UserRole.BANK_ADMIN or target.role not in BANK_ROLES
-            or target.bank_id != admin.bank_id or target.id == admin.id):
+    """An admin clears another bank user's MFA (lost phone). They must
+    enroll again; with BANK_MFA_REQUIRED on, before their next session.
+    Who may: password_service.can_manage — the ONE rule for acting on another
+    person's credentials — so a bank admin never clears a fellow bank admin's
+    factor (coordinator's audit HIGH); only the platform admin does."""
+    from app.services.password_service import can_manage
+    if target.role not in BANK_ROLES or not can_manage(admin, target):
         raise AppException(404, ErrorCode.NOT_FOUND, "User not found")
     _clear(target)
     from app.services import auth_service
     auth_service.revoke_user_sessions(db, target.id, "ADMIN_REVOKED", by=admin.id)
-    db.commit()
-    write_audit(db, action=AuditAction.MFA_DISABLED, user_id=admin.id, entity_type="User", entity_id=target.id,
+    stage_audit(db, action=AuditAction.MFA_DISABLED, user_id=admin.id, entity_type="User", entity_id=target.id,
                 ip_address=_client_ip(request), details={"by": "admin"})
+    db.commit()
 
 
 def _clear(user: User) -> None:
@@ -239,6 +242,6 @@ def ticket_confirm(db: Session, ticket: str, code: str, device_id: str, request:
     user, key = _ticket_user(db, ticket)
     confirm_enrollment(db, user, code, request=request)
     _store().delete(key)                          # single-use
-    tokens = auth_service.open_session(db, user, device_id, request)
-    db.commit()
-    return auth_service._login_response(user, tokens)
+    # Through the same post-gate path as /auth/login: device binding and the
+    # LOGIN row (coordinator's audit MED).
+    return auth_service.complete_login(db, user, device_id, request, method="mfa_enrollment")

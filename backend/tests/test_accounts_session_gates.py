@@ -21,6 +21,7 @@ from fastapi import HTTPException
 from starlette.requests import Request
 
 from app.core.config import settings
+from app.core.errors import ErrorCode
 from app.core.security import create_quick_login_token, decode_token, hash_password
 from app.main import app
 from app.models.audit_log import AuditAction, AuditLog
@@ -46,13 +47,18 @@ def world(monkeypatch):
     monkeypatch.setattr(settings, "TOTP_ENC_KEY", Fernet.generate_key().decode())
     monkeypatch.setattr(settings, "BANK_MFA_REQUIRED", "")
     monkeypatch.setattr(otp_service, "_otp_store", otp_service._InProcessOtpStore())
+    monkeypatch.setattr(settings, "PUBLIC_BASE_URL", "https://fieldops.example.in")
+    sent = []
+    from app.services import notification_service
+    monkeypatch.setattr(notification_service.NotificationService, "send_sms",
+                        staticmethod(lambda to, body, **kw: sent.append(body) or True))
 
     def mk(key, role, agency=None, phone="9800000000"):
         u = User(id=test_id(f"u:{key}"), email=f"{key}@example.in", phone=phone, full_name=key.title(),
                  hashed_password=hash_password(PASSWORD), role=role, bank_id=TEST_BANK_ID, agency_id=agency)
         db.add(u)
         return u
-    w = {"db": db,
+    w = {"db": db, "sent": sent,
          "manager": mk("manager", UserRole.AGENCY_MANAGER, agency=TEST_AGENCY_ID, phone="9800000006"),
          "analyst": mk("analyst", UserRole.BANK_ANALYST, phone="9800000003"),
          "bank_admin": mk("bankadmin", UserRole.BANK_ADMIN, phone="9800000002")}
@@ -92,7 +98,8 @@ def test_quick_login_is_refused_when_a_second_step_is_owed_and_the_link_is_not_b
     before = world["db"].query(UserSession).filter(UserSession.user_id == user.id).count()
     with pytest.raises(HTTPException) as e:
         auth_service.quick_login(world["db"], token, _request())
-    assert e.value.status_code == 403 and e.value.detail == "Sign in with your password and authenticator"
+    assert e.value.status_code == 403 and e.value.detail == auth_service.SIGN_IN_REQUIRED_MESSAGE
+    assert e.value.code == ErrorCode.SIGN_IN_REQUIRED
     assert world["db"].get(UsedQuickLoginToken, jti) is None
     assert world["db"].query(UserSession).filter(UserSession.user_id == user.id).count() == before
     assert world["db"].query(AuditLog).filter(AuditLog.action == AuditAction.LOGIN_FAILED).count() >= 1
@@ -111,7 +118,8 @@ def test_a_refresh_cannot_outlive_a_step_the_account_now_owes(world, monkeypatch
         monkeypatch.setattr(settings, "BANK_MFA_REQUIRED", "true")
     with pytest.raises(HTTPException) as e:
         auth_service.refresh_tokens(world["db"], tokens["refresh_token"], _request())
-    assert e.value.status_code == 401 and e.value.detail == "Sign in again to continue"
+    assert e.value.status_code == 401 and e.value.detail == auth_service.SIGN_IN_REQUIRED_MESSAGE
+    assert e.value.code == ErrorCode.SIGN_IN_REQUIRED          # the same refusal as quick-login
     sid = decode_token(tokens["access_token"])["sid"]
     assert world["db"].get(UserSession, sid).revoked_at is None          # kept, just not extended
 
@@ -150,8 +158,10 @@ def test_an_invited_bank_user_under_required_mfa_gets_a_ticket_not_a_session(wor
 # ── reset completion ────────────────────────────────────────────────────────
 
 def test_completing_a_reset_mints_no_session(world):
-    out = password_service.admin_reset(world["db"], world["bank_admin"], world["analyst"].id)
-    password_service.reset_with_token(world["db"], out["token"], "Monsoon-Terrace-77")
+    password_service.admin_reset(world["db"], world["bank_admin"], world["analyst"].id)
+    import re
+    token = re.search(r"token=([\w-]+)", world["sent"][-1]).group(1)
+    password_service.reset_with_token(world["db"], token, "Monsoon-Terrace-77")
     assert world["db"].query(UserSession).filter(UserSession.user_id == world["analyst"].id,
                                                  UserSession.revoked_at.is_(None)).count() == 0
 

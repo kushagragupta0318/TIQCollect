@@ -77,6 +77,7 @@ async def mfa_ticket_confirm(body: MfaTicketConfirm, request: Request, db: DbSes
 
 # ── signed in ───────────────────────────────────────────────────────────────
 @router.post("/password/change", summary="Change your password; other devices are signed out")
+@limiter.limit(AUTH_LIMIT)
 async def change_password(body: PasswordChange, current_user: CurrentUser, payload: TokenPayload,
                           request: Request, db: DbSession):
     password_service.change_password(db, current_user, body.current_password, body.new_password,
@@ -91,11 +92,13 @@ async def mfa_status(current_user: CurrentUser):
 
 
 @router.post("/mfa/setup", summary="Start TOTP enrollment (bank users)")
-async def mfa_setup(current_user: CurrentUser, db: DbSession):
+@limiter.limit(AUTH_LIMIT)
+async def mfa_setup(current_user: CurrentUser, request: Request, db: DbSession):
     return mfa_service.start_enrollment(db, current_user)
 
 
 @router.post("/mfa/confirm", summary="Confirm TOTP enrollment with a code")
+@limiter.limit(AUTH_LIMIT)
 async def mfa_confirm(body: MfaCode, current_user: CurrentUser, payload: TokenPayload, request: Request,
                       db: DbSession):
     mfa_service.confirm_enrollment(db, current_user, body.code, request=request, keep_sid=payload.get("sid"))
@@ -103,6 +106,7 @@ async def mfa_confirm(body: MfaCode, current_user: CurrentUser, payload: TokenPa
 
 
 @router.post("/mfa/disable", summary="Turn TOTP off (needs a current code)")
+@limiter.limit(AUTH_LIMIT)
 async def mfa_disable(body: MfaCode, current_user: CurrentUser, request: Request, db: DbSession):
     mfa_service.disable(db, current_user, body.code, request=request)
     return {"message": "Two-factor sign-in is off."}
@@ -126,7 +130,8 @@ async def revoke_invite(invite_id: UUIDPath, admin: AccountAdmin, request: Reque
     return invite_service.revoke_invite(db, admin, invite_id, request=request)
 
 
-@admin_router.post("/users/{user_id}/password-reset", summary="Issue a single-use reset link for a user")
+@admin_router.post("/users/{user_id}/password-reset",
+                   summary="Text a single-use reset link to the user (the admin never sees it)")
 async def admin_password_reset(user_id: UUIDPath, admin: AccountAdmin, request: Request, db: DbSession):
     return password_service.admin_reset(db, admin, user_id, request=request)
 

@@ -31,12 +31,15 @@ from __future__ import annotations
 
 import hmac
 import secrets
+import threading
 from datetime import timedelta
 
+import structlog
 from fastapi import Request
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
-from app.core.audit import write_audit
+from app.core.audit import stage_audit, write_audit
+from app.core.config import settings
 from app.core.errors import AppException, ErrorCode
 from app.core.security import hash_password, token_sha256, verify_password
 from app.models.audit_log import AuditAction
@@ -56,6 +59,7 @@ _COUNT_PREFIX = "pwreset_count:"
 
 _INVALID_LINK = "This reset link is not valid. It may have expired or already been used."
 _BAD_CODE = "That code is not right, or it has expired. Request a new one."
+logger = structlog.get_logger()
 FORGOT_MESSAGE = ("If an account matches, a 6-digit code has been sent to its registered phone. "
                   "It expires in 10 minutes.")
 
@@ -75,6 +79,8 @@ def reset_password_path(token: str) -> str:
 
 
 # ── who may reset whom ──────────────────────────────────────────────────────
+_BANK_ADMIN_MANAGES = frozenset({UserRole.BANK_ANALYST, UserRole.BANK_TECHOPS, UserRole.AGENCY_ADMIN})
+
 def can_manage(admin: User, target: User) -> bool:
     """The one rule for an admin acting on another person's credentials.
     Never yourself; never across tenants."""
@@ -83,7 +89,11 @@ def can_manage(admin: User, target: User) -> bool:
     if admin.role == UserRole.PLATFORM_ADMIN:
         return target.role == UserRole.BANK_ADMIN
     if admin.role == UserRole.BANK_ADMIN:
-        return target.bank_id == admin.bank_id and (target.role in BANK_ROLES or target.role == UserRole.AGENCY_ADMIN)
+        # Never a fellow BANK_ADMIN (coordinator's audit HIGH, 2026-09-28): one
+        # admin resetting another's password or factor is a takeover with
+        # nobody else involved. A bank admin's credentials are reset by the
+        # platform admin only — the simplest rule that needs a second party.
+        return target.bank_id == admin.bank_id and target.role in _BANK_ADMIN_MANAGES
     if admin.role == UserRole.AGENCY_ADMIN:
         return (target.agency_id is not None and target.agency_id == admin.agency_id
                 and target.role in (UserRole.AGENCY_MANAGER, UserRole.FIELD_AGENT))
@@ -118,19 +128,33 @@ def first_login_ticket(db: Session, user: User, request: Request | None = None) 
 
 
 def admin_reset(db: Session, admin: User, target_id: str, *, request: Request | None = None) -> dict:
+    """The link goes to the TARGET's phone, never to the admin (coordinator's
+    audit MED): an admin holding a working link could take over any account
+    without a second factor. Returns only whether it was sent and when it
+    expires."""
     target = db.get(User, target_id)
     if target is None or not can_manage(admin, target):
         raise AppException(404, ErrorCode.NOT_FOUND, "User not found")
     if not target.is_active:
         raise AppException(409, ErrorCode.CONFLICT, "The account is deactivated.")
+    base = (settings.PUBLIC_BASE_URL or "").strip().rstrip("/")
+    if not base or base.startswith("${"):
+        raise AppException(503, ErrorCode.CHANNEL_UNAVAILABLE,
+                           "Reset links are sent by SMS and need PUBLIC_BASE_URL. Nothing was changed.")
     token = _issue(db, target, "ADMIN_RESET", ADMIN_RESET_TTL, issued_by=admin.id, request=request)
     from app.services import auth_service
     auth_service.revoke_user_sessions(db, target.id, "ADMIN_REVOKED", by=admin.id)
+    stage_audit(db, action=AuditAction.PASSWORD_RESET_ISSUED, user_id=admin.id, entity_type="User",
+                entity_id=target.id, ip_address=_client_ip(request),
+                details={"kind": "ADMIN_RESET", "channel": "SMS"})
     db.commit()
-    write_audit(db, action=AuditAction.PASSWORD_RESET_ISSUED, user_id=admin.id, entity_type="User",
-                entity_id=target.id, ip_address=_client_ip(request), details={"kind": "ADMIN_RESET"})
-    return {"token": token, "path": reset_password_path(token),
-            "expires_at": (now() + ADMIN_RESET_TTL).isoformat()}
+    from app.services.notification_service import NotificationService
+    sent = NotificationService.send_sms(
+        "+" + NotificationService.normalize_phone(target.phone),
+        f"Your TIQCollect administrator started a password reset. Set a new password within 24 hours: "
+        f"{base}{reset_password_path(token)}",
+        db=db, user_id=target.id)
+    return {"sent": bool(sent), "expires_at": (now() + ADMIN_RESET_TTL).isoformat()}
 
 
 def reset_with_token(db: Session, token: str, new_password: str, *, request: Request | None = None) -> None:
@@ -155,9 +179,9 @@ def reset_with_token(db: Session, token: str, new_password: str, *, request: Req
     _set_password(user, new_password, stamp)
     from app.services import auth_service
     auth_service.revoke_user_sessions(db, user.id, "PASSWORD_CHANGED")
-    db.commit()
-    write_audit(db, action=AuditAction.PASSWORD_RESET, user_id=user.id, entity_type="User", entity_id=user.id,
+    stage_audit(db, action=AuditAction.PASSWORD_RESET, user_id=user.id, entity_type="User", entity_id=user.id,
                 ip_address=_client_ip(request), details={"kind": row.kind, "issued_by": row.issued_by})
+    db.commit()
 
 
 def _set_password(user: User, password: str, stamp) -> None:
@@ -171,7 +195,17 @@ def _set_password(user: User, password: str, stamp) -> None:
 # ── change (signed in) ──────────────────────────────────────────────────────
 def change_password(db: Session, user: User, current_password: str, new_password: str, *,
                     sid: str | None = None, request: Request | None = None) -> None:
+    from app.services import auth_service
+    locked = utc(user.locked_until)
+    if locked and now() < locked:
+        raise AppException(429, ErrorCode.RATE_LIMITED, "Too many wrong attempts. Try again in 15 minutes.")
     if not verify_password(current_password or "", user.hashed_password):
+        # Counts toward the same lockout as a wrong password at sign-in
+        # (coordinator LOW): a stolen session must not be a free guessing oracle.
+        user.failed_login_attempts += 1
+        if user.failed_login_attempts >= auth_service.MAX_FAILED_ATTEMPTS:
+            user.locked_until = now() + timedelta(minutes=auth_service.LOCKOUT_MINUTES)
+        db.commit()
         write_audit(db, action=AuditAction.PASSWORD_CHANGED, user_id=user.id, entity_type="User",
                     entity_id=user.id, success=False, failure_reason="Wrong current password",
                     ip_address=_client_ip(request))
@@ -180,11 +214,10 @@ def change_password(db: Session, user: User, current_password: str, new_password
     if hmac.compare_digest(current_password, new_password):
         raise AppException(422, ErrorCode.PASSWORD_POLICY, "The new password must be different.")
     _set_password(user, new_password, now())
-    from app.services import auth_service
     ended = auth_service.revoke_user_sessions(db, user.id, "PASSWORD_CHANGED", except_sid=sid)
-    db.commit()
-    write_audit(db, action=AuditAction.PASSWORD_CHANGED, user_id=user.id, entity_type="User", entity_id=user.id,
+    stage_audit(db, action=AuditAction.PASSWORD_CHANGED, user_id=user.id, entity_type="User", entity_id=user.id,
                 ip_address=_client_ip(request), details={"other_sessions_ended": ended})
+    db.commit()
 
 
 # ── self-service by SMS OTP ─────────────────────────────────────────────────
@@ -224,14 +257,36 @@ def forgot(db: Session, identifier: str, *, request: Request | None = None) -> d
     key = _OTP_PREFIX + request_sha
     store.hset(key, mapping={"user_id": user.id, "code": _hash_code(request_sha, code), "attempts": "0"})
     store.expire(key, RESET_OTP_TTL_SECONDS)
-    from app.services.notification_service import NotificationService
-    NotificationService.send_sms(
-        "+" + NotificationService.normalize_phone(user.phone),
-        f"Your TIQCollect password reset code is {code}. It expires in 10 minutes. Never share it.",
-        db=db, user_id=user.id)
-    write_audit(db, action=AuditAction.PASSWORD_RESET_ISSUED, user_id=user.id, entity_type="User",
-                entity_id=user.id, ip_address=_client_ip(request), details={"kind": "SELF_SERVICE"})
+    # Off the request path (coordinator LOW): sending an SMS takes hundreds of
+    # milliseconds that an unknown account never spends, and that difference
+    # would answer the question the identical body refuses to. The send and
+    # its audit row run on their own session.
+    factory = sessionmaker(bind=db.get_bind())
+    _dispatch(lambda: _send_reset_code(factory, user.id, user.phone, code, _client_ip(request)))
     return out
+
+
+def _dispatch(fn) -> None:
+    """Run `fn` after the response. A daemon thread: a lost SMS is recoverable
+    (the person asks again), a request held open by a slow SMS gateway is an
+    enumeration oracle. Tests replace this with a synchronous call."""
+    threading.Thread(target=fn, name="pwreset-sms", daemon=True).start()
+
+
+def _send_reset_code(factory, user_id: str, phone: str, code: str, ip: str | None) -> None:
+    from app.services.notification_service import NotificationService
+    db = factory()
+    try:
+        NotificationService.send_sms(
+            "+" + NotificationService.normalize_phone(phone),
+            f"Your TIQCollect password reset code is {code}. It expires in 10 minutes. Never share it.",
+            db=db, user_id=user_id)
+        write_audit(db, action=AuditAction.PASSWORD_RESET_ISSUED, user_id=user_id, entity_type="User",
+                    entity_id=user_id, ip_address=ip, details={"kind": "SELF_SERVICE"})
+    except Exception as exc:  # noqa: BLE001 — never raised into a thread nobody joins
+        logger.error("password_reset.sms_dispatch_failed", error_type=type(exc).__name__, exc_info=True)
+    finally:
+        db.close()
 
 
 def verify_code(db: Session, request_id: str, code: str, *, request: Request | None = None) -> dict:

@@ -52,19 +52,9 @@ def write_audit(
     does not decide whether it happens.
     """
     try:
-        db.add(AuditLog(
-            id=str(uuid.uuid4()),
-            created_at=created_at or datetime.now(timezone.utc),
-            user_id=user_id,
-            action=action,
-            entity_type=entity_type,
-            entity_id=entity_id,
-            ip_address=ip_address,
-            user_agent=user_agent,
-            details=details,
-            success=success,
-            failure_reason=failure_reason,
-        ))
+        db.add(_row(action=action, user_id=user_id, entity_type=entity_type, entity_id=entity_id,
+                    details=details, success=success, failure_reason=failure_reason,
+                    ip_address=ip_address, user_agent=user_agent, created_at=created_at))
         db.commit()
         return True
     except Exception as exc:  # noqa: BLE001 — the event already happened; the row is evidence
@@ -76,3 +66,48 @@ def write_audit(
                      entity_type=entity_type, entity_id=entity_id,
                      error=str(exc), error_type=type(exc).__name__, exc_info=True)
         return False
+
+
+def stage_audit(
+    db: Session,
+    *,
+    action: AuditAction,
+    user_id: str | None,
+    entity_type: str | None = None,
+    entity_id: str | None = None,
+    details: dict[str, Any] | None = None,
+    success: bool = True,
+    failure_reason: str | None = None,
+    ip_address: str | None = None,
+    user_agent: str | None = None,
+) -> None:
+    """Add one AuditLog row to the CALLER'S transaction; the caller commits.
+
+    2026-09-28 (P1, d4; coordinator's audit MED). write_audit commits on its
+    own, so a row written after a business commit is lost if the process
+    dies between the two. Where the business write and its evidence belong
+    together — an invite accepted, a password changed, a factor enrolled —
+    the row is staged before the one commit and lands exactly when the event
+    does. write_audit stays right for refusals, where there is no business
+    write and the row must survive the raise that follows."""
+    db.add(_row(action=action, user_id=user_id, entity_type=entity_type, entity_id=entity_id,
+                details=details, success=success, failure_reason=failure_reason,
+                ip_address=ip_address, user_agent=user_agent, created_at=None))
+
+
+def _row(*, action, user_id, entity_type, entity_id, details, success, failure_reason,
+         ip_address, user_agent, created_at) -> AuditLog:
+    """The one construction of an AuditLog row, for both writers."""
+    return AuditLog(
+        id=str(uuid.uuid4()),
+        created_at=created_at or datetime.now(timezone.utc),
+        user_id=user_id,
+        action=action,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        ip_address=ip_address,
+        user_agent=user_agent,
+        details=details,
+        success=success,
+        failure_reason=failure_reason,
+    )

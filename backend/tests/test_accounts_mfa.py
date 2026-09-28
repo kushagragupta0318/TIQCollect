@@ -59,6 +59,7 @@ def world(monkeypatch):
          "analyst": mk("analyst", UserRole.BANK_ANALYST, phone="9800000003"),
          "techops": mk("techops", UserRole.BANK_TECHOPS, phone="9800000004"),
          "bank_admin": mk("bankadmin", UserRole.BANK_ADMIN, phone="9800000002"),
+         "bank_admin2": mk("bankadmin2", UserRole.BANK_ADMIN, phone="9800000008"),
          "manager": mk("manager", UserRole.AGENCY_MANAGER, agency=TEST_AGENCY_ID, phone="9800000006")}
     db.commit()
     yield w
@@ -278,8 +279,32 @@ def test_a_bank_admin_resets_a_lost_phone_and_signs_them_out(world):
 
 
 @pytest.mark.parametrize("admin,target", [("analyst", "techops"), ("bank_admin", "manager"),
-                                          ("bank_admin", "bank_admin")])
+                                          ("bank_admin", "bank_admin"),
+                                          ("bank_admin", "bank_admin2")])   # audit HIGH: not a peer admin
 def test_only_a_bank_admin_resets_another_bank_users_mfa(world, admin, target):
     with pytest.raises(AppException) as e:
         mfa_service.admin_reset(world["db"], world[admin], world[target])
     assert e.value.status_code == 404
+
+
+
+def test_the_platform_admin_resets_a_bank_admins_factor(world):
+    platform = User(id=test_id("u:platform"), email="platform@example.in", phone="9800000001",
+                    full_name="Platform", hashed_password=hash_password(PASSWORD), role=UserRole.PLATFORM_ADMIN)
+    world["db"].add(platform)
+    world["db"].commit()
+    _enroll(world, world["bank_admin"])
+    mfa_service.admin_reset(world["db"], platform, world["bank_admin"])
+    assert world["bank_admin"].totp_enabled is False
+
+
+def test_finishing_enrollment_from_a_ticket_is_a_login(world, monkeypatch):
+    """The ticket path goes through auth_service.complete_login: a LOGIN row
+    naming the route, like /auth/login writes."""
+    monkeypatch.setattr(settings, "BANK_MFA_REQUIRED", "true")
+    res = _login(world, world["analyst"])
+    start = mfa_service.ticket_start(world["db"], res["enrollment_token"])
+    mfa_service.ticket_confirm(world["db"], res["enrollment_token"], _code(start["secret"], world["clock"].t),
+                               "laptop-device-1", _request())
+    row = world["db"].query(AuditLog).filter(AuditLog.action == AuditAction.LOGIN).one()
+    assert row.user_id == world["analyst"].id and row.details == {"method": "mfa_enrollment"}

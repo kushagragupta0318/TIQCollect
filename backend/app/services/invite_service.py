@@ -32,7 +32,7 @@ from fastapi import Request
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.audit import write_audit
+from app.core.audit import stage_audit, write_audit
 from app.core.config import settings
 from app.core.errors import AppException, ErrorCode
 from app.core.security import hash_password, token_sha256
@@ -181,6 +181,11 @@ def create_invite(db: Session, inviter: User, *, email: str, role: UserRole, ful
         delivery_channel=channel, invited_by=inviter.id, expires_at=now() + INVITE_TTL,
     )
     db.add(inv)
+    db.flush()
+    stage_audit(db, action=AuditAction.USER_INVITED, user_id=inviter.id, entity_type="UserInvite",
+                entity_id=inv.id, ip_address=_client_ip(request),
+                details={"role": role.value, "purpose": inv.purpose, "bank_id": bank_id, "agency_id": agency_id,
+                         "channel": channel})
     try:
         db.commit()
     except IntegrityError:
@@ -196,10 +201,6 @@ def create_invite(db: Session, inviter: User, *, email: str, role: UserRole, ful
         delivered = NotificationService.send_sms("+" + NotificationService.normalize_phone(phone), body,
                                                  db=db, bank_id=bank_id, agency_id=agency_id)
 
-    write_audit(db, action=AuditAction.USER_INVITED, user_id=inviter.id, entity_type="UserInvite",
-                entity_id=inv.id, ip_address=_client_ip(request),
-                details={"role": role.value, "purpose": inv.purpose, "bank_id": bank_id, "agency_id": agency_id,
-                         "channel": channel, "delivered": delivered})
     out = {"invite": to_dict(inv), "delivered": delivered}
     if channel == "LINK":
         out["token"] = token            # shown once; the caller builds the link
@@ -237,9 +238,9 @@ def revoke_invite(db: Session, principal: User, invite_id: str, *, request: Requ
         raise AppException(409, ErrorCode.CONFLICT, f"The invitation is already {status_of(inv).lower()}.")
     inv.revoked_at = now()
     inv.revoked_by = principal.id
-    db.commit()
-    write_audit(db, action=AuditAction.INVITE_REVOKED, user_id=principal.id, entity_type="UserInvite",
+    stage_audit(db, action=AuditAction.INVITE_REVOKED, user_id=principal.id, entity_type="UserInvite",
                 entity_id=inv.id, ip_address=_client_ip(request), details={"role": inv.role.value})
+    db.commit()
     return to_dict(inv)
 
 
@@ -273,7 +274,8 @@ def accept_invite(db: Session, token: str, password: str, device_id: str, reques
     require_good_password(password, email=inv.email)
     stamp = now()
     won = (db.query(UserInvite)
-           .filter(UserInvite.id == inv.id, UserInvite.accepted_at.is_(None), UserInvite.revoked_at.is_(None))
+           .filter(UserInvite.id == inv.id, UserInvite.accepted_at.is_(None), UserInvite.revoked_at.is_(None),
+                   UserInvite.expires_at > stamp)
            .update({UserInvite.accepted_at: stamp}, synchronize_session=False))
     if won != 1:
         db.rollback()
@@ -296,22 +298,21 @@ def accept_invite(db: Session, token: str, password: str, device_id: str, reques
     # is BANK_MFA_REQUIRED, and a bank user under it gets the enrollment
     # ticket, not a session, exactly as at login.
     from app.services import mfa_service
+    _stage_accept(db, inv, user, request)
     gate = mfa_service.enrollment_gate(db, user)
     if gate is not None:
         db.commit()
-        _audit_accept(db, inv, user, request)
         return gate
-    tokens = auth_service.open_session(db, user, device_id, request)
-    user.last_login_at = stamp
-    db.commit()
-    _audit_accept(db, inv, user, request)
-    return auth_service._login_response(user, tokens)
+    # Through the same post-gate path as /auth/login: device binding, the
+    # LOGIN row, one commit that also carries the two rows staged above
+    # (coordinator's audit MED).
+    return auth_service.complete_login(db, user, device_id, request, method="invite")
 
 
-def _audit_accept(db: Session, inv: UserInvite, user: User, request: Request | None) -> None:
-    write_audit(db, action=AuditAction.INVITE_ACCEPTED, user_id=user.id, entity_type="UserInvite",
+def _stage_accept(db: Session, inv: UserInvite, user: User, request: Request | None) -> None:
+    stage_audit(db, action=AuditAction.INVITE_ACCEPTED, user_id=user.id, entity_type="UserInvite",
                 entity_id=inv.id, ip_address=_client_ip(request), details={"role": inv.role.value})
-    write_audit(db, action=AuditAction.USER_CREATED, user_id=user.id, entity_type="User", entity_id=user.id,
+    stage_audit(db, action=AuditAction.USER_CREATED, user_id=user.id, entity_type="User", entity_id=user.id,
                 ip_address=_client_ip(request),
                 details={"role": inv.role.value, "via": "invite", "invited_by": inv.invited_by,
                          "bank_id": inv.bank_id, "agency_id": inv.agency_id})

@@ -32,6 +32,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from fastapi import HTTPException, status, Request
 
+from app.core.audit import stage_audit
 from app.core.config import settings
 from app.core.errors import AppException, ErrorCode
 from app.models.agent import Agent, AgentDevice
@@ -47,6 +48,11 @@ import uuid
 
 MAX_FAILED_ATTEMPTS = 5
 LOCKOUT_MINUTES = 15
+# 2026-09-28 (P1, d4; coordinator LOW): one refusal for every route that will
+# not hand out a session because the account owes a step only /auth/login
+# can take (a second factor, a forced change) — quick-login and refresh alike,
+# so neither says which step.
+SIGN_IN_REQUIRED_MESSAGE = "Sign in with your password to continue."
 
 
 def _utc(dt: datetime | None) -> datetime | None:
@@ -132,9 +138,8 @@ def revoke_user_sessions(db: Session, user_id: str, reason: str, *, by: str | No
         # the caller's transaction rather than through write_audit, which
         # commits on its own: this function's contract is "caller commits",
         # and the row must land exactly when the revocation does.
-        db.add(AuditLog(id=str(uuid.uuid4()), created_at=datetime.now(timezone.utc), user_id=by or user_id,
-                        action=AuditAction.SESSION_REVOKED, entity_type="User", entity_id=user_id,
-                        details={"reason": reason, "count": count, "kept_sid": except_sid}, success=True))
+        stage_audit(db, action=AuditAction.SESSION_REVOKED, user_id=by or user_id, entity_type="User",
+                    entity_id=user_id, details={"reason": reason, "count": count, "kept_sid": except_sid})
     return count
 
 
@@ -234,7 +239,20 @@ def login(db: Session, email: str, password: str, device_id: str, request: Reque
     gate = mfa_service.enrollment_gate(db, user)
     if gate is not None:
         return gate
+    return complete_login(db, user, device_id, request)
 
+
+def complete_login(db: Session, user: User, device_id: str, request: Request, *,
+                   method: str | None = None) -> dict:
+    """Everything after the gates, for EVERY route that ends in a session:
+    device binding, the lockout reset, the session, the LOGIN row, one commit.
+
+    2026-09-28 (P1, d4; coordinator's audit MED) — invite acceptance and the
+    MFA enrollment confirm called open_session directly, so they skipped
+    device binding and wrote no LOGIN row. They come through here now, as
+    /auth/login does; `method` names the route in the LOGIN row. Commits.
+    Any staged rows of the caller (an invite accepted, a user created) land
+    in this same commit."""
     _enforce_device_binding(db, user, device_id, request)
 
     # Reset failed attempts
@@ -243,6 +261,9 @@ def login(db: Session, email: str, password: str, device_id: str, request: Reque
     user.last_login_at = datetime.now(timezone.utc)
 
     tokens = _open_session(db, user, device_id, request)
+    stage_audit(db, action=AuditAction.LOGIN, user_id=user.id, entity_type="User", entity_id=user.id,
+                ip_address=_client_ip(request), user_agent=request.headers.get("user-agent"),
+                details={"method": method} if method else None)
     try:
         db.commit()
     except IntegrityError:
@@ -255,8 +276,6 @@ def login(db: Session, email: str, password: str, device_id: str, request: Reque
              failure_reason="Concurrent first login from another device")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                             detail="Device not authorized. Contact your manager.")
-
-    _log(db, AuditAction.LOGIN, user.id, request)
     return _login_response(user, tokens)
 
 
@@ -299,8 +318,7 @@ def quick_login(db: Session, token: str, request: Request) -> dict:
     if user.must_change_password or mfa_service.second_step_owed(user):
         _log(db, AuditAction.LOGIN_FAILED, user.id, request, success=False,
              failure_reason="Quick-login refused: account needs password sign-in")
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
-                            detail="Sign in with your password and authenticator")
+        raise AppException(403, ErrorCode.SIGN_IN_REQUIRED, SIGN_IN_REQUIRED_MESSAGE)
 
     exp = payload.get("exp")
     db.add(UsedQuickLoginToken(
@@ -359,7 +377,7 @@ def refresh_tokens(db: Session, refresh_token: str, request: Request) -> dict:
     if user.must_change_password or (mfa_service.required_for(user) and not user.totp_enabled):
         _log(db, AuditAction.TOKEN_REFRESH, user.id, request, entity_id=session.id, success=False,
              failure_reason="Refresh refused: account needs password sign-in")
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Sign in again to continue")
+        raise AppException(401, ErrorCode.SIGN_IN_REQUIRED, SIGN_IN_REQUIRED_MESSAGE)
 
     device_id = session.device_id
     new_access = create_access_token(user.id, user.role.value, device_id, sid=session.id,

@@ -43,6 +43,7 @@ class ErrorCode(str, Enum):
     MFA_NOT_ALLOWED = "MFA_NOT_ALLOWED"
     MFA_NOT_CONFIGURED = "MFA_NOT_CONFIGURED"
     MFA_ENROLLMENT_REQUIRED = "MFA_ENROLLMENT_REQUIRED"
+    SIGN_IN_REQUIRED = "SIGN_IN_REQUIRED"      # quick-login / refresh refused: use /auth/login
 
 
 class AppException(HTTPException):

@@ -41,13 +41,18 @@ def world(monkeypatch):
     Session = make_session_factory(engine, info={})
     db = Session()
     monkeypatch.setattr(otp_service, "_otp_store", otp_service._InProcessOtpStore())
+    monkeypatch.setattr(password_service, "_dispatch", lambda fn: fn())        # the SMS thread, run inline
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "PUBLIC_BASE_URL", "https://fieldops.example.in")
     sent = []
     from app.services import notification_service
     monkeypatch.setattr(notification_service.NotificationService, "send_sms",
                         staticmethod(lambda to, body, **kw: sent.append((to, body, kw)) or True))
     w = {
         "db": db, "sent": sent,
+        "platform": _user(db, "platform", UserRole.PLATFORM_ADMIN, bank=None, phone="9800000001"),
         "bank_admin": _user(db, "bankadmin", UserRole.BANK_ADMIN, phone="9800000002"),
+        "bank_admin2": _user(db, "bankadmin2", UserRole.BANK_ADMIN, phone="9800000008"),
         "analyst": _user(db, "analyst", UserRole.BANK_ANALYST, phone="9800000003"),
         "agency_admin": _user(db, "agencyadmin", UserRole.AGENCY_ADMIN, agency=TEST_AGENCY_ID, phone="9800000005"),
         "manager": _user(db, "manager", UserRole.AGENCY_MANAGER, agency=TEST_AGENCY_ID, phone="9800000006"),
@@ -145,16 +150,35 @@ def test_only_the_newest_ticket_works(world):
 
 # ── admin reset ─────────────────────────────────────────────────────────────
 
-def test_an_admin_reset_is_a_link_not_a_password_and_ends_every_session(world):
+def _texted_token(world) -> str:
+    return re.search(r"/reset-password\?token=([\w-]+)", world["sent"][-1][1]).group(1)
+
+
+def test_an_admin_reset_texts_the_link_to_the_target_and_ends_every_session(world):
     _login(world, world["manager"])
     out = password_service.admin_reset(world["db"], world["agency_admin"], world["manager"].id, request=_request())
-    assert out["path"] == f"/reset-password?token={out['token']}"
+    assert set(out) == {"sent", "expires_at"} and out["sent"] is True       # the admin never holds the link
+    to, body, kw = world["sent"][-1]
+    assert to == "+919800000006" and kw["user_id"] == world["manager"].id
+    assert "https://fieldops.example.in/reset-password?token=" in body
     assert verify_password(PASSWORD, world["manager"].hashed_password)       # untouched until used
     assert _live(world["db"], world["manager"]) == 0
     issued = _audits(world["db"], AuditAction.PASSWORD_RESET_ISSUED)
     assert issued[-1].user_id == world["agency_admin"].id and issued[-1].entity_id == world["manager"].id
-    password_service.reset_with_token(world["db"], out["token"], NEW)
+    password_service.reset_with_token(world["db"], _texted_token(world), NEW)
     assert _audits(world["db"], AuditAction.PASSWORD_RESET)[-1].details["kind"] == "ADMIN_RESET"
+
+
+@pytest.mark.parametrize("base", ["", "${PUBLIC_BASE_URL}"])
+def test_an_admin_reset_without_a_public_url_changes_nothing(world, monkeypatch, base):
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "PUBLIC_BASE_URL", base)
+    _login(world, world["manager"])
+    with pytest.raises(AppException) as e:
+        password_service.admin_reset(world["db"], world["agency_admin"], world["manager"].id)
+    assert e.value.code == ErrorCode.CHANNEL_UNAVAILABLE
+    assert _live(world["db"], world["manager"]) == 1
+    assert world["db"].query(PasswordResetToken).count() == 0
 
 
 @pytest.mark.parametrize("admin,target,ok", [
@@ -165,10 +189,12 @@ def test_an_admin_reset_is_a_link_not_a_password_and_ends_every_session(world):
     ("agency_admin", "analyst", False),
     ("manager", "fresh", False),
     ("bank_admin", "bank_admin", False),       # never yourself
+    ("bank_admin", "bank_admin2", False),      # never a fellow bank admin (audit HIGH): a takeover of a peer
+    ("platform", "bank_admin", True),          # a bank admin's reset needs the platform admin
 ])
 def test_who_may_reset_whom(world, admin, target, ok):
     if ok:
-        assert password_service.admin_reset(world["db"], world[admin], world[target].id)["token"]
+        assert password_service.admin_reset(world["db"], world[admin], world[target].id)["sent"] is True
     else:
         with pytest.raises(AppException) as e:
             password_service.admin_reset(world["db"], world[admin], world[target].id)
@@ -185,7 +211,7 @@ def test_the_whole_self_service_reset(world):
     out = password_service.forgot(world["db"], "Manager@Example.in", request=_request())
     assert out["message"] == password_service.FORGOT_MESSAGE
     to, body, kw = world["sent"][-1]
-    assert to == "+919800000006" and kw == {"db": world["db"], "user_id": world["manager"].id}
+    assert to == "+919800000006" and kw["user_id"] == world["manager"].id
     token = password_service.verify_code(world["db"], out["request_id"], _code(world))["reset_token"]
     password_service.reset_with_token(world["db"], token, NEW)
     world["db"].expire_all()
@@ -260,3 +286,49 @@ def test_a_reset_clears_the_lockout_but_not_mfa(world):
     world["db"].expire_all()
     assert world["manager"].failed_login_attempts == 0 and world["manager"].locked_until is None
     assert world["manager"].totp_enabled is True
+
+
+
+def test_wrong_current_passwords_count_toward_the_lockout(world):
+    for _ in range(auth_service.MAX_FAILED_ATTEMPTS):
+        with pytest.raises(AppException):
+            password_service.change_password(world["db"], world["manager"], "not-my-password-1", NEW)
+    assert world["manager"].locked_until is not None
+    with pytest.raises(AppException) as e:                     # even the right one, while locked
+        password_service.change_password(world["db"], world["manager"], PASSWORD, NEW)
+    assert e.value.status_code == 429
+    with pytest.raises(HTTPException) as e:
+        _login(world, world["manager"])
+    assert e.value.status_code == 429
+
+
+def test_the_reset_sms_leaves_the_request_path(world, monkeypatch):
+    """forgot() hands the send to _dispatch and returns: an unknown account
+    and a known one cost the request the same (no SMS on either path)."""
+    queued = []
+    monkeypatch.setattr(password_service, "_dispatch", queued.append)
+    out = password_service.forgot(world["db"], "manager@example.in")
+    assert out["message"] == password_service.FORGOT_MESSAGE
+    assert world["sent"] == [] and len(queued) == 1
+    queued[0]()                                               # the thread's work, run now
+    assert len(world["sent"]) == 1
+
+
+def test_a_changed_password_and_its_audit_row_land_together(world, monkeypatch):
+    """Staged, not written after: when the business commit fails, no
+    PASSWORD_CHANGED row survives either."""
+    from sqlalchemy.orm import Session as _S
+    real_commit = _S.commit
+    calls = {"n": 0}
+
+    def failing_commit(self):
+        calls["n"] += 1
+        raise RuntimeError("database went away")
+    monkeypatch.setattr(_S, "commit", failing_commit)
+    with pytest.raises(RuntimeError):
+        password_service.change_password(world["db"], world["manager"], PASSWORD, NEW)
+    monkeypatch.setattr(_S, "commit", real_commit)
+    world["db"].rollback()
+    assert [r for r in _audits(world["db"], AuditAction.PASSWORD_CHANGED) if r.success] == []
+    world["db"].expire_all()
+    assert verify_password(PASSWORD, world["manager"].hashed_password)
