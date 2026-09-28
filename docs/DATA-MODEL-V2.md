@@ -3161,6 +3161,43 @@ safer than giving the API a bypass role.
   RLS table returns 0 rows to `tiq_app`. It must also include the plan §3.3
   cross-tenant test run **as** `tiq_app` (B19).
 
+### 8.6 What is built (A13 step 1) and what is not (step 2, OWNER-gated)
+
+**Step 1, `v2_0012_rls` (2026-09-28): the policies exist and are proven, but the API is not yet held to them.**
+- The three helpers from §8.2. `p_tenant` on every table of §8.3, `ENABLE`d, **not `FORCE`d**.
+- The table owner, which is the API's own login today (the fixture restores `--no-owner`), still bypasses the policies, so no running stack changes behaviour. A superuser bypasses them in any case.
+- Roles `tiq_app` (`NOLOGIN NOBYPASSRLS`) and `tiq_jobs` (`NOLOGIN BYPASSRLS`).
+  - They are created only if absent and only when the migrating user may create roles; otherwise the revision prints a NOTICE and skips the grants.
+  - Grants go to named tables, never to a whole schema, because a partition read directly is not filtered by its parent's policy.
+  - `audit_logs` gets `SELECT, INSERT` only.
+  - The `mv_*` views are not granted to `tiq_app`.
+- The request hook: `get_current_user` binds the principal's bank, agency, scope and user to the session. `database._tenant_on_begin` re-applies them at the start of every transaction with `set_config(…, true)`, with bound parameters, so they end with the transaction.
+- The scope is `models/user.tenant_scope`, also exposed as `RequestContext.scope`.
+- `tests/pg/test_pg_rls.py` runs **as** `tiq_app` and `tiq_jobs` via `SET LOCAL ROLE`. It covers:
+  - fail-closed, both unset and reset;
+  - bank, agency, other agency, other bank, missing scope and PLATFORM;
+  - the `WITH CHECK` refusal;
+  - the grants that must be refused;
+  - the binding of values.
+- `tests/test_rls_policy_map.py` fails when a table is in neither the policy lists nor `NO_RLS`.
+
+**Deviations from §8.3–8.4, all deliberate.**
+- `model_predictions` and `loan_dpd_history` carry `agency_id`, so they take template (a), which is stricter than (b).
+- `tiq_owner` and `tiq_analytics_ro` are not created: the owner is still the API's login, and the analytics connection is step 2.
+- There are no `*_scoped` views yet, so the API gets no grant on `mv_*` (§6).
+
+**Step 2 needs the owner, because it changes what production connects as.**
+1. Create `LOGIN` roles for the API (a member of `tiq_app`) and the workers (a member of `tiq_jobs`), and a separate owner for migrations. `DATABASE_URL` points at the API login and a new `JOBS_DATABASE_URL` at the workers. Both Docker setups and the platform's secrets change.
+2. Move the pre-authentication reads into `SECURITY DEFINER` functions owned by the owner: login by email, `get_current_user`'s own user and session lookup, refresh by session, and invite or reset by token hash. This is §8.4.
+3. Set the tenant on the analytics session (`get_analytics_db`), which has no user today.
+4. `REFRESH MATERIALIZED VIEW` needs ownership: run the refresher as the owner, or make `tiq_jobs` a member of it.
+5. Only then `FORCE`, and only once the full suite passes against a stack that connects as `tiq_app`.
+6. **Decided, not an oversight:** `PLATFORM` scope reads no bank's `banks` or `agencies` rows.
+   Platform support goes through a time-boxed, audited BANK session, never a bypass (Q20; accepted 2026-09-28).
+   A platform tenant directory would need its own `SECURITY DEFINER` function, which is an owner decision.
+7. Every authenticated transaction now makes one extra round trip (`set_config` ×4 in one `SELECT`).
+   It is cheap, but it has not been measured on `stress`.
+
 ---
 
 ## 9. Migration strategy

@@ -41,6 +41,14 @@ BANK_ROLES = frozenset({UserRole.BANK_ADMIN, UserRole.BANK_ANALYST, UserRole.BAN
 AGENCY_ROLES = frozenset({UserRole.AGENCY_ADMIN, UserRole.AGENCY_MANAGER})
 
 
+def tenant_scope(role: UserRole) -> str:
+    """The RLS scope a principal acts in (DATA-MODEL-V2 §8.1). Anything not a
+    platform or bank role is agency-scoped, so an unknown role never widens."""
+    if role == UserRole.PLATFORM_ADMIN:
+        return "PLATFORM"
+    return "BANK" if role in BANK_ROLES else "AGENCY"
+
+
 class User(Base, UUIDPrimaryKey, TimestampMixin):
     __tablename__ = "users"
 

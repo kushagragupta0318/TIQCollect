@@ -85,6 +85,34 @@ def _begin(conn):
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+# A13 (DATA-MODEL-V2 §8.1): the request's tenant, set on EVERY transaction of
+# its session with set_config(..., is_local => true), so it ends with the
+# transaction and a pooled connection never carries it into another request.
+TENANT_CONTEXT = "tenant_context"
+_SET_TENANT = text(
+    "SELECT set_config('app.bank_id', :bank_id, true), set_config('app.agency_id', :agency_id, true),"
+    " set_config('app.scope', :scope, true), set_config('app.user_id', :user_id, true)")
+
+
+def _set_tenant(connection, ctx: dict) -> None:
+    connection.execute(_SET_TENANT, {k: str(ctx.get(k) or "") for k in ("bank_id", "agency_id", "scope", "user_id")})
+
+
+@event.listens_for(Session, "after_begin")
+def _tenant_on_begin(session, transaction, connection):
+    ctx = session.info.get(TENANT_CONTEXT)
+    if ctx and connection.dialect.name == "postgresql":
+        _set_tenant(connection, ctx)
+
+
+def apply_tenant_context(db: Session, *, bank_id, agency_id, scope: str, user_id) -> None:
+    """Bind the principal's tenant to this session: now, if a transaction is
+    open, and at the start of every later one."""
+    ctx = {"bank_id": bank_id, "agency_id": agency_id, "scope": scope, "user_id": user_id}
+    db.info[TENANT_CONTEXT] = ctx
+    if db.in_transaction() and db.get_bind().dialect.name == "postgresql":
+        _set_tenant(db.connection(), ctx)
+
 # The analytics read path (B14): a replica when ANALYTICS_DATABASE_URL is set,
 # else the primary; every transaction on it is READ ONLY, so a bank screen can
 # never write, whatever its code does. A small pool of its own.
