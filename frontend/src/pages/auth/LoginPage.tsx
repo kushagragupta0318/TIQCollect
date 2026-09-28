@@ -1,5 +1,22 @@
-import { useEffect, useState, type FormEvent } from "react";
-import { useLocation, useNavigate } from "react-router";
+// ─── CHANGELOG ─────────────────────────────────────────────────────────────
+// 2026-09-24 — A10: the static login is gone. This page carried two "Quick
+//   demo login" buttons that filled agent002 / manager1 and their passwords
+//   into the form, and honoured a `prefill` router state LandingPage sent — so
+//   the product shipped two working credentials in its bundle to anyone who
+//   opened the page. Demo accounts still exist in the demo fixture and are
+//   documented once, in backend/fixtures/README.md; there is no UI shortcut to
+//   them. `src/noHardcodedCredentials.test.ts` fails if one comes back.
+// 2026-09-28 — A11 (d4). The second factor: when the server answers
+//   MFA_REQUIRED the form asks for the 6-digit code and sends it with the same
+//   email and password. A correct password that owes a step (a first-login
+//   password change, a required TOTP enrollment) goes where lib/authFlow
+//   says, with its token in router state, never the URL. "Forgot your
+//   password?" is a real flow now (it was a toast), and the dead "Remember me"
+//   checkbox — which did nothing — is gone. Home is homeFor(role), so a bank
+//   user lands in /bank.
+// ─────────────────────────────────────────────────────────────────────────────
+import { useState, type FormEvent } from "react";
+import { Link, useNavigate } from "react-router";
 import { Eye, EyeOff } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { BrandLogo } from "@/components/ui/BrandLogo";
@@ -7,44 +24,38 @@ import { login as apiLogin } from "@/api/auth";
 import { useAuthStore } from "@/store/authStore";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
+import { errorCode, errorDetail } from "@/lib/apiError";
+import { useFinishLogin } from "./useFinishLogin";
 
 export default function LoginPage() {
   const navigate = useNavigate();
-  const location = useLocation();
-  const { setTokens, setUser, deviceId } = useAuthStore();
+  const { deviceId } = useAuthStore();
+  const finish = useFinishLogin();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    const prefill = (location.state as { prefill?: string } | null)?.prefill;
-    if (prefill === "agent") quickLogin("agent");
-    else if (prefill === "manager") quickLogin("manager");
-  }, []);
+  const [needsCode, setNeedsCode] = useState(false);
+  const [code, setCode] = useState("");
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!email || !password) return;
+    if (!email || !password || (needsCode && code.length !== 6)) return;
     setLoading(true);
     try {
-      const data = await apiLogin(email, password, deviceId);
-      setTokens(data.access_token, data.refresh_token);
-      setUser({ id: data.user_id, email, full_name: data.full_name, role: data.role, is_active: true });
-      toast.success(`Welcome, ${data.full_name.split(" ")[0]}!`);
-      navigate(data.role === "FIELD_AGENT" ? "/agent/home" : "/manager/overview", { replace: true });
+      finish(await apiLogin(email, password, deviceId, needsCode ? code : undefined), email);
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      toast.error(msg ?? "Invalid email or password.");
+      const c = errorCode(err);
+      if (c === "MFA_REQUIRED") {
+        setNeedsCode(true);
+      } else {
+        if (c === "MFA_INVALID") setCode("");
+        toast.error(errorDetail(err, "Invalid email or password."));
+      }
     } finally {
       setLoading(false);
     }
-  }
-
-  function quickLogin(type: "agent" | "manager") {
-    setEmail(type === "agent" ? "agent002@tiqcollect.in" : "manager1@tiqcollect.in");
-    setPassword(type === "agent" ? "Agent@123" : "Manager@123");
   }
 
   return (
@@ -107,18 +118,26 @@ export default function LoginPage() {
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between gap-4 text-xs">
-                  <label className="flex cursor-pointer items-center gap-2 !text-[#667085]">
-                    <input type="checkbox" className="size-4 rounded border-[#D0D5DD] text-primary focus:ring-primary/20" />
-                    Remember me
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => toast("Password recovery is managed by your administrator.")}
-                    className="min-h-9 font-medium text-brand-600 hover:text-brand-700"
-                  >
+                {needsCode && (
+                  <Input
+                    label="Authenticator code"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    pattern="\d{6}"
+                    maxLength={6}
+                    placeholder="6-digit code"
+                    value={code}
+                    onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                    className="h-10 px-3 tracking-[0.3em]"
+                    autoFocus
+                    required
+                  />
+                )}
+
+                <div className="flex items-center justify-end gap-4 text-xs">
+                  <Link to="/forgot-password" className="inline-flex min-h-9 items-center font-medium text-brand-600 hover:text-brand-700">
                     Forgot your password?
-                  </button>
+                  </Link>
                 </div>
 
                 <Button
@@ -132,30 +151,7 @@ export default function LoginPage() {
                 </Button>
               </form>
 
-              <div className="my-4 flex items-center gap-3 py-1">
-                <span className="h-px flex-1 bg-[#ECEDF1]" />
-                <span className="px-2 text-xs leading-5 text-[#98A2B3]">Quick demo login</span>
-                <span className="h-px flex-1 bg-[#ECEDF1]" />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <button
-                  type="button"
-                  onClick={() => quickLogin("agent")}
-                  className="min-h-10 rounded-control border border-[#BFDBFE] bg-[#EFF6FF] px-3 text-sm font-medium text-[#1D4ED8] transition-colors hover:bg-[#DBEAFE] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/20"
-                >
-                  Field Agent
-                </button>
-                <button
-                  type="button"
-                  onClick={() => quickLogin("manager")}
-                  className="min-h-10 rounded-control border border-[#DDD6FE] bg-[#F5F3FF] px-3 text-sm font-medium text-[#6D28D9] transition-colors hover:bg-[#EDE9FE] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/20"
-                >
-                  Manager
-                </button>
-              </div>
-
-              <p className="mt-3 text-center text-xs text-[#98A2B3] [@media(max-height:600px)]:hidden">
+              <p className="mt-5 text-center text-xs text-[#98A2B3] [@media(max-height:600px)]:hidden">
                 Access is assigned by your organization administrator.
               </p>
             </div>

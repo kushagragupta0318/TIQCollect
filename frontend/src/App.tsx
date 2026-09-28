@@ -12,8 +12,13 @@ import { useAuthStore } from "@/store/authStore";
 // Route-level code-splitting: separate heavy bundles (RecordVisit, Analytics, Maps)
 const LandingPage = lazy(() => import("@/pages/LandingPage"));
 const LoginPage = lazy(() => import("@/pages/auth/LoginPage"));
-const QuickLoginPage = lazy(() => import("@/pages/auth/QuickLoginPage")); // collection_dashboard
-const ManagerBridgePage = lazy(() => import("@/pages/auth/ManagerBridgePage")); // collection_dashboard
+const QuickLoginPage = lazy(() => import("@/pages/auth/QuickLoginPage")); // link minted by scripts/generate_quick_login_link.py
+// 2026-09-28 (P1 A11, d4): invitations, password reset, two-factor, account security.
+const SetPasswordPage = lazy(() => import("@/pages/auth/SetPasswordPage"));
+const ResetPasswordPage = lazy(() => import("@/pages/auth/ResetPasswordPage"));
+const ForgotPasswordPage = lazy(() => import("@/pages/auth/ForgotPasswordPage"));
+const MfaSetupPage = lazy(() => import("@/pages/auth/MfaSetupPage"));
+const AccountSecurityPage = lazy(() => import("@/pages/auth/AccountSecurityPage"));
 
 const AgentHomePage = lazy(() => import("@/pages/agent/AgentHomePage"));
 const AgentCasesPage = lazy(() => import("@/pages/agent/AgentCasesPage"));
@@ -97,10 +102,18 @@ export default function App() {
           <Routes>
             <Route path="/" element={<RootRedirect />} />
             <Route path="/login" element={<LoginPage />} />
-            {/* collection_dashboard: public deep-link, bypasses login form */}
+            {/* Single-use link token → real session (core/security.py). */}
             <Route path="/quick-login" element={<QuickLoginPage />} />
-            {/* collection_dashboard: always force a Manager 1 session, then land on analytics */}
-            <Route path="/manager-bridge" element={<ManagerBridgePage />} />
+            {/* A11: public credential pages; tokens arrive in state or ?token= and never stay in the URL. */}
+            <Route path="/set-password" element={<SetPasswordPage />} />
+            <Route path="/reset-password" element={<ResetPasswordPage />} />
+            <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+            <Route path="/mfa-setup" element={<MfaSetupPage />} />
+            {/* Any signed-in role, bank roles included; the page sends a signed-out visitor to /login. */}
+            <Route path="/account/security" element={<AccountSecurityPage />} />
+            {/* /manager-bridge was here until 2026-09-24 (A10): a public route that
+                logged ANY visitor in as manager1 with a password compiled into the
+                bundle. Removed with public/collection_dashboard/, its only caller. */}
             {SIMULATOR_ENABLED && <Route path="/simulator" element={<SimulatorPage />} />}
 
             {/* Record Visit — follows the same width ladder as AgentLayout:
