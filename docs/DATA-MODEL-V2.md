@@ -19,6 +19,9 @@ will look for the old schema and not find it.)*
 - the DDL inside the committed dump `backend/fixtures/fieldops-demo.dump`, which
   is the schema that actually runs (alembic `a1c3e5f7b9d2`);
 - the fixture CSVs in `backend/fixtures/tables/`, profiled on 2026-09-24.
+  *(That was the 09-24 profiling source. The CSVs were deleted in `6a91f2d`
+  (B18, 2026-09-28: they carried the published passwords' hashes, and nothing
+  read them); retrieve one with `git show d158d95:backend/fixtures/tables/<table>.csv`.)*
 
 Where the dump and the models disagree, both are quoted (§1.3).
 
@@ -3190,7 +3193,9 @@ onto the work like this:
   models and every call site, one PR per table group. They run against
   SQLite `create_all` until B11 generates the baseline.
 - **Each table gets a before/after test.** It loads v1-shaped rows from
-  `fixtures/tables/*.csv` through that table's transform function and reads
+  `fixtures/tables/*.csv` *(deleted in `6a91f2d`, B18; no test had been built
+  on them. v1-shaped rows now come from the v1 dump, or from
+  `git show d158d95:backend/fixtures/tables/<table>.csv`)* through that table's transform function and reads
   them back through the v2 model. It asserts that parsed dates, rounded money
   and moved columns equal the v1 values under the rules in §9.4.
 - **The Phase 3 equality harness (78 tests) stays green at every PR** (B20).
@@ -3586,7 +3591,7 @@ lifecycle state in the portal has real data behind it.
 
 | # | Legal name | Entity | HQ | Zone | Serves | Status | Onboarded | Agents |
 |---|---|---|---|---|---|---|---|---|
-| 1 | **Aravalli Field Services Pvt. Ltd.** (replaces the v1 agency; keeps all v1 history) | Pvt Ltd | Gurugram | North | Gurugram, Delhi, Noida | ACTIVE | 2025-11-03 | 18 (the v1 agents) |
+| 1 | **Aravalli Field Services Pvt. Ltd.** (replaces the v1 agency; keeps all v1 history) | Pvt Ltd | Gurugram | North | Gurugram, Delhi, Noida | ACTIVE | 2025-11-03 | 21 (the 18 v1 agents + 3 women who joined 2026-09) |
 | 2 | **Sarthak Recovery Services LLP** | LLP | Noida | North | Noida, Ghaziabad, East Delhi | ACTIVE | 2026-01-12 | 22 |
 | 3 | **Rajputana Credit Solutions Pvt. Ltd.** | Pvt Ltd | Jaipur | North | Jaipur, Ajmer | ACTIVE | 2026-02-02 | 16 |
 | 4 | **Awadh Field Collections Pvt. Ltd.** | Pvt Ltd | Lucknow | North | Lucknow, Kanpur | SUSPENDED 2026-09-02 (geofence-failure spike under review) | 2026-02-20 | 14 |
@@ -3598,8 +3603,13 @@ lifecycle state in the portal has real data behind it.
 
 Kumaon Finance has one agency: **Almora Recovery Desk LLP** (Pune, 8 agents).
 
-Workforce: 154 agents at Girivan Finance plus 8 at Kumaon Finance. That meets the
-plan's "~160".
+Workforce: 157 agents at Girivan Finance plus 8 at Kumaon Finance. That meets the
+plan's "~160". *(This read 154 and Aravalli "18 (the v1 agents)" until
+2026-09-28. v1 recorded no gender and all 18 v1 agents are men, so 926
+historical decisions were BLOCKED on "needs a female agent" (ALLOC-G). The
+coordinator chose to add three women as NEW Aravalli agents with no history,
+leaving the v1 book exact. Gender is explicit roster data in
+`app/demo/roster.py`, never derived from a name.)*
 
 ### C.3 Invented details every agency carries
 

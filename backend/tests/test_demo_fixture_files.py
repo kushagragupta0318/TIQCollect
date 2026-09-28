@@ -31,8 +31,9 @@ def test_the_dump_is_a_custom_format_dump_within_the_size_budget():
 def test_the_readme_names_the_dump_it_describes():
     digest = hashlib.sha256(DUMP.read_bytes()).hexdigest()
     readme = README.read_text(encoding="utf-8")
-    m = re.search(r"fieldops-demo-v2\.dump.*?sha256[^`]*`([0-9a-f]{16})", readme, re.S)
-    assert m, "the README's v2 table must quote the dump's sha256 (first 16)"
+    v2 = readme.split("## `fieldops-demo.dump`")[0]              # the v2 section only
+    m = re.search(r"\| Size / sha256 \|[^`]*`([0-9a-f]{16})", v2)
+    assert m, "the README's v2 table must quote the dump's sha256 (first 16) in its Size / sha256 row"
     assert digest.startswith(m.group(1))
     assert "fictional" in readme.lower()
 
