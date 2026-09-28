@@ -36,6 +36,9 @@ class ErrorCode(str, Enum):
     UPI_REFERENCE_REQUIRED = "UPI_REFERENCE_REQUIRED"
     # NEFT / RTGS / DD without a bank reference, CHEQUE without its number.
     PAYMENT_REFERENCE_REQUIRED = "PAYMENT_REFERENCE_REQUIRED"
+    # ML-1: a borrower's stance sent on a contact that did not reach the
+    # borrower (services/borrower_stance.py).
+    DISPOSITION_WITHOUT_BORROWER = "DISPOSITION_WITHOUT_BORROWER"
 
 
 class AppException(HTTPException):

@@ -51,6 +51,7 @@ from app.models.case import Case, CaseStatus, EscalationReason
 from app.models.visit import Visit, VisitOutcome
 from app.schemas.agent import RecordVisitRequest
 from app.services.ai_report_service import AIReportService
+from app.services.borrower_stance import check_visit_stance
 from app.services.notification_service import NotificationService
 
 logger = structlog.get_logger()
@@ -132,6 +133,10 @@ class VisitService:
         if case.customer.do_not_contact:
             raise HTTPException(status_code=403, detail="Customer is marked Do Not Contact")
 
+        # ML-1: a stance is the borrower's, so only a visit that met them may
+        # carry one. Before anything is written.
+        check_visit_stance(req.borrower_disposition, customer_met=req.customer_met, person_met=req.person_met)
+
         now_utc = datetime.now(timezone.utc)
 
         # Idempotency guard — see _DUPLICATE_SUBMIT_WINDOW_SECONDS above.
@@ -210,6 +215,7 @@ class VisitService:
             person_met=req.person_met,
             default_reason=req.default_reason,
             not_met_reason=req.not_met_reason,
+            borrower_disposition=req.borrower_disposition,
             notes=req.notes,
             consent_given=req.consent_given,
             signature_key=req.signature_key,

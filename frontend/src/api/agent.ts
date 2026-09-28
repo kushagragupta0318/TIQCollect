@@ -154,6 +154,8 @@ export async function recordVisit(caseId: string, payload: {
   person_met?: string;
   default_reason?: string;
   not_met_reason?: string;
+  /** ML-1: BorrowerDisposition; only when the borrower was met. */
+  borrower_disposition?: string;
   notes?: string;
   consent_given?: boolean;
   property_type?: string;
@@ -364,6 +366,8 @@ export interface LogCallPayload {
   payment_intent_signalled?: boolean | null;
   verbal_payment_date?: string;
   ai_intel_summary?: string;
+  /** ML-1: BorrowerDisposition; only on an ANSWERED call. */
+  borrower_disposition?: string;
 }
 
 export async function logCall(caseId: string, payload: LogCallPayload): Promise<{ id: string; called_at: string; outcome: string }> {

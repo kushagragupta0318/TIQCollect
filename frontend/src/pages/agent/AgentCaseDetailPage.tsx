@@ -51,6 +51,7 @@ import { haversineM } from "@/lib/geo";
 import { geo, geoAvailable } from "@/lib/deviceLocation";
 import { errorDetail } from "@/lib/apiError";
 import type { CaseStatus, DPDBucket, VisitPriority } from "@/types";
+import { STANCE_OPTIONS } from "./borrowerStance";
 
 interface CaseDetail {
   // Repayment likelihood, computed live per case by case_service.
@@ -330,6 +331,7 @@ export default function AgentCaseDetailPage() {
         delete payload.blocked_until_date;
         delete payload.payment_intent_signalled;
         delete payload.verbal_payment_date;
+        delete payload.borrower_disposition;      // ML-1: the server refuses it off an answered call
         delete payload.alternate_location_hint;
       }
       if (payload.blocked_until_date === "") delete payload.blocked_until_date;
@@ -934,6 +936,23 @@ export default function AgentCaseDetailPage() {
                           </button>
                         ))}
                       </div>
+                    </div>
+                  </div>
+
+                  {/* The borrower's stance (ML-1): optional here, never defaulted */}
+                  <div>
+                    <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1.5">Borrower's stance on paying</label>
+                    <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Borrower's stance on paying">
+                      {STANCE_OPTIONS.map((o) => {
+                        const on = callForm.borrower_disposition === o.value;
+                        return (
+                          <button key={o.value} role="radio" aria-checked={on} title={o.hint}
+                            onClick={() => setCallForm(f => ({ ...f, borrower_disposition: on ? undefined : o.value }))}
+                            className={`py-2 px-2 rounded-xl text-xs font-medium border transition-colors ${on ? "border-brand-500 bg-brand-50 text-brand-700" : "border-slate-200 text-slate-600 hover:border-slate-300"}`}>
+                            {o.label}
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
 
