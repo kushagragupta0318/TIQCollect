@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.core.database import get_db
-from app.core.dependencies import _get_token_payload, get_current_user
+from app.core.dependencies import _get_token_payload, get_current_user, get_tenant_analytics_db
 from app.main import app
 from app.models.user import User, UserRole
 from app.services.bank import kpi_catalog as K
@@ -27,7 +27,7 @@ def test_twelve_kpis_each_defined_once_in_two_rows_of_six():
     assert [r["kpis"] for r in K.ROWS] == [ids[:6], ids[6:]]
     for k in K.KPIS:
         assert k.label and len(k.basis) > 40 and k.drill, k.id
-        assert k.unit in {"inr", "pct", "score", "rs"} and k.kind in {"stock", "month", "transition", "pending"}
+        assert k.unit in {"inr", "pct", "score", "rs"} and k.kind in {"stock", "month", "transition", "visits", "pending"}
         assert (k.kind == "pending") == (not k.sql) == bool(k.pending), k.id
 
 
@@ -82,8 +82,7 @@ def test_without_the_analytics_views_every_kpi_says_why_and_shows_no_number(db):
     ov = K.compute_overview(db, DEFAULT_TENANT["bank_id"])
     assert ov.as_of is None and ov.totals == []
     assert all(not k["available"] and k["value"] == "—" and k["reason"] for k in ov.kpis)
-    pending = {k["id"] for k in ov.kpis if k["reason"].startswith("definition pending")}
-    assert pending == {"visit_to_pay"}
+    assert not [k for k in ov.kpis if k["reason"].startswith("definition pending")]   # all 12 defined
     assert ov.narrative[-1].startswith("Not yet available:")
 
 
@@ -91,6 +90,7 @@ def _client(db, user: User) -> TestClient:
     app.dependency_overrides[get_db] = lambda: db
     app.dependency_overrides[get_current_user] = lambda: user
     app.dependency_overrides[_get_token_payload] = lambda: {"sid": None}
+    app.dependency_overrides[get_tenant_analytics_db] = lambda: db
     return TestClient(app)
 
 

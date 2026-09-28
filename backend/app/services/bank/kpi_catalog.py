@@ -27,7 +27,10 @@ TRANSITIONS = "bucket_transitions_monthly_scoped"
 COLLECTIONS = "collections_daily_scoped"
 FIELD = "field_activity_daily_scoped"
 SCORECARD = "agency_scorecard_monthly_scoped"
-VIEWS = (PORTFOLIO, TRANSITIONS, COLLECTIONS, FIELD, SCORECARD)
+VISIT_TO_PAY = "v_visit_to_pay"
+VIEWS = (PORTFOLIO, TRANSITIONS, COLLECTIONS, FIELD, SCORECARD, VISIT_TO_PAY)
+#: A visit needs 7 days to have its chance of a payment (v_visit_to_pay's window).
+VISIT_MATURITY_DAYS = 7
 
 CR, LAKH = 1e7, 1e5
 
@@ -58,7 +61,7 @@ class KpiDef:
     higher_is_better: bool
     basis: str
     drill: str                     # the analytics tab a click opens (plan §5.4)
-    kind: str                      # "stock" (a date) | "month" (month to date) | "transition" | "pending"
+    kind: str                      # "stock" | "month" | "transition" | "visits" (matured, per visit) | "pending"
     views: tuple = ()
     sql: str = ""                  # returns one row: value, aux
     sub: Callable[[dict], str] | None = None
@@ -111,21 +114,23 @@ KPIS: tuple[KpiDef, ...] = (
         "month-ends (states and their order: analytics.dim_portfolio_state). Only loans read at both "
         "month-ends count; pairs excluded as stale or missing are shown, never carried forward.",
         "migration", "transition", (TRANSITIONS,),
-        f"""SELECT SUM(t.exposure_from) FILTER (WHERE s2.sort_order > s1.sort_order AND t.to_state <> 'RESOLVED')
-                  / NULLIF(SUM(t.exposure_from), 0) AS value,
+        f"""SELECT SUM(t.exposure_from) FILTER (WHERE s2.sort_order > s1.sort_order
+                                                   AND t.to_state NOT IN ('RESOLVED', 'NO_READING'))
+                  / NULLIF(SUM(t.exposure_from) FILTER (WHERE t.to_state <> 'NO_READING'), 0) AS value,
                   SUM(t.excluded_stale_pairs) + SUM(t.excluded_missing_pairs) AS aux
            FROM analytics.{TRANSITIONS} t
            JOIN analytics.dim_portfolio_state s1 ON s1.state = t.from_state
-           JOIN analytics.dim_portfolio_state s2 ON s2.state = t.to_state
+           LEFT JOIN analytics.dim_portfolio_state s2 ON s2.state = t.to_state
            WHERE t.bank_id = :bank AND t.month_end = :d AND t.from_state NOT IN ('WRITTEN_OFF', 'RESOLVED')""",
         lambda r: f"{count(r['aux'] or 0)} pairs excluded (stale or missing)", alias="t"),
     KpiDef(
         "cure_rate", "Cure Rate", "book", "pct", True,
         "Exposure-weighted share of delinquent loans (any state after CURRENT, before WRITTEN_OFF) that "
-        "returned to CURRENT or were RESOLVED between the last two month-ends.",
+        "returned to CURRENT or were RESOLVED between the last two month-ends. Loans with no reading at the "
+        "later month-end are left out, not counted as uncured.",
         "migration", "transition", (TRANSITIONS,),
         f"""SELECT SUM(t.exposure_from) FILTER (WHERE t.to_state IN ('CURRENT', 'RESOLVED'))
-                  / NULLIF(SUM(t.exposure_from), 0) AS value,
+                  / NULLIF(SUM(t.exposure_from) FILTER (WHERE t.to_state <> 'NO_READING'), 0) AS value,
                   SUM(t.accounts) FILTER (WHERE t.to_state IN ('CURRENT', 'RESOLVED')) AS aux
            FROM analytics.{TRANSITIONS} t
            WHERE t.bank_id = :bank AND t.month_end = :d
@@ -164,9 +169,12 @@ KPIS: tuple[KpiDef, ...] = (
         lambda r: f"of {count(r['aux'] or 0)} matured promises"),
     KpiDef(
         "visit_to_pay", "Visit-to-Pay Conversion", "outcome", "pct", True,
-        "Met visits followed by a verified payment within 7 days, divided by met visits.",
-        "fieldops", "pending", (FIELD,),
-        pending="needs a per-visit follow-up count that no analytics view carries yet"),
+        "Met visits followed by a verified payment on the same case within 7 days, divided by met visits, "
+        "over the period's visits that are at least 7 days old (a younger visit has not had its chance yet).",
+        "fieldops", "visits", (VISIT_TO_PAY,),
+        f"""SELECT AVG(CASE WHEN paid_within_7d THEN 1.0 ELSE 0.0 END) AS value, COUNT(*) AS aux
+            FROM analytics.{VISIT_TO_PAY} WHERE bank_id = :bank AND customer_met AND visit_date BETWEEN :lo AND :hi""",
+        lambda r: f"of {count(r['aux'] or 0)} matured met visits"),
     KpiDef(
         "cost_to_collect", "Cost to Collect", "outcome", "rs", False,
         "Agency commission accrued plus field cost, per ₹100 collected through agencies, month to date. "
@@ -334,6 +342,16 @@ def _one(db: Session, k: KpiDef, bank: str, as_of: date | None, views: set[str],
         prev = _read(db, sql, {**base, "m0": pm0, "m1": pm1})
         label = "vs last month" if span == 1 else f"vs the {span} months before"
         trend = _trend(k, now.value, prev.value, label) if now.value is not None else None
+    elif k.kind == "visits":
+        sql = k.sql + " " + clause
+        lo, hi = f.window(as_of)
+        hi = min(hi, as_of - timedelta(days=VISIT_MATURITY_DAYS))
+        if hi < lo:
+            return _unavailable(k, f"no visit in this period is {VISIT_MATURITY_DAYS} days old yet")
+        span = (hi - lo).days + 1
+        now = _read(db, sql, {**base, "lo": lo, "hi": hi})
+        prev = _read(db, sql, {**base, "lo": lo - timedelta(days=span), "hi": lo - timedelta(days=1)})
+        trend = _trend(k, now.value, prev.value, f"vs the {span} days before") if now.value is not None else None
     else:  # transition: the latest month-end on or before the reading, against the one before
         sql = k.sql + " " + clause
         me = db.execute(text(f"SELECT MAX(month_end) FROM analytics.{TRANSITIONS} WHERE bank_id = :bank "

@@ -23,6 +23,7 @@ VIEW_DIMENSIONS = {
     "agency_scorecard_monthly_scoped": {"geo", "agency"},
     "collections_daily_scoped": {"agency"},
     "field_activity_daily_scoped": {"agency"},
+    "v_visit_to_pay": {"agency"},
 }
 DIMENSION_LABELS = {"geo": "geography", "agency": "agency", "product": "product", "bucket": "DPD bucket",
                     "security": "secured / unsecured"}

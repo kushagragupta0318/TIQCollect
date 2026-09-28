@@ -9,7 +9,7 @@ from typing import Literal, Optional
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel
 
-from app.core.dependencies import DbSession
+from app.core.dependencies import AnalyticsDb, DbSession
 from app.core.errors import AppException, ErrorCode
 from app.core.ids import UUIDQuery
 from app.core.permissions import require_perm
@@ -82,7 +82,7 @@ def _own(db, model, row_id: Optional[str], bank_id: str) -> None:
 
 
 @router.get("/overview", response_model=OverviewOut, summary="Command Center overview: the twelve header KPIs")
-def overview(ctx: CurrentContext, db: DbSession,
+def overview(ctx: CurrentContext, db: DbSession, adb: AnalyticsDb,
              period: Literal["mtd", "l30", "qtd", "fytd", "custom"] = "mtd",
              start: Optional[date] = None, end: Optional[date] = None,
              geo: UUIDQuery = None, agency: UUIDQuery = None,
@@ -99,7 +99,9 @@ def overview(ctx: CurrentContext, db: DbSession,
     except FilterError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     bank = db.get(Bank, bank_id)
-    ov = compute_overview(db, bank_id, f)
+    # The KPIs read the analytics session bound to the caller's tenant (43, B13b):
+    # the scoped views return only this bank's rows, and nothing if unbound.
+    ov = compute_overview(adb, bank_id, f)
     return OverviewOut(
         bank_name=bank.display_name if bank else "",
         as_of=ov.as_of,
