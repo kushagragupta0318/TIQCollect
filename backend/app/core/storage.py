@@ -108,3 +108,16 @@ def key_exists(key: str) -> bool:
         return True
     except S3Error:
         return False
+
+
+def delete_object(key: str) -> None:
+    """Remove an object a confirm step has just rejected (wrong content-type,
+    oversized, magic bytes not matching the declared type) — a rejected
+    upload should not sit in the bucket forever with no document row ever
+    pointing at it. Best-effort: a failed delete is not this caller's
+    problem to solve twice, and MinIO cleanup of an orphan is cheap
+    regardless."""
+    try:
+        _client().remove_object(BUCKET, key)
+    except S3Error:
+        pass

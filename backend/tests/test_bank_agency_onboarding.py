@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import io
+import uuid
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,7 +12,7 @@ from starlette.requests import Request
 
 from app.core.database import get_db
 from app.core.errors import AppException
-from app.core.security import create_access_token
+from app.core.security import create_access_token, create_agency_doc_upload_token
 from app.main import app
 from app.models.audit_log import AuditAction, AuditLog
 from app.models.tenancy import Agency, AgencyContract, AgencyDocument, Bank, Region
@@ -223,6 +224,23 @@ def test_contract_end_date_before_start_date_is_rejected(w):
     assert exc.value.status_code == 422
 
 
+def test_duplicate_slab_pairs_are_rejected_cleanly_not_a_500(w):
+    """Coordinator audit LOW: a duplicate (loan_type, dpd_bucket) pair used
+    to reach agency_contract_terms' own UniqueConstraint and surface as an
+    unhandled IntegrityError."""
+    db, bank_admin = w["db"], w["bank_admin"]
+    out = _draft(db, bank_admin)
+    with pytest.raises(AppException) as exc:
+        agency_service.update_coverage_and_contract(
+            db, bank_admin, out["agency_id"],
+            contract_terms=[
+                {"loan_type": "PERSONAL", "dpd_bucket": "BUCKET_1", "commission_pct": 10},
+                {"loan_type": "PERSONAL", "dpd_bucket": "BUCKET_1", "commission_pct": 20},
+            ],
+        )
+    assert exc.value.status_code == 422
+
+
 # ── documents: confirm trusts nothing from the client ────────────────────────
 class _FakeStat:
     def __init__(self, content_type, size):
@@ -230,12 +248,55 @@ class _FakeStat:
         self.size = size
 
 
-def test_confirm_document_rejects_a_key_not_issued_for_this_agency(w, monkeypatch):
+def _token(agency: dict, doc_type: str, key: str) -> str:
+    return create_agency_doc_upload_token(key, bank_id=TEST_BANK_ID, agency_id=agency["agency_id"], doc_type=doc_type)
+
+
+def test_confirm_document_rejects_a_garbage_upload_token(w, monkeypatch):
     db, bank_admin = w["db"], w["bank_admin"]
     out = _draft(db, bank_admin)
+    key = f"agencies/{out['agency_id'][:8]}/agreement_x.pdf"
     with pytest.raises(AppException) as exc:
-        agency_service.confirm_document(db, bank_admin, out["agency_id"], doc_type="AGREEMENT",
-                                        key="agencies/someoneelse/agreement_x.pdf")
+        agency_service.confirm_document(db, bank_admin, out["agency_id"], doc_type="AGREEMENT", key=key,
+                                        upload_token="not-a-real-token")
+    assert exc.value.status_code == 422
+
+
+def test_confirm_document_rejects_a_token_issued_for_a_different_key(w, monkeypatch):
+    """Coordinator audit HIGH (51d165b): a prefix check on the key alone
+    could not tell "the object this upload_token was issued for" from "an
+    object with a similar-looking key" — the token's own `sub` claim must
+    match the key EXACTLY."""
+    db, bank_admin = w["db"], w["bank_admin"]
+    out = _draft(db, bank_admin)
+    key = f"agencies/{out['agency_id'][:8]}/agreement_x.pdf"
+    wrong_token = _token(out, "AGREEMENT", key + ".different")
+    with pytest.raises(AppException) as exc:
+        agency_service.confirm_document(db, bank_admin, out["agency_id"], doc_type="AGREEMENT", key=key,
+                                        upload_token=wrong_token)
+    assert exc.value.status_code == 422
+
+
+def test_confirm_document_rejects_a_token_issued_for_a_different_doc_type(w, monkeypatch):
+    db, bank_admin = w["db"], w["bank_admin"]
+    out = _draft(db, bank_admin)
+    key = f"agencies/{out['agency_id'][:8]}/agreement_x.pdf"
+    token = _token(out, "INSURANCE", key)   # issued for a different doc_type
+    with pytest.raises(AppException) as exc:
+        agency_service.confirm_document(db, bank_admin, out["agency_id"], doc_type="AGREEMENT", key=key,
+                                        upload_token=token)
+    assert exc.value.status_code == 422
+
+
+def test_confirm_document_rejects_a_token_issued_for_a_different_agency(w, monkeypatch):
+    db, bank_admin = w["db"], w["bank_admin"]
+    out_a = _draft(db, bank_admin, legal_name="Agency A")
+    out_b = _draft(db, bank_admin, legal_name="Agency B")
+    key = f"agencies/{out_a['agency_id'][:8]}/agreement_x.pdf"
+    token = _token(out_b, "AGREEMENT", key)   # issued for agency B, presented against A
+    with pytest.raises(AppException) as exc:
+        agency_service.confirm_document(db, bank_admin, out_a["agency_id"], doc_type="AGREEMENT", key=key,
+                                        upload_token=token)
     assert exc.value.status_code == 422
 
 
@@ -249,7 +310,8 @@ def test_confirm_document_rejects_when_nothing_was_actually_uploaded(w, monkeypa
         raise S3Error("NoSuchKey", "not found", None, None, None, None)
     monkeypatch.setattr(agency_service.storage, "stat_object", fake_stat)
     with pytest.raises(AppException) as exc:
-        agency_service.confirm_document(db, bank_admin, out["agency_id"], doc_type="AGREEMENT", key=key)
+        agency_service.confirm_document(db, bank_admin, out["agency_id"], doc_type="AGREEMENT", key=key,
+                                        upload_token=_token(out, "AGREEMENT", key))
     assert exc.value.status_code == 422
 
 
@@ -259,9 +321,13 @@ def test_confirm_document_rejects_a_disallowed_content_type_even_if_the_client_c
     key = f"agencies/{out['agency_id'][:8]}/agreement_x.exe"
     monkeypatch.setattr(agency_service.storage, "stat_object",
                         lambda k: _FakeStat("application/x-msdownload", 1000))
+    deleted = []
+    monkeypatch.setattr(agency_service.storage, "delete_object", lambda k: deleted.append(k))
     with pytest.raises(AppException) as exc:
-        agency_service.confirm_document(db, bank_admin, out["agency_id"], doc_type="AGREEMENT", key=key)
+        agency_service.confirm_document(db, bank_admin, out["agency_id"], doc_type="AGREEMENT", key=key,
+                                        upload_token=_token(out, "AGREEMENT", key))
     assert exc.value.status_code == 422
+    assert deleted == [key]   # coordinator audit MED: a rejected upload does not sit in the bucket
 
 
 def test_confirm_document_rejects_an_oversized_file(w, monkeypatch):
@@ -270,9 +336,33 @@ def test_confirm_document_rejects_an_oversized_file(w, monkeypatch):
     key = f"agencies/{out['agency_id'][:8]}/agreement_x.pdf"
     monkeypatch.setattr(agency_service.storage, "stat_object",
                         lambda k: _FakeStat("application/pdf", 50 * 1024 * 1024))
+    deleted = []
+    monkeypatch.setattr(agency_service.storage, "delete_object", lambda k: deleted.append(k))
     with pytest.raises(AppException) as exc:
-        agency_service.confirm_document(db, bank_admin, out["agency_id"], doc_type="AGREEMENT", key=key)
+        agency_service.confirm_document(db, bank_admin, out["agency_id"], doc_type="AGREEMENT", key=key,
+                                        upload_token=_token(out, "AGREEMENT", key))
     assert exc.value.status_code == 422
+    assert deleted == [key]
+
+
+def test_confirm_document_rejects_content_whose_magic_bytes_dont_match_the_claimed_type(w, monkeypatch):
+    """Coordinator audit MED: `stat.content_type` is whatever the CLIENT's
+    PUT request claimed — MinIO does not verify it. A caller could claim
+    application/pdf on a PUT and confirm with completely different bytes."""
+    db, bank_admin = w["db"], w["bank_admin"]
+    out = _draft(db, bank_admin)
+    key = f"agencies/{out['agency_id'][:8]}/agreement_x.pdf"
+    not_actually_a_pdf = b"this is plain text, not a pdf"
+    monkeypatch.setattr(agency_service.storage, "stat_object",
+                        lambda k: _FakeStat("application/pdf", len(not_actually_a_pdf)))
+    monkeypatch.setattr(agency_service.storage, "download_bytes", lambda k: not_actually_a_pdf)
+    deleted = []
+    monkeypatch.setattr(agency_service.storage, "delete_object", lambda k: deleted.append(k))
+    with pytest.raises(AppException) as exc:
+        agency_service.confirm_document(db, bank_admin, out["agency_id"], doc_type="AGREEMENT", key=key,
+                                        upload_token=_token(out, "AGREEMENT", key))
+    assert exc.value.status_code == 422
+    assert deleted == [key]
 
 
 def test_confirm_document_computes_sha256_server_side_not_from_the_client(w, monkeypatch):
@@ -287,18 +377,38 @@ def test_confirm_document_computes_sha256_server_side_not_from_the_client(w, mon
     monkeypatch.setattr(agency_service.storage, "stat_object",
                         lambda k: _FakeStat("application/pdf", len(real_bytes)))
     monkeypatch.setattr(agency_service.storage, "download_bytes", lambda k: real_bytes)
-    result = agency_service.confirm_document(db, bank_admin, out["agency_id"], doc_type="AGREEMENT", key=key)
+    result = agency_service.confirm_document(db, bank_admin, out["agency_id"], doc_type="AGREEMENT", key=key,
+                                             upload_token=_token(out, "AGREEMENT", key))
     doc = db.get(AgencyDocument, result["document_id"])
     assert doc.sha256 == hashlib.sha256(real_bytes).hexdigest()
     assert doc.scan_status == "PENDING"
     assert doc.status == "UPLOADED"
 
 
+def test_confirm_document_rejects_reuse_of_an_already_confirmed_key(w, monkeypatch):
+    """Coordinator audit HIGH: the same uploaded object used to be
+    confirmable into more than one AgencyDocument row — e.g. one physical
+    file satisfying two different required doc_types."""
+    db, bank_admin = w["db"], w["bank_admin"]
+    out = _draft(db, bank_admin)
+    key = f"agencies/{out['agency_id'][:8]}/agreement_x.pdf"
+    monkeypatch.setattr(agency_service.storage, "stat_object", lambda k: _FakeStat("application/pdf", 10))
+    monkeypatch.setattr(agency_service.storage, "download_bytes", lambda k: b"%PDF-1.4 x")
+    agency_service.confirm_document(db, bank_admin, out["agency_id"], doc_type="AGREEMENT", key=key,
+                                    upload_token=_token(out, "AGREEMENT", key))
+    with pytest.raises(AppException) as exc:
+        agency_service.confirm_document(db, bank_admin, out["agency_id"], doc_type="AGREEMENT", key=key,
+                                        upload_token=_token(out, "AGREEMENT", key))
+    assert exc.value.status_code == 409
+
+
 def _upload_doc(db, bank_admin, agency_id, doc_type, monkeypatch, content=b"%PDF-1.4 x") -> str:
-    key = f"agencies/{agency_id[:8]}/{doc_type.lower()}_x.pdf"
+    key = f"agencies/{agency_id[:8]}/{doc_type.lower()}_{uuid.uuid4().hex[:8]}.pdf"
     monkeypatch.setattr(agency_service.storage, "stat_object", lambda k: _FakeStat("application/pdf", len(content)))
     monkeypatch.setattr(agency_service.storage, "download_bytes", lambda k: content)
-    return agency_service.confirm_document(db, bank_admin, agency_id, doc_type=doc_type, key=key)["document_id"]
+    token = create_agency_doc_upload_token(key, bank_id=TEST_BANK_ID, agency_id=agency_id, doc_type=doc_type)
+    return agency_service.confirm_document(db, bank_admin, agency_id, doc_type=doc_type, key=key,
+                                           upload_token=token)["document_id"]
 
 
 # ── document review: four-eyes ───────────────────────────────────────────────
@@ -452,15 +562,71 @@ def test_activation_fires_only_once(w, monkeypatch):
     )
     invite_service.accept_invite(db, invite_result["token"], "Harbour-Lights-2026", "device-2", _request())
 
-    # An extra, optional document is uploaded and verified after activation —
-    # must not touch Agency.status or write a second AGENCY_ACTIVATED row.
-    extra_doc_id = _upload_doc(db, bank_admin, out["agency_id"], "OTHER", monkeypatch)
-    agency_service.verify_document(db, verifier, out["agency_id"], extra_doc_id)
+    # Any further wizard action on an already-ACTIVE agency is now refused
+    # outright (_require_editable, coordinator audit LOW) — including trying
+    # to upload one more document — so there is no path left by which a
+    # second AGENCY_ACTIVATED row could be written.
+    with pytest.raises(AppException) as exc:
+        _upload_doc(db, bank_admin, out["agency_id"], "OTHER", monkeypatch)
+    assert exc.value.status_code == 409
 
     rows = (db.query(AuditLog)
            .filter(AuditLog.entity_type == "Agency", AuditLog.entity_id == out["agency_id"],
                    AuditLog.action == AuditAction.AGENCY_ACTIVATED).all())
     assert len(rows) == 1
+
+
+def test_identity_edits_are_refused_once_active(w, monkeypatch):
+    db, bank_admin = w["db"], w["bank_admin"]
+    verifier = User(id=test_id("u:bank-admin:v4"), email="v4@meridiantrust.example", phone="9810005011",
+                    full_name="Verifier Four", hashed_password="x", role=UserRole.BANK_ADMIN, bank_id=TEST_BANK_ID)
+    db.add(verifier)
+    db.commit()
+    out = _draft(db, bank_admin)
+    _verify_all_required_docs(db, bank_admin, verifier, out["agency_id"], monkeypatch)
+    invite_result = invite_service.create_invite(
+        db, bank_admin, email="admin4@konkan-recovery.example", role=UserRole.AGENCY_ADMIN,
+        full_name="New Agency Admin", phone="9810006005", agency_id=out["agency_id"], bank_id=TEST_BANK_ID,
+        channel="LINK",
+    )
+    invite_service.accept_invite(db, invite_result["token"], "Harbour-Lights-2026", "device-3", _request())
+    assert db.get(Agency, out["agency_id"]).status == "ACTIVE"
+
+    with pytest.raises(AppException) as exc:
+        agency_service.update_identity(db, bank_admin, out["agency_id"], trade_name="Renamed After Activation")
+    assert exc.value.status_code == 409
+
+
+def test_activation_requires_the_specific_invite_accepted_not_any_active_admin(w, monkeypatch):
+    """Coordinator audit LOW: the old check ('any active AGENCY_ADMIN of
+    this agency') would have activated on an admin account that reached
+    AGENCY_ADMIN some other way — the real condition is that THIS wizard's
+    master-login invite was accepted."""
+    db, bank_admin = w["db"], w["bank_admin"]
+    verifier = User(id=test_id("u:bank-admin:v5"), email="v5@meridiantrust.example", phone="9810005012",
+                    full_name="Verifier Five", hashed_password="x", role=UserRole.BANK_ADMIN, bank_id=TEST_BANK_ID)
+    db.add(verifier)
+    db.commit()
+    out = _draft(db, bank_admin)
+    _verify_all_required_docs(db, bank_admin, verifier, out["agency_id"], monkeypatch)
+
+    # An AGENCY_ADMIN exists and is active — but NOT via an accepted invite
+    # for this agency (created directly, as a seed/migration might).
+    from app.core.security import hash_password
+    rogue_admin = User(id=test_id("u:rogue-admin"), email="rogue@konkan-recovery.example", phone="9810006099",
+                       full_name="Rogue Admin", hashed_password=hash_password("Harbour-Lights-2026"),
+                       role=UserRole.AGENCY_ADMIN, bank_id=TEST_BANK_ID, agency_id=out["agency_id"],
+                       is_active=True)
+    db.add(rogue_admin)
+    db.commit()
+
+    # Directly re-runs the activation check (the same one verify_document and
+    # accept_invite call) now that a rogue active admin exists but no invite
+    # was ever accepted for this agency — must still refuse.
+    activated = agency_service._maybe_activate(db, out["agency_id"])
+    db.commit()
+    assert activated is False
+    assert db.get(Agency, out["agency_id"]).status == "PENDING"
 
 
 # ── invite_master_login ──────────────────────────────────────────────────────
@@ -501,6 +667,37 @@ def test_http_get_agency_is_scoped_to_the_bank_admins_own_bank(w):
     agency_id = created.json()["agency_id"]
     r = client.get(f"/api/v1/bank/agencies/{agency_id}", headers=_h(w["other_bank_admin"]))
     assert r.status_code == 404
+
+
+# ── HTTP: coordinator audit MED — bounded money/rate/count fields ───────────
+@pytest.mark.parametrize("field,bad_value", [
+    ("commission_pct", -5), ("commission_pct", 150), ("fixed_fee_per_resolution", -1),
+])
+def test_http_contract_term_rejects_out_of_range_values(w, field, bad_value):
+    client = TestClient(app)
+    created = client.post("/api/v1/bank/agencies", json={"legal_name": "Bounds Test Agency"},
+                          headers=_h(w["bank_admin"]))
+    agency_id = created.json()["agency_id"]
+    term = {"loan_type": "PERSONAL", "dpd_bucket": "BUCKET_1", "commission_pct": 10}
+    term[field] = bad_value
+    r = client.patch(f"/api/v1/bank/agencies/{agency_id}/coverage-contract", json={"contract_terms": [term]},
+                     headers=_h(w["bank_admin"]))
+    assert r.status_code == 422, r.text
+
+
+@pytest.mark.parametrize("field,bad_value", [
+    ("max_placed_cases", 0), ("max_agents", -1), ("max_visits_per_month", 0),
+    ("sla_first_visit_days", 0), ("recall_no_activity_days", 0),
+    ("performance_bonus_pct", -1), ("performance_target_pct", 101), ("security_deposit", -100),
+])
+def test_http_coverage_contract_rejects_out_of_range_values(w, field, bad_value):
+    client = TestClient(app)
+    created = client.post("/api/v1/bank/agencies", json={"legal_name": "Bounds Test Agency 2"},
+                          headers=_h(w["bank_admin"]))
+    agency_id = created.json()["agency_id"]
+    r = client.patch(f"/api/v1/bank/agencies/{agency_id}/coverage-contract", json={field: bad_value},
+                     headers=_h(w["bank_admin"]))
+    assert r.status_code == 422, r.text
 
 
 # ── regions (coverage step source) ───────────────────────────────────────────

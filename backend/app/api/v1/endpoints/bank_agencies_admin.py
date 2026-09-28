@@ -80,24 +80,32 @@ def update_identity_route(agency_id: UUIDPath, body: UpdateIdentityRequest, db: 
 class ContractTermIn(BaseModel):
     loan_type: str
     dpd_bucket: str
-    commission_pct: float
-    fixed_fee_per_resolution: float | None = None
+    # coordinator audit MED: unbounded before — a negative or >100 percentage,
+    # or a negative fee, reached the database with nothing but the service
+    # layer's own 0-100 check on commission_pct alone to catch it. Kept as
+    # float, not Decimal: AgencyContractTerm.commission_pct is
+    # Numeric(6,3, asdecimal=False) (models/base.py's Rate) — every money/rate
+    # column in this codebase is deliberately asdecimal=False, so a Decimal
+    # boundary type here would be inconsistent with the ORM on the other side
+    # of this same call, not more correct.
+    commission_pct: float = Field(ge=0, le=100)
+    fixed_fee_per_resolution: float | None = Field(default=None, ge=0)
     is_authorised: bool = True
 
 
 class UpdateCoverageContractRequest(BaseModel):
     start_date: date | None = None
     end_date: date | None = None
-    max_placed_cases: int | None = None
-    max_agents: int | None = None
-    max_visits_per_month: int | None = None
-    sla_first_visit_days: int | None = None
-    recall_no_activity_days: int | None = None
+    max_placed_cases: int | None = Field(default=None, ge=1)
+    max_agents: int | None = Field(default=None, ge=1)
+    max_visits_per_month: int | None = Field(default=None, ge=1)
+    sla_first_visit_days: int | None = Field(default=None, ge=1)
+    recall_no_activity_days: int | None = Field(default=None, ge=1)
     recall_on_sla_breach: bool | None = None
     recall_at_contract_end: bool | None = None
-    performance_bonus_pct: float | None = None
-    performance_target_pct: float | None = None
-    security_deposit: float | None = None
+    performance_bonus_pct: float | None = Field(default=None, ge=0, le=100)
+    performance_target_pct: float | None = Field(default=None, ge=0, le=100)
+    security_deposit: float | None = Field(default=None, ge=0)
     region_ids: list[str] | None = None
     contract_terms: list[ContractTermIn] | None = None
 
@@ -125,6 +133,7 @@ def presign_document_route(agency_id: UUIDPath, body: PresignDocumentRequest, db
 class ConfirmDocumentRequest(BaseModel):
     doc_type: str
     key: str
+    upload_token: str
     file_name: str | None = None
     issued_on: date | None = None
     expires_on: date | None = None

@@ -111,6 +111,27 @@ def test_directory_filter_by_region_rejects_an_unknown_id(w):
     assert exc.value.status_code == 422
 
 
+def test_directory_filter_by_region_rejects_a_real_region_from_another_bank(w):
+    """Coordinator audit LOW: this filter used to query Region with no
+    bank_id scope at all — a real, existing region belonging to a DIFFERENT
+    bank was previously accepted and its .path used as the coverage
+    filter, leaking that another tenant's region even exists."""
+    from app.models.tenancy import Bank
+    from tests._db import test_id as _tid
+    db, bank_admin = w["db"], w["bank_admin"]
+    other_bank_id = _tid("bank:directory-other")
+    db.add(Bank(id=other_bank_id, code="DIROTH", legal_name="Directory Other Bank Ltd.",
+               display_name="Directory Other Bank"))
+    db.flush()
+    foreign_region = Region(id=_tid("region:foreign"), bank_id=other_bank_id, level="ZONE", code="FOREIGN",
+                            name="Foreign Zone", path="/foreign/")
+    db.add(foreign_region)
+    db.commit()
+    with pytest.raises(AppException) as exc:
+        agency_service.list_agency_directory(db, bank_admin, region_id=foreign_region.id)
+    assert exc.value.status_code == 422
+
+
 def test_directory_filters_by_authorised_product(w):
     db, bank_admin, region = w["db"], w["bank_admin"], w["region"]
     personal = _agency_with_contract(db, bank_admin, region, legal_name="Personal Loans Agency",

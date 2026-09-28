@@ -3,7 +3,12 @@
 // two-call flow used elsewhere in this app (RecordVisitPage's photo/recording
 // uploads) — presign, PUT the file straight to MinIO, then confirm — because
 // nothing here trusts the client for the object's real size or content type;
-// confirm_document HEADs and hashes what MinIO actually received.
+// confirm_document HEADs and hashes what MinIO actually received, and checks
+// its magic bytes against the declared type. The presign response's
+// upload_token is passed straight back to confirm unmodified (2026-09-28,
+// coordinator audit HIGH) — it cryptographically binds the key to this
+// (bank, agency, doc_type), so confirm can require an exact match instead of
+// trusting a prefix on the key.
 //
 // No verify/reject controls here on purpose — that is a bank-admin review
 // screen for a later task (brief: "No document verify/reject UI"). This step
@@ -67,7 +72,7 @@ function DocumentRow({
       const put = await fetch(presigned.upload_url, { method: "PUT", body: file, headers: { "Content-Type": contentType } });
       if (!put.ok) throw new Error(`Upload to storage failed (${put.status}).`);
       return confirmAgencyDocument(agencyId, {
-        doc_type: docType, key: presigned.key, file_name: file.name,
+        doc_type: docType, key: presigned.key, upload_token: presigned.upload_token, file_name: file.name,
         issued_on: issuedOn || undefined, expires_on: expiresOn || undefined,
       });
     },

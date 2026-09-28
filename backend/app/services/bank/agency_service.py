@@ -37,8 +37,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core import storage
-from app.core.audit import stage_audit, write_audit
+from app.core.audit import stage_audit
 from app.core.errors import AppException, ErrorCode
+from app.core.ids import parse_uuid
+from app.core.security import create_agency_doc_upload_token, decode_token
 from app.models.audit_log import AuditAction
 from app.models.loan import DPDBucket, LoanType
 from app.models.tenancy import (
@@ -74,6 +76,17 @@ def _client_ip(request: Request | None) -> str | None:
 def _require_bank_admin(principal: User) -> None:
     if principal.role != UserRole.BANK_ADMIN or not principal.bank_id:
         raise AppException(403, ErrorCode.FORBIDDEN, "Not permitted.")
+
+
+def _require_editable(agency: Agency) -> None:
+    """coordinator audit LOW: nothing stopped a step from being resubmitted
+    after the agency had already gone ACTIVE — identity, coverage, contract
+    and documents are onboarding-time only. Once active, a change here needs
+    its own amendment flow (a later task), not a silent rewrite through the
+    wizard's own PATCH routes."""
+    if agency.status != "PENDING":
+        raise AppException(409, ErrorCode.CONFLICT,
+                           f"This agency is {agency.status.lower()} — the onboarding wizard no longer applies.")
 
 
 def _generate_code(db: Session, bank_id: str, legal_name: str) -> str:
@@ -128,6 +141,7 @@ def update_identity(db: Session, bank_admin: User, agency_id: str, **fields) -> 
     silently ignored, so a frontend typo fails loud."""
     _require_bank_admin(bank_admin)
     agency = agency_or_404(db, bank_admin, agency_id)
+    _require_editable(agency)
     unknown = set(fields) - set(_IDENTITY_FIELDS)
     if unknown:
         raise AppException(422, ErrorCode.VALIDATION_ERROR, f"Unknown field(s): {', '.join(sorted(unknown))}")
@@ -181,6 +195,7 @@ def update_coverage_and_contract(
     from an earlier, since-changed submission)."""
     _require_bank_admin(bank_admin)
     agency = agency_or_404(db, bank_admin, agency_id)
+    _require_editable(agency)
     contract = _upsert_draft_contract(db, agency)
 
     if start_date is not None:
@@ -207,16 +222,32 @@ def update_coverage_and_contract(
         contract.recall_at_contract_end = recall_at_contract_end
 
     if region_ids is not None:
+        parsed_region_ids = [parse_uuid(rid) for rid in region_ids]
+        if any(p is None for p in parsed_region_ids):
+            raise AppException(422, ErrorCode.VALIDATION_ERROR, "region_ids must all be valid ids.")
         valid_ids = {r.id for r in db.query(Region.id)
-                    .filter(Region.bank_id == agency.bank_id, Region.id.in_(region_ids)).all()}
-        missing = set(region_ids) - valid_ids
+                    .filter(Region.bank_id == agency.bank_id, Region.id.in_(parsed_region_ids)).all()}
+        missing = set(parsed_region_ids) - valid_ids
         if missing:
             raise AppException(422, ErrorCode.VALIDATION_ERROR, f"Unknown region id(s): {', '.join(sorted(missing))}")
         db.query(AgencyRegion).filter(AgencyRegion.contract_id == contract.id).delete()
-        for rid in region_ids:
+        for rid in parsed_region_ids:
             db.add(AgencyRegion(bank_id=agency.bank_id, agency_id=agency.id, contract_id=contract.id, region_id=rid))
 
     if contract_terms is not None:
+        # coordinator audit LOW: a duplicate (loan_type, dpd_bucket) pair in
+        # the submitted list used to reach agency_contract_terms' own
+        # UniqueConstraint("contract_id", "loan_type", "dpd_bucket") and
+        # fail as an unhandled IntegrityError — a 500 for a mistake the API
+        # should refuse cleanly.
+        seen_pairs: set[tuple[str, str]] = set()
+        for term in contract_terms:
+            pair = (term.get("loan_type"), term.get("dpd_bucket"))
+            if pair in seen_pairs:
+                raise AppException(422, ErrorCode.VALIDATION_ERROR,
+                                   f"Duplicate slab for {pair[0]} / {pair[1]} — each loan type and DPD bucket "
+                                   "combination may appear once.")
+            seen_pairs.add(pair)
         db.query(AgencyContractTerm).filter(AgencyContractTerm.contract_id == contract.id).delete()
         for term in contract_terms:
             loan_type, bucket = term.get("loan_type"), term.get("dpd_bucket")
@@ -240,12 +271,29 @@ def update_coverage_and_contract(
     return _agency_dict(agency)
 
 
+# The bytes every allowed content-type actually starts with. `stat.content_type`
+# is whatever the CLIENT's PUT request claimed in its own Content-Type header
+# — MinIO does not verify it — so accepting that claim at face value would
+# make the allowlist purely cosmetic. Checked against what was actually
+# downloaded to hash, so this costs nothing extra to read.
+_MAGIC_BYTES: dict[str, tuple[bytes, ...]] = {
+    "application/pdf": (b"%PDF-",),
+    "image/jpeg": (b"\xff\xd8\xff",),
+    "image/png": (b"\x89PNG\r\n\x1a\n",),
+}
+
+
 def presign_document(db: Session, bank_admin: User, agency_id: str, doc_type: str, content_type: str) -> dict:
-    """Step 4, part 1. Returns a server-generated key and a short-lived
-    presigned PUT URL — the client uploads directly to MinIO and never
-    chooses its own key."""
+    """Step 4, part 1. Returns a server-generated key, a short-lived
+    presigned PUT URL, and a signed upload_token binding that exact key to
+    this (bank, agency, doc_type) — confirm_document requires it back and
+    verifies it cryptographically, rather than trusting a prefix match on
+    the key alone (coordinator audit HIGH, 51d165b: a key-prefix check does
+    not stop the same uploaded object being confirmed into a different
+    agency or doc_type, or confirmed twice)."""
     _require_bank_admin(bank_admin)
     agency = agency_or_404(db, bank_admin, agency_id)
+    _require_editable(agency)
     if doc_type not in DOC_TYPES:
         raise AppException(422, ErrorCode.VALIDATION_ERROR, f"doc_type must be one of: {', '.join(DOC_TYPES)}")
     if content_type not in _ALLOWED_DOC_CONTENT_TYPES:
@@ -254,21 +302,45 @@ def presign_document(db: Session, bank_admin: User, agency_id: str, doc_type: st
     ext = _ALLOWED_DOC_CONTENT_TYPES[content_type]
     key = storage.agency_document_key(agency.id, doc_type, ext=ext)
     upload_url = storage.presigned_upload_url(key, content_type=content_type, expires_minutes=15)
-    return {"upload_url": upload_url, "key": key, "doc_type": doc_type}
+    upload_token = create_agency_doc_upload_token(key, bank_id=agency.bank_id, agency_id=agency.id,
+                                                  doc_type=doc_type)
+    return {"upload_url": upload_url, "key": key, "doc_type": doc_type, "upload_token": upload_token}
 
 
 def confirm_document(db: Session, bank_admin: User, agency_id: str, *, doc_type: str, key: str,
-                     file_name: str | None = None, issued_on: date | None = None,
+                     upload_token: str, file_name: str | None = None, issued_on: date | None = None,
                      expires_on: date | None = None) -> dict:
     """Step 4, part 2. Trusts nothing the client says about the file it
-    claims to have uploaded — only that the key came from presign_document
-    (checked by prefix) and whatever MinIO itself reports."""
+    claims to have uploaded:
+      - the upload_token (from presign_document) is decoded and its
+        bank_id/agency_id/doc_type/key claims must match this call EXACTLY
+        — a prefix match on the key is not identity;
+      - the object must not already be confirmed under any document row
+        (storage_key is checked for an existing row before insert — a
+        UNIQUE constraint at the DB level is tracked as a follow-up, 43);
+      - content-type and size come from a HEAD on the object MinIO actually
+        stored, never the client's claim, and are cross-checked against the
+        object's real magic bytes;
+      - a rejected upload is deleted from storage rather than left orphaned,
+        so a confirm that fails for a bad reason does not silently consume
+        the bucket."""
     _require_bank_admin(bank_admin)
     agency = agency_or_404(db, bank_admin, agency_id)
+    _require_editable(agency)
     if doc_type not in DOC_TYPES:
         raise AppException(422, ErrorCode.VALIDATION_ERROR, f"doc_type must be one of: {', '.join(DOC_TYPES)}")
-    if not key.startswith(f"agencies/{agency.id[:8]}/"):
-        raise AppException(422, ErrorCode.VALIDATION_ERROR, "That key was not issued for this agency.")
+
+    try:
+        payload = decode_token(upload_token)
+    except ValueError:
+        raise AppException(422, ErrorCode.VALIDATION_ERROR, "That upload link has expired. Upload again.")
+    if (payload.get("type") != "agency_doc_upload" or payload.get("sub") != key
+            or payload.get("bank_id") != agency.bank_id or payload.get("agency_id") != agency.id
+            or payload.get("doc_type") != doc_type):
+        raise AppException(422, ErrorCode.VALIDATION_ERROR, "That upload was not issued for this document.")
+
+    if db.query(AgencyDocument.id).filter(AgencyDocument.storage_key == key).first() is not None:
+        raise AppException(409, ErrorCode.CONFLICT, "This upload has already been confirmed.")
 
     try:
         stat = storage.stat_object(key)
@@ -276,11 +348,18 @@ def confirm_document(db: Session, bank_admin: User, agency_id: str, *, doc_type:
         raise AppException(422, ErrorCode.VALIDATION_ERROR, "Nothing was uploaded to that key yet.")
     content_type = (stat.content_type or "").split(";")[0].strip()
     if content_type not in _ALLOWED_DOC_CONTENT_TYPES:
+        storage.delete_object(key)
         raise AppException(422, ErrorCode.VALIDATION_ERROR, f"Unsupported file type: {content_type or 'unknown'}")
     if stat.size > _MAX_DOCUMENT_SIZE_BYTES:
+        storage.delete_object(key)
         raise AppException(422, ErrorCode.VALIDATION_ERROR,
                            f"File is {stat.size // 1024} KB; the limit is {_MAX_DOCUMENT_SIZE_BYTES // 1024} KB.")
-    sha256 = hashlib.sha256(storage.download_bytes(key)).hexdigest()
+    content = storage.download_bytes(key)
+    if not content.startswith(_MAGIC_BYTES[content_type]):
+        storage.delete_object(key)
+        raise AppException(422, ErrorCode.VALIDATION_ERROR,
+                           f"The file's contents don't match its declared type ({content_type}).")
+    sha256 = hashlib.sha256(content).hexdigest()
 
     doc = AgencyDocument(
         bank_id=agency.bank_id, agency_id=agency.id, doc_type=doc_type, storage_key=key,
@@ -289,7 +368,16 @@ def confirm_document(db: Session, bank_admin: User, agency_id: str, *, doc_type:
         uploaded_by=bank_admin.id,
     )
     db.add(doc)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError:
+        # A concurrent confirm of the same key won the race between our own
+        # pre-check above and this insert — the belt to that brace. Once
+        # 43's UNIQUE(storage_key) migration lands this is what actually
+        # catches it; today it is unreachable in SQLite (no such
+        # constraint yet) and reachable only under real concurrency.
+        db.rollback()
+        raise AppException(409, ErrorCode.CONFLICT, "This upload has already been confirmed.")
     stage_audit(db, action=AuditAction.DOCUMENT_UPLOADED, user_id=bank_admin.id, entity_type="AgencyDocument",
                entity_id=doc.id, details={"agency_id": agency.id, "doc_type": doc_type, "size_bytes": stat.size})
     db.commit()
@@ -317,6 +405,7 @@ def verify_document(db: Session, verifier: User, agency_id: str, doc_id: str,
     status flip — see its own docstring for why that matters."""
     _require_bank_admin(verifier)
     agency = agency_or_404(db, verifier, agency_id)
+    _require_editable(agency)
     doc = _latest_document(db, agency.id, doc_id)
     if doc.status != "UPLOADED" or doc.uploaded_by == verifier.id:
         raise _refuse_review()
@@ -335,6 +424,7 @@ def reject_document(db: Session, verifier: User, agency_id: str, doc_id: str, *,
                     request: Request | None = None) -> dict:
     _require_bank_admin(verifier)
     agency = agency_or_404(db, verifier, agency_id)
+    _require_editable(agency)
     doc = _latest_document(db, agency.id, doc_id)
     if doc.status != "UPLOADED" or doc.uploaded_by == verifier.id:
         raise _refuse_review()
@@ -356,16 +446,24 @@ def invite_master_login(db: Session, bank_admin: User, agency_id: str, *, full_n
                         phone: str, channel: str = "LINK", request: Request | None = None) -> dict:
     """Step 5. Wraps invite_service.create_invite — can_invite's own rule
     already allows a BANK_ADMIN to invite an AGENCY_ADMIN into a named
-    agency_id, so nothing new is needed there."""
+    agency_id, so nothing new is needed there.
+
+    The AGENCY_ONBOARDED row is STAGED before create_invite runs, not
+    written after (coordinator audit LOW, 51d165b) — create_invite commits
+    its own transaction internally, so a row added to the same session
+    before that call rides along in the SAME commit as the invite and its
+    own USER_INVITED row, rather than a second, separate commit that could
+    succeed even if this one never ran, or vice versa."""
     from app.services.invite_service import create_invite
 
     _require_bank_admin(bank_admin)
     agency = agency_or_404(db, bank_admin, agency_id)
+    _require_editable(agency)
+    stage_audit(db, action=AuditAction.AGENCY_ONBOARDED, user_id=bank_admin.id, entity_type="Agency",
+               entity_id=agency.id, details={"step": "master_login", "invited_email": email})
     result = create_invite(db, bank_admin, email=email, role=UserRole.AGENCY_ADMIN, full_name=full_name,
                            phone=phone, agency_id=agency.id, bank_id=agency.bank_id, channel=channel,
                            request=request)
-    write_audit(db, action=AuditAction.AGENCY_ONBOARDED, user_id=bank_admin.id, entity_type="Agency",
-               entity_id=agency.id, details={"step": "master_login", "invited_email": email})
     return result
 
 
@@ -377,10 +475,27 @@ def _maybe_activate(db: Session, agency_id: str) -> bool:
     it, in the same commit as the event that completed it. Never called on
     its own schedule; there is no polling path and no Celery task for this.
 
+    LOCKS the Agency row first (coordinator audit HIGH, 51d165b): both
+    callers read-check-write against the SAME row from two different
+    request transactions that can genuinely overlap — the last required
+    document being verified and the master invite being accepted are
+    ordinarily two different actions by two different people. Without a
+    lock, both transactions can pass their own "is the other condition
+    already true?" read before either commits, and neither sees the other's
+    not-yet-committed write: the agency then never activates (both callers
+    conclude "not yet, my half is done but the other one isn't" and stop),
+    or — if the interleaving lands differently — the code between the read
+    and the write runs twice, both branches try to fire ACTIVE. The Postgres
+    FOR UPDATE lock serialises the two callers: whichever gets here second
+    blocks until the first commits, then re-reads a row that already
+    reflects the first caller's write. On SQLite (tests without a Postgres
+    fixture) with_for_update() is a documented no-op — there is no real
+    concurrent writer to serialise against there anyway.
+
     Returns whether it activated, so a caller with its own audit trail
     (accept_invite's) can add "and this activated the agency" without a
     second read."""
-    agency = db.query(Agency).filter(Agency.id == agency_id).first()
+    agency = db.query(Agency).filter(Agency.id == agency_id).with_for_update().first()
     if agency is None or agency.status != "PENDING":
         return False
 
@@ -392,12 +507,20 @@ def _maybe_activate(db: Session, agency_id: str) -> bool:
     if not set(REQUIRED_DOC_TYPES).issubset(verified_types):
         return False
 
-    admin_accepted = (
-        db.query(User)
-        .filter(User.agency_id == agency_id, User.role == UserRole.AGENCY_ADMIN, User.is_active.is_(True))
+    # coordinator audit LOW: "any active AGENCY_ADMIN of this agency" is a
+    # proxy for "the master invite was accepted", and a wrong one — it says
+    # nothing about WHICH invite, or that this wizard's invite (rather than
+    # some other admin account reaching AGENCY_ADMIN some other way) is what
+    # the bank user is waiting on. The real condition is the UserInvite row
+    # itself: this purpose, this agency, accepted.
+    from app.models.identity import UserInvite
+    invite_accepted = (
+        db.query(UserInvite)
+        .filter(UserInvite.agency_id == agency_id, UserInvite.role == UserRole.AGENCY_ADMIN,
+                UserInvite.purpose == "AGENCY_MASTER_LOGIN", UserInvite.accepted_at.isnot(None))
         .first()
     ) is not None
-    if not admin_accepted:
+    if not invite_accepted:
         return False
 
     agency.status = "ACTIVE"
@@ -454,7 +577,15 @@ def list_agency_directory(
 
     region_prefix = None
     if region_id:
-        target = db.query(Region).filter(Region.id == region_id).first()
+        # coordinator audit LOW: this used to query Region with no bank_id
+        # filter at all — a bank admin could pass ANOTHER bank's region id
+        # and have its `.path` used as a filter prefix. Region rows are
+        # tenant data the same as everything else; scoped like every other
+        # Region read in this module.
+        parsed_region_id = parse_uuid(region_id)
+        if parsed_region_id is None:
+            raise AppException(422, ErrorCode.VALIDATION_ERROR, f"Unknown region id: {region_id}")
+        target = db.query(Region).filter(Region.id == parsed_region_id, Region.bank_id == principal.bank_id).first()
         if target is None:
             raise AppException(422, ErrorCode.VALIDATION_ERROR, f"Unknown region id: {region_id}")
         region_prefix = target.path

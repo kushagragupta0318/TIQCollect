@@ -221,11 +221,18 @@ export interface PresignDocumentResult {
   upload_url: string;
   key: string;
   doc_type: string;
+  /** Opaque, short-lived, signed — pass back exactly as received to
+   *  confirmAgencyDocument. Binds this key to this (bank, agency, doc_type);
+   *  confirm_document verifies it server-side rather than trusting a prefix
+   *  match on the key alone (coordinator audit HIGH, backend 51d165b). */
+  upload_token: string;
 }
 
 export interface ConfirmDocumentBody {
   doc_type: string;
   key: string;
+  /** The upload_token from presignAgencyDocument's response — required. */
+  upload_token: string;
   file_name?: string;
   issued_on?: string;
   expires_on?: string;
