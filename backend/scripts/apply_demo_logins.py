@@ -69,6 +69,7 @@ def _end_sessions(db: Session, user: User) -> None:
     from app.services.auth_service import revoke_user_sessions
     revoke_user_sessions(db, user.id, "PASSWORD_CHANGED")
 
+
 MIN_PASSWORD_LENGTH = 16
 # One account per group, in this order (v2, owner's decision): a bank-side
 # user, an agency manager, a field agent.
@@ -82,10 +83,14 @@ REQUIRED_ROLE_GROUPS: tuple[tuple[str, frozenset[UserRole]], ...] = (
 
 def _group_of(role: UserRole) -> int | None:
     return next((i for i, (_, roles) in enumerate(REQUIRED_ROLE_GROUPS) if role in roles), None)
-# The committed demo book (backend/fixtures/tables/users.csv, 2026-09-24): 21
-# users, every one @tiqcollect.in. A box with more users than that has users
-# the demo did not create, and is not one whose passwords this may retire.
-FIXTURE_USER_COUNT = 21
+
+
+# The committed demo book: backend/fixtures/fieldops-demo-v2.dump (B15,
+# 2026-09-28) holds 24 users, every one @girivanfinance.test or
+# @aravallifs.test. A box with more users than that has users the demo did
+# not create, and is not one whose passwords this may retire. (Was 21, the v1
+# book's users.csv, all @tiqcollect.in.) B16-B18's generator raises it.
+FIXTURE_USER_COUNT = 24
 
 EXIT_APPLIED, EXIT_REFUSED, EXIT_NOT_CONFIGURED = 0, 1, 3
 
@@ -123,7 +128,7 @@ def _domain(email: str) -> str:
 
 def apply(db: Session, *, password: str | None, accounts_raw: str | None, demo_mode: bool,
           keep_raw: str | None = "", disable_others: bool = False,
-          demo_domains: str | None = "tiqcollect.in", max_users: int = FIXTURE_USER_COUNT) -> Outcome:
+          demo_domains: str | None = None, max_users: int = FIXTURE_USER_COUNT) -> Outcome:
     """Give the three named accounts the master password; with disable_others,
     retire every other demo account's password. Changes nothing unless every
     precondition holds."""
@@ -169,6 +174,9 @@ def apply(db: Session, *, password: str | None, accounts_raw: str | None, demo_m
     master = set(emails)
     others = [e for e in users if e not in master and e not in keep]
     if disable_others:
+        if demo_domains is None:                  # the one definition: settings (core/config.py)
+            from app.core.config import settings
+            demo_domains = settings.DEMO_EMAIL_DOMAINS
         domains = {d.strip().lower() for d in (demo_domains or "").split(",") if d.strip()}
         foreign = sorted(e for e in others if _domain(e) not in domains)
         if foreign:

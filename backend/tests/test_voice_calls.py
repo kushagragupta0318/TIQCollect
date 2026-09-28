@@ -247,3 +247,15 @@ def test_a_refusal_never_names_a_user_it_has_not_proven_exists(world, who):
         voice_service.resolve_destination(world["db"], from_param=frm, case_id=world["mine"])
     assert exc.value.reason == voice_service.SESSION_ENDED
     assert exc.value.user_id is None
+
+
+@pytest.mark.parametrize("unset", ["", "${TWILIO_TWIML_APP_SID}"])
+def test_from_our_app_fails_closed_on_an_unset_sid_by_itself(monkeypatch, unset):
+    """Audit LOW 2026-09-28: from_our_app must not rely on voice_configured()
+    having been checked first. An unset / literal SID never matches a request
+    that carries the same empty or literal value."""
+    monkeypatch.setattr(settings, "TWILIO_ACCOUNT_SID", "AC" + "0" * 32)
+    monkeypatch.setattr(settings, "TWILIO_TWIML_APP_SID", unset)
+    assert voice_service.from_our_app({"AccountSid": "AC" + "0" * 32, "ApplicationSid": unset}) is False
+    monkeypatch.setattr(settings, "TWILIO_TWIML_APP_SID", "AP" + "2" * 32)
+    assert voice_service.from_our_app({"AccountSid": "AC" + "0" * 32, "ApplicationSid": "AP" + "2" * 32}) is True

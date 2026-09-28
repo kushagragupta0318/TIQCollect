@@ -1,6 +1,82 @@
 # fixtures/
 
-## `fieldops-demo.dump` — the demo book
+## `fieldops-demo-v2.dump` — the v2 demo book (what the entrypoint restores)
+
+*(Added 2026-09-28, task B15. Until then this README described only the v1
+dump below, which is now the transform's INPUT, not what a box boots from.)*
+
+A `pg_dump -Fc` of an empty v2 database (alembic `v2_0006`) filled by
+`scripts/migrate_v1_to_v2.py` from the v1 book below, under the final demo
+roster (docs/DATA-MODEL-V2.md Appendix C). `docker-entrypoint.sh` restores it,
+in one transaction, into an EMPTY database, then applies migrations newer than
+it and re-applies the database-level `search_path` / `timezone`.
+
+| | |
+|---|---|
+| Built | 2026-09-28 from `fieldops-demo.dump` (v1, `a1c3e5f7b9d2`), `pg_dump 17` against Postgres 16 |
+| Lender | **Girivan Finance Ltd** (demo, `is_demo = true`), zone North → region NCR → Haryana / Delhi / Uttar Pradesh → Gurugram / Delhi / Noida, one branch per v1 branch code |
+| Agency | **Aravalli Field Services Pvt. Ltd.** (demo), one ACTIVE contract `GFL/AGY/2025/0017` with Appendix C.3's commission slab, every product × bucket authorised, region NCR. Every v1 row belongs to it |
+| People | 24 users: 3 Girivan bank users (BANK_ADMIN / ANALYST / TECHOPS), Meera Khanna (Aravalli's Operations Head, AGENCY_ADMIN; v1's "System Admin"), Vikram Malhotra and Sunita Kapoor (AGENCY_MANAGER; v1 `manager1` / `manager2`), 18 field agents with their v1 names |
+| Book | 1,378 customers · 1,478 loans · 1,371 placements · 1,698 cases · 142 allocation runs / 78,809 decisions · 34,241 model predictions · 4,489 repayment snapshots · 3,069 beats · 2,400 visits · 1,036 payments · 663 PTPs · 1,089 call logs · 35 fraud reviews · 57 agent locations · 1,070 audit rows |
+| Passwords | **none usable.** Every hash is `core.security.disabled_password_hash()`; the master login below sets the three demo accounts' at boot |
+| Size / sha256 | 15.7 MB · `3c1929a75e405c81…` (first 16; `sha256sum` to verify) |
+| Not in it | the other eight Girivan agencies, Kumaon Finance and Almora (the generator, B16-B18); beat_stops, attendance, case_assignments, escalations, bank_actions, loan_dpd_history, loan_instalments (empty, as on a fresh install); device bindings (agents bind again on first login) |
+
+**Everything in it is fictional.** Names, companies, numbers and addresses are
+invented for the prototype; outbound SMS, WhatsApp and calls are suppressed for
+demo tenants, so no invented number is ever contacted.
+
+### The demo master login (v2)
+
+One password, three accounts: one bank user, one agency manager, one field
+agent (the owner's decision; `scripts/apply_demo_logins.py` checks the roles).
+
+```
+DEMO_MASTER_ACCOUNTS=ananya.iyer@girivanfinance.test,vikram.malhotra@aravallifs.test,piyush.sharma@aravallifs.test
+DEMO_MASTER_PASSWORD=          # ask the team; at least 16 characters; never in a committed file
+DEMO_MODE=true
+```
+
+| Role | Account | First screen |
+|---|---|---|
+| BANK_ADMIN | `ananya.iyer@girivanfinance.test` | the bank portal |
+| AGENCY_MANAGER | `vikram.malhotra@aravallifs.test` | the manager app (15 agents) |
+| FIELD_AGENT | `piyush.sharma@aravallifs.test` | the agent app |
+
+Verified 2026-09-28 by booting an empty database through `docker-entrypoint.sh`:
+restore, baseline snapshot and master login applied, the three accounts log in
+through `/auth/login` (200) and load `/auth/me`, `/manager/agents` (15) and
+`/agent/home-summary`; a non-master account is refused (401).
+`DEMO_EMAIL_DOMAINS` defaults to `girivanfinance.test,aravallifs.test` and the
+fixture's user count (24) is the cap for `DEMO_MASTER_DISABLE_OTHERS`.
+
+### Rebuilding it
+
+```bash
+# 1. the v1 source, into a scratch database (never the live `fieldops`)
+createdb fieldops_v1src && pg_restore --no-owner --no-acl -d fieldops_v1src backend/fixtures/fieldops-demo.dump
+# 2. an empty v2 target at head
+createdb fieldops_v2fix && DATABASE_URL=…/fieldops_v2fix alembic upgrade head
+# 3. the transform (aborts, writing nothing, on any value it cannot convert exactly)
+V1_DATABASE_URL=…/fieldops_v1src DATABASE_URL=…/fieldops_v2fix python -m scripts.migrate_v1_to_v2
+# 4. the dump
+pg_dump -d fieldops_v2fix -Fc --no-owner --no-acl -f backend/fixtures/fieldops-demo-v2.dump
+```
+
+(With `pg_restore` 17 against a 16 server, pipe `pg_restore -f -` through
+`sed '/^SET transaction_timeout/d'` into `psql`, as the entrypoint does.) Then
+update the table above and commit.
+
+---
+
+## `fieldops-demo.dump` — the v1 book (the transform's input)
+
+*(Everything below describes the v1 dump. It is kept as the input to
+`scripts/migrate_v1_to_v2.py`; the entrypoint REFUSES to restore it, because it
+is not a v2 dump. Its logins and the `@tiqcollect.in` accounts do not exist in
+the v2 book.)*
+
+### Provenance
 
 A `pg_dump -Fc` of the field-ops database as it stood on the development box,
 committed so that a fresh clone comes up with the book the demo actually shows

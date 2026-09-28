@@ -1,10 +1,12 @@
 from typing import Literal, Optional
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, Field
+
+from app.core.emails import AccountEmail
 
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    email: AccountEmail          # `.test` demo domains allowed (core/emails.py)
     password: str = Field(min_length=8, max_length=128)
     device_id: str = Field(min_length=8, max_length=128, description="Client-generated device identifier")
     # 2026-09-28 (A08, d4): required once the user has enrolled in TOTP.
