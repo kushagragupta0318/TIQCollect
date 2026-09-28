@@ -19,13 +19,22 @@
 #     re-bind is recorded instead of refused. The manager's "reset device
 #     binding" action (G01) unbinds.
 #   - Tokens carry bank_id / agency_id (the request context, A02) and sid.
+# 2026-09-28 (P1 A07 / A08 / A16, d4 — a shared-file edit announced to 43).
+#   login() takes an optional totp_code and gains three branches after the
+#   password and active checks, before any session: an enrolled user's code
+#   (MFA_REQUIRED / MFA_INVALID, the latter counted toward the lockout), then
+#   must_change_password (a FIRST_LOGIN ticket instead of a session), then the
+#   BANK_MFA_REQUIRED enrollment ticket. revoke_user_sessions writes one
+#   SESSION_REVOKED row per call. Frozen signatures are unchanged.
 # ───────────────────────────────────────────────────────────────────────────
 from datetime import datetime, timedelta, timezone
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from fastapi import HTTPException, status, Request
 
+from app.core.audit import stage_audit
 from app.core.config import settings
+from app.core.errors import AppException, ErrorCode
 from app.models.agent import Agent, AgentDevice
 from app.models.identity import UserSession
 from app.models.user import User, UserRole
@@ -42,6 +51,11 @@ import uuid
 
 MAX_FAILED_ATTEMPTS = 5
 LOCKOUT_MINUTES = 15
+# 2026-09-28 (P1, d4; coordinator LOW): one refusal for every route that will
+# not hand out a session because the account owes a step only /auth/login
+# can take (a second factor, a forced change) — quick-login and refresh alike,
+# so neither says which step.
+SIGN_IN_REQUIRED_MESSAGE = "Sign in with your password to continue."
 
 
 def _utc(dt: datetime | None) -> datetime | None:
@@ -119,8 +133,17 @@ def revoke_user_sessions(db: Session, user_id: str, reason: str, *, by: str | No
     q = db.query(UserSession).filter(UserSession.user_id == user_id, UserSession.revoked_at.is_(None))
     if except_sid:
         q = q.filter(UserSession.id != except_sid)
-    return q.update({UserSession.revoked_at: datetime.now(timezone.utc), UserSession.revoked_reason: reason,
-                     UserSession.revoked_by: by}, synchronize_session=False)
+    count = q.update({UserSession.revoked_at: datetime.now(timezone.utc), UserSession.revoked_reason: reason,
+                      UserSession.revoked_by: by}, synchronize_session=False)
+    if count:
+        # 2026-09-28 (A16, d4) — ONE SESSION_REVOKED row per call, however
+        # many sessions it ended (43's ask: a mass revoke is one row). Added to
+        # the caller's transaction rather than through write_audit, which
+        # commits on its own: this function's contract is "caller commits",
+        # and the row must land exactly when the revocation does.
+        stage_audit(db, action=AuditAction.SESSION_REVOKED, user_id=by or user_id, entity_type="User",
+                    entity_id=user_id, details={"reason": reason, "count": count, "kept_sid": except_sid})
+    return count
 
 
 def _new_device_secret() -> tuple[str, str]:
@@ -173,9 +196,12 @@ def _enforce_device_binding(db: Session, user: User, device_id: str, request: Re
         bound.unbound_at = now
         bound.unbind_reason = "DEMO_DEVICE_REBIND re-bind on login from a new device"
         db.flush()
-        _log(db, AuditAction.DEVICE_MISMATCH, user.id, request, success=True,
-             details={"rebound": True, "demo_device_rebind": True, "previous_device_id": bound.id,
-                      "reason": reason})
+        # Staged, not committed: it lands with the new binding and the session, or not at all.
+        stage_audit(db, action=AuditAction.DEVICE_MISMATCH, user_id=user.id, entity_type="User",
+                    entity_id=user.id, ip_address=_client_ip(request),
+                    user_agent=request.headers.get("user-agent"),
+                    details={"rebound": True, "demo_device_rebind": True, "previous_device_id": bound.id,
+                             "reason": reason})
     device = (db.query(AgentDevice)
               .filter(AgentDevice.agent_id == agent.id, AgentDevice.device_fingerprint == fp).first())
     if device is None:
@@ -201,7 +227,7 @@ def _login_response(user: User, tokens: dict) -> dict:
 
 
 def login(db: Session, email: str, password: str, device_id: str, request: Request, *,
-          device_secret: str | None = None) -> dict:
+          totp_code: str | None = None, device_secret: str | None = None) -> dict:
     user: User | None = db.query(User).filter(User.email == email).first()
 
     if not user:
@@ -224,6 +250,44 @@ def login(db: Session, email: str, password: str, device_id: str, request: Reque
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account deactivated")
 
+    # 2026-09-28 (A08, A07; d4) — after the password, before any session.
+    # The second factor comes FIRST: a stolen password alone must not reach
+    # the forced-change ticket below, or it could take over an MFA account.
+    # MFA_REQUIRED is only reachable with the right password, so it does
+    # confirm the password to whoever holds it — standard for TOTP, and this
+    # is the same route, under the same AUTH_LIMIT, as every other attempt.
+    from app.services import mfa_service, password_service
+    verdict = mfa_service.check_login_code(db, user, totp_code)
+    if verdict != "ok":
+        if verdict == "invalid":
+            user.failed_login_attempts += 1
+            if user.failed_login_attempts >= MAX_FAILED_ATTEMPTS:
+                user.locked_until = datetime.now(timezone.utc) + timedelta(minutes=LOCKOUT_MINUTES)
+            db.commit()
+            _log(db, AuditAction.MFA_FAILED, user.id, request, success=False, failure_reason="Wrong TOTP code")
+            raise AppException(401, ErrorCode.MFA_INVALID, "That code is not right.")
+        raise AppException(401, ErrorCode.MFA_REQUIRED, "Enter the 6-digit code from your authenticator app.")
+    if user.must_change_password:
+        # No session: a single-use ticket to set a new password (FIRST_LOGIN).
+        return password_service.first_login_ticket(db, user, request)
+    gate = mfa_service.enrollment_gate(db, user)
+    if gate is not None:
+        return gate
+    return complete_login(db, user, device_id, request, device_secret=device_secret)
+
+
+def complete_login(db: Session, user: User, device_id: str, request: Request, *,
+                   method: str | None = None, device_secret: str | None = None) -> dict:
+    """Everything after the gates, for EVERY route that ends in a session:
+    device binding, the lockout reset, the session, the LOGIN row, one commit.
+
+    2026-09-28 (P1, d4; coordinator's audit MED) — invite acceptance and the
+    MFA enrollment confirm called open_session directly, so they skipped
+    device binding and wrote no LOGIN row. They come through here now, as
+    /auth/login does; `method` names the route in the LOGIN row. Commits.
+    Any staged rows of the caller (an invite accepted, a user created) land
+    in this same commit. A09b: a new binding's secret is returned once, as
+    `device_secret`, and its DEVICE_BOUND row commits with the LOGIN row."""
     bound_now = _enforce_device_binding(db, user, device_id, request, device_secret)
 
     # Reset failed attempts
@@ -232,6 +296,14 @@ def login(db: Session, email: str, password: str, device_id: str, request: Reque
     user.last_login_at = datetime.now(timezone.utc)
 
     tokens = _open_session(db, user, device_id, request)
+    stage_audit(db, action=AuditAction.LOGIN, user_id=user.id, entity_type="User", entity_id=user.id,
+                ip_address=_client_ip(request), user_agent=request.headers.get("user-agent"),
+                details={"method": method} if method else None)
+    if bound_now:
+        # Same commit as the session: a bind that loses the race below is never recorded as made.
+        stage_audit(db, action=AuditAction.DEVICE_BOUND, user_id=user.id, entity_type="AgentDevice",
+                    entity_id=bound_now[1], ip_address=_client_ip(request),
+                    user_agent=request.headers.get("user-agent"), details={"agent_device_id": bound_now[1]})
     try:
         db.commit()
     except IntegrityError:
@@ -244,12 +316,6 @@ def login(db: Session, email: str, password: str, device_id: str, request: Reque
              failure_reason="Concurrent first login from another device")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                             detail="Device not authorized. Contact your manager.")
-
-    if bound_now:
-        # After the commit, so a bind that lost the race is never recorded as made.
-        _log(db, AuditAction.DEVICE_BOUND, user.id, request, entity_id=bound_now[1],
-             details={"agent_device_id": bound_now[1]})
-    _log(db, AuditAction.LOGIN, user.id, request)
     response = _login_response(user, tokens)
     if bound_now:
         response["device_secret"] = bound_now[0]   # once; the app stores it
@@ -295,6 +361,16 @@ def quick_login(db: Session, token: str, request: Request) -> dict:
         _log(db, AuditAction.LOGIN_FAILED, user.id, request, success=False,
              failure_reason="Quick-login refused for a field agent")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Field agents sign in on their own device")
+    # 2026-09-28 (A07/A08, d4; 43's review HIGH) — a link proves nothing but
+    # possession of the link. An account that owes a second factor (enrolled,
+    # or BANK_MFA_REQUIRED) or a forced password change signs in through
+    # /auth/login only. Refused BEFORE the jti is recorded, so the link is not
+    # burned; one message for all three, so it says nothing about which.
+    from app.services import mfa_service
+    if user.must_change_password or mfa_service.second_step_owed(user):
+        _log(db, AuditAction.LOGIN_FAILED, user.id, request, success=False,
+             failure_reason="Quick-login refused: account needs password sign-in")
+        raise AppException(403, ErrorCode.SIGN_IN_REQUIRED, SIGN_IN_REQUIRED_MESSAGE)
 
     exp = payload.get("exp")
     db.add(UsedQuickLoginToken(
@@ -344,6 +420,16 @@ def refresh_tokens(db: Session, refresh_token: str, request: Request) -> dict:
     now = datetime.now(timezone.utc)
     if session.user_id != user.id or session.revoked_at is not None or _utc(session.expires_at) <= now:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired")
+    # 2026-09-28 (A07/A08, d4; coordinator) — a refresh must not outlive a
+    # step the account now owes: a forced password change set after this
+    # session opened, or a second factor BANK_MFA_REQUIRED now demands. The
+    # session is not revoked (the person may be at the keyboard); it simply
+    # cannot be extended, so the next token needs /auth/login.
+    from app.services import mfa_service
+    if user.must_change_password or (mfa_service.required_for(user) and not user.totp_enabled):
+        _log(db, AuditAction.TOKEN_REFRESH, user.id, request, entity_id=session.id, success=False,
+             failure_reason="Refresh refused: account needs password sign-in")
+        raise AppException(401, ErrorCode.SIGN_IN_REQUIRED, SIGN_IN_REQUIRED_MESSAGE)
 
     device_id = session.device_id
     new_access = create_access_token(user.id, user.role.value, device_id, sid=session.id,

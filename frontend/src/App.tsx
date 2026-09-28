@@ -14,6 +14,12 @@ import { AGENT_ROLES, MANAGER_ROLES, homeFor } from "@/lib/roles";
 const LandingPage = lazy(() => import("@/pages/LandingPage"));
 const LoginPage = lazy(() => import("@/pages/auth/LoginPage"));
 const QuickLoginPage = lazy(() => import("@/pages/auth/QuickLoginPage")); // link minted by scripts/generate_quick_login_link.py
+// 2026-09-28 (P1 A11, d4): invitations, password reset, two-factor, account security.
+const SetPasswordPage = lazy(() => import("@/pages/auth/SetPasswordPage"));
+const ResetPasswordPage = lazy(() => import("@/pages/auth/ResetPasswordPage"));
+const ForgotPasswordPage = lazy(() => import("@/pages/auth/ForgotPasswordPage"));
+const MfaSetupPage = lazy(() => import("@/pages/auth/MfaSetupPage"));
+const AccountSecurityPage = lazy(() => import("@/pages/auth/AccountSecurityPage"));
 
 const AgentHomePage = lazy(() => import("@/pages/agent/AgentHomePage"));
 const AgentCasesPage = lazy(() => import("@/pages/agent/AgentCasesPage"));
@@ -103,6 +109,13 @@ export default function App() {
             <Route path="/login" element={<LoginPage />} />
             {/* Single-use link token → real session (core/security.py). */}
             <Route path="/quick-login" element={<QuickLoginPage />} />
+            {/* A11: public credential pages; tokens arrive in state or ?token= and never stay in the URL. */}
+            <Route path="/set-password" element={<SetPasswordPage />} />
+            <Route path="/reset-password" element={<ResetPasswordPage />} />
+            <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+            <Route path="/mfa-setup" element={<MfaSetupPage />} />
+            {/* Any signed-in role, bank roles included; the page sends a signed-out visitor to /login. */}
+            <Route path="/account/security" element={<AccountSecurityPage />} />
             {/* /manager-bridge was here until 2026-09-24 (A10): a public route that
                 logged ANY visitor in as manager1 with a password compiled into the
                 bundle. Removed with public/collection_dashboard/, its only caller. */}
