@@ -217,6 +217,16 @@ else
     echo "[entrypoint] fixture restored — applying migrations newer than it"
     alembic upgrade head
     echo "[entrypoint] restore complete"
+    # 2026-09-28 (B16, d4) — the agencies' specimen documents live in MinIO,
+    # which a pg_dump does not carry. Re-created from the roster (the bytes
+    # are deterministic, so each sha256 matches its tenancy.agency_documents
+    # row) and uploaded where missing. Never fatal: MinIO being late costs a
+    # document preview, not the boot.
+    if python -m scripts.ensure_demo_documents; then
+      echo "[entrypoint] demo agency documents present in object storage"
+    else
+      echo "[entrypoint] demo agency documents not uploaded (fine unless you open one; rerun scripts.ensure_demo_documents)"
+    fi
   else
     # No fixture: build the v2 schema, then seed. (Until B16 replaces it,
     # scripts.seed_data is the v1 seed and refuses to run without

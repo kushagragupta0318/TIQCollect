@@ -55,86 +55,32 @@ from app.core.security import disabled_password_hash
 from app.models.lookups import LOOKUP_MODELS, LOOKUP_SEEDS
 from app.models.loan import DPDBucket, LoanType
 
-NAMESPACE_TIQ_V2 = uuid.UUID("5f0c1b8e-2f3a-4d7e-9b61-0a4f7c2e9d11")
-
-
-def new_id(kind: str, key: str) -> str:
-    """Deterministic id for a row v1 did not have (§9.2): two runs agree."""
-    return str(uuid.uuid5(NAMESPACE_TIQ_V2, f"{kind}:{key}"))
+# ── The roster (Appendix C) ─────────────────────────────────────────────────
+# 2026-09-28 (B16, d4): every roster constant moved VERBATIM to
+# app/demo/roster.py, the one roster file (owner: all names in one place).
+# Same keys, same uuid5 namespace, so every id this transform writes is
+# unchanged (tests/test_demo_roster.py pins them). Only the v1 mapping stays.
+from app.demo import roster
+from app.demo.roster import (  # noqa: E402,F401 — re-exported for the tests and callers
+    AGENCY, AGENCY_DOMAIN, BANK, BANK_DOMAIN, BANK_USERS, COMMISSION, CONTRACT, MASTER_ACCOUNTS,
+    NAMESPACE_TIQ_V2, REGIONS, V1_STAFF, new_id,
+)
 
 
 class TransformError(Exception):
     pass
 
 
-# ── The roster (Appendix C) ─────────────────────────────────────────────────
 V1_BANK_NAMES = {"ABC Bank"}            # the only lender v1 knows; anything else aborts
 V1_AGENCY_CODES = {"AGENCY-TIQ-001"}    # the only agency v1 knows; anything else aborts
-BANK = dict(id=new_id("bank", "GIRIVAN"), code="GIRIVAN", legal_name="Girivan Finance Ltd",
-            display_name="Girivan Finance", timezone="Asia/Kolkata", status="ACTIVE", is_demo=True,
-            brand={"upi_payee_name": "Girivan Finance Ltd", "sms_sender_id": "GIRIVN"})
-AGENCY = dict(id=new_id("agency", "ARAVALLI"), bank_id=BANK["id"], code="AGY-ARAVALLI",
-              legal_name="Aravalli Field Services Pvt. Ltd.", trade_name="Aravalli Field Services",
-              entity_type="PVT_LTD", cin="U74999HR2019PTC082417", pan="AAECA4172K", gstin="06AAECA4172K1Z3",
-              registered_address={"line1": "Plot 88, Udyog Vihar Phase IV", "city": "Gurugram",
-                                  "state": "Haryana", "pincode": "122015"},
-              hq_city="Gurugram", website="https://aravallifs.test",
-              contacts=[{"role": "Director", "name": "Rajiv Bhandari", "phone": "+919810460211",
-                         "email": "rajiv.bhandari@aravallifs.test"},
-                        {"role": "Operations Head", "name": "Meera Khanna", "phone": "+919810460212",
-                         "email": "meera.khanna@aravallifs.test"},
-                        {"role": "Compliance Officer", "name": "Tarun Sethi", "phone": "+919810460213",
-                         "email": "tarun.sethi@aravallifs.test"}],
-              contact_name="Meera Khanna", contact_email="meera.khanna@aravallifs.test",
-              contact_phone="9810460212", status="ACTIVE",
-              activated_at=datetime(2025, 11, 3, 4, 30, tzinfo=timezone.utc), is_demo=True)
-AGENCY_DOMAIN = "aravallifs.test"
-BANK_DOMAIN = "girivanfinance.test"
-BANK_USERS = [  # Appendix C.5
-    ("ananya.iyer", "Ananya Iyer", "BANK_ADMIN", "9820031101"),
-    ("rohan.mehta", "Rohan Mehta", "BANK_ANALYST", "9820031102"),
-    ("farah.siddiqui", "Farah Siddiqui", "BANK_TECHOPS", "9820031103"),
-]
-# v1's non-agent users. Deviation from Appendix C.5, announced to the
-# coordinator: manager1 (Vikram Malhotra, 15 agents) stays AGENCY_MANAGER —
-# the owner's master login needs an agency MANAGER and his is the showcase
-# team — and v1's "System Admin" becomes Aravalli's Operations Head, the
-# agency's AGENCY_ADMIN (C.3's pattern), rather than Vikram.
-V1_STAFF = {
-    "admin@tiqcollect.in": ("meera.khanna", "Meera Khanna", "AGENCY_ADMIN"),
-    "manager1@tiqcollect.in": ("vikram.malhotra", "Vikram Malhotra", "AGENCY_MANAGER"),
-    "manager2@tiqcollect.in": ("sunita.kapoor", "Sunita Kapoor", "AGENCY_MANAGER"),
-}
-MASTER_ACCOUNTS = (f"ananya.iyer@{BANK_DOMAIN}", f"vikram.malhotra@{AGENCY_DOMAIN}",
-                   f"piyush.sharma@{AGENCY_DOMAIN}")
-CONTRACT = dict(id=new_id("contract", "ARAVALLI-2025"), bank_id=BANK["id"], agency_id=AGENCY["id"],
-                contract_no="GFL/AGY/2025/0017", start_date=date(2025, 11, 3), end_date=date(2027, 11, 2),
-                status="ACTIVE", max_placed_cases=2500, max_agents=25, sla_first_visit_days=5,
-                recall_no_activity_days=75, recall_on_sla_breach=False, recall_at_contract_end=True,
-                performance_bonus_pct=Decimal("1.000"), performance_target_pct=Decimal("85.000"),
-                security_deposit=Decimal("1500000.00"))
-# Appendix C.3's Aravalli slab, by bucket.
-COMMISSION = {"CURRENT": "3.500", "BUCKET_1": "3.500", "BUCKET_2": "6.000", "BUCKET_3": "9.000", "NPA": "13.000"}
-# Zone North → region NCR → states → cities (design §9.2 step 1).
-REGIONS = [
-    ("ZONE", "NORTH", "North", None, None, None),
-    ("REGION", "NCR", "National Capital Region", "NORTH", 28.61, 77.21),
-    ("STATE", "HR", "Haryana", "NCR", 29.06, 76.09),
-    ("STATE", "DL", "Delhi", "NCR", 28.70, 77.10),
-    ("STATE", "UP", "Uttar Pradesh", "NCR", 26.85, 80.95),
-    ("CITY", "GURUGRAM", "Gurugram", "HR", 28.46, 77.03),
-    ("CITY", "DELHI", "Delhi", "DL", 28.64, 77.22),
-    ("CITY", "NOIDA", "Noida", "UP", 28.54, 77.39),
-]
 
 
 def email_for(full_name: str, domain: str) -> str:
-    """<first>.<last>@domain (Appendix C.5), lower case ASCII."""
-    parts = [p for p in full_name.strip().lower().replace(".", " ").split() if p.isalpha()]
-    if not parts:
-        raise TransformError(f"cannot derive an email from {full_name!r}")
-    local = parts[0] if len(parts) == 1 else f"{parts[0]}.{parts[-1]}"
-    return f"{local}@{domain}"
+    """The roster's rule (roster.email_for); an underivable name aborts the transform."""
+    try:
+        return roster.email_for(full_name, domain)
+    except roster.RosterError as exc:
+        raise TransformError(str(exc)) from exc
 
 
 # ── Value conversion (design §9.4) ──────────────────────────────────────────

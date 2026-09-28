@@ -29,6 +29,7 @@ ALLOWED = {
     # v2 (standalone-p1, 2026-09-28): two more DIFFERENT things spelled the same.
     "models/case.py": "ClosureReason.DECEASED, why a case stopped being worked",
     "models/lookups.py": "the DECEASED bank_action_types lookup row (a bank's feed action)",
+    "demo/books.py": "SIM_EVENT_DECEASED, the simulator's death EVENT name (the tag is the constant)",
 }
 
 

@@ -40,6 +40,11 @@
 #       `bank_name="HDFC"` (a real bank's name, on a synthetic book).
 #     - DATE columns get dates, not `strftime` strings (Postgres would coerce
 #       them and SQLite refuses them, so the harness and production diverged).
+# 2026-09-28 (B16, d4) — the rewind's arithmetic is lifted into three pure
+#   functions (payment_status_at, ptp_status_at, loan_state_at) so the demo
+#   generator (app/demo/books.py) derives a book's state at its anchor date
+#   with the SAME definition rather than a second copy. rewind_to calls them;
+#   what it writes is unchanged (the Phase 3 equality harness is the proof).
 # ───────────────────────────────────────────────────────────────────────────
 """Load a `Ledger` into the production schema and rewind it to a past date.
 
@@ -118,6 +123,53 @@ _ID_NS = uuid.UUID("5b3f0c2e-8d4a-4e61-9f7b-2a6c1d0e9b44")
 #: The synthetic world's own tenant. is_demo: nothing here is ever contacted.
 SIM_BANK_CODE = "LEDGER-SIM"
 SIM_AGENCY_CODE = "LEDGER-SIM-AGENCY"
+
+
+def payment_status_at(pays: pd.DataFrame, day: int) -> np.ndarray:
+    """Each payment's status at the START of `day`: its final status once the
+    change took effect strictly before `day`, its initial status until then."""
+    return np.where(pays.status_effective_day < day, pays.final_status, pays.initial_status)
+
+
+def ptp_status_at(ptps: pd.DataFrame, day: int) -> list:
+    """Each promise's status at the start of `day` (PTP_STATUS values)."""
+    out = []
+    for t in ptps.itertuples():
+        resolved = t.resolved_day is not None and 0 <= t.resolved_day < day
+        out.append(PTP_STATUS[t.resolved_status] if resolved else PTPStatus.ACTIVE)
+    return out
+
+
+def loan_state_at(led: Ledger, cfg: LedgerConfig, day: int, keep) -> pd.DataFrame:
+    """The overwritten-in-place loan columns as they stood at the start of
+    `day`, derived from the schedule and the payment ledger (billing.py).
+
+    Indexed by ledger loan id; columns dpd, overdue, penal, principal, total,
+    last_payment_day (NaN when nothing was paid). Rounding to paise is the
+    writer's, as NUMERIC(14,2) does on Postgres."""
+    loans = led.loans[led.loans.loan_id.isin(keep)].set_index("loan_id")
+    pays = led.payments[led.payments.loan_id.isin(keep)]
+    status_now = payment_status_at(pays, day)
+    verified = pays[(pays.payment_day < day) & (status_now == "VERIFIED")]
+    paid = (loans.opening_paid.astype(float)
+            + verified.groupby("loan_id").amount.sum()
+            .reindex(loans.index).fillna(0.0))
+    sched = billing.Schedule(loans.first_due_day.to_numpy(),
+                             loans.emi_amount.to_numpy(dtype=float),
+                             loans.tenure_months.to_numpy(), cfg.cycle_days)
+    dpd = billing.dpd_at(day, sched, paid.to_numpy(), cfg.grace_days)
+    overdue = billing.overdue_at(day, sched, paid.to_numpy())
+    penal = billing.penal_at(overdue, dpd, cfg.penal_rate_monthly, cfg.cycle_days)
+    settled = billing.settled_count(paid.to_numpy(),
+                                    loans.emi_amount.to_numpy(dtype=float),
+                                    sched.billed_count(day))
+    principal = np.maximum(
+        loans.sanction_amount.to_numpy() *
+        (1 - settled / np.maximum(loans.tenure_months.to_numpy(), 1)), 0.0)
+    last_pay = verified.groupby("loan_id").payment_day.max().reindex(loans.index)
+    return pd.DataFrame({"dpd": dpd, "overdue": overdue, "penal": penal, "principal": principal,
+                         "total": principal + overdue + penal, "last_payment_day": last_pay.to_numpy()},
+                        index=loans.index)
 
 
 class Materialiser:
@@ -368,8 +420,7 @@ class Materialiser:
 
         # ── payment status as at `day` ──────────────────────────────────────
         pays = led.payments[led.payments.loan_id.isin(keep)]
-        status_now = np.where(pays.status_effective_day < day,
-                              pays.final_status, pays.initial_status)
+        status_now = payment_status_at(pays, day)
         for pid, st in zip(pays.payment_id, status_now):
             db.query(Payment).filter(Payment.id == self.db_id("payment", pid)).update(
                 {"status": PAYMENT_STATUS[st]}, synchronize_session=False)
@@ -377,32 +428,15 @@ class Materialiser:
         # ── PTP status as at `day` ──────────────────────────────────────────
         ptps = product_promises(led.ptps)
         ptps = ptps[ptps.loan_id.isin(keep)]
-        for t in ptps.itertuples():
-            resolved = t.resolved_day is not None and 0 <= t.resolved_day < day
-            st = PTP_STATUS[t.resolved_status] if resolved else PTPStatus.ACTIVE
+        for t, st in zip(ptps.itertuples(), ptp_status_at(ptps, day)):
             db.query(PTP).filter(PTP.id == self.db_id("ptp", t.ptp_id)).update(
                 {"status": st}, synchronize_session=False)
 
         # ── loan state as at `day` ──────────────────────────────────────────
         loans = led.loans[led.loans.loan_id.isin(keep)].set_index("loan_id")
-        verified = pays[(pays.payment_day < day) & (status_now == "VERIFIED")]
-        paid = (loans.opening_paid.astype(float)
-                + verified.groupby("loan_id").amount.sum()
-                .reindex(loans.index).fillna(0.0))
-        sched = billing.Schedule(loans.first_due_day.to_numpy(),
-                                 loans.emi_amount.to_numpy(dtype=float),
-                                 loans.tenure_months.to_numpy(), cfg.cycle_days)
-        dpd = billing.dpd_at(day, sched, paid.to_numpy(), cfg.grace_days)
-        overdue = billing.overdue_at(day, sched, paid.to_numpy())
-        penal = billing.penal_at(overdue, dpd, cfg.penal_rate_monthly, cfg.cycle_days)
-        settled = billing.settled_count(paid.to_numpy(),
-                                        loans.emi_amount.to_numpy(dtype=float),
-                                        sched.billed_count(day))
-        principal = np.maximum(
-            loans.sanction_amount.to_numpy() *
-            (1 - settled / np.maximum(loans.tenure_months.to_numpy(), 1)), 0.0)
-
-        last_pay = verified.groupby("loan_id").payment_day.max().reindex(loans.index)
+        state = loan_state_at(led, cfg, day, keep)
+        dpd, overdue, penal = state.dpd.to_numpy(), state.overdue.to_numpy(), state.penal.to_numpy()
+        principal, last_pay = state.principal.to_numpy(), state.last_payment_day
         for i, lid in enumerate(loans.index):
             lp = last_pay.iloc[i]
             db.query(Loan).filter(Loan.id == self.loan(lid)).update({
