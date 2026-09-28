@@ -15,6 +15,13 @@ concurrency:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    # For tests/test_rate_limit_redis.py (two limiter instances, one Redis).
+    services:
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 5s --health-retries 12
     defaults:
       run:
         working-directory: backend
@@ -34,6 +41,8 @@ jobs:
       # No env block needed: tests/conftest.py supplies the required settings,
       # ignores any backend/.env and blocks network access.
       - name: Test
+        env:
+          TIQ_REDIS_TEST_URL: redis://localhost:6379/15
         run: python -m pytest -q -p no:cacheprovider
 
   # 2026-09-28 (B19): what SQLite cannot show — the Alembic chain round trip and

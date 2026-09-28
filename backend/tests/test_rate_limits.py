@@ -125,7 +125,9 @@ def test_an_unreachable_redis_still_limits_and_never_500s():
     from slowapi import _rate_limit_exceeded_handler
     from slowapi.errors import RateLimitExceeded
 
-    from app.core.ratelimit import AUTH_LIMIT, build_limiter
+    from structlog.testing import capture_logs
+
+    from app.core.ratelimit import AUTH_LIMIT, build_limiter, storage_state
 
     dead = build_limiter("redis://127.0.0.1:1/0")      # loopback, nothing listening
     mini = FastAPI()
@@ -137,7 +139,25 @@ def test_an_unreachable_redis_still_limits_and_never_500s():
     def login(request: Request):
         return {"ok": True}
 
-    with TestClient(mini) as c:
+    with TestClient(mini) as c, capture_logs() as logs:
         codes = [c.post("/login").status_code for _ in range(LIMIT + 2)]
     assert codes[:LIMIT] == [200] * LIMIT, codes
     assert codes[LIMIT:] == [429, 429]
+    # The switch is logged at ERROR once, not once per request.
+    events = [e for e in logs if e["event"] == "ratelimit.storage_unreachable"]
+    assert len(events) == 1 and events[0]["log_level"] == "error"
+    assert storage_state(dead) == "memory-fallback"
+
+
+def test_recovery_is_logged_as_a_warning():
+    import logging
+
+    from structlog.testing import capture_logs
+    with capture_logs() as logs:
+        logging.getLogger("slowapi").info("Rate limit storage recovered")
+    assert [(e["event"], e["log_level"]) for e in logs] == [("ratelimit.storage_recovered", "warning")]
+
+
+def test_ready_reports_where_the_limiter_counts(client):
+    body = client.get("/api/v1/ready").json()
+    assert body["rate_limit_storage"] == "memory"          # conftest: memory://

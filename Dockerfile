@@ -49,6 +49,7 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 USER app
 EXPOSE 8300
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-# WEB_CONCURRENCY: uvicorn workers. The rate limiter counts in Redis (REDIS_URL),
-# so every worker shares one limit.
+# WEB_CONCURRENCY: uvicorn workers, default 1; the deployment decides. Since
+# RESTRUCTURE-PLAN 1.8 the rate limiter counts in Redis, so more than one is safe
+# while REDIS_URL is reachable (/ready reports rate_limit_storage).
 CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port 8300 --workers ${WEB_CONCURRENCY:-1}"]

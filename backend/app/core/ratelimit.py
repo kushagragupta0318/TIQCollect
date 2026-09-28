@@ -26,10 +26,15 @@ to be discovered a second time.
 """
 from __future__ import annotations
 
+import logging
+
+import structlog
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from app.core.config import settings
+
+logger = structlog.get_logger()
 
 
 def storage_uri() -> str:
@@ -51,6 +56,32 @@ def build_limiter(uri: str) -> Limiter:
         in_memory_fallback_enabled=True,
     )
 
+
+def storage_state(lim: Limiter) -> str:
+    """'redis', 'memory' (configured so) or 'memory-fallback' (Redis is down).
+    `_storage_dead` is slowapi 0.1.9's own flag (pinned in requirements.txt)."""
+    if (lim._storage_uri or "").startswith("memory://"):
+        return "memory"
+    return "memory-fallback" if getattr(lim, "_storage_dead", False) else "redis"
+
+
+class _StorageTransitions(logging.Handler):
+    """slowapi logs each switch exactly once (to memory on the first failure, back
+    on recovery), quietly. Re-log both where alerts look; never per request."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        msg = record.getMessage()
+        if msg.startswith("Rate limit storage unreachable"):
+            logger.error("ratelimit.storage_unreachable", now="memory-fallback",
+                         effect="limits count per process until Redis returns")
+        elif msg.startswith("Rate limit storage recovered"):
+            logger.warning("ratelimit.storage_recovered", now="redis")
+
+
+_slowapi_log = logging.getLogger("slowapi")
+if not any(isinstance(h, _StorageTransitions) for h in _slowapi_log.handlers):
+    _slowapi_log.addHandler(_StorageTransitions())
+    _slowapi_log.setLevel(logging.INFO)     # the recovery message is INFO
 
 limiter = build_limiter(storage_uri())
 

@@ -66,6 +66,18 @@ def allowed_pg_address(address, target, addresses) -> bool:
 _PG_TARGET = pg_test_target(os.environ.get("TIQ_PG_TEST_URL"))
 _PG_ADDRESSES = resolve_addresses(_PG_TARGET[0]) if _PG_TARGET else frozenset()
 
+# The same rule for the one Redis test server (tests/test_rate_limit_redis.py).
+def redis_test_target(url: str | None) -> tuple[str, int] | None:
+    if not url or "${" in url:
+        return None
+    from urllib.parse import urlsplit
+    u = urlsplit(url)
+    return (u.hostname, u.port or 6379) if u.hostname else None
+
+
+_REDIS_TARGET = redis_test_target(os.environ.get("TIQ_REDIS_TEST_URL"))
+_REDIS_ADDRESSES = resolve_addresses(_REDIS_TARGET[0]) if _REDIS_TARGET else frozenset()
+
 
 def _is_local(address) -> bool:
     if not isinstance(address, tuple) or not address:
@@ -74,6 +86,8 @@ def _is_local(address) -> bool:
     if host in ("localhost", ""):
         return True
     if allowed_pg_address(address, _PG_TARGET, _PG_ADDRESSES):
+        return True
+    if allowed_pg_address(address, _REDIS_TARGET, _REDIS_ADDRESSES):
         return True
     try:
         return ipaddress.ip_address(host).is_loopback
