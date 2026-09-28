@@ -53,6 +53,12 @@ export const DPD_BUCKETS = ["CURRENT", "BUCKET_1", "BUCKET_2", "BUCKET_3", "NPA"
  *  with room to type something else via "OTHER". */
 export const ENTITY_TYPES = ["PVT_LTD", "LLP", "PARTNERSHIP", "PROPRIETORSHIP", "PUBLIC_LTD", "OTHER"] as const;
 
+/** backend/app/models/tenancy.py AGENCY_STATUSES — the directory's status filter. */
+export const AGENCY_STATUSES = ["PENDING", "ACTIVE", "SUSPENDED", "OFFBOARDED"] as const;
+
+/** backend/app/models/tenancy.py CONTRACT_STATUSES. */
+export const CONTRACT_STATUSES = ["DRAFT", "ACTIVE", "EXPIRED", "TERMINATED"] as const;
+
 export interface AgencyContact {
   role?: string;
   name?: string;
@@ -142,6 +148,40 @@ export interface AgencyDetail extends Agency {
   region_ids: string[];
   documents: AgencyDocument[];
   required_doc_types: string[];
+}
+
+/**
+ * GET /bank/agencies-directory row (D05, `agency_service.list_agency_directory`)
+ * — one Agency plus its latest contract, covered regions and authorised
+ * products, joined server-side so the directory table and coverage map need
+ * one call, not one per agency.
+ *
+ * `score` IS DELIBERATELY ABSENT. Agency Performance Index is D06's, reads a
+ * materialised view that does not exist yet — the backend does not null-fill
+ * or fake it, and neither does this type. Render that column as pending.
+ */
+export interface AgencyDirectoryRow extends Agency {
+  contract: AgencyContract | null;
+  covered_regions: {
+    region_id: string;
+    name: string;
+    /** ZONE | REGION | STATE | CITY */
+    level: string;
+    latitude: number | null;
+    longitude: number | null;
+  }[];
+  /** Sorted LoanType values this agency is authorised for, server-side. */
+  authorised_products: string[];
+}
+
+export interface AgencyDirectoryFilters {
+  /** Hierarchy-aware server-side: a ZONE id also matches agencies covering
+   *  anything beneath it (REGION/STATE/CITY) — see list_agency_directory. */
+  region_id?: string;
+  status?: string;
+  loan_type?: string;
+  /** YYYY-MM-DD. */
+  contract_expiring_before?: string;
 }
 
 export interface Region {
@@ -268,6 +308,18 @@ export async function getAgencyDetail(agencyId: string): Promise<AgencyDetail> {
 
 export async function listRegions(): Promise<Region[]> {
   const { data } = await api.get<Region[]>("/bank/regions");
+  return data;
+}
+
+/**
+ * The directory table's source (D05). All filters are optional and
+ * server-side (region_id is hierarchy-aware, see AgencyDirectoryFilters) —
+ * axios drops undefined params, so an unset filter is never sent, matching
+ * the route's "omit entirely to mean no filter" contract. Callers should not
+ * pass an empty string for an unset filter; leave the key out instead.
+ */
+export async function listAgencyDirectory(filters: AgencyDirectoryFilters = {}): Promise<AgencyDirectoryRow[]> {
+  const { data } = await api.get<AgencyDirectoryRow[]>("/bank/agencies-directory", { params: filters });
   return data;
 }
 
