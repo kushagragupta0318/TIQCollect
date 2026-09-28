@@ -15,8 +15,8 @@ import enum
 from datetime import date, datetime
 
 from sqlalchemy import (
-    Boolean, CheckConstraint, Date, DateTime, Enum as SAEnum, ForeignKeyConstraint, Index,
-    SmallInteger, String, UniqueConstraint,
+    BigInteger, Boolean, CheckConstraint, Date, DateTime, Enum as SAEnum, ForeignKeyConstraint, Index,
+    SmallInteger, String, Text, UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -58,7 +58,12 @@ class User(Base, UUIDPrimaryKey, TimestampMixin):
     is_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     password_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    totp_secret: Mapped[str | None] = mapped_column(String(64))
+    # v2_0004 (2026-09-28): TEXT, was String(64) — the secret is stored
+    # Fernet-encrypted (TOTP_ENC_KEY) and a Fernet token is longer than 64.
+    totp_secret: Mapped[str | None] = mapped_column(Text)
+    # The last accepted 30-second TOTP step; replay refused by compare-and-swap.
+    # NULL = no code accepted yet. Never defaulted.
+    totp_last_step: Mapped[int | None] = mapped_column(BigInteger)
     totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     failed_login_attempts: Mapped[int] = mapped_column(SmallInteger, default=0, nullable=False)
