@@ -134,9 +134,22 @@ if [ "${RUN_SEED:-false}" != "true" ]; then
     # again. Now they WAIT for the API to build it (DB_WAIT_SECONDS, default
     # 300), then take the same checks as a v2 start below; still empty after
     # the wait, they refuse and their restart policy tries again.
-    echo "[entrypoint] database ${DB_NAME} is empty; only the API container (RUN_SEED=true) builds it — waiting up to ${DB_WAIT_SECONDS:-300}s"
+    # Validated (audit LOW, 2026-09-28): a non-number — a literal "${VAR}", a
+    # typo — broke `[ -lt ]` and refused at once with "after 0s". Now: not a
+    # plain non-negative integer -> 300 with a warning; capped at 1800.
+    db_wait="${DB_WAIT_SECONDS:-300}"
+    case "$db_wait" in
+      ''|*[!0-9]*)
+        echo "[entrypoint] WARNING: DB_WAIT_SECONDS='${db_wait}' is not a number of seconds — using 300"
+        db_wait=300 ;;
+    esac
+    if [ "$db_wait" -gt 1800 ]; then
+      echo "[entrypoint] WARNING: DB_WAIT_SECONDS=${db_wait} capped at 1800"
+      db_wait=1800
+    fi
+    echo "[entrypoint] database ${DB_NAME} is empty; only the API container (RUN_SEED=true) builds it — waiting up to ${db_wait}s"
     waited=0
-    while [ "$generation" = "empty" ] && [ "$waited" -lt "${DB_WAIT_SECONDS:-300}" ]; do
+    while [ "$generation" = "empty" ] && [ "$waited" -lt "$db_wait" ]; do
       sleep 5; waited=$((waited + 5))
       generation=$(probe_generation)
     done

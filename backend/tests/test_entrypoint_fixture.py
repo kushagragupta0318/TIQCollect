@@ -316,3 +316,21 @@ def test_check_migrations_names_both_revisions_and_the_command(monkeypatch, caps
     assert cm.main() == 1
     err = capsys.readouterr().err
     assert "v2_0001" in err and next(iter(heads)) in err and "alembic upgrade head" in err
+
+
+@pytest.mark.parametrize("value,expect_wait,warning", [
+    ("${DB_WAIT_SECONDS}", 300, "is not a number"),     # an uninterpolated compose reference
+    ("five", 300, "is not a number"),
+    ("-5", 300, "is not a number"),
+    ("99999", 1800, "capped at 1800"),
+])
+def test_a_bad_db_wait_is_defaulted_or_capped_not_an_instant_refusal(tmp_path, value, expect_wait, warning):
+    """Audit LOW 2026-09-28: a non-number broke `[ -lt ]` and refused at once
+    with "after 0s". It now waits the default (or the cap) — counted here by
+    probes, one per 5 s (sleep is stubbed) — and says why."""
+    proc, calls = _run(tmp_path, generation="empty", fixture="v2",
+                       env={"RUN_SEED": "false", "DB_WAIT_SECONDS": value})
+    assert proc.returncode != 0 and warning in proc.stdout
+    assert f"waiting up to {expect_wait}s" in proc.stdout
+    assert f"after {expect_wait}s" in proc.stdout
+    assert _starts(calls).count("psql") == 1 + expect_wait // 5
