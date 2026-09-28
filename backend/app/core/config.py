@@ -176,7 +176,9 @@ class Settings(BaseSettings):
     # DEMO_MODE cannot be it: .env.example ships DEMO_MODE=true and compose
     # defaults it on, so a real deployment may well run with it.
     DEMO_MASTER_DISABLE_OTHERS: str = ""
-    DEMO_EMAIL_DOMAINS: str = "tiqcollect.in"     # accounts outside these are never retired
+    # Accounts outside these are never retired. The v2 demo book (B15, 2026-09-28):
+    # Girivan Finance's bank users and Aravalli's staff and agents. (Was "tiqcollect.in", the v1 book.)
+    DEMO_EMAIL_DOMAINS: str = "girivanfinance.test,aravallifs.test"
     # 2026-09-24 (hotfix PAY-1) — accept the demo auto-confirm's DEMO-UPI-
     # reference. A flag production never sets: NOT DEMO_MODE, which the live
     # site runs with. Off => every UPI reference must be a 12-digit UTR.

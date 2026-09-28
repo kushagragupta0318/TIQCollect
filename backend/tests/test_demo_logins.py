@@ -97,6 +97,9 @@ def _hashes(db):
 
 def _apply(db, password=MASTER, accounts=ACCOUNTS, demo_mode=True, **kw):
     kw.setdefault("disable_others", True)
+    # This test book is @tiqcollect.in; the v2 default (settings) is the
+    # girivanfinance.test / aravallifs.test book, so name the domain here.
+    kw.setdefault("demo_domains", "tiqcollect.in")
     return demo.apply(db, password=password, accounts_raw=accounts, demo_mode=demo_mode, **kw)
 
 
