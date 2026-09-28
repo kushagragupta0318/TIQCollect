@@ -20,6 +20,10 @@
 //   instead of PENDING_VERIFICATION). Backs the OTP gate + offline branch in
 //   RecordVisitPage. See prototype_to_product/30.07.md.
 //   Full detail + why for all: /changelog.md
+// 2026-09-24 — H14: extractVisitFields() and its wire types (VisitExtraction,
+//   ExtractedField, RejectedField) for POST /agent/cases/{id}/visit-extraction.
+//   The types live here, in the API layer, and the page's pure module imports
+//   them — not the other way round.
 // ──────────────────────────────────────────────────────────────────────────
 import api from "./axios";
 import type { Case } from "@/types";
@@ -144,6 +148,41 @@ export async function transcribeAudio(blob: Blob): Promise<string> {
     timeout: 60000,
   });
   return data.text as string;
+}
+
+// 2026-09-24 — H14. Transcribed notes → SUGGESTED form values, each with the
+// words it came from. Writes nothing server-side; see visitExtraction.ts for
+// what the page does with them. The server falls back to keyword rules
+// itself, so this never needs a retry.
+export interface ExtractedField {
+  field: string;
+  value: string | number;
+  evidence: string;
+}
+
+export interface RejectedField {
+  field: string;
+  value: unknown;
+  code: string;      // stable: payment_outcome, above_remaining, evidence_mismatch, superseded, …
+  reason: string;    // for the agent
+}
+
+export interface VisitExtraction {
+  source: "llm" | "rules" | "none";
+  ai_generated: boolean;
+  suggestions: ExtractedField[];
+  rejected: RejectedField[];
+  llm_status: string | null;
+  failure_reason: string | null;
+  version: string;
+}
+
+// 45 s: the server abandons the LLM at a hard 25 s deadline and answers with
+// its keyword fallback (extraction 1.2.0), so this only has to outlast that
+// plus the request. (It was 90 s while the server's worst case was ~61.5 s.)
+export async function extractVisitFields(caseId: string, transcript: string): Promise<VisitExtraction> {
+  const { data } = await api.post(`/agent/cases/${caseId}/visit-extraction`, { transcript }, { timeout: 45000 });
+  return data as VisitExtraction;
 }
 
 export async function recordVisit(caseId: string, payload: {

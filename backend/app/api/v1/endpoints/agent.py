@@ -104,6 +104,10 @@
 #   caller, and ignores any client number. The token needs real credentials
 #   and lives 5 minutes; its errors no longer echo SDK text. PAY-2: new GET
 #   /upi-config serves the QR payee from settings (none => no QR).
+# 2026-09-24 — H14: POST /cases/{case_id}/visit-extraction, a thin delegate
+#   to services/visit_report_extraction.py — a voice-note transcript becomes
+#   SUGGESTED form values the agent confirms; it writes nothing. case_id is
+#   checked as a UUID at the boundary (404, never a Postgres DataError).
 # ───────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 
@@ -135,6 +139,8 @@ from app.services.notification_service import NotificationService
 from app.services.media_service import MediaService
 from app.services.payment_service import PaymentService
 from app.services.otp_service import OtpService
+from app.services import visit_report_extraction
+from app.schemas.visit_extraction import VisitExtractionRequest, VisitExtractionResponse
 from app.schemas.agent import (
     AvailabilityCalendarResponse,
     BeatResponse,
@@ -855,6 +861,40 @@ def transcribe_audio(current_user: AgentOnly, db: DbSession, audio: UploadFile =
         raise HTTPException(status_code=502, detail="Transcription failed") from exc
 
     return {"text": text}
+
+
+# ---------------------------------------------------------------------------
+# POST /agent/cases/{case_id}/visit-extraction  — 2026-09-24, H14
+# Voice note transcript → SUGGESTED form values (outcome, who was met, reason,
+# PTP amount and date) for the agent to confirm. Writes nothing. Logic and
+# every validation rule: services/visit_report_extraction.py.
+# ---------------------------------------------------------------------------
+
+@router.post("/cases/{case_id}/visit-extraction", response_model=VisitExtractionResponse)
+def extract_visit_fields(case_id: str, body: VisitExtractionRequest, current_user: AgentOnly, db: DbSession):
+    # TODO(A02): take RequestContext once it exists. Scoped STRICTLY: the case
+    # must be assigned to the caller (visit_report_extraction.own_case), the
+    # rule media_service, otp_service and the voice webhook use. (Until the
+    # audit of 5d70298 this used _get_accessible_case_or_404, the looser helper
+    # A03 is replacing, which also admits a teammate's or an unassigned case;
+    # and before a4c834b's audit its comment claimed that helper was "the same
+    # case-access check every other agent case route uses" — false.)
+    # TODO(B02): at the rebase onto standalone-p1, type case_id as
+    # app.core.ids.UUIDPath and delete this check (43's AST tripwire fails on a
+    # bare str *_id). Ids become native UUIDs, and on Postgres a malformed one
+    # would be a DataError (a 500); the body here is the unknown-case 404's, so
+    # the swap changes no behaviour.
+    try:
+        uuid.UUID(case_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Case not found")
+    agent = _get_agent_or_404(current_user, db)
+    case = visit_report_extraction.own_case(db, agent.id, case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="Case not found")
+    # The same figure PaymentService.set_ptp clamps a promise to.
+    remaining = max(0.0, (case.target_amount or 0.0) - (case.collected_amount or 0.0))
+    return visit_report_extraction.extract(body.transcript, remaining_amount=remaining).as_dict()
 
 
 # ---------------------------------------------------------------------------

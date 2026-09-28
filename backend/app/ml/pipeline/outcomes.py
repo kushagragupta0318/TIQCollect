@@ -73,7 +73,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.case import Case, CaseStatus
-from app.models.customer import Customer
+from app.models.customer import CUSTOMER_TAG_DECEASED, Customer
 from app.models.loan import Loan, LoanStatus
 from app.models.model_prediction import ModelPrediction
 from app.models.payment import Payment, PaymentStatus
@@ -206,7 +206,7 @@ def censoring_status(case: Case | None, loan: Loan | None,
     if notes.startswith(RECALL_NOTE_PREFIX):
         return OutcomeStatus.CENSORED_RECALLED
 
-    if customer is not None and "DECEASED" in (customer.tags or []):
+    if customer is not None and CUSTOMER_TAG_DECEASED in (customer.tags or []):
         return OutcomeStatus.CENSORED_DECEASED
 
     return None

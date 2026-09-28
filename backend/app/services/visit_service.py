@@ -48,6 +48,7 @@ from app.models.audit_log import AuditAction, AuditLog
 from app.core.audit import write_audit
 from app.models.agent import Agent
 from app.models.case import Case, CaseStatus, EscalationReason
+from app.models.customer import CUSTOMER_TAG_DECEASED
 from app.models.visit import Visit, VisitOutcome
 from app.schemas.agent import RecordVisitRequest
 from app.services.ai_report_service import AIReportService
@@ -63,7 +64,7 @@ _PAYMENT_OUTCOMES = {VisitOutcome.PAID_FULL, VisitOutcome.PART_PAID, VisitOutcom
 # excluded by their own flags (_should_send_visit_notice).
 _NO_VISIT_NOTICE_OUTCOMES = frozenset({VisitOutcome.DECEASED, VisitOutcome.DISPUTE})
 # The tag a DECEASED visit leaves on the customer (and outcomes.py censors on).
-DECEASED_TAG = "DECEASED"
+DECEASED_TAG = CUSTOMER_TAG_DECEASED      # the hotfix's name, now an alias of the one definition
 # A case escalated for one of these is a disputed debt: no later visit to it
 # sends the borrower a notice either (coordinator re-audit of bb4371a).
 _DISPUTE_ESCALATIONS = frozenset({EscalationReason.DISPUTED_AMOUNT, EscalationReason.PROPERTY_DISPUTE})
@@ -394,7 +395,7 @@ class VisitService:
             case.resolved_at = now_utc
             case.resolution_notes = "Customer deceased — do not contact"
             case.customer.do_not_contact = True
-            case.customer.tags = list(set(case.customer.tags or []) | {DECEASED_TAG})
+            case.customer.tags = list(set(case.customer.tags or []) | {CUSTOMER_TAG_DECEASED})
 
         elif case.status == CaseStatus.ASSIGNED:
             case.status = CaseStatus.IN_PROGRESS

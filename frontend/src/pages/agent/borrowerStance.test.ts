@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  BORROWER_STANCES, HARDSHIP_REASONS, NO_STANCE, STANCE_OPTIONS, nextStance,
+  BORROWER_STANCES, HARDSHIP_REASONS, NO_STANCE, STANCE_OPTIONS, nextStance, stanceAfterPatch,
   type StanceEvent, type StanceState,
 } from "./borrowerStance";
 
@@ -99,5 +99,25 @@ describe("the last tap wins", () => {
 
   it("tapping the chosen stance again clears it", () => {
     expect(run([{ kind: "tap", value: "REFUSES" }, { kind: "tap", value: "REFUSES" }])).toEqual(NO_STANCE);
+  });
+});
+
+describe("a patch from the voice-note suggestions pre-selects like a tap", () => {
+  it("an accepted RTP pre-selects REFUSES", () => {
+    expect(stanceAfterPatch(NO_STANCE, { outcome: "RTP" })).toEqual({ stance: "REFUSES", source: "outcome" });
+  });
+
+  it("outcome and reason together: the reason is the later tap", () => {
+    expect(stanceAfterPatch(NO_STANCE, { outcome: "RTP", defaultReason: "JOB_LOSS" }).stance).toBe("HARDSHIP");
+  });
+
+  it("a patch that implies nothing clears a stale pre-selection and keeps the agent's own", () => {
+    expect(stanceAfterPatch({ stance: "REFUSES", source: "outcome" }, { outcome: "PTP" })).toEqual(NO_STANCE);
+    expect(stanceAfterPatch({ stance: "MAY_PAY", source: "agent" }, { outcome: "PTP" }).stance).toBe("MAY_PAY");
+  });
+
+  it("a patch without outcome or reason (an amount, a date) leaves the stance alone", () => {
+    const s = { stance: "REFUSES", source: "outcome" } as const;
+    expect(stanceAfterPatch(s, {})).toEqual(s);
   });
 });

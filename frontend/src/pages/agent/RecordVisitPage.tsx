@@ -91,6 +91,11 @@
 //   Required on the Borrower path, no default; RTP / BROKEN_PTP / DISPUTE and
 //   the hardship reasons pre-select it and the agent's last tap wins (rules
 //   and tests: borrowerStance.ts). Sent as borrower_disposition.
+// 2026-09-24 - H14: section G gains "Fill the form from your notes"
+//   (VisitExtractionPanel) under the two voice-note boxes, on the Borrower
+//   path only. It suggests the outcome, reason and promise from what the agent
+//   dictated, each beside the words it came from; nothing is applied without a
+//   tap, and it never overwrites a choice silently. Logic: visitExtraction.ts.
 // ──────────────────────────────────────────────────────────────────────────
 import { useEffect, useRef, useState } from "react";
 import QRCode from "react-qr-code";
@@ -107,7 +112,7 @@ import { toast } from "react-hot-toast";
 import { getCaseDetail, recordVisit, collectPayment, setPTP, getPhotoUploadUrl, getCasePhotos, getRecordingUploadUrl, reoptimizeBeat, transcribeAudio, queueVisitTranscription, sendPaymentOtp, verifyPaymentOtp, getUpiConfig } from "@/api/agent";
 import { useQuery } from "@tanstack/react-query";
 import { DEMO_UPI_REFERENCE_PREFIX, demoUpiAutoconfirmEnabled, demoUpiReference, paymentReferenceOk, upiQrValue, upiReferenceOk } from "./upiPayment";
-import { STANCE_OPTIONS, nextStance, type BorrowerStance, type StanceEvent, type StanceState } from "./borrowerStance";
+import { STANCE_OPTIONS, nextStance, stanceAfterPatch, type BorrowerStance, type StanceEvent, type StanceState } from "./borrowerStance";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import SignaturePad from "@/components/ui/SignaturePad";
@@ -121,6 +126,7 @@ import type { PaymentReceiptData } from "@/components/ui/PaymentReceiptModal";
 import { haversineM } from "@/lib/geo";
 import { geo, geoAvailable } from "@/lib/deviceLocation";
 import { errorDetail } from "@/lib/apiError";
+import { VisitExtractionPanel } from "./VisitExtractionPanel";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -556,6 +562,11 @@ export default function RecordVisitPage() {
 
   const upd = (patch: Partial<FormState>) => setForm((f) => ({ ...f, ...patch }));
   /** Apply a field change and the stance it implies, in one update (ML-1). */
+  /** H14's suggestions arrive as one patch; the stance follows it as it follows a tap. */
+  const applyExtracted = (patch: Partial<FormState>) => setForm((f) => {
+    const s = stanceAfterPatch({ stance: f.borrowerStance, source: f.stanceSource }, patch);
+    return { ...f, ...patch, borrowerStance: s.stance, stanceSource: s.source };
+  });
   const updWithStance = (patch: Partial<FormState>, event: StanceEvent) => setForm((f) => {
     const s = nextStance({ stance: f.borrowerStance, source: f.stanceSource }, event);
     return { ...f, ...patch, borrowerStance: s.stance, stanceSource: s.source };
@@ -2175,6 +2186,17 @@ export default function RecordVisitPage() {
                   onAudioRemove={() => upd({ borrowerRecordingBlob: null, borrowerRecordingDuration: 0 })}
                 />
               </div>
+
+              {/* H14 (2026-09-24): suggested outcome / reason / promise from the two notes above.
+                  Not rendered without a case id — it would post to /cases//visit-extraction. */}
+              {caseId && <VisitExtractionPanel
+                caseId={caseId}
+                transcript={[form.notes, form.customerStatement].filter((t) => t.trim()).join("\n")}
+                form={{ outcome: form.outcome, defaultReason: form.defaultReason, ptpAmount: form.ptpAmount, ptpDate: form.ptpDate }}
+                outcomes={BORROWER_OUTCOMES}
+                reasons={DEFAULT_REASONS}
+                onApply={applyExtracted}
+              />}
 
               {/* Signature */}
               <div className="mt-4">

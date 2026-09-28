@@ -4,6 +4,14 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKey
 
 
+# The tag a customer carries once recorded as deceased. ONE definition
+# (2026-09-28, the coordinator's follow-up to H14-2): visit_service writes it
+# on a DECEASED visit, ml/pipeline/outcomes censors a prediction on it, and the
+# ledger materialiser writes it for a simulated death. They used to spell it
+# out three times; tests/test_deceased_tag.py fails on a fourth.
+CUSTOMER_TAG_DECEASED = "DECEASED"
+
+
 class RiskCategory(str, enum.Enum):
     LOW = "LOW"
     MEDIUM = "MEDIUM"
