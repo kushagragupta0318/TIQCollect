@@ -22,6 +22,7 @@ from app.models.allocation_decision import AllocationDecision
 from app.models.allocation_run import AllocationRun
 from app.models.beat import Beat
 from app.models.model_prediction import ModelPrediction
+from app.models.user import User, UserRole
 from app.services.planner_service import PlannerService
 
 from app.core.security import create_access_token
@@ -260,6 +261,11 @@ def test_a_normal_plan_still_works_after_a_rollback(
 def test_rollback_refuses_a_run_that_is_not_the_managers(
         client, auth, db_session, ml_plan):
     """A rollback is destructive; tenancy must hold on it."""
+    # The other run needs a real owner: allocation_runs.manager_user_id is a FK.
+    db_session.add(User(id=test_id("another-manager"), email="rohan.mehta@aravallifs.test",
+                        phone="9810000417", full_name="Rohan Mehta", hashed_password="x",
+                        role=UserRole.AGENCY_MANAGER, is_active=True, is_verified=True))
+    db_session.flush()
     other = AllocationRun(
         id=test_id("run-someone-else"), manager_user_id=test_id("another-manager"),
         plan_date=date.today(), strategy="SMART", status="PLANNED",
