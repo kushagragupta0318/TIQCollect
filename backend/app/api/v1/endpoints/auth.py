@@ -13,7 +13,9 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 async def login(body: LoginRequest, request: Request, db: DbSession):
     # 2026-09-28 (A07/A08, d4): totp_code for enrolled users; a NextStepResponse
     # (CHANGE_PASSWORD / ENROLL_MFA) when the password was right but no session opens.
-    return auth_service.login(db, body.email, body.password, body.device_id, request, totp_code=body.totp_code)
+    # A09b: device_secret from a field agent's bound device.
+    return auth_service.login(db, body.email, body.password, body.device_id, request,
+                              totp_code=body.totp_code, device_secret=body.device_secret)
 
 
 # collection_dashboard: lets the multi-agency dashboard deep-link into a manager's session
@@ -37,11 +39,16 @@ async def logout(current_user: CurrentUser, payload: TokenPayload, request: Requ
 
 
 @router.get("/me", summary="Get current authenticated user info")
-async def me(current_user: CurrentUser):
+def me(current_user: CurrentUser, db: DbSession):
+    from app.services.brand import tenant_of
+    tenant = tenant_of(db, user=current_user)
     return {
         "id": current_user.id,
         "email": current_user.email,
         "full_name": current_user.full_name,
         "role": current_user.role.value,
         "is_active": current_user.is_active,
+        # A14: the header names the tenant. None when nothing resolves.
+        "bank_name": tenant.bank_name if tenant else None,
+        "agency_name": tenant.agency_name if tenant else None,
     }

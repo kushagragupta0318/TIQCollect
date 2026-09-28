@@ -373,3 +373,15 @@ def test_a_failed_accept_leaves_no_audit_rows(world):
     assert e.value.status_code == 409
     assert _audits(world["db"], AuditAction.INVITE_ACCEPTED) == []
     assert _audits(world["db"], AuditAction.USER_CREATED) == []
+
+
+@pytest.mark.parametrize("email,status", [
+    ("kavya.nair@sarthakrecovery.test", 201),     # demo domains are .test: EmailStr would have 422'd this
+    ("not-an-address", 422),
+    ("two@@example.in", 422),
+])
+def test_the_invite_route_takes_account_emails(world, email, status):
+    c = TestClient(app)
+    r = c.post("/api/v1/admin/invites", headers=_hdr(world["bank_admin"]),
+               json={"email": email, "full_name": "Kavya Nair", "phone": "9811100031", "role": "BANK_ANALYST"})
+    assert r.status_code == status, r.text

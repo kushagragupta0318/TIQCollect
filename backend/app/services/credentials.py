@@ -71,8 +71,8 @@ def utc(dt: datetime | None) -> datetime | None:
 
 def flag_on(value) -> bool:
     """A switch is on only when it says "true" (any case); a literal ${VAR}
-    reads as off. The same rule as the hotfix's security.explicit_true, which
-    replaces this at the P1 rebase (one definition)."""
-    if isinstance(value, bool):
-        return value
-    return str(value or "").strip().lower() == "true"
+    reads as off. Delegates to security.explicit_true, the one definition,
+    which reached p1 with the hotfix merge (3498391); this name stays so the
+    callers read as they did."""
+    from app.core.security import explicit_true
+    return explicit_true(value)

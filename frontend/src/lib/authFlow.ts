@@ -35,6 +35,8 @@ export interface SessionResponse {
   role: string;
   user_id: string;
   full_name: string;
+  /** A09b: sent once, when the server has just bound a field agent's device. */
+  device_secret?: string;
 }
 
 export interface NextStepResponse {

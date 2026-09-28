@@ -42,9 +42,11 @@ export function errorDetail(err: unknown, fallback: string): string {
 }
 
 /**
- * The `code` half of `{detail, code}` — the stable machine-readable ErrorCode
- * string (e.g. "MFA_REQUIRED"), for callers that need to branch on which
- * error happened rather than just show `detail`'s message.
+ * The typed `ErrorCode` the backend attaches, when it attached one.
+ *
+ * 2026-09-28 (P1 A11, d4) — restored. Wave 1's dead-code sweep (4aa7aa2)
+ * removed it when nothing called it; the login page now branches on
+ * MFA_REQUIRED / MFA_INVALID, which only the code tells apart (both are 401).
  */
 export function errorCode(err: unknown): string | undefined {
   const code = body(err)?.code;

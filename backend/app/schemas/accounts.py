@@ -9,6 +9,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from app.core.emails import AccountEmail
 from app.core.ids import UUIDStr
 from app.models.user import UserRole
 
@@ -19,7 +20,7 @@ _CODE6 = Field(pattern=r"^\d{6}$")
 
 
 class InviteCreate(BaseModel):
-    email: str = Field(min_length=3, max_length=255)
+    email: AccountEmail              # `.test` demo domains allowed; EmailStr refuses them (43, 7fa1cf5)
     full_name: str = Field(min_length=1, max_length=200)
     phone: str = Field(min_length=10, max_length=20)
     role: UserRole
@@ -49,6 +50,8 @@ class PasswordReset(BaseModel):
 
 
 class ForgotPassword(BaseModel):
+    # Email OR phone, so not AccountEmail: an address is only looked up here,
+    # never stored, and a malformed one simply matches nobody (same 202).
     identifier: str = Field(min_length=3, max_length=255, description="Email or phone")
 
 

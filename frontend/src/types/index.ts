@@ -15,6 +15,8 @@ export interface LoginResponse {
   role: UserRole;
   user_id: string;
   full_name: string;
+  /** A09b: issued once, when the server binds this device (field agents). */
+  device_secret?: string;
 }
 
 export type DPDBucket = "CURRENT" | "BUCKET_1" | "BUCKET_2" | "BUCKET_3" | "NPA";
@@ -105,6 +107,10 @@ export interface Agent {
   collection_rate_trend: { month: string; rate_pct: number | null }[];
   /** Change in points between the two most recent complete months. */
   collection_rate_delta_pts: number | null;
+  /** GET /agent/profile only: the issuing agency, and its RBI registration
+   *  when the agency record has one (A14). */
+  agency_name?: string | null;
+  agency_rbi_registration_no?: string | null;
 }
 
 export interface Customer {

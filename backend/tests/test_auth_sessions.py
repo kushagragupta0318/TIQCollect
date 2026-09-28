@@ -17,7 +17,7 @@ from starlette.requests import Request
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.security import create_quick_login_token, decode_token, hash_password
+from app.core.security import create_quick_login_token, decode_token, device_fingerprint_for, hash_password
 from app.main import app
 from app.models.agent import Agent, AgentDevice
 from app.models.audit_log import AuditAction, AuditLog
@@ -70,8 +70,8 @@ def world():
         db.close()
 
 
-def _login(w, user, device=DEVICE_A):
-    return auth_service.login(w["db"], user.email, PASSWORD, device, _request())
+def _login(w, user, device=DEVICE_A, secret=None):
+    return auth_service.login(w["db"], user.email, PASSWORD, device, _request(), device_secret=secret)
 
 
 def _audits(db, action):
@@ -160,10 +160,91 @@ def test_logout_ends_the_session_and_its_access_token_at_once(world):
 # ── A09: device binding ─────────────────────────────────────────────────────
 
 def test_the_first_agent_login_binds_the_device_and_the_same_device_is_welcome(world):
-    _login(world, world["agent_user"], DEVICE_A)
-    _login(world, world["agent_user"], DEVICE_A)
+    first = _login(world, world["agent_user"], DEVICE_A)
+    # A09b: the same device is welcome WITH the secret the first login issued.
+    again = _login(world, world["agent_user"], DEVICE_A, secret=first["device_secret"])
+    assert "device_secret" not in again                   # nothing new to issue
     bound = world["db"].query(AgentDevice).filter(AgentDevice.is_bound.is_(True)).all()
     assert len(bound) == 1
+
+
+# ── A09b: a server-issued device secret (2026-09-28) ────────────────────────
+import hashlib  # noqa: E402
+
+
+def test_binding_issues_a_secret_and_stores_only_its_hash(world):
+    out = _login(world, world["agent_user"], DEVICE_A)
+    secret = out["device_secret"]
+    assert len(secret) >= 40
+    dev = world["db"].query(AgentDevice).filter(AgentDevice.is_bound.is_(True)).one()
+    assert dev.device_secret_sha256 == hashlib.sha256(secret.encode()).hexdigest()
+    assert secret not in (dev.device_fingerprint, dev.device_secret_sha256)
+
+
+@pytest.mark.parametrize("presented", [None, "", "not-the-secret"])
+def test_the_bound_device_id_without_its_secret_is_refused_and_recorded(world, monkeypatch, presented):
+    """The device_id is client-chosen: learning it must not be enough."""
+    monkeypatch.setattr(settings, "DEMO_DEVICE_REBIND", False)
+    _login(world, world["agent_user"], DEVICE_A)
+    with pytest.raises(HTTPException) as exc:
+        _login(world, world["agent_user"], DEVICE_A, secret=presented)
+    assert exc.value.status_code == 403
+    rows = _audits(world["db"], AuditAction.DEVICE_MISMATCH)
+    assert rows and rows[-1].failure_reason == "Device secret missing or wrong"
+
+
+def test_a_binding_without_a_secret_is_a_mismatch_and_issues_nothing(world, monkeypatch):
+    """A09b audit HIGH: a pre-A09b binding (NULL hash) used to hand its secret
+    to whoever presented password + device_id first. It is refused now, and
+    v2_0010 released every such binding so the real phone binds afresh."""
+    monkeypatch.setattr(settings, "DEMO_DEVICE_REBIND", False)
+    _login(world, world["agent_user"], DEVICE_A)
+    dev = world["db"].query(AgentDevice).filter(AgentDevice.is_bound.is_(True)).one()
+    dev.device_secret_sha256 = None                        # as every pre-A09b binding was
+    world["db"].commit()
+    for presented in (None, "anything"):
+        with pytest.raises(HTTPException) as exc:
+            _login(world, world["agent_user"], DEVICE_A, secret=presented)
+        assert exc.value.status_code == 403
+    rows = _audits(world["db"], AuditAction.DEVICE_MISMATCH)
+    assert [r.failure_reason for r in rows[-2:]] == ["Device bound without a secret"] * 2
+    world["db"].expire_all()
+    assert world["db"].query(AgentDevice).one().device_secret_sha256 is None   # nothing issued
+
+
+def test_every_bind_is_audited_as_device_bound_and_a_welcome_login_is_not(world, monkeypatch):
+    monkeypatch.setattr(settings, "DEMO_DEVICE_REBIND", True)
+    first = _login(world, world["agent_user"], DEVICE_A)
+    _login(world, world["agent_user"], DEVICE_A, secret=first["device_secret"])   # welcome: no bind
+    _login(world, world["agent_user"], DEVICE_B)                                   # demo re-bind
+    rows = _audits(world["db"], AuditAction.DEVICE_BOUND)
+    devices = {d.device_fingerprint: d.id for d in world["db"].query(AgentDevice).all()}
+    assert [r.details["agent_device_id"] for r in rows] == [
+        devices[device_fingerprint_for(DEVICE_A)], devices[device_fingerprint_for(DEVICE_B)]]
+    assert all(r.user_id == world["agent_user"].id and r.success for r in rows)
+
+
+def test_a_refused_bind_writes_no_device_bound(world, monkeypatch):
+    monkeypatch.setattr(settings, "DEMO_DEVICE_REBIND", False)
+    _login(world, world["agent_user"], DEVICE_A)
+    with pytest.raises(HTTPException):
+        _login(world, world["agent_user"], DEVICE_B)
+    assert len(_audits(world["db"], AuditAction.DEVICE_BOUND)) == 1
+
+
+def test_demo_rebind_replaces_a_lost_secret_with_a_new_one(world, monkeypatch):
+    monkeypatch.setattr(settings, "DEMO_DEVICE_REBIND", True)
+    first = _login(world, world["agent_user"], DEVICE_A)
+    again = _login(world, world["agent_user"], DEVICE_A)   # the app lost its secret
+    assert again["device_secret"] and again["device_secret"] != first["device_secret"]
+    with pytest.raises(HTTPException):
+        monkeypatch.setattr(settings, "DEMO_DEVICE_REBIND", False)
+        _login(world, world["agent_user"], DEVICE_A, secret=first["device_secret"])   # the old one is dead
+
+
+def test_other_roles_are_never_issued_a_device_secret(world):
+    out = _login(world, world["mgr"], DEVICE_A)
+    assert "device_secret" not in out
 
 
 def test_a_different_device_is_refused_and_recorded(world, monkeypatch):
@@ -267,3 +348,56 @@ def test_reset_device_on_another_managers_agent_is_a_404(world):
                              headers={"Authorization": f"Bearer {tokens['access_token']}"})
     assert r.status_code == 404
     assert world["db"].query(AuditLog).filter(AuditLog.action == AuditAction.DEVICE_RESET).count() == 0
+
+
+# ── DEMO_DEVICE_REBIND at start-up (A09b audit MED + LOW) ───────────────────
+
+def _settings_with(monkeypatch, **env):
+    from app.core.config import Settings
+    for name, value in (("SECRET_KEY", "k" * 32), ("DATABASE_URL", "sqlite://"),
+                        ("MINIO_ACCESS_KEY", "a"), ("MINIO_SECRET_KEY", "b")):
+        monkeypatch.setenv(name, value)
+    for name in ("DEMO_MODE", "DEMO_DEVICE_REBIND"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    return Settings(_env_file=None)
+
+
+@pytest.mark.parametrize("raw", ["", "   ", "${DEMO_DEVICE_REBIND}"])
+def test_an_unset_or_unexpanded_rebind_switch_is_off(monkeypatch, raw):
+    assert _settings_with(monkeypatch, DEMO_DEVICE_REBIND=raw).DEMO_DEVICE_REBIND is False
+
+
+def test_rebind_without_demo_mode_refuses_to_start(monkeypatch):
+    with pytest.raises(ValueError, match="DEMO_DEVICE_REBIND"):
+        _settings_with(monkeypatch, DEMO_DEVICE_REBIND="true")
+    with pytest.raises(ValueError, match="DEMO_DEVICE_REBIND"):
+        _settings_with(monkeypatch, DEMO_DEVICE_REBIND="true", DEMO_MODE="false")
+    assert _settings_with(monkeypatch, DEMO_DEVICE_REBIND="true", DEMO_MODE="true").DEMO_DEVICE_REBIND is True
+
+
+# ── A14: the tenant is named from its own record, never a made-up one ──────
+
+def test_me_names_the_callers_agency_and_bank(world):
+    tokens = _login(world, world["mgr"], "laptop-1")
+    body = TestClient(app).get("/api/v1/auth/me",
+                               headers={"Authorization": f"Bearer {tokens['access_token']}"}).json()
+    assert (body["agency_name"], body["bank_name"]) == ("Aravalli Field Services", "Meridian Trust Bank")
+
+
+def test_the_id_card_registration_is_the_agencys_own_or_nothing(world, monkeypatch):
+    from app.models.tenancy import Agency
+    from tests._db import TEST_AGENCY_ID
+    monkeypatch.setattr(settings, "DEMO_DEVICE_REBIND", False)
+    tokens = _login(world, world["agent_user"], DEVICE_A)
+    client = TestClient(app)
+    h = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    body = client.get("/api/v1/agent/profile", headers=h).json()
+    assert body["agency_name"] == "Aravalli Field Services"
+    assert body["agency_rbi_registration_no"] is None            # the record has none: nothing shown
+
+    world["db"].get(Agency, TEST_AGENCY_ID).rbi_registration_no = "DRA/NCR/2031/0417"
+    world["db"].commit()
+    assert client.get("/api/v1/agent/profile", headers=h).json()["agency_rbi_registration_no"] == "DRA/NCR/2031/0417"

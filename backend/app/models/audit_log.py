@@ -65,6 +65,8 @@ class AuditAction(str, enum.Enum):
     USER_DEACTIVATED = "USER_DEACTIVATED"
     # v2_0006 (2026-09-28): an agent's fields edited without a status change (G02, ce)
     AGENT_UPDATED = "AGENT_UPDATED"
+    # v2_0010 (2026-09-28, A09b audit): every device binding, first or re-bind
+    DEVICE_BOUND = "DEVICE_BOUND"
 
 
 class AuditLog(Base, UUIDPrimaryKey):

@@ -129,7 +129,14 @@ describe("the definitions are the ones the app uses", () => {
   it("the bank tree, ProtectedRoute and both login pages call the shared rule", () => {
     expect(read("bank/BankApp.tsx")).toMatch(/guardRedirect\(user, isAuthenticated, BANK_PORTAL_ROLES\)/);
     expect(read("components/layout/ProtectedRoute.tsx")).toMatch(/guardRedirect\(user, isAuthenticated, allowedRoles\)/);
-    expect(read("pages/auth/LoginPage.tsx")).toMatch(/navigate\(homeFor\(data\.role\)/);
+    // 2026-09-28 (P1 A11, d4): LoginPage no longer navigates inline — a login
+    // answer may be a session OR a step still owed (MFA enrollment, a forced
+    // password change), so the page hands it to useFinishLogin, which goes
+    // where lib/authFlow.afterLogin says, and afterLogin sends a session to
+    // homeFor(role) (behaviour pinned in lib/authFlow.test.ts). Pin the chain.
+    expect(read("pages/auth/LoginPage.tsx")).toMatch(/finish\(await apiLogin\(/);
+    expect(read("pages/auth/useFinishLogin.ts")).toMatch(/afterLogin\(result\)/);
+    expect(read("lib/authFlow.ts")).toMatch(/return \{ to: homeFor\(r\.role\) \}/);
     expect(read("pages/auth/QuickLoginPage.tsx")).toMatch(/navigate\(quickLoginLanding\(data\.role\)/);
   });
 });

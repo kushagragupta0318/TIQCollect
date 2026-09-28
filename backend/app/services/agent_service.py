@@ -487,6 +487,13 @@ class AgentService:
         # counted every id on the LATEST beat of any date.
         cases_today = len(today_beat_cases(self.db, agent)[1])
 
+        # The ID card's issuer and RBI registration are the agency's own record;
+        # absent means not shown, never a placeholder.
+        from app.models.tenancy import Agency
+        from app.services.brand import tenant_of
+        tenant = tenant_of(self.db, agent=agent)
+        agency = self.db.get(Agency, agent.agency_id) if agent.agency_id else None
+
         return {
             "id": agent.id,
             "user_id": agent.user_id,
@@ -512,6 +519,8 @@ class AgentService:
             "last_known_longitude": agent.last_known_longitude,
             "sos_active": agent.sos_active,
             "cases_today": cases_today,
+            "agency_name": tenant.agency_name if tenant else None,
+            "agency_rbi_registration_no": agency.rbi_registration_no if agency else None,
         }
 
     # -----------------------------------------------------------------

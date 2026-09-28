@@ -42,11 +42,13 @@ export default function AgentHomePage() {
 
   async function startSelfieCapture() {
     setSelfieModal(true);
-    // Get GPS coords when modal opens
+    // Get GPS coords when modal opens. No fix means no coordinates, never a
+    // default point: a check-in is evidence of where the agent was.
+    setCheckInCoords(null);
     if (geoAvailable()) {
       geo.getCurrentPosition(
         (p) => setCheckInCoords({ lat: p.coords.latitude, lon: p.coords.longitude }),
-        () => setCheckInCoords({ lat: 28.4595, lon: 77.0266 })
+        () => setCheckInCoords(null)
       );
     }
     try {
@@ -77,8 +79,12 @@ export default function AgentHomePage() {
   }
 
   async function confirmCheckIn() {
+    const coords = checkInCoords;
+    if (!coords) {
+      toast.error("Location unavailable. Turn on location, then try checking in again.");
+      return;
+    }
     setCheckingIn(true);
-    const coords = checkInCoords ?? { lat: 28.4595, lon: 77.0266 };
     try {
       await apiCheckIn(coords.lat, coords.lon);
       closeSelfie();

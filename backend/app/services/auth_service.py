@@ -49,6 +49,9 @@ from app.core.security import (
     verify_password, hash_password, create_access_token, create_refresh_token, decode_token,
     device_fingerprint_for, fingerprint_device, is_disabled_password_hash, token_sha256,
 )
+import hashlib
+import hmac
+import secrets
 import uuid
 
 MAX_FAILED_ATTEMPTS = 5
@@ -149,43 +152,74 @@ def revoke_user_sessions(db: Session, user_id: str, reason: str, *, by: str | No
     return count
 
 
-def _enforce_device_binding(db: Session, user: User, device_id: str, request: Request) -> None:
+def _new_device_secret() -> tuple[str, str]:
+    """(secret, its sha256). The secret goes to the client once; only the hash is stored."""
+    secret = secrets.token_urlsafe(32)
+    return secret, hashlib.sha256(secret.encode()).hexdigest()
+
+
+def _secret_matches(presented: str | None, stored_sha256: str | None) -> bool:
+    if not presented or not stored_sha256:
+        return False
+    return hmac.compare_digest(hashlib.sha256(presented.encode()).hexdigest(), stored_sha256)
+
+
+def _enforce_device_binding(db: Session, user: User, device_id: str, request: Request,
+                            device_secret: str | None = None) -> tuple[str, str] | None:
     """A09. First login binds; a different device is refused (or, with
-    DEMO_DEVICE_REBIND on, re-bound with a record of it)."""
+    DEMO_DEVICE_REBIND on, re-bound with a record of it).
+
+    A09b: the device_id is client-chosen, so binding ISSUES a secret and a
+    later login must present it. Returns (secret, agent_device id) when this
+    call bound a device, else None. A binding with no secret hash never
+    matches (v2_0010 released the pre-A09b ones): the secret is never handed
+    to whoever presents the device_id first. The client's IP is never part of
+    the identity (owner's decision). The app keeps the secret in localStorage,
+    accepted as the refresh token's exposure (coordinator, A09b audit)."""
     if user.role != UserRole.FIELD_AGENT:
-        return
+        return None
     agent = db.query(Agent).filter(Agent.user_id == user.id).first()
     if agent is None:
-        return
+        return None
     fp = device_fingerprint_for(device_id)
     now = datetime.now(timezone.utc)
     bound = (db.query(AgentDevice)
              .filter(AgentDevice.agent_id == agent.id, AgentDevice.is_bound.is_(True)).first())
     if bound is not None and bound.device_fingerprint == fp:
-        bound.last_seen_at = now
-        return
+        if _secret_matches(device_secret, bound.device_secret_sha256):
+            bound.last_seen_at = now
+            return None
+        reason = ("Device bound without a secret" if bound.device_secret_sha256 is None
+                  else "Device secret missing or wrong")
+    else:
+        reason = "Device mismatch"
     if bound is not None:
         if not settings.DEMO_DEVICE_REBIND:
-            _log(db, AuditAction.DEVICE_MISMATCH, user.id, request, success=False,
-                 failure_reason="Device mismatch")
+            _log(db, AuditAction.DEVICE_MISMATCH, user.id, request, success=False, failure_reason=reason)
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                                 detail="Device not authorized. Contact your manager.")
         bound.is_bound = False
         bound.unbound_at = now
         bound.unbind_reason = "DEMO_DEVICE_REBIND re-bind on login from a new device"
         db.flush()
-        _log(db, AuditAction.DEVICE_MISMATCH, user.id, request, success=True,
-             details={"rebound": True, "demo_device_rebind": True, "previous_device_id": bound.id})
+        # Staged, not committed: it lands with the new binding and the session, or not at all.
+        stage_audit(db, action=AuditAction.DEVICE_MISMATCH, user_id=user.id, entity_type="User",
+                    entity_id=user.id, ip_address=_client_ip(request),
+                    user_agent=request.headers.get("user-agent"),
+                    details={"rebound": True, "demo_device_rebind": True, "previous_device_id": bound.id,
+                             "reason": reason})
     device = (db.query(AgentDevice)
               .filter(AgentDevice.agent_id == agent.id, AgentDevice.device_fingerprint == fp).first())
     if device is None:
-        device = AgentDevice(agent_id=agent.id, device_fingerprint=fp, first_seen_at=now,
+        device = AgentDevice(id=str(uuid.uuid4()), agent_id=agent.id, device_fingerprint=fp, first_seen_at=now,
                              user_agent=(request.headers.get("user-agent") or "")[:500] or None)
         db.add(device)
+    secret, device.device_secret_sha256 = _new_device_secret()
     device.is_bound = True
     device.bound_at = now
     device.unbound_at = None
     device.last_seen_at = now
+    return secret, device.id
 
 
 def _agent_is_suspended(db: Session, user: User) -> bool:
@@ -211,7 +245,7 @@ def _login_response(user: User, tokens: dict) -> dict:
 
 
 def login(db: Session, email: str, password: str, device_id: str, request: Request, *,
-          totp_code: str | None = None) -> dict:
+          totp_code: str | None = None, device_secret: str | None = None) -> dict:
     user: User | None = db.query(User).filter(User.email == email).first()
 
     if not user:
@@ -257,11 +291,11 @@ def login(db: Session, email: str, password: str, device_id: str, request: Reque
     gate = mfa_service.enrollment_gate(db, user)
     if gate is not None:
         return gate
-    return complete_login(db, user, device_id, request)
+    return complete_login(db, user, device_id, request, device_secret=device_secret)
 
 
 def complete_login(db: Session, user: User, device_id: str, request: Request, *,
-                   method: str | None = None) -> dict:
+                   method: str | None = None, device_secret: str | None = None) -> dict:
     """Everything after the gates, for EVERY route that ends in a session:
     device binding, the lockout reset, the session, the LOGIN row, one commit.
 
@@ -270,8 +304,9 @@ def complete_login(db: Session, user: User, device_id: str, request: Request, *,
     device binding and wrote no LOGIN row. They come through here now, as
     /auth/login does; `method` names the route in the LOGIN row. Commits.
     Any staged rows of the caller (an invite accepted, a user created) land
-    in this same commit."""
-    _enforce_device_binding(db, user, device_id, request)
+    in this same commit. A09b: a new binding's secret is returned once, as
+    `device_secret`, and its DEVICE_BOUND row commits with the LOGIN row."""
+    bound_now = _enforce_device_binding(db, user, device_id, request, device_secret)
 
     # Reset failed attempts
     user.failed_login_attempts = 0
@@ -282,6 +317,11 @@ def complete_login(db: Session, user: User, device_id: str, request: Request, *,
     stage_audit(db, action=AuditAction.LOGIN, user_id=user.id, entity_type="User", entity_id=user.id,
                 ip_address=_client_ip(request), user_agent=request.headers.get("user-agent"),
                 details={"method": method} if method else None)
+    if bound_now:
+        # Same commit as the session: a bind that loses the race below is never recorded as made.
+        stage_audit(db, action=AuditAction.DEVICE_BOUND, user_id=user.id, entity_type="AgentDevice",
+                    entity_id=bound_now[1], ip_address=_client_ip(request),
+                    user_agent=request.headers.get("user-agent"), details={"agent_device_id": bound_now[1]})
     try:
         db.commit()
     except IntegrityError:
@@ -294,7 +334,10 @@ def complete_login(db: Session, user: User, device_id: str, request: Request, *,
              failure_reason="Concurrent first login from another device")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                             detail="Device not authorized. Contact your manager.")
-    return _login_response(user, tokens)
+    response = _login_response(user, tokens)
+    if bound_now:
+        response["device_secret"] = bound_now[0]   # once; the app stores it
+    return response
 
 
 # collection_dashboard: exchanges a quick-login link token for a real session, skips password check

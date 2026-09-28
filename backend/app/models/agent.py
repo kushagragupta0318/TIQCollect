@@ -234,6 +234,11 @@ class AgentDevice(Base, UUIDPrimaryKey, TimestampMixin):
     agency_id: Mapped[str] = mapped_column(UUIDType, nullable=False)
     agent_id: Mapped[str] = mapped_column(UUIDType, nullable=False)
     device_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    # A09b (v2_0009, 2026-09-28): SHA-256 of the secret the SERVER issued when
+    # this device was bound. The client-chosen device_id alone could be
+    # replayed by anyone who learnt it; a login from the bound device must
+    # also present the secret. NULL = bound before A09b (issued on next login).
+    device_secret_sha256: Mapped[str | None] = mapped_column(String(64))
     device_label: Mapped[str | None] = mapped_column(String(100))
     platform: Mapped[str | None] = mapped_column(String(12))
     app_version: Mapped[str | None] = mapped_column(String(20))

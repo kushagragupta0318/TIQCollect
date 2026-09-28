@@ -1040,6 +1040,13 @@ export default function RecordVisitPage() {
       );
       return;
     }
+    // The captured fix or nothing: a visit record never carries a default location.
+    const lat = form.gpsLat;
+    const lon = form.gpsLon;
+    if (lat == null || lon == null) {
+      toast.error("Waiting for GPS location — enable location and hold still.");
+      return;
+    }
     setSubmitting(true);
     try {
       // Build notes — prepend third-party context; append customer statement if given
@@ -1074,8 +1081,8 @@ export default function RecordVisitPage() {
       const deviceId = navigator.userAgent?.substring(0, 200) || undefined;
 
       const visitRes = await recordVisit(caseId, {
-        check_in_latitude: form.gpsLat ?? 28.4595,
-        check_in_longitude: form.gpsLon ?? 77.0266,
+        check_in_latitude: lat,
+        check_in_longitude: lon,
         customer_met: form.customerMet!,
         outcome: form.outcome!,
         // No casts: PersonMet and DefaultReason are string unions and the

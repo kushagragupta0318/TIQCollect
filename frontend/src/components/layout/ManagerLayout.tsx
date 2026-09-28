@@ -38,7 +38,8 @@ import api from "@/api/axios";
 import { useAuthStore } from "@/store/authStore";
 import { AccountMenu } from "@/components/layout/AccountMenu";
 import type { Agent } from "@/types";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { getMe } from "@/api/auth";
 import { useLiveEvents, WORK_EVENTS } from "@/hooks/useLiveEvents";
 import { useModalA11y } from "@/hooks/useModalA11y";
 import {
@@ -123,6 +124,8 @@ export default function ManagerLayout() {
   // 60 s LIVE tick. Debounced: a burst of events is one refetch, not ten. The
   // polls above stay — they are what still works if the stream never connects.
   const queryClient = useQueryClient();
+  // A14: the header names the agency (from its record), not the viewer's role.
+  const { data: me } = useQuery({ queryKey: ["auth-me", user?.id], queryFn: getMe, enabled: !!user, staleTime: 10 * 60_000 });
   const invalidateTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useLiveEvents((e) => {
     if (e.type.startsWith("sos.")) fetchSOS();
@@ -264,7 +267,7 @@ export default function ManagerLayout() {
           }}
         >
           <div className="min-w-0">
-            <h1 className="text-[15px] font-bold text-foreground truncate" style={{ letterSpacing: "-0.02em" }}>Agency Manager</h1>
+            <h1 className="text-[15px] font-bold text-foreground truncate" style={{ letterSpacing: "-0.02em" }}>{me?.agency_name ?? "Agency Manager"}</h1>
             {/* Short date on phones, full date once there is room for it. */}
             <p className="text-[11px] mt-0.5 text-muted-foreground font-medium truncate">
               <span className="sm:hidden">
