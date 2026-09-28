@@ -27,6 +27,7 @@ celery_app = Celery(
         "app.workers.tasks.model_outcomes",
         "app.workers.tasks.model_retraining",
         "app.workers.tasks.partition_maintenance",
+        "app.workers.tasks.analytics_refresh",
     ],
 )
 
@@ -103,6 +104,12 @@ celery_app.conf.update(
         "model-outcome-labelling": {
             "task": "app.workers.tasks.model_outcomes.attach_model_outcomes",
             "schedule": crontab(hour=19, minute=15),
+        },
+        # 20:30 — analytics MV refresh (B13): after ingest, scoring and the 20:00
+        # allocation; it also waits for allocation runs to leave RUNNING.
+        "analytics-refresh": {
+            "task": "app.workers.tasks.analytics_refresh.refresh_analytics",
+            "schedule": crontab(hour=20, minute=30),
         },
         # 01:30 — partition maintenance (B12, core/partitions.py): pre-create
         # month partitions, report DEFAULT rows, apply DECIDED retention. Before
