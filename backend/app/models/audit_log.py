@@ -67,6 +67,9 @@ class AuditAction(str, enum.Enum):
     AGENT_UPDATED = "AGENT_UPDATED"
     # v2_0010 (2026-09-28, A09b audit): every device binding, first or re-bind
     DEVICE_BOUND = "DEVICE_BOUND"
+    # v2_0011 (2026-09-28, D02): an agency document reviewed; the verifier is never the uploader
+    DOCUMENT_VERIFIED = "DOCUMENT_VERIFIED"
+    DOCUMENT_REJECTED = "DOCUMENT_REJECTED"
 
 
 class AuditLog(Base, UUIDPrimaryKey):
