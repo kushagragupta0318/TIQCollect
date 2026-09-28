@@ -26,6 +26,7 @@ from app.ml.pipeline.outcomes import OUTCOME_DEFINITION_VERSION, OutcomeStatus
 from app.models.allocation_decision import AllocationDecision
 from app.models.model_prediction import ModelPrediction
 from app.services.planner_service import PlannerService
+from tests._db import test_id
 
 # Reuse the planner harness that already builds a full manager/agent/case world.
 from tests.test_planner_service import (  # noqa: F401
@@ -247,7 +248,7 @@ def test_the_prediction_agent_stamp_matches_the_allocated_agent(db_session, ml_o
 def _matured(db, case_id, as_of, prob, outcome=1, version="1.1.0"):
     db.add(ModelPrediction(
         id=str(uuid.uuid4()), model_name="recovery_risk", model_version=version,
-        entity_type="case", entity_id=case_id, case_id=case_id,
+        entity_type="case", entity_id=test_id(case_id),   # no case row: the monitor keys on entity_id
         as_of_date=as_of, probability=prob, is_modelled=True,
         features={"dpd": 40.0}, actual_outcome=outcome,
         outcome_status=OutcomeStatus.NOT_RECOVERED.value,

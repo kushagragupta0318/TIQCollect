@@ -128,7 +128,7 @@ def test_the_frozen_baseline_is_not_the_balance_at_labelling_time(lifecycle):
     _, db, _, rows, _, _ = lifecycle
     moved = 0
     for r in rows[:200]:
-        loan = db.query(Loan).filter(Loan.loan_account_number == r.loan_id).first()
+        loan = db.get(Loan, r.loan_id)                  # v2: loan_id is the loan's id, not its account number
         if abs(float(loan.overdue_amount) -
                float(r.outcome_baseline["overdue_amount"])) > 1.0:
             moved += 1

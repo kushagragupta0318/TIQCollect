@@ -508,11 +508,11 @@ def test_route_refuses_an_empty_or_oversized_transcript(api, payload):
 
 def test_route_answers_a_malformed_case_id_with_404_not_500(api):
     """Ids become native UUIDs in v2; on Postgres a malformed one would reach
-    the database as a DataError. It must stop at the boundary, and look exactly
-    like an unknown case."""
+    the database as a DataError. It must stop at the boundary as a 404, the
+    same UUIDPath answer every other case route gives (test_ids tripwire)."""
     client, state = api
     r = _post(client, case_id="not-a-uuid")
-    assert r.status_code == 404 and r.json()["detail"] == "Case not found"
+    assert r.status_code == 404 and r.json()["detail"] == "Not found"
     assert "case_lookup" not in state
 
 

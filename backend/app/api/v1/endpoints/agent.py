@@ -865,7 +865,7 @@ def transcribe_audio(current_user: AgentOnly, db: DbSession, audio: UploadFile =
 # ---------------------------------------------------------------------------
 
 @router.post("/cases/{case_id}/visit-extraction", response_model=VisitExtractionResponse)
-def extract_visit_fields(case_id: str, body: VisitExtractionRequest, current_user: AgentOnly, db: DbSession):
+def extract_visit_fields(case_id: UUIDPath, body: VisitExtractionRequest, current_user: AgentOnly, db: DbSession):
     # TODO(A02): take RequestContext once it exists. Scoped STRICTLY: the case
     # must be assigned to the caller (visit_report_extraction.own_case), the
     # rule media_service, otp_service and the voice webhook use. (Until the
