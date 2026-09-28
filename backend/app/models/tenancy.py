@@ -297,6 +297,8 @@ class AgencyDocument(Base, UUIDPrimaryKey, TimestampMixin):
 
     __table_args__ = (
         ForeignKeyConstraint(["agency_id", "bank_id"], ["tenancy.agencies.id", "tenancy.agencies.bank_id"]),
+        # v2_0014 (D02): one object, one row; the backstop for two concurrent confirms.
+        UniqueConstraint("storage_key"),
         CheckConstraint(_check_in("doc_type", DOC_TYPES), name="doc_type"),
         CheckConstraint(_check_in("status", DOC_STATUSES), name="status"),
         CheckConstraint(_check_in("scan_status", SCAN_STATUSES), name="scan_status"),
