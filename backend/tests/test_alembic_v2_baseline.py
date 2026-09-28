@@ -18,6 +18,7 @@ from __future__ import annotations
 import importlib.util
 import pathlib
 
+import pytest
 from sqlalchemy import Enum
 
 import app.models  # noqa: F401
@@ -119,3 +120,47 @@ def test_the_session_revoke_reasons_check_is_migrated_as_the_model_declares_it()
     # ... and the migrated SQL names every one of them.
     latest = next(m for m in reversed(_chain()) if hasattr(m, "SESSION_REVOKE_REASONS"))
     assert all(f"'{r}'" in latest._check(latest.SESSION_REVOKE_REASONS) for r in SESSION_REVOKE_REASONS)
+
+
+class _FakeOp:
+    """Stands in for alembic.op: answers the downgrade's row count and records DDL."""
+    def __init__(self, count):
+        self.count, self.ddl = count, []
+
+    def get_bind(self):
+        op = self
+
+        class _Bind:
+            def execute(self, _stmt):
+                class _R:
+                    def scalar(self_inner):
+                        return op.count
+                return _R()
+        return _Bind()
+
+    def drop_constraint(self, *a, **k):
+        self.ddl.append(("drop", a))
+
+    def create_check_constraint(self, *a, **k):
+        self.ddl.append(("create", a))
+
+    def f(self, name):
+        return name
+
+
+@pytest.mark.parametrize("count", [0, 3])
+def test_v2_0005_downgrade_refuses_by_count_before_touching_the_constraint(monkeypatch, count):
+    """Audit LOW 2026-09-28: the refusal was only a raw CHECK violation. It
+    is now an explicit count, raised BEFORE the constraint is dropped, so a
+    refused downgrade leaves the table exactly as it was."""
+    mod = next(m for m in _chain() if m.revision == "v2_0005")
+    fake = _FakeOp(count)
+    monkeypatch.setattr(mod, "op", fake)
+    if count:
+        with pytest.raises(RuntimeError, match=r"3 user_sessions row\(s\).*MFA_CHANGED"):
+            mod.downgrade()
+        assert fake.ddl == []
+    else:
+        mod.downgrade()
+        assert [k for k, _ in fake.ddl] == ["drop", "create"]
+        assert "MFA_CHANGED" not in fake.ddl[1][1][2]
