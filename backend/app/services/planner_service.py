@@ -210,6 +210,22 @@ class PlannerService:
         """
         target_date = plan_date or get_target_plan_date()
 
+        # A04 (coordinator audit follow-up, 2026-09-28) — resolved once, up
+        # front, rather than deep inside the candidate-case query: it also
+        # scopes the agent roster below (defence in depth — the eligible set
+        # feeds the exploration swaps) and it must be known before anything
+        # else runs. `ck_users_role_scope` requires AGENCY_MANAGER/
+        # AGENCY_ADMIN to carry a non-NULL agency_id, so None here means the
+        # manager row is malformed in a way the schema is supposed to
+        # prevent — not a normal "no work today" state, so this does not
+        # take the lock, touch a beat, or write the usual zero-agents run
+        # row; it raises, and the nightly task's existing per-manager
+        # try/except records it as a FAILED AllocationRun the same way any
+        # other plan_next_day exception already does.
+        manager_agency_id = self.db.query(User.agency_id).filter(User.id == self.manager_user_id).scalar()
+        if manager_agency_id is None:
+            raise ValueError(f"Manager {self.manager_user_id} has no agency_id; cannot plan.")
+
         # 1. Who can work on TARGET_DATE — which is not the same question as
         #    who is working today.
         #
@@ -240,6 +256,7 @@ class PlannerService:
 
         agents = self.db.query(Agent).filter(
             Agent.manager_user_id == self.manager_user_id,
+            Agent.agency_id == manager_agency_id,
             Agent.status != AgentStatus.SUSPENDED,
         ).all()
         _on_leave = agent_ids_on_leave(self.db, target_date, [a.id for a in agents])
@@ -302,8 +319,8 @@ class PlannerService:
         # belongs to one agency's book to another agency's agent. Closed by
         # binding the pool to this manager's own agency_id, which is what
         # `ix_cases_unassigned_pool (agency_id, status, ...)` was already
-        # indexed for.
-        manager_agency_id = self.db.query(User.agency_id).filter(User.id == self.manager_user_id).scalar()
+        # indexed for. (manager_agency_id resolved once, at the top of this
+        # method — see the note there.)
         candidate_cases = self.db.query(Case).options(
             joinedload(Case.customer),
             joinedload(Case.loan),
@@ -316,7 +333,7 @@ class PlannerService:
             Case.status.notin_(list(RESOLVED_STATUSES)),
             Case.status != CaseStatus.PAID,
             Case.collected_amount < Case.target_amount,
-        ).all() if manager_agency_id is not None else []
+        ).all()
 
         # ── Who is workable TOMORROW ─────────────────────────────────────────
         # 2026-09-02 — the filter above used to end with

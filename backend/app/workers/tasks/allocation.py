@@ -44,6 +44,7 @@ logger = structlog.get_logger()
 def run_nightly_allocation(self, strategy: str = "SMART", plan_date_str: str | None = None):
     from app.core.database import SessionLocal
     from app.models.allocation_run import AllocationRun, AllocationRunStatus
+    from app.models.tenancy import Agency
     from app.models.user import User, UserRole
     from app.services.planner_service import PlannerService, get_target_plan_date
 
@@ -55,9 +56,17 @@ def run_nightly_allocation(self, strategy: str = "SMART", plan_date_str: str | N
     failures: dict[str, str] = {}
     try:
         try:
-            managers = db.query(User).filter(
+            # MED, coordinator audit on c041835: this used to select by role
+            # and is_active alone, with no Agency join at all — a manager
+            # whose agency had been SUSPENDED or OFFBOARDED was still
+            # planned every night. Inner-joining Agency and requiring
+            # ACTIVE means a manager whose agency_id is somehow NULL (should
+            # not occur — ck_users_role_scope requires it) is excluded the
+            # same way, rather than needing a separate check.
+            managers = db.query(User).join(Agency, User.agency_id == Agency.id).filter(
                 User.role.in_([UserRole.AGENCY_MANAGER, UserRole.AGENCY_ADMIN]),
                 User.is_active.is_(True),
+                Agency.status == "ACTIVE",
             ).all()
         except Exception as exc:
             # Nothing manager-specific to record against — the run could not
@@ -75,10 +84,11 @@ def run_nightly_allocation(self, strategy: str = "SMART", plan_date_str: str | N
         # something that only lived inside one query deep in the service,
         # so a future change to this task (a per-agency lock, a per-agency
         # summary, a partial retry) inherits the boundary instead of having
-        # to remember it. A manager with no agency_id (should not occur for
-        # AGENCY_MANAGER/AGENCY_ADMIN — enforced by ck_users_role_scope) is
-        # grouped under its own `None` bucket so it is still visible in the
-        # log rather than silently dropped by a `.get` default.
+        # to remember it. The `by_agency` key can no longer be None in
+        # practice — the inner join above already excludes a NULL
+        # agency_id — but the dict grouping stays generic rather than
+        # assuming that, the same way a defensive filter stays even once a
+        # constraint makes its branch unreachable.
         by_agency: dict[str | None, list[User]] = {}
         for manager in managers:
             by_agency.setdefault(manager.agency_id, []).append(manager)

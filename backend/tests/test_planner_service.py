@@ -305,6 +305,63 @@ def test_planner_pool_is_scoped_to_the_managers_own_agency(db_session, test_data
     assert other_case.agent_id is None      # never claimed by an out-of-agency agent
 
 
+def test_a_manager_whose_agency_is_suspended_is_not_planned(db_session, test_data, monkeypatch):
+    """MED, coordinator audit on c041835: the nightly task selected managers
+    by role + is_active only, with no Agency join — a manager whose agency
+    had been SUSPENDED (offboarded, contract lapsed, under review) was still
+    planned every night regardless. test_data's own manager sits under the
+    default ACTIVE test agency and must still be planned; a second manager
+    under a SUSPENDED agency must not be attempted at all — not planned, not
+    recorded as a failure either, simply excluded from the query."""
+    from app.workers.tasks import allocation as mod
+
+    suspended_agency_id = test_id("agency:suspended-a04")
+    db_session.add(Agency(id=suspended_agency_id, bank_id=TEST_BANK_ID, code="AGENCY-SUSPENDED",
+                          legal_name="Kumaon Debt Solutions Pvt. Ltd.", trade_name="Kumaon Debt Solutions",
+                          status="SUSPENDED", contacts=[], is_demo=True))
+    db_session.flush()
+    suspended_mgr = User(
+        id=str(uuid.uuid4()), email="suspended_mgr@tiqcollect.in", phone="9800009999",
+        full_name="Manager Of A Suspended Agency", hashed_password="hash", role=UserRole.AGENCY_MANAGER,
+        agency_id=suspended_agency_id, is_active=True, is_verified=True,
+    )
+    db_session.add(suspended_mgr)
+    db_session.commit()
+
+    monkeypatch.setattr("app.core.database.SessionLocal", lambda: db_session)
+    monkeypatch.setattr(db_session, "close", lambda: None)   # the fixture owns closing it
+
+    out = mod.run_nightly_allocation.__wrapped__(
+        strategy="SMART", plan_date_str=str(date.today() + timedelta(days=1)))
+
+    assert test_data["manager"].email in out["planned"]
+    assert suspended_mgr.email not in out["planned"]
+    assert suspended_mgr.email not in out["failed"]
+
+
+def test_a_manager_with_no_resolvable_agency_raises_without_touching_a_beat(db_session, test_data):
+    """LOW, coordinator audit on c041835: manager_agency_id is resolved by
+    looking up the manager's own User row; a manager_user_id that names
+    nobody (a stale reference — the realistic shape this branch actually
+    takes, since a live AGENCY_MANAGER/AGENCY_ADMIN row can't carry a NULL
+    agency_id past ck_users_role_scope) makes that lookup return None the
+    same way an explicit NULL would. This must raise immediately — before
+    the plan lock, before any Beat query — not fall through to the
+    "no active agents" branch's zero-run AllocationRun row, which describes
+    a different, legitimate state (a real manager with nobody to plan for
+    today), not a manager who could not be resolved at all."""
+    ghost_manager_id = str(uuid.uuid4())
+    planner = PlannerService(db_session, manager_user_id=ghost_manager_id)
+    tomorrow = date.today() + timedelta(days=1)
+
+    with pytest.raises(ValueError, match="no agency_id"):
+        planner.plan_next_day(plan_date=tomorrow, strategy="SMART")
+
+    assert db_session.query(AllocationRun).filter(
+        AllocationRun.manager_user_id == ghost_manager_id).count() == 0
+    assert db_session.query(Beat).count() == 0
+
+
 def test_planner_rollback(db_session, test_data):
     """Verify rollback removes draft PLANNED beats and marks run as ROLLED_BACK."""
     planner = PlannerService(db_session, manager_user_id=test_data["manager"].id)
@@ -829,6 +886,7 @@ def test_one_managers_failure_does_not_abort_the_others(monkeypatch):
                         lambda *a, **k: failed.append(a[3].id))
 
     class _Q:
+        def join(self, *a, **k): return self
         def filter(self, *a, **k): return self
         def all(self):
             # A04: two agencies (m1/m2 in one, m3 in another), so this also
