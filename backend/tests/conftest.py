@@ -30,16 +30,43 @@ for _name, _value in {
     os.environ.setdefault(_name, _value)
 
 
+# 2026-09-28 (B19): the Postgres suite (tests/pg/) talks to exactly one
+# database server, named by TIQ_PG_TEST_URL. Its host is the ONE address let
+# through; everything else stays blocked. Unset (every ordinary run), nothing
+# changes and tests/pg skips.
+def _pg_test_host() -> str | None:
+    url = os.environ.get("TIQ_PG_TEST_URL", "")
+    if not url:
+        return None
+    from urllib.parse import urlsplit
+    return urlsplit(url.replace("+psycopg2", "")).hostname
+
+
+_PG_TEST_HOST = _pg_test_host()
+
+
 def _is_local(address) -> bool:
     if not isinstance(address, tuple) or not address:
         return True                                   # AF_UNIX and the like
     host = str(address[0])
     if host in ("localhost", ""):
         return True
+    if _PG_TEST_HOST and host in _pg_test_addresses():
+        return True
     try:
         return ipaddress.ip_address(host).is_loopback
     except ValueError:
         return False                                  # a hostname: resolving it is network
+
+
+def _pg_test_addresses() -> set[str]:
+    """The Postgres test host and what it resolves to (the socket sees the IP)."""
+    out = {_PG_TEST_HOST}
+    try:
+        out |= {ai[4][0] for ai in socket.getaddrinfo(_PG_TEST_HOST, None)}
+    except OSError:
+        pass
+    return out
 
 
 _real_connect = socket.socket.connect
