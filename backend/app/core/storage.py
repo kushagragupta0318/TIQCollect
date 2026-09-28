@@ -60,6 +60,19 @@ def photo_key(case_id: str, photo_type: str, ext: str = "jpg") -> str:
     return f"collections/{d.year}/{d.month:02d}/{case_id[:8]}/{photo_type}_{uuid.uuid4().hex[:12]}.{ext}"
 
 
+def agency_document_key(agency_id: str, doc_type: str, ext: str = "pdf") -> str:
+    """Generate an object key for an agency onboarding document.
+    Path: agencies/{agency_id[:8]}/{doc_type}_{uuid8}.ext
+    """
+    return f"agencies/{agency_id[:8]}/{doc_type}_{uuid.uuid4().hex[:12]}.{ext}"
+
+
+def stat_object(key: str):
+    """Server-side HEAD — the authoritative size/content-type/etag for an
+    object a client claims to have uploaded. Raises S3Error if absent."""
+    return _client().stat_object(BUCKET, key)
+
+
 def download_bytes(key: str) -> bytes:
     """Download an object from MinIO into memory (for transcription)."""
     resp = _client().get_object(BUCKET, key)
