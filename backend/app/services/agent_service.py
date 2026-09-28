@@ -82,7 +82,7 @@ class AgentService:
             payment_conditions.append((Payment.payment_date >= start) & (Payment.payment_date <= end))
 
         # Use beat as single source of truth for cases/target — same as beat map and my-cases
-        _beat, _visible = today_beat_cases(self.db, agent)
+        beat, _visible = today_beat_cases(self.db, agent)
         beat_case_ids = [c.id for c in _visible]
         if beat_case_ids:
             # Same rule as get_beat: a case settled before today is not today's

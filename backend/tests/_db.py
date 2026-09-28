@@ -109,9 +109,15 @@ def make_session_factory(engine=None, *, bind=None, **kw):
     """A sessionmaker with the test default tenant. Accepts `bind=` as well as
     a positional engine, so `sessionmaker(bind=engine, …)` call sites migrate
     by name only. `autocommit` is dropped (SQLAlchemy 2 has no such option;
-    the old call sites passed False, which was already the only behaviour)."""
+    the old call sites passed False, which was already the only behaviour).
+
+    2026-09-28: `autoflush` is left to the CALL SITE, as sessionmaker leaves
+    it. This used to `setdefault("autoflush", False)`, so every call site that
+    had been a plain `sessionmaker(bind=engine)` — autoflush ON — silently
+    became autoflush OFF, and "migrate by name only" was untrue for them.
+    Found by test_repayment_labeller: a second scan re-read a marker the first
+    had set but never flushed. Sites that passed autoflush=False still do."""
     kw.pop("autocommit", None)
-    kw.setdefault("autoflush", False)
     kw.setdefault("info", {"default_tenant": dict(DEFAULT_TENANT)})
     return sessionmaker(bind=engine if engine is not None else bind, **kw)
 
