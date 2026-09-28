@@ -6,6 +6,111 @@ copies drift. This is how to fold this repo's work back into the platform.
 
 Written 2026-08-21, after doing it once. Read the traps before running anything.
 
+---
+
+## Deploy checklist: TIQCollect-app `0a4513f` → fieldops.transorg.ai (2026-09-28)
+
+The owner runs this. It brings the v1 work to the live site: the three security hotfixes,
+batch 1 (the LLM provider seam, PWA, mobile nav), ML-1 borrower stance, lead-structure and
+d4's H14.
+
+- **Diff base: `4bff733`.** That is the last tree landed on `COLLECTIONS`, as `e4a1729`. It
+  is not the `008433f` in the "State this assumes" table below.
+- **Nothing is committed to Collections until every step in part C passes.**
+
+### A. Before touching anything
+
+1. **Back up.**
+   - `pg_dump -Fc` of the field-ops database.
+   - A copy of `field-ops-stub/backend/.env`.
+   - `docker image inspect collections-platform-field-ops --format '{{.Id}}'`, the rollback
+     point.
+2. **Choose the secrets now, and don't commit them anywhere:**
+   - a demo master password, at least 16 characters;
+   - one new random password per Command Center service account (step B3).
+3. **The demo passwords are public** (Agent@123 / Manager@123 / Admin@123 match the
+   hashes in the committed dump; board FX-1). This deploy is what retires them (B2), so
+   do all of part B in one sitting.
+
+### B. Code, config, accounts
+
+1. **Merge the code.** Follow "Procedure" below with `4bff733` as the base:
+   `git diff --binary 4bff733^{tree} <tiq>/TIQCollect-app^{tree} ...`, applied with
+   `git apply -3 --directory=field-ops-stub`.
+   - Expect deletions: `api/v1/endpoints/field_ops.py`, `backend/Dockerfile`,
+     `scripts/research/`, `docs/rollback/` and others. Traps 5 and 6 apply.
+   - **No new Alembic migrations since `4bff733`.**
+2. **`field-ops-stub/backend/.env`,** which the API, the worker and beat all read:
+
+   | Variable | Set to | Why · if unset |
+   |---|---|---|
+   | `DEMO_OTP_ECHO` | **unset** (or `false`) | `true` hands the borrower's payment OTP to the agent. Unset is off |
+   | `DEMO_MASTER_PASSWORD` | the new secret (≥ 16 chars) | the demo's one login. Unset: nothing changes, and the published passwords keep working |
+   | `DEMO_MASTER_ACCOUNTS` | three demo emails, comma-separated: one admin, one manager, one agent | the only accounts that get the master password |
+   | `DEMO_MASTER_KEEP_ACCOUNTS` | the Command Center service-login emails (B3) | never touched by the script. Leave one out and the Command Center's `/field` pages break |
+   | `DEMO_MASTER_DISABLE_OTHERS` | `true` | retires every other demo account's password. The script refuses unless every account is `@tiqcollect.in` and the count is the fixture's (21) |
+   | `DEMO_UPI_ACCEPT` | **unset** | accepts the fake `DEMO-UPI-` references. Production takes real 12-digit UTRs only |
+   | `FORWARDED_ALLOW_IPS` | Caddy's fixed IP (see "Client address behind Caddy" below; needs the compose `ipam` change) | per-user login rate limit. Unset (`127.0.0.1`) means everyone shares one bucket, which is safe but coarse |
+   | `PUBLIC_BASE_URL` | `https://fieldops.transorg.ai` | the Twilio voice webhook signature is checked against it. Unset: every call is refused |
+   | `UPI_VPA`, `UPI_PAYEE_NAME` | the lender's real collection VPA and name, or **unset** | unset: no QR is offered, and the agent records the UTR by hand |
+   | `BORROWER_HELPLINE` | optional | the number in the neutral post-visit message. Unset: that sentence is left out |
+   | `TWILIO_*` | **leave unset on the demo site** | fixture borrowers have real-format phone numbers and demo-tenant suppression (B22) has not shipped. With no Twilio, SMS/WhatsApp and in-app calling are off |
+   | `COMMAND_CENTRE_API_KEY`, `FIELD_OPS_REQUIRE_API_KEY` | delete | the `/api/field-ops` contract is gone; ignored if left |
+   | `WEB_CONCURRENCY` | leave unset (1) | the rate limiter counts per process until RESTRUCTURE-PLAN 1.8 |
+   | `ANTHROPIC_API_KEY` / `LLM_PROVIDER` | optional; `groq` stays the default | F01 |
+   | `TOTP_ENC_KEY` | **not yet** | arrives with A08 (P1). Not read by this build |
+
+3. **Command Center service logins** (the `command-center/backend` env,
+   `TIQCOLLECT_AGENCY_ACCOUNTS`, JSON `agency_id → {email, password}`). KEEP accounts
+   are never changed by the script, so they still hold whatever password they had. The
+   platform's `.env.example` uses `manager1` / `Manager@123`, which is public. For each
+   service account:
+   - Set a new password. The password travels through the environment, never the
+     command line:
+     `NEW_PW='…' docker compose exec -e NEW_PW -e EMAIL=<email> field-ops python -c "import os;from app.core.database import SessionLocal;from app.core.security import hash_password;from app.models.user import User;db=SessionLocal();u=db.query(User).filter(User.email==os.environ['EMAIL']).one();u.hashed_password=hash_password(os.environ['NEW_PW']);u.hashed_refresh_token=None;db.commit();print('ok')"`
+   - Put the new password into `TIQCOLLECT_AGENCY_ACCOUNTS` and the email into
+     `DEMO_MASTER_KEEP_ACCOUNTS` (B2). A KEEP email must not also be a master account;
+     the script refuses that.
+4. **Twilio console** (only if Twilio is ever enabled): the TwiML App's Voice URL is
+   `https://fieldops.transorg.ai/api/v1/agent/voice/outbound` (POST).
+
+### C. Deploy and verify
+
+1. **Rebuild; a restart is not enough.** Run `docker compose build field-ops field-ops-worker
+   field-ops-beat`, then `docker compose up -d`, then confirm the new image id (Traps /
+   "After merging").
+   - The image now runs as **uid 10001**. The platform mounts no volumes into field-ops,
+     so there is nothing to chown.
+2. **Run `alembic upgrade head`** inside `field-ops`. The entrypoint migrates only right
+   after a fixture restore, so a populated database must be migrated by hand. Nothing
+   is pending today, and this proves it.
+3. **Check, before committing to Collections:**
+   - [ ] `curl https://fieldops.transorg.ai/api/v1/health` gives 200; `/api/v1/ready` gives
+         200 (it returns 503 now when Postgres or Redis is down).
+   - [ ] The field-ops log shows `[demo-logins] master login: 3 set` and no `REFUSED`.
+   - [ ] The three master accounts log in with the new password.
+   - [ ] `manager1` / `Manager@123` and `agent1` / `Agent@123` get **401**.
+   - [ ] Every Command Center `/field` page loads (its service logins work).
+   - [ ] From outside: 11 bad logins with 11 different forged `X-Forwarded-For` values end
+         in **429**, and a second real client can still try.
+   - [ ] An OTP send response has **no `demo_otp`**.
+   - [ ] `POST /api/v1/agent/voice/outbound` without a Twilio signature gets 403.
+   - [ ] `/manager/ml/health` serves `recovery_risk` 2.2.0.
+   - [ ] The worker and beat logs show no PermissionError; beat writes its schedule file.
+   - [ ] The SPA loads, and `/manifest.webmanifest` is served.
+4. **Rollback:** go back to the recorded image id and the `.env` backup. The database is
+   changed only by password hashes (the demo login and B3), and the `pg_dump` restores
+   those.
+
+**The non-root image was proved on a throwaway Postgres:**
+- the full entrypoint (fixture restore, alembic, demo_reset);
+- a `registry.promote` round-trip as uid 10001;
+- beat start-up with no `-s`.
+Result: *(pending: tiqcollect-bb's locked run (C) on `d8552ac`; its numbers are added here
+when it finishes)*.
+
+---
+
 ## State this assumes
 
 | | |
