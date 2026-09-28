@@ -270,6 +270,24 @@ def test_verify_correct_deferred_promotes_payment(db, fake_redis):
     assert fake_redis.hgetall(OtpService._otp_key(test_id("otp-1"))) == {}
 
 
+@pytest.mark.parametrize("mode", [PaymentMode.UPI, PaymentMode.NEFT, PaymentMode.CHEQUE])
+def test_verify_deferred_refuses_a_payment_without_its_reference(db, fake_redis, mode):
+    """Hotfix PAY-1 (2026-09-24): a PENDING row written before the server
+    required references must not become VERIFIED by a borrower OTP."""
+    _seed_case(db)
+    db.add(Payment(
+        id="pay-1", case_id="case-1", agent_id="agent-1", amount=5000.0,
+        mode=mode, receipt_number="TIQ-2026-FEEDBEEF",
+        payment_date=datetime.now(timezone.utc), status=PaymentStatus.PENDING_VERIFICATION,
+    ))
+    db.commit()
+    _put_otp(fake_redis, "otp-1", code="1234", payment_id="pay-1")
+    with pytest.raises(AppException) as e:
+        OtpService(db).verify(_agent(), test_id("case-1"), "otp-1", "1234")
+    assert e.value.status_code == 422
+    assert db.query(Payment).filter_by(id="pay-1").one().status == PaymentStatus.PENDING_VERIFICATION
+
+
 # ── consume_for_payment ───────────────────────────────────────────────────────
 
 def test_consume_requires_verified_otp(db, fake_redis):
@@ -456,3 +474,48 @@ def test_an_otp_issued_by_another_agent_reads_exactly_like_a_missing_one(db, fak
     assert (foreign.value.status_code, foreign.value.detail) == (missing.value.status_code, missing.value.detail)
     stored = fake_redis.hgetall(OtpService._otp_key(test_id("otp-1")))
     assert stored["verified"] == "0" and stored["attempts"] == "0"
+
+
+# ── Demo echo of the code (2026-09-24) ───────────────────────────────────────
+# The public platform deployment runs DEMO_MODE=true, and the echo used to ride
+# on DEMO_MODE: the agent's own response carried the borrower's code. It now
+# needs DEMO_OTP_ECHO, which no deployment gets by accident.
+
+def test_demo_mode_alone_does_not_hand_the_agent_the_borrowers_code(db, fake_redis, monkeypatch):
+    _seed_case(db)
+    _sms(monkeypatch, False)
+    monkeypatch.setattr(settings, "DEMO_MODE", True)
+    monkeypatch.setattr(settings, "DEMO_OTP_ECHO", False)
+    res = OtpService(db).generate_and_send(_agent(), test_id("case-1"), 5000.0)
+    assert "demo_otp" not in res
+    assert res["otp_id"]                      # the OTP itself is still issued
+
+
+def test_the_code_is_echoed_only_when_the_echo_is_switched_on(db, fake_redis, monkeypatch):
+    _seed_case(db)
+    _sms(monkeypatch, False)
+    monkeypatch.setattr(OtpService, "_generate_code", staticmethod(lambda: "2468"))
+    monkeypatch.setattr(settings, "DEMO_MODE", False)
+    monkeypatch.setattr(settings, "DEMO_OTP_ECHO", True)
+    res = OtpService(db).generate_and_send(_agent(), test_id("case-1"), 5000.0)
+    assert res["demo_otp"] == "2468"
+
+
+# The echo switch never takes the API down. `docker run --env-file` passes a
+# literal "${DEMO_OTP_ECHO}", and a bool field would refuse it at start-up.
+
+@pytest.mark.parametrize("raw, expected", [
+    (None, False), ("", False), ("   ", False), ("${DEMO_OTP_ECHO}", False),
+    ("false", False), ("true", True), ("1", True),
+])
+def test_the_echo_switch_reads_unset_or_unexpanded_values_as_off(monkeypatch, raw, expected):
+    from app.core.config import Settings
+    for name, value in (("SECRET_KEY", "k" * 32), ("DATABASE_URL", "sqlite://"),
+                        ("MINIO_ACCESS_KEY", "a"), ("MINIO_SECRET_KEY", "b"),
+                        ("COMMAND_CENTRE_API_KEY", "c")):
+        monkeypatch.setenv(name, value)
+    if raw is None:
+        monkeypatch.delenv("DEMO_OTP_ECHO", raising=False)
+    else:
+        monkeypatch.setenv("DEMO_OTP_ECHO", raw)
+    assert Settings(_env_file=None).DEMO_OTP_ECHO is expected

@@ -15,33 +15,40 @@
 //   shell for framing inside the Collections Command Center) is dropped
 //   along with the rest of the offline build: nothing produces that bundle
 //   any more since its build script was deleted upstream.
+// 2026-09-24 — G06: the phone bar is four tabs and a "More" sheet. The
+//   2026-07-31 line above ("all five destinations stay visible") stopped
+//   being true when the bar reached seven: 48 px a slot on a 360 px phone,
+//   labels truncated. Primary = Overview, Agents, Live Map, Cases — what a
+//   manager opens away from a desk; Field Plan, Analytics and Compliance are
+//   sit-down reviews and live in the sheet. The list is now ONE array in
+//   managerNav.ts that the desktop rail and the phone bar both read (it was
+//   NAV_ITEMS here); the rail is unchanged. The More button is lit while its
+//   sheet is open or while the page is one of its items, and the sheet closes
+//   on any navigation, Escape, the backdrop and its close button.
 // ─────────────────────────────────────────────────────────────────────────
 import { NavLink, Outlet, useNavigate, useLocation } from "react-router";
-import { AlertTriangle, BarChart2, Bell, Briefcase, CalendarOff, Compass, LayoutDashboard, MapPin, Shield, Users } from "lucide-react";
+import type { Location } from "react-router";
+import { AlertTriangle, Bell, CalendarOff, Ellipsis, X } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import type { LeaveRequest } from "@/api/agent";
 import { BrandLogo } from "@/components/ui/BrandLogo";
 import { useState, useEffect, useCallback, useRef } from "react";
+import { createPortal, flushSync } from "react-dom";
 import api from "@/api/axios";
 import { useAuthStore } from "@/store/authStore";
 import { AccountMenu } from "@/components/layout/AccountMenu";
 import type { Agent } from "@/types";
 import { useQueryClient } from "@tanstack/react-query";
 import { useLiveEvents, WORK_EVENTS } from "@/hooks/useLiveEvents";
+import { useModalA11y } from "@/hooks/useModalA11y";
+import {
+  MANAGER_NAV, MOBILE_MORE, MOBILE_PRIMARY, activeMoreItem, isSheetOpen, moreButtonActive,
+} from "@/components/layout/managerNav";
 
 const SIDEBAR_KEY   = "tiq:sidebar";
 const SIDEBAR_W     = 252;
 const SIDEBAR_ICON  = 72;
-
-const NAV_ITEMS = [
-  { to: "/manager/overview",   icon: LayoutDashboard, label: "Overview" },
-  { to: "/manager/agents",     icon: Users,           label: "Agents" },
-  { to: "/manager/live-map",   icon: MapPin,          label: "Live Map" },
-  // "Field Plan" in the manager's words; the path keeps the code's word.
-  { to: "/manager/beat-plan",  icon: Compass,         label: "Field Plan" },
-  { to: "/manager/cases",      icon: Briefcase,       label: "Cases" },
-  { to: "/manager/analytics",  icon: BarChart2,       label: "Analytics" },
-  { to: "/manager/compliance", icon: Shield,          label: "Compliance" },
-];
+const MORE_SHEET_ID = "manager-more-sheet";
 
 // ── Inline style helpers ──────────────────────────────────────────────────────
 // `display` is intentionally NOT set here — it comes from the `hidden lg:flex`
@@ -157,6 +164,13 @@ export default function ManagerLayout() {
     });
   }, [logout, navigate]);
 
+  // Phone "More" sheet (G06). Open FOR ONE LOCATION — see isSheetOpen — so
+  // any navigation closes it without an effect syncing state to the route.
+  const [moreOpenFor, setMoreOpenFor] = useState<Location | null>(null);
+  const moreOpen = isSheetOpen(moreOpenFor, location);
+  const closeMore = useCallback(() => setMoreOpenFor(null), []);
+  const currentMore = activeMoreItem(location.pathname);
+
   return (
     <div
       className="overflow-x-clip-safe"
@@ -181,7 +195,7 @@ export default function ManagerLayout() {
 
         {/* Nav */}
         <nav style={{ flex: 1, padding: "12px 8px", overflowY: "auto", overflowX: "hidden" }}>
-          {NAV_ITEMS.map(({ to, icon: Icon, label }) => (
+          {MANAGER_NAV.map(({ to, icon: Icon, label }) => (
             <NavLink
               key={to}
               to={to}
@@ -280,46 +294,136 @@ export default function ManagerLayout() {
       </div>
 
       {/* ── Bottom tab bar — below lg, where the hover sidebar cannot work.
-             Same visual language as AgentLayout so the two flows match. ── */}
+             Same visual language as AgentLayout so the two flows match.
+             Four primary tabs and a More button (G06); the rest of
+             MANAGER_NAV opens in a sheet. ── */}
       <nav
+        aria-label="Manager navigation"
         className="safe-bottom fixed bottom-2 left-2 right-2 z-40 rounded-card border lg:hidden"
         style={{ background: "#FFFFFF", boxShadow: "0 8px 24px rgba(16,24,40,0.10)", borderColor: "#ECEDF1" }}
       >
         <div className="flex items-stretch px-1 py-1.5">
-          {NAV_ITEMS.map(({ to, icon: Icon, label }) => (
+          {MOBILE_PRIMARY.map(({ to, icon, label }) => (
             <NavLink key={to} to={to} style={{ flex: 1, textDecoration: "none", minWidth: 0 }}>
+              {({ isActive }) => <TabCell icon={icon} label={label} active={isActive} />}
+            </NavLink>
+          ))}
+          <button
+            type="button"
+            onClick={() => setMoreOpenFor(moreOpen ? null : location)}
+            aria-haspopup="dialog"
+            aria-expanded={moreOpen}
+            aria-controls={moreOpen ? MORE_SHEET_ID : undefined}
+            // The visible word stays "More"; the name also says which page is
+            // behind it, since no primary tab is lit while one of these is open.
+            aria-label={currentMore ? `More, current page ${currentMore.label}` : "More"}
+            style={{ flex: 1, minWidth: 0, background: "none", border: 0, padding: 0, cursor: "pointer" }}
+          >
+            <TabCell icon={Ellipsis} label="More" active={moreButtonActive(location.pathname, moreOpen)} />
+          </button>
+        </div>
+      </nav>
+
+      {moreOpen && <MoreSheet onClose={closeMore} />}
+    </div>
+  );
+}
+
+/** One slot of the phone tab bar — shared by the NavLinks and the More
+ *  button so the fifth slot cannot drift from the other four. */
+function TabCell({ icon: Icon, label, active }: { icon: LucideIcon; label: string; active: boolean }) {
+  return (
+    <div
+      className="tap-target"
+      style={{
+        display:        "flex",
+        flexDirection:  "column",
+        alignItems:     "center",
+        justifyContent: "center",
+        gap:            3,
+        padding:        "6px 2px",
+        borderRadius:   10,
+        background:     active ? "#EFF6FF" : "transparent",
+        transition:     "background 120ms cubic-bezier(0.2,0,0,1)",
+      }}
+    >
+      <Icon
+        size={19}
+        style={{ color: active ? "#2563EB" : "#98A2B3", strokeWidth: active ? 2.2 : 1.8, flexShrink: 0 }}
+      />
+      <span
+        className="w-full truncate text-center"
+        style={{ fontSize: 10, fontWeight: active ? 700 : 500, color: active ? "#2563EB" : "#667085", lineHeight: 1 }}
+      >
+        {label}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * The More sheet: MOBILE_MORE as rows, in the desktop rail's row style.
+ * useModalA11y gives it Escape, the focus trap, focus back to the More
+ * button and the body scroll lock; a tap on the backdrop closes it.
+ */
+function MoreSheet({ onClose }: { onClose: () => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useModalA11y(true, ref, onClose);
+  // Back/Forward while open (the Android back button, most often): close in
+  // its own commit first, for the same scroll reason as the links below.
+  // Without it the page Back lands on opened at this page's offset — 800 px
+  // measured, against 0 for a Back with the sheet shut.
+  useEffect(() => {
+    const onPop = () => flushSync(onClose);
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [onClose]);
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[10000] flex items-end p-2"
+      style={{ background: "rgba(15,23,42,0.35)" }}
+      onClick={onClose}
+    >
+      <div
+        ref={ref}
+        id={MORE_SHEET_ID}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="manager-more-title"
+        onClick={(e) => e.stopPropagation()}
+        className="safe-bottom w-full rounded-card border"
+        style={{ background: "#FFFFFF", boxShadow: "0 8px 24px rgba(16,24,40,0.10)", borderColor: "#ECEDF1" }}
+      >
+        <div className="flex items-center justify-between pl-4 pr-2 pt-2">
+          <h2 id="manager-more-title" className="text-sm font-bold" style={{ color: "#1C1C1F" }}>More</h2>
+          <button type="button" onClick={onClose} aria-label="Close" className="tap-target flex items-center justify-center" style={{ color: "#6B6D76" }}>
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+        <nav aria-label="More pages" className="px-2 pb-2">
+          {MOBILE_MORE.map(({ to, icon: Icon, label }) => (
+            <NavLink
+              key={to}
+              to={to}
+              // Close in its OWN commit, before the link navigates. Batched
+              // with the navigation, the scroll lock's cleanup (which puts the
+              // page back where it was) ran after ScrollToTop and opened the
+              // new page at the old page's scroll offset.
+              onClick={() => flushSync(onClose)}
+              style={{ textDecoration: "none" }}
+            >
               {({ isActive }) => (
-                <div
-                  className="tap-target"
-                  style={{
-                    display:        "flex",
-                    flexDirection:  "column",
-                    alignItems:     "center",
-                    justifyContent: "center",
-                    gap:            3,
-                    padding:        "6px 2px",
-                    borderRadius:   10,
-                    background:     isActive ? "#EFF6FF" : "transparent",
-                    transition:     "background 120ms cubic-bezier(0.2,0,0,1)",
-                  }}
-                >
-                  <Icon
-                    size={19}
-                    style={{ color: isActive ? "#2563EB" : "#98A2B3", strokeWidth: isActive ? 2.2 : 1.8, flexShrink: 0 }}
-                  />
-                  <span
-                    className="w-full truncate text-center"
-                    style={{ fontSize: 10, fontWeight: isActive ? 700 : 500, color: isActive ? "#2563EB" : "#667085", lineHeight: 1 }}
-                  >
-                    {label}
-                  </span>
+                <div style={navItemStyle(isActive, true)}>
+                  <Icon size={17} style={{ flexShrink: 0, color: isActive ? "#2563EB" : "#98A2B3" }} />
+                  <span style={{ fontSize: 13, fontWeight: isActive ? 600 : 500 }}>{label}</span>
                 </div>
               )}
             </NavLink>
           ))}
-        </div>
-      </nav>
-    </div>
+        </nav>
+      </div>
+    </div>,
+    document.body,
   );
 }
 

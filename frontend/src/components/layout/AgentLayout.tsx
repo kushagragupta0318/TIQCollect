@@ -23,7 +23,7 @@ import { BeatProvider } from "@/contexts/BeatContext";
 import { useBeat } from "@/contexts/useBeat";
 import { refreshLocation, useLiveLocation } from "@/hooks/useLiveLocation";
 import { reportNow, startLocationReporting, stopLocationReporting } from "@/lib/locationReporter";
-import api from "@/api/axios";
+import { logout as apiLogout } from "@/api/auth";
 
 const SIDEBAR_KEY  = "tiq:agent-sidebar";
 const SIDEBAR_W    = 252;
@@ -224,7 +224,7 @@ function AgentLayoutInner() {
   }, []);
 
   const handleLogout = useCallback(() => {
-    api.post("/auth/logout").finally(() => {
+    apiLogout().finally(() => {
       logout();
       navigate("/login", { replace: true });
     });

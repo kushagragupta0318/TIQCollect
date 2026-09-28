@@ -32,7 +32,6 @@ the gates will silently invert.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, asdict
-from typing import Literal
 
 
 # ---------------------------------------------------------------------------
@@ -685,5 +684,3 @@ CANDIDATE_SPECS: dict[tuple[str, str], ModelSpec] = {
     (RECOVERY_RISK_V21.name, RECOVERY_RISK_V21.version): RECOVERY_RISK_V21,
     (RECOVERY_RISK_GAM.name, RECOVERY_RISK_GAM.version): RECOVERY_RISK_GAM,
 }
-
-SplitName = Literal["train", "valid", "oot"]

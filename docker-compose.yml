@@ -11,8 +11,9 @@
 #     http://localhost:19001  MinIO console
 #     localhost:15432         Postgres    localhost:16379  Redis
 #
-# Log in as agent002@tiqcollect.in / Agent@123, or manager1@tiqcollect.in /
-# Manager@123. The database is created and seeded automatically on first start.
+# The database is created and filled automatically on first start. The demo
+# accounts are listed once, in backend/fixtures/README.md — never here and never
+# in the UI (the login page's demo buttons were removed on 2026-09-24).
 #
 # This is NOT how the app is deployed. In production one container serves the
 # built SPA and the API on a single origin — see ../docker-compose.yml and
@@ -162,7 +163,6 @@ services:
       SECRET_KEY: ${SECRET_KEY:-dev_only_secret_change_me_openssl_rand_hex_32}
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-fieldops_minio}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-fieldops_minio_secret}
-      COMMAND_CENTRE_API_KEY: ${COMMAND_CENTRE_API_KEY:-dev_only_command_centre_key}
       # Pre-signed upload URLs carry this host in the signature, so it has to be
       # one the BROWSER can reach — minio:9000 only resolves inside the compose
       # network. Set explicitly because backend/.env may still point at the
@@ -186,6 +186,17 @@ services:
       #     is shown to the agent so a payment can be verified in a demo.
       DEMO_DEVICE_REBIND: ${DEMO_DEVICE_REBIND:-true}
       DEMO_OTP_ECHO: ${DEMO_OTP_ECHO:-true}
+      # Believe X-Forwarded-For only from loopback. The Vite proxy passes a
+      # browser's header through, and :5473/:8400 listen on every interface,
+      # so trusting the compose network would let a LAN device pick its own
+      # rate-limit bucket.
+      FORWARDED_ALLOW_IPS: "127.0.0.1"
+      # Pairs with the web's VITE_DEMO_UPI_AUTOCONFIRM below (hotfix PAY-1
+      # round 3, 2026-09-24): the demo auto-confirm records a DEMO-UPI-
+      # reference, and the server accepts one only with this flag. DEMO_MODE
+      # does not admit it. DEV ONLY: the prod image and the platform compose
+      # never set it, and it defaults to false in config.py.
+      DEMO_UPI_ACCEPT: "true"
       # RBI contact hours are enforced with a real 403. Left open so the app
       # works outside 08:00-19:00 IST; set 8 and 19 for true behaviour.
       CONTACT_HOUR_START: ${CONTACT_HOUR_START:-0}
@@ -251,6 +262,12 @@ services:
       # without this the dev server keeps serving code from before the edit
       # until the container restarts (vite.config.ts, 2026-09-24).
       VITE_WATCH_POLLING: "1"
+      # Demo aid (hotfix PAY-1, 2026-09-24): 10 s after the UPI QR is shown the
+      # card flips to "payment marked received" and records a DEMO-UPI-
+      # reference. DEV ONLY — the prod Dockerfile never sets this, and a
+      # frontend test fails if it does. The QR itself appears only when the api
+      # has UPI_VPA / UPI_PAYEE_NAME set (no default).
+      VITE_DEMO_UPI_AUTOCONFIRM: "1"
     volumes:
       - ./frontend:/app
       # Named volume so the container's node_modules (built for Alpine) is not
@@ -259,9 +276,9 @@ services:
       - web_node_modules:/app/node_modules
     ports:
       - "${WEB_HOST_PORT:-5473}:5473"
-    # npm install on every start is near-instant once the volume is populated,
-    # and means adding a dependency needs only a restart, not a rebuild.
-    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    # Installs on start, and restarts itself when package-lock.json changes
+    # (frontend/scripts/dev-web.sh), so a merged dependency needs no manual step.
+    command: sh scripts/dev-web.sh
     depends_on:
       api:
         condition: service_started

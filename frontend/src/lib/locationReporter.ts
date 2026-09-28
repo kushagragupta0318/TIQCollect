@@ -249,7 +249,3 @@ function onVisibility(): void {
   if (document.visibilityState === "hidden") void flush();
 }
 
-/** Fixes waiting to upload — surfaced in the agent header as an offline hint. */
-export function pendingCount(): number {
-  return queue.length;
-}

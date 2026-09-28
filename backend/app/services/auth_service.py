@@ -32,8 +32,8 @@ from app.models.user import User, UserRole
 from app.models.audit_log import AuditLog, AuditAction
 from app.models.quick_login_token import UsedQuickLoginToken
 from app.core.security import (
-    verify_password, create_access_token, create_refresh_token, decode_token, device_fingerprint_for,
-    fingerprint_device, token_sha256,
+    verify_password, hash_password, create_access_token, create_refresh_token, decode_token,
+    device_fingerprint_for, fingerprint_device, is_disabled_password_hash, token_sha256,
 )
 import uuid
 
@@ -241,6 +241,15 @@ def quick_login(db: Session, token: str, request: Request) -> dict:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired link")
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account deactivated")
+    # 2026-09-24 (hotfix DEMO-LOGIN) — a password retired by
+    # scripts/apply_demo_logins.py retires the account's quick-login links too.
+    # They are stateless JWTs valid for 15 minutes and skip the password, so
+    # without this an outstanding link outlived the retirement. The account
+    # stays is_active (the nightly allocation reads that flag for managers).
+    if is_disabled_password_hash(user.hashed_password):
+        _log(db, AuditAction.LOGIN_FAILED, user.id, request, success=False,
+             failure_reason="Quick-login refused: password retired by the demo master login")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired link")
     if user.role == UserRole.FIELD_AGENT:
         # 2026-09-24 (audit LOW) — a quick-login link skips device binding, so
         # an agent must never be signed in by one.

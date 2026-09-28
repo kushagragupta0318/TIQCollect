@@ -63,6 +63,10 @@ def _isolate(monkeypatch):
     monkeypatch.setattr(settings, "LLM_PROVIDER", "groq")
     monkeypatch.setattr(settings, "GROQ_API_KEY", "test-key")
     monkeypatch.setattr(settings, "LLM_MODEL", "test-model")
+    # A real .env can set LLM_FALLBACK_PROVIDER; without clearing it here, a
+    # failure this file deliberately provokes (bad key, 401, ...) could fall
+    # through to a REAL provider instead of the failure this test expects.
+    monkeypatch.setattr(settings, "LLM_FALLBACK_PROVIDER", "")
     monkeypatch.setattr(settings, "LLM_MAX_RETRIES", 2)
     monkeypatch.setattr(settings, "LLM_CACHE_TTL_SECONDS", 60)
     monkeypatch.setattr(llm, "_store", llm._MemoryStore())

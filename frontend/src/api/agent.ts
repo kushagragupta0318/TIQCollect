@@ -20,6 +20,10 @@
 //   instead of PENDING_VERIFICATION). Backs the OTP gate + offline branch in
 //   RecordVisitPage. See prototype_to_product/30.07.md.
 //   Full detail + why for all: /changelog.md
+// 2026-09-24 — H14: extractVisitFields() and its wire types (VisitExtraction,
+//   ExtractedField, RejectedField) for POST /agent/cases/{id}/visit-extraction.
+//   The types live here, in the API layer, and the page's pure module imports
+//   them — not the other way round.
 // ──────────────────────────────────────────────────────────────────────────
 import api from "./axios";
 import type { Case } from "@/types";
@@ -66,11 +70,6 @@ export async function reoptimizeBeat(lat: number, lon: number): Promise<{
   message?: string;
 }> {
   const { data } = await api.post(`/agent/beat/reoptimize?lat=${lat}&lon=${lon}`);
-  return data;
-}
-
-export async function getCases(): Promise<Case[]> {
-  const { data } = await api.get<Case[]>("/agent/cases");
   return data;
 }
 
@@ -146,6 +145,41 @@ export async function transcribeAudio(blob: Blob): Promise<string> {
   return data.text as string;
 }
 
+// 2026-09-24 — H14. Transcribed notes → SUGGESTED form values, each with the
+// words it came from. Writes nothing server-side; see visitExtraction.ts for
+// what the page does with them. The server falls back to keyword rules
+// itself, so this never needs a retry.
+export interface ExtractedField {
+  field: string;
+  value: string | number;
+  evidence: string;
+}
+
+export interface RejectedField {
+  field: string;
+  value: unknown;
+  code: string;      // stable: payment_outcome, above_remaining, evidence_mismatch, superseded, …
+  reason: string;    // for the agent
+}
+
+export interface VisitExtraction {
+  source: "llm" | "rules" | "none";
+  ai_generated: boolean;
+  suggestions: ExtractedField[];
+  rejected: RejectedField[];
+  llm_status: string | null;
+  failure_reason: string | null;
+  version: string;
+}
+
+// 45 s: the server abandons the LLM at a hard 25 s deadline and answers with
+// its keyword fallback (extraction 1.2.0), so this only has to outlast that
+// plus the request. (It was 90 s while the server's worst case was ~61.5 s.)
+export async function extractVisitFields(caseId: string, transcript: string): Promise<VisitExtraction> {
+  const { data } = await api.post(`/agent/cases/${caseId}/visit-extraction`, { transcript }, { timeout: 45000 });
+  return data as VisitExtraction;
+}
+
 export async function recordVisit(caseId: string, payload: {
   check_in_latitude: number;
   check_in_longitude: number;
@@ -154,6 +188,8 @@ export async function recordVisit(caseId: string, payload: {
   person_met?: string;
   default_reason?: string;
   not_met_reason?: string;
+  /** ML-1: BorrowerDisposition; only when the borrower was met. */
+  borrower_disposition?: string;
   notes?: string;
   consent_given?: boolean;
   property_type?: string;
@@ -207,13 +243,22 @@ export async function notifyCase(caseId: string, type: "reminder" | "ptp" | "rec
   return data;
 }
 
-export async function getVoiceToken(): Promise<{ token: string }> {
+export async function getVoiceToken(): Promise<{ token: string; ttl_seconds: number }> {
   const { data } = await api.get("/agent/voice/token");
   return data;
 }
 
-export async function createPaymentLink(caseId: string, amount: number): Promise<{ image_url: string; qr_id: string }> {
-  const { data } = await api.post(`/agent/cases/${caseId}/payment-link`, { amount });
+// 2026-09-24 (hotfix PAY-2) — the payee the UPI QR pays, from server settings.
+// `available: false` when unset: the page then offers no QR and the agent
+// records the UTR by hand. Replaces a VPA and bank name hardcoded in the page.
+export interface UpiConfig {
+  available: boolean;
+  vpa: string | null;
+  payee_name: string | null;
+}
+
+export async function getUpiConfig(): Promise<UpiConfig> {
+  const { data } = await api.get<UpiConfig>("/agent/upi-config");
   return data;
 }
 
@@ -334,11 +379,6 @@ export async function handoverCase(caseId: string, notes: string, returnToPool =
   return data;
 }
 
-export async function flagCustomer(customerId: string, flags: { is_hostile?: boolean; do_not_contact?: boolean }) {
-  const { data } = await api.patch(`/agent/customers/${customerId}/flag`, flags);
-  return data;
-}
-
 export interface LogCallPayload {
   outcome: "ANSWERED" | "NO_ANSWER" | "BUSY" | "DECLINED" | "SWITCHED_OFF" | "WRONG_NUMBER";
   duration_seconds?: number;
@@ -353,6 +393,8 @@ export interface LogCallPayload {
   payment_intent_signalled?: boolean | null;
   verbal_payment_date?: string;
   ai_intel_summary?: string;
+  /** ML-1: BorrowerDisposition; only on an ANSWERED call. */
+  borrower_disposition?: string;
 }
 
 export async function logCall(caseId: string, payload: LogCallPayload): Promise<{ id: string; called_at: string; outcome: string }> {

@@ -1,9 +1,0 @@
-2026-09-21 — cases.priority re-derived from each loan's current DPD for all open
-cases (services/case_priority_service.restamp, the same code the 19:45 task now
-runs nightly). 248 of 1,270 open cases changed; before/after per case in
-priority_before_after.csv (case_id, priority_before, priority_after).
-
-Undo:
-  docker compose cp docs/rollback/2026-09-21-case-priority/priority_before_after.csv postgres:/tmp/pri.csv
-  docker compose exec postgres psql -U fieldops -d fieldops -c "create temp table pri(case_id text, priority_before text, priority_after text); copy pri from '/tmp/pri.csv' csv header; update cases c set priority = pri.priority_before::case_priority_enum from pri where pri.case_id = c.id;"
-  (the nightly task will re-derive them again the following night unless it is also reverted)

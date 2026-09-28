@@ -143,6 +143,17 @@ class NotificationService:
         return cc + digits.lstrip("0")
 
     @staticmethod
+    def visit_notice_text(lender: str) -> str:
+        """The borrower's post-visit message (hotfix BL-5, 2026-09-24): no
+        amount, no loan details, no agent name. BORROWER_HELPLINE, when set, is
+        where to call; unset, the sentence is left out rather than invented."""
+        text = f"Our representative visited you today regarding your account with {lender}."
+        helpline = (settings.BORROWER_HELPLINE or "").strip()
+        if helpline and not helpline.startswith("${"):
+            text += f" For queries call {helpline}."
+        return text
+
+    @staticmethod
     def send_twilio(phone_e164: str, sms_body: str, wa_body: str, *, db, case_id: str | None = None,
                     agent_id: str | None = None, user_id: str | None = None, agency_id: str | None = None,
                     bank_id: str | None = None) -> bool:

@@ -27,6 +27,15 @@
 # PENDING_VERIFICATION. When absent, behaviour is unchanged (offline/deferred
 # path: row stays PENDING_VERIFICATION for later borrower verification). See
 # otp_service.py, prototype_to_product/30.07.md, and /changelog.md.
+#
+# 2026-09-24 (hotfix PAY-1) — collect_payment refuses mode=UPI without a
+# non-blank upi_reference (AppException 422, UPI_REFERENCE_REQUIRED), before
+# anything is read or written. The Record Visit page used to waive the field
+# 10 s after showing a static QR — a demo timer in every build — so a UPI
+# payment could be recorded with no evidence it happened. There is no
+# gateway-verified exception because v1 records no gateway payment:
+# create_payment_link mints a Razorpay QR that no page calls and no webhook
+# confirms.
 from __future__ import annotations
 
 import uuid
@@ -46,12 +55,66 @@ from app.core.audit import write_audit
 from app.models.case import Case, CaseStatus
 from app.models.customer import Customer
 from app.models.loan import Loan
-from app.models.payment import Payment, PaymentStatus
+import re
+
+from app.core.security import explicit_true
+from app.models.payment import Payment, PaymentMode, PaymentStatus
 from app.models.ptp import PTP, PTPStatus
 from app.services.scope import agent_case_or_404, sync_assignee
 from app.services.ptp_lifecycle_service import verified_paid_against
 from app.services.brand import brand_for
 from app.services.notification_service import NotificationService
+
+# ── The evidence each payment mode must carry (hotfix PAY-1, 2026-09-24) ──────
+# The only evidence a non-cash payment happened is its reference. The page
+# asked for these; the server never did — 201 of the demo book's 1,036
+# payments are NEFT rows with no reference at all. One definition, read by
+# collect_payment and by the deferred-OTP promotion (otp_service).
+# The prefix the demo auto-confirm writes (frontend upiPayment.ts); compared
+# upper-case, so a hand-typed variant is caught too.
+DEMO_UPI_REFERENCE_PREFIX = "DEMO-UPI-"
+# A UPI transaction's UTR / RRN is 12 digits.
+UPI_UTR = re.compile(r"^\d{12}$")
+_BANK_REFERENCE_MODES = frozenset({PaymentMode.NEFT, PaymentMode.RTGS, PaymentMode.DD})
+
+
+def normalised_upi_reference(ref: str | None) -> str | None:
+    """The UTR as stored: what the rule checks (spaces removed), so
+    "4123 4567 8901" and "412345678901" are one reference, not two. A demo
+    reference is kept as typed, trimmed."""
+    r = (ref or "").strip()
+    if not r:
+        return None
+    if r.upper().startswith(DEMO_UPI_REFERENCE_PREFIX):
+        return r
+    return r.replace(" ", "")
+
+
+def payment_reference_problem(mode, *, upi_reference: str | None, bank_reference: str | None,
+                              cheque_number: str | None) -> tuple[ErrorCode, str] | None:
+    """None when the payment carries the evidence its mode needs; otherwise
+    the error code and the message for the agent."""
+    mode = PaymentMode(mode) if not isinstance(mode, PaymentMode) else mode
+    if mode == PaymentMode.UPI:
+        ref = (upi_reference or "").strip()
+        if not ref:
+            return (ErrorCode.UPI_REFERENCE_REQUIRED,
+                    "A UPI payment needs its transaction reference (UTR) from the payment confirmation.")
+        if ref.upper().startswith(DEMO_UPI_REFERENCE_PREFIX):
+            # Accepted only where the demo flag production never sets is on —
+            # NOT DEMO_MODE, which the live site runs with.
+            if explicit_true(settings.DEMO_UPI_ACCEPT):
+                return None
+            return ErrorCode.UPI_REFERENCE_REQUIRED, "A demo UPI reference is not accepted on this server."
+        if not UPI_UTR.match(ref.replace(" ", "")):
+            return ErrorCode.UPI_REFERENCE_REQUIRED, "A UPI transaction reference (UTR) is 12 digits."
+        return None
+    if mode in _BANK_REFERENCE_MODES and not (bank_reference or "").strip():
+        return (ErrorCode.PAYMENT_REFERENCE_REQUIRED,
+                f"A {mode.value} payment needs its bank reference (UTR) from the transfer confirmation.")
+    if mode == PaymentMode.CHEQUE and not (cheque_number or "").strip():
+        return ErrorCode.PAYMENT_REFERENCE_REQUIRED, "A cheque payment needs the cheque number."
+    return None
 
 
 class PaymentService:
@@ -82,6 +145,21 @@ class PaymentService:
     # POST /agent/cases/{case_id}/payment
     # -----------------------------------------------------------------
     def collect_payment(self, agent, case_id: str, req) -> dict:
+        # 2026-09-24 (hotfix PAY-1) — a UPI collection must carry its UTR. The
+        # page used to waive the field 10 s after showing a static QR (a demo
+        # timer, not a payment signal), so a "UPI payment" could be recorded
+        # with no evidence it happened. No gateway-verified exception exists
+        # because v1 records no gateway payment at all: create_payment_link
+        # mints a Razorpay QR that no page calls and no webhook confirms. A
+        # future webhook must put the gateway's payment id in upi_reference.
+        # Every non-cash mode now carries its evidence (see
+        # payment_reference_problem): UPI a 12-digit UTR (or, on a box with
+        # DEMO_UPI_ACCEPT, the demo's DEMO-UPI- reference), NEFT/RTGS/DD a bank
+        # reference, CHEQUE its number.
+        problem = payment_reference_problem(req.mode, upi_reference=req.upi_reference,
+                                            bank_reference=req.bank_reference, cheque_number=req.cheque_number)
+        if problem:
+            raise AppException(422, problem[0], problem[1])
         case = self._get_accessible_case(agent, case_id)
 
         existing = self._find_recent_duplicate(case.id, agent.id, req)
@@ -110,7 +188,7 @@ class PaymentService:
             amount=req.amount,
             mode=req.mode,
             receipt_number=self._generate_receipt(),
-            upi_reference=req.upi_reference,
+            upi_reference=normalised_upi_reference(req.upi_reference),
             cheque_number=req.cheque_number,
             bank_reference=req.bank_reference,
             receipt_photo_key=req.receipt_photo_key,
@@ -296,21 +374,33 @@ class PaymentService:
     # -----------------------------------------------------------------
     # POST /agent/cases/{case_id}/payment-link  (Razorpay UPI QR)
     # -----------------------------------------------------------------
-    def create_payment_link(self, case_id: str, amount: float) -> dict:
+    def create_payment_link(self, agent, case_id: str, amount: float) -> dict:
+        # 2026-09-24 (hotfix PL-1) — this had NO access check: any agent could
+        # mint a UPI payment QR for any case in the database. Now the case must
+        # pass the access rule, checked before anything else, and "not yours"
+        # is the same 404 as "no such case".
+        # 2026-09-28 (merge into standalone-p1): the rule is services/scope's —
+        # the ONE definition (agency AND assigned-or-on-today's-beat) — not the
+        # strict `agent_id ==` copy hotfix-1 carried on v1, and the 404 body is
+        # scope's uniform "Not found".
+        case = agent_case_or_404(self.db, agent, case_id)
+
         import razorpay
         if not settings.RAZORPAY_TEST_API or not settings.RAZORPAY_TEST_KEY_SECRET:
             raise AppException(503, ErrorCode.VALIDATION_ERROR, "Razorpay not configured")
-
-        case = self.db.query(Case).filter(Case.id == case_id).first()
-        if not case:
-            raise AppException(404, ErrorCode.CASE_NOT_FOUND, "Case not found")
+        # The name on the gateway QR is the payee's, from settings — the same
+        # UPI_PAYEE_NAME the static QR uses (PAY-2). It was "ABC Bank",
+        # hardcoded, which review of 4dcd9dc found surviving here.
+        payee = (settings.UPI_PAYEE_NAME or "").strip()
+        if not payee or payee.startswith("${"):
+            raise AppException(503, ErrorCode.VALIDATION_ERROR, "UPI payee not configured")
 
         close_at = int((datetime.now(timezone.utc) + timedelta(hours=2)).timestamp())
 
         client = razorpay.Client(auth=(settings.RAZORPAY_TEST_API, settings.RAZORPAY_TEST_KEY_SECRET))
         qr = client.qrcode.create({
             "type": "upi_qr",
-            "name": brand_for(self.db, case=case).upi_payee_name,
+            "name": payee,
             "usage": "single_use",
             "fixed_amount": True,
             "payment_amount": int(amount * 100),

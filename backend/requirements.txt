@@ -24,6 +24,16 @@ python-multipart==0.0.19
 minio==7.2.11
 openai==1.57.4
 httpx==0.28.1
+# LLM_PROVIDER=anthropic (core/llm.py, 2026-09-24). The four lines under it are
+# anthropic's own transitive dependencies, pinned exactly: anthropic 1.8.0
+# declares httpx2<3,>=2.0.0 and docstring-parser; httpx2 2.13.1 declares
+# httpcore2==2.13.1 and truststore>=0.10 (read from both wheels' METADATA).
+# httpx2 is a separate package from httpx and does not replace it.
+anthropic==1.8.0
+httpx2==2.13.1
+httpcore2==2.13.1
+truststore==0.10.4
+docstring-parser==0.18.0
 faker==33.1.0
 pandas==2.2.3
 numpy==2.2.0
@@ -44,8 +54,9 @@ orjson==3.10.12
 #
 # 9.11.4210 is chosen because it is what the routing work was ACTUALLY verified
 # against: installing optbinning on the dev machine silently downgraded ortools,
-# so core/routing.py's plan_route/plan_fleet and all 27 tests in
-# tests/test_routing.py were written and run on 9.11, never on 9.15. Pinning
+# so core/routing.py's plan_route and the tests in tests/test_routing.py
+# (16 since plan_fleet was deleted on 2026-09-24) were written and run on
+# 9.11, never on 9.15. Pinning
 # here makes the declared dependency match the tested one instead of the other
 # way round.
 #

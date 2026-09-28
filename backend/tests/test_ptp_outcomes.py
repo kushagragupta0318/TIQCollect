@@ -37,6 +37,13 @@ TODAY = date.today()
 THIS = TODAY.strftime("%Y-%m")
 
 
+def _later_this_month(days: int) -> date:
+    """TODAY + days, but never past the last day of this month: after the 26th a
+    plain TODAY + 5 lands in next month and the "this month" bucket loses it."""
+    first_next = date(TODAY.year + (TODAY.month == 12), TODAY.month % 12 + 1, 1)
+    return min(TODAY + timedelta(days=days), first_next - timedelta(days=1))
+
+
 def _ym(months_back: int) -> date:
     y, m = TODAY.year, TODAY.month - months_back
     while m <= 0:
@@ -98,7 +105,7 @@ def book():
     ptp(a1, m1, PTPStatus.BROKEN); ptp(a2, m1, PTPStatus.EXPIRED)
     # This month: 1 honoured, 2 still open -> kept 1/1, open 2
     ptp(a1, date(TODAY.year, TODAY.month, 1), PTPStatus.HONORED, 700, 700)
-    ptp(a1, TODAY + timedelta(days=3), PTPStatus.ACTIVE); ptp(a2, TODAY + timedelta(days=5), PTPStatus.ACTIVE)
+    ptp(a1, _later_this_month(3), PTPStatus.ACTIVE); ptp(a2, _later_this_month(5), PTPStatus.ACTIVE)
     # Other manager: loud, must never appear
     for _ in range(5):
         ptp(ax, m2, PTPStatus.BROKEN)

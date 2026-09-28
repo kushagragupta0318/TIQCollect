@@ -41,12 +41,6 @@ export function errorDetail(err: unknown, fallback: string): string {
   return typeof detail === "string" && detail.trim() ? detail : fallback;
 }
 
-/** The typed `ErrorCode` the backend attaches, when it attached one. */
-export function errorCode(err: unknown): string | undefined {
-  const code = body(err)?.code;
-  return typeof code === "string" ? code : undefined;
-}
-
 /** HTTP status, for the few places that branch on 404 vs 409 vs the rest. */
 export function errorStatus(err: unknown): number | undefined {
   if (typeof err !== "object" || err === null) return undefined;

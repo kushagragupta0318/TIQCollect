@@ -51,7 +51,7 @@ from app.models.customer import RiskCategory
 from app.models.loan import LoanType, LoanStatus, DPDBucket
 from app.models.beat import BeatStatus
 from app.models.agent import AgentStatus, AgentTier, AgentSpecialization
-from app.models.call_log import CallOutcome
+from app.models.call_log import BorrowerDisposition, CallOutcome
 
 
 class CheckInRequest(BaseModel):
@@ -70,6 +70,9 @@ class RecordVisitRequest(BaseModel):
     # Why the customer is defaulting (for payment/RTP/dispute outcomes)
     default_reason: Optional[DefaultReason] = None
     not_met_reason: Optional[NotMetReason] = None
+    # ML-1 (2026-09-24): the borrower's stance, the agent's read of it. Only
+    # when the borrower was met (services/borrower_stance.py). Never defaulted.
+    borrower_disposition: Optional[BorrowerDisposition] = None
     notes: Optional[str] = None
     selfie_photo_key: Optional[str] = None
     # Geo-tagged photos — full metadata per photo type (keys from /photo-upload-url)
@@ -170,6 +173,9 @@ class LogCallRequest(BaseModel):
     payment_intent_signalled: Optional[bool] = None
     verbal_payment_date: Optional[date] = None
     ai_intel_summary: Optional[str] = None
+    # ML-1 (2026-09-24): what the borrower said about paying, on an ANSWERED
+    # call only (services/borrower_stance.py). Never defaulted.
+    borrower_disposition: Optional[BorrowerDisposition] = None
 
 
 class LogCallResponse(BaseModel):

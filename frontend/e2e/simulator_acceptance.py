@@ -19,8 +19,10 @@ correctly refuses the visit.
     python frontend/e2e/simulator_acceptance.py [--headed] [--base http://localhost:5473]
 
 Credentials come from TIQ_AGENT_EMAIL / TIQ_AGENT_PASSWORD /
-TIQ_MANAGER_EMAIL / TIQ_MANAGER_PASSWORD, defaulting to the demo fixture's
-accounts (backend/fixtures/README.md).
+TIQ_MANAGER_EMAIL / TIQ_MANAGER_PASSWORD and are REQUIRED — the demo accounts
+are listed in backend/fixtures/README.md. (Until 2026-09-24, A10, they
+defaulted to agent002 / manager1 and their passwords, written out here; B18
+renames every demo login, so a default would also have gone stale.)
 """
 from __future__ import annotations
 
@@ -33,10 +35,7 @@ from pathlib import Path
 
 from playwright.sync_api import Frame, Page, sync_playwright
 
-AGENT = (os.environ.get("TIQ_AGENT_EMAIL", "agent002@tiqcollect.in"),
-         os.environ.get("TIQ_AGENT_PASSWORD", "Agent@123"))
-MANAGER = (os.environ.get("TIQ_MANAGER_EMAIL", "manager1@tiqcollect.in"),
-           os.environ.get("TIQ_MANAGER_PASSWORD", "Manager@123"))
+CRED_VARS = ("TIQ_AGENT_EMAIL", "TIQ_AGENT_PASSWORD", "TIQ_MANAGER_EMAIL", "TIQ_MANAGER_PASSWORD")
 BUDGET_MS = 2_000
 SHOTS = Path(__file__).with_name("screenshots")
 
@@ -85,6 +84,13 @@ def timeline_has(page: Page, label: str, timeout_ms: int, before: int) -> float 
 
 
 def main() -> int:
+    missing = [v for v in CRED_VARS if not os.environ.get(v)]
+    if missing:
+        print(f"set {', '.join(missing)} — the demo logins are in backend/fixtures/README.md")
+        return 2
+    agent = (os.environ["TIQ_AGENT_EMAIL"], os.environ["TIQ_AGENT_PASSWORD"])
+    manager = (os.environ["TIQ_MANAGER_EMAIL"], os.environ["TIQ_MANAGER_PASSWORD"])
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="http://localhost:5473")
     ap.add_argument("--headed", action="store_true")
@@ -106,9 +112,9 @@ def main() -> int:
         agent_f = frame(page, "tiq-slot:agent")
         mgr_f = frame(page, "tiq-slot:manager")
         if "/login" in agent_f.url:
-            login(agent_f, *AGENT)
+            login(agent_f, *agent)
         if "/login" in mgr_f.url:
-            login(mgr_f, *MANAGER)
+            login(mgr_f, *manager)
         agent_f.wait_for_url("**/agent/**", timeout=20_000)
         mgr_f.wait_for_url("**/manager/**", timeout=20_000)
 

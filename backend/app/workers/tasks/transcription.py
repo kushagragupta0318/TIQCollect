@@ -30,17 +30,23 @@ def transcribe_visit_recording_task(self, visit_id: str, recorder: str = "both")
 
         result: dict = {}
 
-        if recorder in ("agent", "both") and visit.agent_recording_key:
-            audio_bytes = storage.download_bytes(visit.agent_recording_key)
-            transcript = transcribe(audio_bytes, "agent.mp4")
-            visit.agent_recording_transcript = transcript
-            result["agent_transcript"] = transcript
-
-        if recorder in ("borrower", "both") and visit.borrower_recording_key:
-            audio_bytes = storage.download_bytes(visit.borrower_recording_key)
-            transcript = transcribe(audio_bytes, "borrower.mp4")
-            visit.borrower_recording_transcript = transcript
-            result["borrower_transcript"] = transcript
+        # A recording that already has a transcript is not sent again: each call
+        # is a paid speech-to-text minute, and the task can be queued twice for
+        # one visit (a retried submit, a manual re-queue).
+        for who in ("agent", "borrower"):
+            if recorder not in (who, "both"):
+                continue
+            key = getattr(visit, f"{who}_recording_key")
+            if not key:
+                continue
+            existing = getattr(visit, f"{who}_recording_transcript")
+            if existing:
+                result[f"{who}_transcript"] = existing
+                result.setdefault("skipped", []).append(who)
+                continue
+            transcript = transcribe(storage.download_bytes(key), f"{who}.mp4")
+            setattr(visit, f"{who}_recording_transcript", transcript)
+            result[f"{who}_transcript"] = transcript
 
         db.commit()
         logger.info("transcription.completed", visit_id=visit_id, fields=list(result.keys()))

@@ -62,6 +62,7 @@ OUTSIDE_CONTACT_HOURS = "OUTSIDE_CONTACT_HOURS"
 DO_NOT_CONTACT = "DO_NOT_CONTACT"
 NO_NUMBER = "NO_NUMBER"
 DEMO_SUPPRESSED = "DEMO_SUPPRESSED"
+NOT_OUR_APP = "NOT_OUR_APP"          # from d4's hotfix-1 voice_service (merged 2026-09-28)
 
 
 class VoiceRefused(Exception):
@@ -105,6 +106,16 @@ def parse_identity(from_param: str | None) -> tuple[str, str] | None:
         return None
     user_id, sid = _hex_uuid(parts[1]), _hex_uuid(parts[2])
     return (user_id, sid) if user_id and sid else None
+
+
+def from_our_app(params: dict) -> bool:
+    """The signed request came from OUR Twilio account and OUR TwiML app. The
+    signature proves the account's auth token signed it; any other TwiML app
+    in the same account could otherwise point here with identities of its own.
+    (Carried over from d4's hotfix-1 voice_service at the 2026-09-28 merge; the
+    rest of this module is the session-bound AU-2 version the owner kept.)"""
+    return (params.get("AccountSid") == settings.TWILIO_ACCOUNT_SID
+            and params.get("ApplicationSid") == settings.TWILIO_TWIML_APP_SID)
 
 
 def public_url(path: str, query: str = "") -> str | None:
