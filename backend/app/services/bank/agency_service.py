@@ -433,6 +433,68 @@ def list_agencies(db: Session, principal: User, *, status: str | None = None) ->
     return [_agency_dict(a) for a in q.order_by(Agency.created_at.desc()).all()]
 
 
+def list_agency_directory(
+    db: Session, principal: User, *, region_id: str | None = None, status: str | None = None,
+    loan_type: str | None = None, contract_expiring_before: date | None = None,
+) -> list[dict]:
+    """D05 (P3 fast-forward, thin first cut): one row per agency with its
+    latest contract's dates/capacity, its covered regions (for the
+    directory's map) and its authorised products — everything the table and
+    map need in one call, no N+1 from the frontend.
+
+    `score` is deliberately absent (not null-filled, not faked) — Agency
+    Performance Index is D06's, reads mv_agency_scorecard_monthly (via
+    analytics.agency_scorecard_monthly_scoped, per 43), and does not exist
+    yet. A frontend column for it renders as pending until D06 lands, not
+    as a fabricated zero."""
+    q = agencies_in_scope(db, principal)
+    if status:
+        q = q.filter(Agency.status == status)
+    agencies = q.order_by(Agency.legal_name).all()
+
+    region_prefix = None
+    if region_id:
+        target = db.query(Region).filter(Region.id == region_id).first()
+        if target is None:
+            raise AppException(422, ErrorCode.VALIDATION_ERROR, f"Unknown region id: {region_id}")
+        region_prefix = target.path
+
+    rows = []
+    for agency in agencies:
+        contract = (db.query(AgencyContract)
+                   .filter(AgencyContract.agency_id == agency.id)
+                   .order_by(AgencyContract.created_at.desc()).first())
+        if contract_expiring_before is not None:
+            if contract is None or contract.end_date > contract_expiring_before:
+                continue
+
+        covered = []
+        authorised_products: set[str] = set()
+        if contract is not None:
+            covered = (db.query(Region)
+                      .join(AgencyRegion, AgencyRegion.region_id == Region.id)
+                      .filter(AgencyRegion.contract_id == contract.id).all())
+            authorised_products = {
+                t.loan_type for t in
+                db.query(AgencyContractTerm.loan_type)
+                .filter(AgencyContractTerm.contract_id == contract.id, AgencyContractTerm.is_authorised.is_(True))
+                .all()
+            }
+        if region_prefix is not None and not any(r.path.startswith(region_prefix) for r in covered):
+            continue
+        if loan_type is not None and loan_type not in authorised_products:
+            continue
+
+        rows.append({
+            **_agency_dict(agency),
+            "contract": _contract_dict(contract) if contract is not None else None,
+            "covered_regions": [{"region_id": r.id, "name": r.name, "level": r.level,
+                                 "latitude": r.latitude, "longitude": r.longitude} for r in covered],
+            "authorised_products": sorted(authorised_products),
+        })
+    return rows
+
+
 def list_regions(db: Session, principal: User) -> list[dict]:
     """The bank's region hierarchy, for the Coverage step's checklist.
     Read-only here — editing it is K01 (Admin > Regions), not this wizard.

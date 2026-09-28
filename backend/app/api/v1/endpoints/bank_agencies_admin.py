@@ -187,3 +187,18 @@ def list_regions_route(db: DbSession, current_user: User = require_perm("agency.
     reading the region hierarchy is closer to "who may set coverage" than
     "who may see an agency's onboarding progress"."""
     return agency_service.list_regions(db, current_user)
+
+
+@router.get("/agencies-directory")
+def list_agency_directory_route(
+    db: DbSession, region_id: str | None = None, status: str | None = None, loan_type: str | None = None,
+    contract_expiring_before: date | None = None, current_user: User = require_perm("agency.read"),
+):
+    """D05: the directory table + coverage map. A separate route from
+    GET /agencies (not a query param on it) — that one is the wizard's own
+    plain list and callers of it should not have to pay for a contract +
+    coverage + product join they never asked for."""
+    return agency_service.list_agency_directory(
+        db, current_user, region_id=region_id, status=status, loan_type=loan_type,
+        contract_expiring_before=contract_expiring_before,
+    )
