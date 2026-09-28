@@ -54,8 +54,9 @@ orjson==3.10.12
 #
 # 9.11.4210 is chosen because it is what the routing work was ACTUALLY verified
 # against: installing optbinning on the dev machine silently downgraded ortools,
-# so core/routing.py's plan_route/plan_fleet and all 27 tests in
-# tests/test_routing.py were written and run on 9.11, never on 9.15. Pinning
+# so core/routing.py's plan_route and the tests in tests/test_routing.py
+# (16 since plan_fleet was deleted on 2026-09-24) were written and run on
+# 9.11, never on 9.15. Pinning
 # here makes the declared dependency match the tested one instead of the other
 # way round.
 #

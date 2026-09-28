@@ -196,11 +196,11 @@ def test_the_old_formula_itself_is_gone():
     silently loose regex:
       * Loan.bank_risk_score (seed_data.py) is a DIFFERENT column, standing in
         for a number the bank supplies. It uses /90*50 and is out of scope.
-      * scripts/analyse_priority_shift.py reproduces the old formula on purpose,
-        to measure the before/after shift against it. Removing it would remove
-        the only "before" side there is.
+      * scripts/analyse_priority_shift.py reproduced the old formula on purpose,
+        to measure the before/after shift. The shift was measured before the
+        scorer went live; the script is in tag archive/research-2026-09.
     """
-    exempt = {"analyse_priority_shift.py"}
+    exempt: set[str] = set()
     offenders = []
     for path, text in _python_sources():
         if path.name in exempt:
@@ -246,10 +246,10 @@ def test_no_constructor_writers_remain():
     bank blocks, leaving 16 customers labelled CRITICAL/HIGH/LOW while their
     risk_score sat at the 50.0 MEDIUM default. Fixed 2026-08-21.
     """
-    # These four legitimately mention the name: the scorer that computes it, the
-    # column that stores it, and the analysis script that compares old vs new.
+    # These legitimately mention the name: the scorer that computes it and the
+    # column that stores it.
     infrastructure = {"repayment_service.py", "repayment_scorecard.py",
-                      "repayment_snapshot.py", "analyse_priority_shift.py"}
+                      "repayment_snapshot.py"}
     offenders = []
     for path, text in _python_sources():
         if path.name in infrastructure:

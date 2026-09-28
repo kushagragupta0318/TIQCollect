@@ -37,10 +37,9 @@ four-feature cohort from a fifty-feature one without opening the rows.
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 from dataclasses import asdict, dataclass, field
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 
 import pandas as pd
 from sqlalchemy.orm import Session
@@ -295,6 +294,3 @@ def build_training_frame(
                 periods, cohort.cohort_digest[:12])
     return frame, cohort
 
-
-def cohort_summary(cohort: TrainingCohort) -> str:
-    return json.dumps(cohort.to_dict(), default=str)

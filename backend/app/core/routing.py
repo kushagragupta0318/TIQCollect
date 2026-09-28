@@ -29,11 +29,10 @@
 #      failure and told nobody, so there was no way to know how often OSRM was
 #      even answering. Every result now carries `source`, and it is persisted.
 #
-#   4. One vehicle at a time. Each agent's day was solved as an independent TSP
-#      over cases another stage had already assigned, so the sequencing could
-#      never say "this case routes better on someone else's day". plan_fleet()
-#      is a real multi-vehicle CVRPTW: per-vehicle depots, capacity, time
-#      windows, and drop penalties proportional to what the case is worth.
+#   4. One vehicle at a time. Each agent's day is solved as an independent TSP
+#      over cases the allocator already assigned. A multi-vehicle CVRPTW
+#      (plan_fleet) was built and tested but never wired, and was deleted on
+#      2026-09-24 (tag archive/plan-fleet-2026-09).
 #
 #   DETERMINISM IS PRESERVED AND IT COST SOMETHING. OR-Tools' usual advice for a
 #   fleet problem is GUIDED_LOCAL_SEARCH under a wall-clock limit. A wall-clock
@@ -48,7 +47,6 @@ Route optimization for field collection beats.
 
     matrix = fetch_osrm_table(coords)          # durations + distances + source
     result = plan_route(stops, lat, lon)       # one agent's day, sequenced
-    fleet  = plan_fleet(stops, agents)         # every agent at once (CVRPTW)
 
 Single-vehicle pipeline
 -----------------------
@@ -174,17 +172,6 @@ class RouteResult:
         return int(round(self.total_seconds / 60.0))
 
 
-@dataclass
-class FleetResult:
-    """A whole team's day. `plans` is keyed by the caller's vehicle index."""
-
-    plans: dict[int, RouteResult] = field(default_factory=dict)
-    dropped: list[int] = field(default_factory=list)
-    source: str = SOURCE_HAVERSINE
-    solver: str = "ortools_cvrptw"
-    feasible: bool = True
-
-
 # ---------------------------------------------------------------------------
 # Travel-time matrix
 # ---------------------------------------------------------------------------
@@ -308,15 +295,6 @@ def fetch_osrm_route(coords: Sequence[tuple[float, float]]) -> tuple[str | None,
 
 
 # Backwards-compatible aliases used by existing call sites.
-def _haversine_seconds(lat1: float, lon1: float, lat2: float, lon2: float,
-                       avg_speed_kmh: float = _FALLBACK_SPEED_KMH) -> int:
-    return _haversine_pair(lat1, lon1, lat2, lon2)[0]
-
-
-def _haversine_matrix(coords: Sequence[tuple[float, float]]) -> list[list[int]]:
-    return _haversine_table(coords).durations
-
-
 # ---------------------------------------------------------------------------
 # Solver parameters — determinism lives here
 # ---------------------------------------------------------------------------
@@ -569,162 +547,3 @@ def optimize_route(
     all_windows = [None, *time_windows] if time_windows is not None else None
     ordered = solve_tsp(durations, depot=0, time_windows=all_windows)
     return [i - 1 for i in ordered if i > 0]
-
-
-# ---------------------------------------------------------------------------
-# Public: the whole fleet — CVRPTW
-# ---------------------------------------------------------------------------
-
-@dataclass
-class Vehicle:
-    """One agent, as the solver sees them."""
-
-    key: int                        # caller's index; echoed back in FleetResult
-    start: tuple[float, float]      # base lat/lon
-    capacity: int                   # max stops for the day
-    shift_start_s: int = 0          # seconds from midnight
-    shift_end_s: int = 24 * 3_600
-
-
-def plan_fleet(
-    stops: Sequence[tuple[float, float]],
-    vehicles: Sequence[Vehicle],
-    *,
-    time_windows: "Sequence[tuple[int, int] | None] | None" = None,
-    drop_penalties: Sequence[int] | None = None,
-    service_seconds: Sequence[int] | None = None,
-    allowed_vehicles: "Sequence[Sequence[int] | None] | None" = None,
-) -> FleetResult:
-    """Assign AND sequence every stop across every agent in one solve.
-
-    WHY THIS EXISTS. The planner previously solved one TSP per agent over cases
-    a separate bipartite stage had already assigned. Sequencing therefore could
-    never say "this case belongs on someone else's day" — the two halves of the
-    same problem were decided in sequence, by different objectives, and stage 2
-    could only defer an outlier it had no power to reassign.
-
-    DROP PENALTIES ARE WHAT MAKE IT PRIZE-COLLECTING. Every stop gets a
-    disjunction: the solver may leave it out, at a cost. Set that cost from what
-    the case is worth and the day fills with the most valuable feasible work
-    rather than the nearest — which is the whole of "recovery-optimised routing"
-    and needs no ML at all. A stop with no penalty given falls back to a high
-    constant, i.e. "drop only if you must".
-
-    `allowed_vehicles` IS A COMPLIANCE MECHANISM, NOT AN OPTIMISATION HINT, and
-    without it this function must never be used on real cases. The allocator
-    applies five hard gates BEFORE any scoring — do-not-contact, hostility, the
-    female-agent requirement, the 16 km territory boundary and PTP fatigue — and
-    a fleet solver that is free to move any stop to any vehicle would silently
-    undo all of them while reporting a shorter route. Passing the eligible
-    vehicle set per stop constrains the solve to pairings the gates already
-    permit, so the guarantees hold by construction rather than by re-testing.
-    None for a stop means "any vehicle"; an EMPTY list means the stop cannot be
-    served by anyone and is dropped.
-    """
-    n_stops, n_veh = len(stops), len(vehicles)
-    if n_stops == 0 or n_veh == 0:
-        return FleetResult(plans={v.key: RouteResult(order=[]) for v in vehicles})
-
-    # Node layout: 0..n_veh-1 are the vehicle depots, then the stops.
-    coords = [v.start for v in vehicles] + list(stops)
-    m = fetch_osrm_table(coords)
-
-    def stop_node(i: int) -> int:
-        return n_veh + i
-
-    try:
-        from ortools.constraint_solver import pywrapcp
-
-        starts = list(range(n_veh))
-        manager = pywrapcp.RoutingIndexManager(len(coords), n_veh, starts, starts)
-        routing = pywrapcp.RoutingModel(manager)
-
-        service = list(service_seconds) if service_seconds else [avg_visit_seconds()] * n_stops
-
-        def transit(from_idx: int, to_idx: int) -> int:
-            f = manager.IndexToNode(from_idx)
-            t = manager.IndexToNode(to_idx)
-            extra = service[f - n_veh] if f >= n_veh else 0
-            return m.durations[f][t] + extra
-
-        cb = routing.RegisterTransitCallback(transit)
-        routing.SetArcCostEvaluatorOfAllVehicles(cb)
-
-        # Capacity: one unit of demand per stop, depots zero.
-        def demand(from_idx: int) -> int:
-            return 0 if manager.IndexToNode(from_idx) < n_veh else 1
-
-        dcb = routing.RegisterUnaryTransitCallback(demand)
-        routing.AddDimensionWithVehicleCapacity(
-            dcb, 0, [max(1, v.capacity) for v in vehicles], True, "Capacity")
-
-        # Time, with each vehicle's own shift as its depot window.
-        routing.AddDimension(cb, _TIME_WINDOW_SLACK, _TIME_WINDOW_HORIZON, False, "Time")
-        tdim = routing.GetDimensionOrDie("Time")
-        for vi, veh in enumerate(vehicles):
-            tdim.CumulVar(routing.Start(vi)).SetRange(veh.shift_start_s, veh.shift_end_s)
-            tdim.CumulVar(routing.End(vi)).SetRange(veh.shift_start_s, veh.shift_end_s)
-        if time_windows is not None:
-            for i, window in enumerate(time_windows):
-                if window is None:
-                    continue
-                lo, hi = window
-                tdim.CumulVar(manager.NodeToIndex(stop_node(i))).SetRange(int(lo), int(hi))
-
-        # Eligibility: restrict each stop to the vehicles allowed to serve it.
-        # Done before the disjunctions so an unservable stop still has a defined
-        # way out (it is dropped) rather than making the model infeasible.
-        if allowed_vehicles is not None:
-            for i, allowed in enumerate(allowed_vehicles):
-                if allowed is None:
-                    continue
-                idx = manager.NodeToIndex(stop_node(i))
-                routing.VehicleVar(idx).SetValues([-1, *[int(v) for v in allowed]])
-
-        # Disjunctions: a stop may be dropped, at a price.
-        default_penalty = 10_000_000
-        for i in range(n_stops):
-            pen = int(drop_penalties[i]) if drop_penalties else default_penalty
-            routing.AddDisjunction([manager.NodeToIndex(stop_node(i))], max(pen, 1))
-
-        solution = routing.SolveWithParameters(_search_params())
-        if solution is None:
-            logger.warning("fleet.infeasible n_stops=%d n_vehicles=%d", n_stops, n_veh)
-            return FleetResult(plans={v.key: RouteResult(order=[]) for v in vehicles},
-                               dropped=list(range(n_stops)), source=m.source,
-                               feasible=False)
-
-        plans: dict[int, RouteResult] = {}
-        served: set[int] = set()
-        for vi, veh in enumerate(vehicles):
-            order, legs, travel, metres = [], [], 0, 0
-            idx = routing.Start(vi)
-            prev_node = manager.IndexToNode(idx)
-            idx = solution.Value(routing.NextVar(idx))
-            while not routing.IsEnd(idx):
-                node = manager.IndexToNode(idx)
-                s_i = node - n_veh
-                secs, dist = m.durations[prev_node][node], m.distances[prev_node][node]
-                legs.append(RouteLeg(
-                    from_stop=prev_node - n_veh if prev_node >= n_veh else None,
-                    to_stop=s_i, seconds=secs, metres=dist))
-                travel += secs
-                metres += dist
-                order.append(s_i)
-                served.add(s_i)
-                prev_node = node
-                idx = solution.Value(routing.NextVar(idx))
-            plans[veh.key] = RouteResult(
-                order=order, legs=legs, travel_seconds=travel,
-                service_seconds=sum(service[i] for i in order),
-                metres=metres, source=m.source)
-
-        return FleetResult(plans=plans,
-                           dropped=sorted(set(range(n_stops)) - served),
-                           source=m.source, feasible=True)
-
-    except Exception as exc:
-        logger.warning("fleet.solver_failed error=%s; no fleet plan produced", exc)
-        return FleetResult(plans={v.key: RouteResult(order=[]) for v in vehicles},
-                           dropped=list(range(n_stops)), source=m.source,
-                           solver="failed", feasible=False)

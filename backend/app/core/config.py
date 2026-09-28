@@ -25,6 +25,7 @@
 #   not a like-for-like swap. Wiring the nightly task must not be what makes
 #   either of them live.
 # ───────────────────────────────────────────────────────────────────────────
+import os
 from functools import lru_cache
 from typing import List
 from pydantic import field_validator
@@ -33,7 +34,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        # TIQ_ENV_FILE="" reads no file: tests/conftest.py sets it so a developer's
+        # backend/.env cannot change what the suite sees.
+        env_file=os.environ.get("TIQ_ENV_FILE", ".env") or None,
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
@@ -118,16 +121,6 @@ class Settings(BaseSettings):
     @property
     def allowed_origins_list(self) -> List[str]:
         return [o.strip() for o in self.ALLOWED_ORIGINS.split(",")]
-
-    # Bank Command Centre
-    COMMAND_CENTRE_API_KEY: str
-
-    # Gate the /api/field-ops/* contract endpoints behind COMMAND_CENTRE_API_KEY.
-    # Off by default so a local Command Centre works with no configuration —
-    # its proxy sends no auth header. Turn on in any deployment reachable
-    # beyond localhost: those endpoints expose live agent GPS and collections
-    # figures. See api/v1/endpoints/field_ops.py.
-    FIELD_OPS_REQUIRE_API_KEY: bool = False
 
     # OpenAI (Whisper transcription)
     OPENAI_API_KEY: str = ""

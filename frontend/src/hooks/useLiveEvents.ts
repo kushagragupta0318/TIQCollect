@@ -1,6 +1,6 @@
-import { useEffect, useRef, useSyncExternalStore } from "react";
-import api from "@/api/axios";
-import { subscribeEvents, type LiveEvent, type StreamStatus } from "@/lib/eventStream";
+import { useEffect, useRef } from "react";
+import { getMe } from "@/api/auth";
+import { subscribeEvents, type LiveEvent } from "@/lib/eventStream";
 import { useAuthStore } from "@/store/authStore";
 
 /**
@@ -20,8 +20,6 @@ import { useAuthStore } from "@/store/authStore";
 type Listener = (e: LiveEvent) => void;
 
 const listeners = new Set<Listener>();
-const statusListeners = new Set<() => void>();
-let status: StreamStatus = "closed";
 let stop: (() => void) | null = null;
 let stopTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -34,17 +32,13 @@ function start() {
   stop = subscribeEvents({
     getToken: () => useAuthStore.getState().accessToken,
     onEvent: (e) => listeners.forEach((l) => l(e)),
-    onStatus: (s) => {
-      status = s;
-      statusListeners.forEach((f) => f());
-    },
     // Refresh through the axios instance so the ONE refresh path (with its
     // queue and token-reuse handling) stays the only one: a 401 on /auth/me
     // makes the interceptor rotate the tokens into the store, and the stream
     // reconnects reading the new one.
     onUnauthorized: async () => {
       try {
-        await api.get("/auth/me");
+        await getMe();
         return true;
       } catch {
         return false;
@@ -80,17 +74,6 @@ export function useLiveEvents(handler: Listener, enabled = true): void {
       scheduleStop();
     };
   }, [enabled]);
-}
-
-/** "live" | "polling" | "connecting" | "closed" — for a status dot. */
-export function useLiveStatus(): StreamStatus {
-  return useSyncExternalStore(
-    (cb) => {
-      statusListeners.add(cb);
-      return () => statusListeners.delete(cb);
-    },
-    () => status,
-  );
 }
 
 /** Event types that change what a manager's charts and tables show. */

@@ -38,6 +38,20 @@ celery_app.conf.update(
     task_acks_late=True,
     worker_prefetch_multiplier=1,
     task_track_started=True,
+    # Every task has a wall-clock ceiling, so a hung call (OSRM, an LLM, a DB
+    # lock) cannot hold one of the worker's slots through the nightly window.
+    # The soft limit raises SoftTimeLimitExceeded inside the task, so its
+    # except/finally still run; the hard limit kills the child 5 minutes later.
+    task_soft_time_limit=900,
+    task_time_limit=1200,
+    # Longer ceilings where the work is long by nature. Tighten once stage
+    # timings exist on the stress profile (RESTRUCTURE-PLAN 2.9).
+    task_annotations={
+        "app.workers.tasks.allocation.run_nightly_allocation":
+            {"soft_time_limit": 1800, "time_limit": 2100},
+        "app.workers.tasks.model_retraining.run_candidate_training":
+            {"soft_time_limit": 3600, "time_limit": 3900},
+    },
     beat_schedule={
         # Repayment scoring at 7:45 PM IST — after the daily bank ingest
         # (~7:30 PM, scripts/ingest_daily.py) and before allocation at 8 PM.

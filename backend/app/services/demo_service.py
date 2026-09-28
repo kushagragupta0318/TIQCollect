@@ -131,14 +131,6 @@ def save_baseline(db, ref: str | None = None) -> dict:
     }
 
 
-def has_baseline(db, ref: str | None = None) -> bool:
-    ref = ref or settings.DEMO_CONTACT_REF
-    _ensure_table(db)
-    return db.execute(
-        text("SELECT 1 FROM demo_baseline WHERE customer_ref = :r"), {"r": ref}
-    ).first() is not None
-
-
 def rewind(db, ref: str | None = None, dry_run: bool = False) -> dict:
     """Put the demo case back to its snapshot. Commits unless dry_run."""
     ref = ref or settings.DEMO_CONTACT_REF

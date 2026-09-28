@@ -256,28 +256,6 @@ export interface VisitPriority {
   rate_as_of?: string | null;
 }
 
-export interface Beat {
-  id: string;
-  beat_date: string;
-  beat_number: string;
-  ordered_case_ids: string[];
-  total_cases: number;
-  estimated_distance_km: number;
-  estimated_duration_minutes: number;
-  total_target_amount: number;
-  status: "PLANNED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED";
-  cases_completed: number;
-  amount_collected: number;
-  // Road geometry for the beat map (2026-09-08). Optional: beats planned before
-  // that date have none, and a run where OSRM was unreachable records
-  // route_source "haversine" with no polyline at all — the map reads the source
-  // and declines to present straight lines as a driving route.
-  route_geometry?: string | null;
-  route_source?: string | null;
-  start_latitude?: number | null;
-  start_longitude?: number | null;
-}
-
 export interface PTP {
   id: string;
   committed_amount: number;

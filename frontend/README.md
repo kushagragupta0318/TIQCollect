@@ -1,4 +1,45 @@
-# React + TypeScript + Vite
+# TIQCollect frontend
+
+One React 19 + Vite + TypeScript + Tailwind SPA with three route trees: `/agent` (the field
+app), `/manager` (the agency view) and `/bank` (the bank portal, in progress). The API it talks
+to is the FastAPI backend in `../backend`. The target structure is in
+[docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md) §4.
+
+## Run
+
+```bash
+docker compose up -d          # from the repo root: API on :8400, this app on :5473
+```
+
+or on its own, against a running API:
+
+```bash
+npm ci
+VITE_API_TARGET=http://localhost:8400 npm run dev
+```
+
+## Check a change
+
+```bash
+npm run build     # tsc -b + vite build: the real typecheck (never `npx tsc --noEmit`)
+npm test          # vitest, pure modules
+npm run lint      # eslint; CI fails on errors
+```
+
+## Where things go
+
+| Path | Holds |
+|---|---|
+| `src/api/` | the one axios client (`axios.ts`) and one module per area |
+| `src/lib/` | pure helpers (money, geo, event stream, location reporter), unit-tested |
+| `src/components/ui/` | primitives: Button, Card, Badge, modals |
+| `src/pages/<area>/` | route components, plus the pure logic they were split from (`*.ts` + `*.test.ts`) |
+| `src/store/` | zustand: auth, SOS |
+
+Environment variables are read at build time:
+- `VITE_API_TARGET` (the dev proxy target)
+- `VITE_TILE_URL` (the map tile server)
+- `VITE_ENABLE_SIMULATOR` (the `/simulator` page outside dev)
 
 ## Install the app on a phone (PWA, 2026-09-24)
 
@@ -41,77 +82,3 @@ page until its user reloads, so a half-filled visit form is never lost.
 phones that have it. Ship one build with `selfDestroying: true` in
 `src/lib/pwaConfig.ts` (the worker unregisters itself and clears its caches
 on the next visit), then remove the plugin.
-
----
-
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
-
-Currently, two official plugins are available:
-
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
-
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
-
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```

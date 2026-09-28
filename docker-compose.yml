@@ -163,7 +163,6 @@ services:
       SECRET_KEY: ${SECRET_KEY:-dev_only_secret_change_me_openssl_rand_hex_32}
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-fieldops_minio}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-fieldops_minio_secret}
-      COMMAND_CENTRE_API_KEY: ${COMMAND_CENTRE_API_KEY:-dev_only_command_centre_key}
       # Pre-signed upload URLs carry this host in the signature, so it has to be
       # one the BROWSER can reach — minio:9000 only resolves inside the compose
       # network. Set explicitly because backend/.env may still point at the
@@ -267,9 +266,9 @@ services:
       - web_node_modules:/app/node_modules
     ports:
       - "${WEB_HOST_PORT:-5473}:5473"
-    # npm install on every start is near-instant once the volume is populated,
-    # and means adding a dependency needs only a restart, not a rebuild.
-    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    # Installs on start, and restarts itself when package-lock.json changes
+    # (frontend/scripts/dev-web.sh), so a merged dependency needs no manual step.
+    command: sh scripts/dev-web.sh
     depends_on:
       api:
         condition: service_started
