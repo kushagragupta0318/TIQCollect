@@ -5,3 +5,9 @@
 # Parquet I/O: the ledger simulator and the tests that build panels read and
 # write .parquet. Imported only by ml/simulation, scripts and tests.
 pyarrow==25.0.1
+
+# Parallel runs (`pytest -n 4`, the shared-machine maximum) and a per-test
+# ceiling (`--timeout=600`) so a spinning test names itself instead of holding
+# the lock for hours (2026-09-28: one worker ran 100 min on an ML file).
+pytest-xdist==3.8.0
+pytest-timeout==2.4.0
