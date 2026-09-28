@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import secrets
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
@@ -145,6 +146,13 @@ def _audit(conn_rows: list, *, when: datetime, action: AuditAction, user_id, ban
     conn_rows.append(dict(id=R.new_id("audit", key), created_at=when, user_id=user_id, bank_id=bank_id,
                           agency_id=agency_id, action=action.value, entity_type=entity_type,
                           entity_id=str(entity_id)[:50], details=details, success=success))
+
+
+def unredeemable_token_hash() -> str:
+    """The token_sha256 of an invite nobody can accept: the hash of random bytes
+    that are discarded at once. (Audit HIGH, 2026-09-28: it was the sha256 of a
+    fixed string in this source, so anyone could redeem Hooghly's open invite.)"""
+    return hashlib.sha256(secrets.token_bytes(32)).hexdigest()
 
 
 def _user_id_by_email(conn: Connection, email: str) -> str:
@@ -346,7 +354,8 @@ def build_world(conn: Connection, *, agency_keys: tuple[str, ...], agents_cap: i
                 id=R.new_id("agent", f"ARAVALLI:{code}"), bank_id=R.BANK["id"], agency_id=R.AGENCY["id"],
                 user_id=uid, employee_code=code, id_card_number=card, gender=gender, base_latitude=lat,
                 base_longitude=lon, territory=f"{loc[0]}, {city.title()}",
-                territory_region_id=R.new_id("region", city), languages_spoken=["ENGLISH", "HINDI"],
+                territory_region_id=R.new_id("region", region_key("GIRIVAN", city)),
+                languages_spoken=["ENGLISH", "HINDI"],
                 specialization="BOTH", max_cases_per_day=12, vehicle_type="TWO_WHEELER", status="ON_DUTY",
                 tier="TIER_3", ranking_score=0.0, joined_on=joined, dra_certificate_no=_dra_no(rng, issued),
                 dra_certificate_expires_on=R.plus_years(issued, 3),
@@ -399,7 +408,7 @@ def build_world(conn: Connection, *, agency_keys: tuple[str, ...], agents_cap: i
                    entity_type="agency", entity_id=a.id, key=f"{a.key}:suspend", **base,
                    details={"reason": a.row["suspended_reason"]})
         if a.invite_sent is not None:                # the open invite (Hooghly)
-            token = hashlib.sha256(f"never-issued:{a.key}".encode()).hexdigest()
+            token = unredeemable_token_hash()
             conn.execute(T["user_invites"].insert(), [dict(
                 id=R.new_id("invite", a.key), bank_id=a.bank_id, agency_id=a.id, purpose="AGENCY_MASTER_LOGIN",
                 email=a.ops_head["email"], phone=a.ops_head["phone"][3:], full_name=a.ops_head["name"],

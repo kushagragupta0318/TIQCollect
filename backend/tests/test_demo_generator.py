@@ -113,3 +113,11 @@ def test_contact_hours_decide_the_flag_the_way_the_product_does():
     assert is_within_contact_hours(datetime(2026, 9, 1, 18, 59, tzinfo=ist))
     assert not is_within_contact_hours(datetime(2026, 9, 1, 19, 0, tzinfo=ist))
     assert not is_within_contact_hours(datetime(2026, 9, 1, 7, 59, tzinfo=ist))
+
+
+def test_the_open_invite_can_never_be_redeemed():
+    """Audit HIGH: the placeholder invite's token hash must not be computable
+    from anything in the source. Random, discarded preimage: two calls differ."""
+    from app.demo.world import unredeemable_token_hash
+    a, b = unredeemable_token_hash(), unredeemable_token_hash()
+    assert a != b and len(a) == 64 and int(a, 16) >= 0

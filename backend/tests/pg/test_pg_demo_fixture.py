@@ -203,3 +203,39 @@ def test_the_revision_is_one_alembic_knows(db):
     from tests.pg.conftest import alembic_cfg
     rev = one(db, "select version_num from public.alembic_version")
     assert ScriptDirectory.from_config(alembic_cfg()).get_revision(rev) is not None
+
+
+def test_no_open_invite_is_redeemable_with_a_guessable_token(db):
+    """Audit HIGH: an open invite in a committed fixture is a public credential
+    if its token can be computed. None may hash a string derivable from the
+    roster (the pre-fix scheme was sha256("never-issued:<agency key>"))."""
+    import hashlib
+    from app.demo import roster as R
+    guessable = {hashlib.sha256(f"{p}{a.key}".encode()).hexdigest()
+                 for a in R.AGENCIES for p in ("never-issued:", "", "invite:")}
+    open_hashes = {r[0] for r in rows(db, "select token_sha256 from tenancy.user_invites "
+                                          "where accepted_at is null and revoked_at is null")}
+    assert open_hashes and not open_hashes & guessable
+
+
+SECRETISH = r"(secret|token|api_?key|password|otp|jti|totp|hash)"
+#: The only secret-like columns a committed demo book may fill, and why each is safe.
+#: Everything else matching SECRETISH must be empty: a session, reset token, device
+#: secret, TOTP seed or push token in a public fixture is a credential.
+ALLOWED_FILLED = {
+    "tenancy.users.hashed_password",         # all the unusable marker (test above)
+    "tenancy.users.must_change_password",    # booleans, checked false below
+    "tenancy.users.totp_enabled",
+    "tenancy.user_invites.token_sha256",     # random preimage (test above)
+}
+
+
+def test_no_other_secret_like_value_is_in_the_fixture(db):
+    """Coordinator, after the invite finding: scan every secret-like column."""
+    cols = rows(db, "select table_schema, table_name, column_name from information_schema.columns "
+                    "where table_schema not in ('pg_catalog', 'information_schema') "
+                    "and column_name ~* :rx", rx=SECRETISH)
+    filled = {f"{s}.{t}.{c}" for s, t, c in cols
+              if one(db, f'select count(*) from "{s}"."{t}" where "{c}" is not null') > 0}
+    assert filled <= ALLOWED_FILLED, f"secret-like columns with values: {sorted(filled - ALLOWED_FILLED)}"
+    assert one(db, "select count(*) from tenancy.users where must_change_password or totp_enabled") == 0

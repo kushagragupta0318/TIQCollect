@@ -46,9 +46,13 @@ from app.ml.simulation.ledger.materialise import loan_state_at, payment_status_a
 from app.ml.simulation.ledger.product_rules import product_promises
 from app.ml.simulation.ledger.simulator import LedgerSimulator
 from app.models.audit_log import AuditAction
+from app.models.case import ClosureReason as CR
+from app.models.customer import CUSTOMER_TAG_DECEASED
 from app.models.loan import dpd_bucket_for
 
 UTC = timezone.utc
+#: The ledger simulator's death EVENT name (not the customer tag, not a closure reason).
+SIM_EVENT_DECEASED = "DECEASED"
 
 
 class DemoLedgerSimulator(LedgerSimulator):
@@ -156,7 +160,6 @@ def generate_book(conn: Connection, w: AgencyWorld, *, slots_per_agent: float, s
                 npa_since[lid_] = day
             if lid_ in placed_on or day >= last_scan or row.dpd <= 0:
                 continue
-            opened = int(loans.loc[loans.loan_id == lid_, "opened_day"].iloc[0]) if False else None
             if dpd_bucket_for(int(row.dpd)).value not in a.buckets:
                 continue
             placed_on[lid_] = day
@@ -203,7 +206,7 @@ def generate_book(conn: Connection, w: AgencyWorld, *, slots_per_agent: float, s
     if len(led.flags):
         f = led.flags[(led.flags.flag == "HOSTILE") & (led.flags.day < end_day)]
         hostile_by = set(f.loan_id)
-    deceased = set(life[life.event == "DECEASED"].loan_id)
+    deceased = set(life[life.event == SIM_EVENT_DECEASED].loan_id)
     pulls = led.bureau_pulls[led.bureau_pulls.day < end_day] if len(led.bureau_pulls) else led.bureau_pulls
     latest_cibil = (pulls.sort_values("day").groupby("loan_id").cibil_score.last() if len(pulls)
                     else pd.Series(dtype=float))
@@ -228,7 +231,7 @@ def generate_book(conn: Connection, w: AgencyWorld, *, slots_per_agent: float, s
         lat, lon = jitter(rng, loc[1], loc[2], 900)
         cust_pos[bid] = (lat, lon)
         cib = latest_cibil.get(lids[-1], opening_cibil[lids[-1]])
-        tags = ["DECEASED"] if any(x in deceased for x in lids) else []
+        tags = [CUSTOMER_TAG_DECEASED] if any(x in deceased for x in lids) else []
         evening = rng.random() < 0.25
         cust_rows.append(dict(
             id=lid("customer", bid), bank_id=bank_id,
@@ -305,12 +308,13 @@ def generate_book(conn: Connection, w: AgencyWorld, *, slots_per_agent: float, s
         p_status, reason, c_status, closure, notes = "ACTIVE", None, None, None, None
         if ended:
             p_status, reason, c_status, closure = {
-                "WRITTEN_OFF": ("RETURNED", "WRITTEN_OFF", "WRITTEN_OFF", "WRITTEN_OFF"),
-                "SETTLED": ("RESOLVED", "SETTLED", "CLOSED", "SETTLED"),
-                "CLOSED": ("RESOLVED", "PAID", "PAID", "PAID"),
-                "RECALLED": ("RECALLED", "RECALLED", "CLOSED", "RECALLED"),
-                "DECEASED": ("RETURNED", "DECEASED", "CLOSED", "DECEASED"),
+                "WRITTEN_OFF": ("RETURNED", CR.WRITTEN_OFF, "WRITTEN_OFF", CR.WRITTEN_OFF),
+                "SETTLED": ("RESOLVED", CR.SETTLED, "CLOSED", CR.SETTLED),
+                "CLOSED": ("RESOLVED", CR.PAID, "PAID", CR.PAID),
+                "RECALLED": ("RECALLED", CR.RECALLED, "CLOSED", CR.RECALLED),
+                SIM_EVENT_DECEASED: ("RETURNED", CR.DECEASED, "CLOSED", CR.DECEASED),
             }[ev[0]]
+            reason, closure = reason.value, closure.value
             if ev[0] == "RECALLED":
                 # outcomes.censoring_status reads a recall only from this prefix.
                 notes = f"RECALLED by bank on {start + timedelta(days=ev[1])}"
@@ -339,8 +343,7 @@ def generate_book(conn: Connection, w: AgencyWorld, *, slots_per_agent: float, s
     spike = (latent.spike_from, latent.spike_to)
     for v in visits.itertuples():
         ag = w.agents[int(v.agent_idx)]
-        cust = lid("customer", loans.loc[loans.loan_id == v.loan_id, "borrower_id"].iloc[0]) \
-            if False else case_rows[case_idx[case_of[v.loan_id]]]["customer_id"]
+        cust = case_rows[case_idx[case_of[v.loan_id]]]["customer_id"]
         clat, clon = cust_rows[cust_idx[cust]]["latitude"], cust_rows[cust_idx[cust]]["longitude"]
         vday = start + timedelta(days=int(v.day))
         outcome, met = str(v.outcome), bool(v.met)
@@ -420,9 +423,6 @@ def generate_book(conn: Connection, w: AgencyWorld, *, slots_per_agent: float, s
     # ── calls ───────────────────────────────────────────────────────────────
     call_rows = []
     contacts_by_loan: dict[str, list[int]] = defaultdict(list)
-    for v in visit_rows:
-        if v["customer_met"]:
-            pass
     for (k, d), vr in visits_by_loan_day.items():
         if vr["customer_met"]:
             contacts_by_loan[k].append(d)
@@ -540,7 +540,6 @@ def generate_book(conn: Connection, w: AgencyWorld, *, slots_per_agent: float, s
     for vr in visit_rows:
         if vr["outcome"] != "DISPUTE":
             continue
-        k = next(x for x, cid in case_of.items() if cid == vr["case_id"]) if False else None
         raised = vr["check_in_time"]
         resolved = rng.random() < 0.7
         dispute_rows.append(dict(
