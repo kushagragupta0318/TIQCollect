@@ -25,7 +25,7 @@
 + its User row) on behalf of the manager who owns them."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import Request
 from sqlalchemy.exc import IntegrityError
@@ -36,11 +36,21 @@ from app.core.errors import AppException, ErrorCode
 from app.core.geo import point_in_geojson_polygon
 from app.core.security import disabled_password_hash
 from app.models.agent import AGENT_GENDER_VALUES, VEHICLE_TYPES, Agent, AgentSpecialization, AgentStatus, AgentTier
-from app.models.audit_log import AuditAction
+from app.models.audit_log import AuditAction, AuditLog
 from app.models.tenancy import Region
 from app.models.user import User, UserRole
 from app.services.invite_service import _normalise_email, _normalise_phone
 from app.services.scope import agents_in_scope
+
+# coordinator audit on 084d9ba: a manager could edit an agent's phone to a
+# number they control, then reset-login, and sign in AS the agent — visits
+# and payments recorded under the agent's identity with no way to tell the
+# two apart. PHONE_CHANGE_HOLD is how long reset-login refuses after a
+# phone edit on an ESTABLISHED account (never_had_a_password False); a
+# brand-new agent (never signed in) is exempt — there is no identity yet to
+# hijack, and blocking it would make edit_agent unusable in the ordinary
+# "fix a typo before the agent's first login" case right after creation.
+PHONE_CHANGE_HOLD = timedelta(hours=24)
 
 _LAT_RANGE = (-90.0, 90.0)
 _LON_RANGE = (-180.0, 180.0)
@@ -250,6 +260,24 @@ def create_agent(
     }
 
 
+def _phone_changed_within(db: Session, agent: Agent, window: timedelta) -> bool:
+    """True if an AGENT_UPDATED audit row for this agent, inside `window`,
+    recorded a phone change. Read from the audit trail rather than a new
+    column (coordinator audit on 084d9ba: "store phone_changed_at ... or
+    read it from the latest AGENT_UPDATED audit row's from/to phone" — the
+    audit row already carries exactly this, and a column is a schema change
+    that goes to 43 first). Filtered in Python rather than a JSON-path
+    query on `details`, which is not portable between SQLite (tests) and
+    Postgres (production) — the row count per agent is small enough that
+    this costs nothing that matters."""
+    cutoff = datetime.now(timezone.utc) - window
+    rows = (db.query(AuditLog)
+           .filter(AuditLog.entity_type == "Agent", AuditLog.entity_id == agent.id,
+                   AuditLog.action == AuditAction.AGENT_UPDATED, AuditLog.created_at >= cutoff)
+           .all())
+    return any("phone" in (row.details or {}).get("changed", {}) for row in rows)
+
+
 def _agent_in_scope_or_404(db: Session, manager: User, agent_id: str) -> Agent:
     """The uniform 404 (scope.py convention): an agent of another agency, or
     another manager's agent under the SAME agency (agents_in_scope for
@@ -379,6 +407,23 @@ def edit_agent(
         db.rollback()
         raise AppException(409, ErrorCode.CONFLICT, _CONFLICT_MESSAGE)
 
+    if "phone" in changes:
+        # coordinator audit: the OLD number is the only channel that can
+        # catch a takeover — a manager who just pointed the account at a
+        # phone they control controls the NEW number too, so texting that
+        # one would tell the attacker their own move succeeded. Best-effort
+        # and after the commit (the notification convention throughout
+        # this codebase): a delivery failure must not roll back a change
+        # that already happened, and the old number may itself be
+        # disconnected.
+        old_phone = changes["phone"][0]
+        from app.services.notification_service import NotificationService
+        NotificationService.send_sms(
+            "+" + NotificationService.normalize_phone(old_phone),
+            f"Your TIQCollect phone number was changed by {manager.full_name}. "
+            f"If this wasn't expected, contact your agency immediately.",
+            db=db, user_id=agent_user.id)
+
     return {"agent_id": agent.id, "changed": sorted(changes.keys())}
 
 
@@ -458,7 +503,20 @@ def reset_agent_login(db: Session, manager: User, agent_id: str, *,
     anything else (coordinator's audit of 12c3232: a "first" password on an
     ESTABLISHED account would spend its open tokens and leave its sessions
     running — that is a reset). An agent who has ever signed in reaches
-    this action, so admin_reset is the one that fits."""
+    this action, so admin_reset is the one that fits.
+
+    Refuses for PHONE_CHANGE_HOLD after a phone edit on an established
+    account (coordinator audit on 084d9ba): without this, a manager edits
+    the phone to one they control, resets login, receives the set-password
+    link themselves, and signs in AS the agent — every visit and payment
+    they record after that reads as the agent's own, with no way to tell
+    the two apart. A brand-new agent (never_had_a_password) is exempt: see
+    PHONE_CHANGE_HOLD's own docstring for why."""
     agent = _agent_in_scope_or_404(db, manager, agent_id)
+    agent_user = db.get(User, agent.user_id)
     from app.services import password_service
+    if (not password_service.never_had_a_password(db, agent_user)
+            and _phone_changed_within(db, agent, PHONE_CHANGE_HOLD)):
+        raise AppException(409, ErrorCode.CONFLICT,
+                           "This account's phone number changed recently. Try again later.")
     return password_service.admin_reset(db, manager, agent.user_id, request=request)

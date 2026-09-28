@@ -266,6 +266,96 @@ def test_reset_login_without_public_base_url_is_a_clean_service_unavailable(w, m
     assert exc.value.status_code == 503
 
 
+# ── phone-change hold (coordinator audit on 084d9ba) ────────────────────────
+# Without this, a manager edits an agent's phone to one they control, resets
+# login, and signs in AS the agent: every visit and payment they record after
+# that reads as the agent's own.
+def test_reset_login_refuses_within_24h_of_a_phone_change_on_an_established_account(w, monkeypatch):
+    from datetime import timezone
+    from app.services.agent_management_service import edit_agent
+
+    db = w["db"]
+    # An "established" account: never_had_a_password looks at last_login_at /
+    # password_changed_at / any UserSession row. A fresh create_agent() agent
+    # has none of these — this simulates one that does.
+    agent_user = db.get(User, w["agent_user_id"])
+    agent_user.password_changed_at = datetime.now(timezone.utc)
+    db.commit()
+
+    edit_agent(db, w["mgr"], w["agent_id"], phone="9810005088")
+    with pytest.raises(AppException) as exc:
+        reset_agent_login(db, w["mgr"], w["agent_id"])
+    assert exc.value.status_code == 409
+
+
+def test_reset_login_is_not_held_after_a_phone_change_for_a_brand_new_agent(w):
+    """never_had_a_password is True right after create_agent — the hold does
+    not apply, or a manager could never fix a typo'd phone number before an
+    agent's very first login."""
+    from app.services.agent_management_service import edit_agent
+
+    db = w["db"]
+    edit_agent(db, w["mgr"], w["agent_id"], phone="9810005089")
+    # Falls through to admin_reset, which then hits the real (unrelated)
+    # gate in this test environment — proving the phone-change hold itself
+    # did not fire, not that reset-login unconditionally succeeds.
+    with pytest.raises(AppException) as exc:
+        reset_agent_login(db, w["mgr"], w["agent_id"])
+    assert exc.value.status_code == 503
+
+
+def test_reset_login_is_allowed_again_once_the_hold_window_has_passed(w):
+    from datetime import timedelta, timezone
+    from app.models.audit_log import AuditLog
+    from app.services.agent_management_service import PHONE_CHANGE_HOLD, edit_agent
+
+    db = w["db"]
+    agent_user = db.get(User, w["agent_user_id"])
+    agent_user.password_changed_at = datetime.now(timezone.utc)
+    db.commit()
+
+    edit_agent(db, w["mgr"], w["agent_id"], phone="9810005090")
+    # entity_type/entity_id alone also matches create_agent's own
+    # USER_CREATED row (same Agent entity) — the action filter is what
+    # narrows this to the edit.
+    old_row = (db.query(AuditLog)
+              .filter(AuditLog.entity_type == "Agent", AuditLog.entity_id == w["agent_id"],
+                      AuditLog.action == AuditAction.AGENT_UPDATED).one())
+    old_row.created_at = datetime.now(timezone.utc) - PHONE_CHANGE_HOLD - timedelta(minutes=1)
+    db.commit()
+
+    with pytest.raises(AppException) as exc:
+        reset_agent_login(db, w["mgr"], w["agent_id"])
+    assert exc.value.status_code == 503   # past the gate; 503 is the unrelated PUBLIC_BASE_URL check
+
+
+def test_edit_agent_phone_change_texts_the_old_number(w, monkeypatch):
+    from app.services import agent_management_service, notification_service
+
+    sent = []
+    monkeypatch.setattr(notification_service.NotificationService, "send_sms",
+                        staticmethod(lambda phone, body, **kw: sent.append((phone, body)) or True))
+
+    db = w["db"]
+    old_phone = db.get(User, w["agent_user_id"]).phone
+    agent_management_service.edit_agent(db, w["mgr"], w["agent_id"], phone="9810005091")
+
+    assert len(sent) == 1
+    phone, body = sent[0]
+    assert old_phone in phone   # normalize_phone/"+" wrapping is NotificationService's own concern
+    assert w["mgr"].full_name in body
+
+
+def test_edit_agent_without_a_phone_change_sends_no_sms(w, monkeypatch):
+    from app.services import agent_management_service, notification_service
+
+    sent = []
+    monkeypatch.setattr(notification_service.NotificationService, "send_sms",
+                        staticmethod(lambda *a, **kw: sent.append(1) or True))
+    agent_management_service.edit_agent(w["db"], w["mgr"], w["agent_id"], territory="Sector 60, Gurugram")
+    assert sent == []
+
+
 # ── HTTP ─────────────────────────────────────────────────────────────────
 def test_http_suspend_reactivate_round_trip(w):
     client = TestClient(app)
