@@ -304,8 +304,12 @@ def refresh_tokens(db: Session, refresh_token: str, request: Request) -> dict:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired")
 
     device_id = session.device_id
+    # perms must ride refresh too (MED 2, coordinator audit 2026-09-28) — only
+    # _open_session/login set it before this; a refreshed token silently lost
+    # the claim after 15 min, which the frontend reads without a round trip.
     new_access = create_access_token(user.id, user.role.value, device_id, sid=session.id,
-                                     bank_id=user.bank_id, agency_id=user.agency_id)
+                                     bank_id=user.bank_id, agency_id=user.agency_id,
+                                     perms=sorted(role_capabilities(user.role)))
     new_refresh = create_refresh_token(user.id, device_id, sid=session.id)
     # 2026-09-24 (coordinator audit gate 6) — rotate with a COMPARE-AND-SWAP.
     # Read-then-write let two concurrent refreshes with the same token both

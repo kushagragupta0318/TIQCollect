@@ -1,12 +1,14 @@
 # ─── CHANGELOG (standalone plan) ─────────────────────────────────────────────
 # New file, 2026-09-28 (A15). Covers:
 #   - PRODUCT_MODE (core/config.py): default, and that anything else is
-#     refused at startup rather than silently read as one mode or the other.
-#   - the /api/field-ops/* contract is preserved regardless of PRODUCT_MODE —
-#     both a live check (the routes exist on the running app) and a
-#     structural one (main.py's mount is not wrapped in a PRODUCT_MODE
-#     conditional, so a future edit that tries to gate it on the new flag is
-#     caught here rather than discovered live).
+#     refused at startup rather than silently read as one mode or the other,
+#     including the literal string an unresolved `${VAR}` arrives as.
+#   - the field-ops preservation claim originally here (a live mount check
+#     plus a structural PRODUCT_MODE-conditional tripwire) is WITHDRAWN,
+#     2026-09-28: bb's owner-approved Wave 1 D4 (0c32082) deleted
+#     /api/field-ops/* as unused before this landed, so "preserved" is now
+#     false and the two tests asserting it were dropped rather than left to
+#     fail at merge. Nothing in this file depends on that route existing.
 #   - SERVICE role accounts replace manager-password service logins: a
 #     dedicated User row with role=SERVICE logs in through the ORDINARY
 #     /auth/login (no new credential scheme, no schema change — see the
@@ -25,10 +27,6 @@
 #   and proves it works in isolation; wiring individual manager.py routes to
 #   accept it is follow-up work, not silently skipped.
 from __future__ import annotations
-
-import ast
-import inspect
-import pathlib
 
 import pytest
 from fastapi import FastAPI
@@ -77,42 +75,15 @@ def test_standalone_is_accepted():
     assert s.PRODUCT_MODE == "standalone"
 
 
-# ── /api/field-ops/* contract preserved ──────────────────────────────────────
-def test_field_ops_router_is_mounted_on_the_live_app():
-    from app.api.v1.endpoints import field_ops
-    from app.main import app
-
-    field_ops_paths = {r.path for r in field_ops.router.routes}
-    assert field_ops_paths, "field_ops.router declares no routes — nothing to preserve"
-    live_paths = {r.path for r in app.routes}
-    assert field_ops_paths <= live_paths
-
-
-def test_field_ops_mount_is_not_conditional_on_product_mode():
-    """Structural tripwire: main.py must not gate the field_ops mount behind
-    `if settings.PRODUCT_MODE == ...`. Reads the source rather than trusting a
-    behavioural test alone, because the live-app check above only proves
-    TODAY's default ("embedded") keeps it mounted — it says nothing about
-    whether a future edit made "standalone" drop it."""
-    main_src = pathlib.Path(inspect.getfile(__import__("app.main", fromlist=["app"]))).read_text(encoding="utf-8")
-    tree = ast.parse(main_src)
-    mount_calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
-                  and isinstance(n.func, ast.Attribute) and n.func.attr == "include_router"
-                  and any(isinstance(a, ast.Attribute) and a.attr == "router"
-                         and isinstance(a.value, ast.Name) and a.value.id == "field_ops"
-                         for a in n.args)]
-    assert mount_calls, "app.include_router(field_ops.router) not found in main.py"
-    for call in mount_calls:
-        # Walk UP from the call to the module body, and fail if any ancestor
-        # on the way is an `if` node whose test mentions PRODUCT_MODE.
-        for node in ast.walk(tree):
-            if isinstance(node, ast.If) and call in ast.walk(node):
-                test_src = ast.dump(node.test)
-                assert "PRODUCT_MODE" not in test_src, (
-                    "field_ops mount is now conditional on PRODUCT_MODE — "
-                    "the standalone plan requires the contract to be preserved "
-                    "regardless of mode; this decision is the owner's, not a "
-                    "silent side effect of an unrelated change")
+def test_an_unresolved_docker_var_literal_is_refused_not_silently_a_mode():
+    """CLAUDE.md's own known failure mode for backend/.env: an unresolved
+    `${VAR}` reference arrives as the literal string, not empty and not unset.
+    PRODUCT_MODE must reject it the same way it rejects any other garbage
+    value rather than quietly matching neither Literal arm."""
+    from app.core.config import Settings
+    with pytest.raises(ValidationError) as exc:
+        Settings(**_REQUIRED_SETTINGS, PRODUCT_MODE="${PRODUCT_MODE}")
+    assert any(e["loc"] == ("PRODUCT_MODE",) for e in exc.value.errors())
 
 
 # ── SERVICE role accounts ────────────────────────────────────────────────────
@@ -178,7 +149,7 @@ def service_capability_app(db):
         return {"ok": True, "role": current_user.role.value}
 
     @app.get("/manager/human-only-thing")
-    def human_only(current_user: User = ManagerOnly):
+    def human_only(current_user: ManagerOnly):
         return {"ok": True}
 
     app.dependency_overrides[get_db] = lambda: db

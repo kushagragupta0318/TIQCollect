@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.core.database import get_db
-from app.core.dependencies import get_current_user
+from app.core.dependencies import _get_token_payload, get_current_user
 from app.core.permissions import CAPABILITIES, role_capabilities
 from app.core.request_context import CurrentContext, RequestContext, get_request_context
 from app.core.security import create_access_token, decode_token
@@ -117,17 +117,27 @@ def test_a_request_context_with_no_sid_is_allowed():
 
 # ── through a real request ───────────────────────────────────────────────────
 def test_current_context_end_to_end_through_http(db):
+    """CurrentContext resolves current_user AND the raw token payload as two
+    INDEPENDENT sub-dependencies (get_request_context's own signature) — in
+    production both trace back to the same request's bearer token and FastAPI
+    dedupes the underlying decode within one request, but a test that only
+    overrides get_current_user does not also bypass _get_token_payload (it
+    still demands a real Authorization header). Both are overridden here for
+    exactly that reason — found by running this test, not by reading the
+    dependency graph."""
     user = _make_user(db, UserRole.AGENCY_MANAGER, agency_id=DEFAULT_TENANT["agency_id"])
     app = FastAPI()
 
     @app.get("/whoami")
     def whoami(ctx: CurrentContext):
         return {"user_id": ctx.user_id, "role": ctx.role.value, "bank_id": ctx.bank_id,
-                "agency_id": ctx.agency_id, "has_team_read": ctx.has("team.read"),
+                "agency_id": ctx.agency_id, "sid": ctx.sid, "has_team_read": ctx.has("team.read"),
                 "has_ml_promote": ctx.has("ml.promote")}
 
     app.dependency_overrides[get_db] = lambda: db
     app.dependency_overrides[get_current_user] = lambda: user
+    app.dependency_overrides[_get_token_payload] = lambda: {"sub": user.id, "type": "access",
+                                                             "sid": "sid-e2e-1"}
     client = TestClient(app)
 
     r = client.get("/whoami")
@@ -135,5 +145,6 @@ def test_current_context_end_to_end_through_http(db):
     body = r.json()
     assert body == {
         "user_id": user.id, "role": "AGENCY_MANAGER", "bank_id": DEFAULT_TENANT["bank_id"],
-        "agency_id": DEFAULT_TENANT["agency_id"], "has_team_read": True, "has_ml_promote": False,
+        "agency_id": DEFAULT_TENANT["agency_id"], "sid": "sid-e2e-1",
+        "has_team_read": True, "has_ml_promote": False,
     }

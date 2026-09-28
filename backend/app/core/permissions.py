@@ -54,7 +54,24 @@ from typing import Annotated
 
 from fastapi import Depends, HTTPException, Request, status
 
+from app.core.audit import write_audit
+from app.core.dependencies import CurrentUser, DbSession
+from app.models.audit_log import AuditAction
 from app.models.user import UserRole
+
+# 2026-09-28 — CurrentUser/DbSession MUST be imported at module level, not
+# lazily inside require_perm(). `from __future__ import annotations` (above)
+# makes every annotation in this module a lazy STRING, resolved later via
+# `typing.get_type_hints()` against the function's OWN __globals__ — which
+# for a nested function is this MODULE's namespace, never the local scope of
+# the function that defined it. A function-local import here was found (by
+# running the actual dependency through FastAPI, not by reading the code) to
+# leave `_dependency`'s `current_user: CurrentUser` / `db: DbSession`
+# unresolved: FastAPI silently fell back to treating both as plain,
+# unrecognised-type QUERY PARAMETERS — every route gated by require_perm()
+# answered 422 "Field required" instead of running the check at all. No
+# circular import exists either way (core/dependencies.py does not import
+# this module), so there was nothing the lazy form protected against.
 
 # Role shorthand matching docs/DATA-MODEL-V2.md §5.2's own legend exactly, so
 # the matrix below can be transcribed in the doc's column order without
@@ -198,8 +215,14 @@ _CATALOG: tuple[Capability, ...] = (
 
     _cap("service.field_ops.read", "the /api/field-ops/* contract (embedded mode)", (SV,)),
     _cap("service.manager_api.read",
-        "read-only /api/v1/manager/* for Command Center (replaces TIQCOLLECT_AGENCY_ACCOUNTS "
-        "manager passwords, plan §2.1)", (SV,)),
+        "read-only /api/v1/manager/* for Command Center — DECLARED, NOT WIRED: "
+        "manager.py's 48 routes still check ManagerOnly only (known issue 6, no "
+        "manager_service.py to add a SERVICE+tenant-scope branch to). A SERVICE "
+        "login reaches this capability in isolation (test_product_mode.py) but "
+        "cannot yet reach a live manager.py route with it, so the "
+        "TIQCOLLECT_AGENCY_ACCOUNTS replacement (plan §2.1) is not complete. "
+        "Flagged 2026-09-28 (coordinator audit MED 1); wiring individual routes "
+        "is follow-up work, not delivered here", (SV,)),
 )
 
 CAPABILITIES: dict[str, Capability] = {c.code: c for c in _CATALOG}
@@ -243,15 +266,24 @@ def require_perm(code: str):
     if code not in CAPABILITIES:
         raise KeyError(f"{code!r} is not a declared capability — check core/permissions.CAPABILITIES")
 
-    def _checker(request: Request, db, current_user) -> object:
+    # `current_user: CurrentUser, db: DbSession` are themselves sub-
+    # dependencies (each an Annotated[X, Depends(...)] alias from
+    # core.dependencies) — FastAPI resolves them the same way it resolves
+    # `require_roles`'s own `_checker`. See the module-level import note
+    # above for why CurrentUser/DbSession cannot be imported inside this
+    # function instead.
+    def _dependency(request: Request, current_user: CurrentUser, db: DbSession):
         if not has_capability(current_user.role, code):
-            from app.core.audit import write_audit
-            from app.models.audit_log import AuditAction
             write_audit(
                 db, action=AuditAction.ROLE_VIOLATION_ATTEMPT,
                 user_id=current_user.id, entity_type="Route",
                 entity_id=f"{request.method} {request.url.path}",
-                details={"required_capability": code, "actual_role": current_user.role.value,
+                details={"required_capability": code,
+                         # A None/unknown role must still 403 + audit cleanly,
+                         # not 500 on .value — has_capability(None, code) already
+                         # returns False (frozenset membership never raises), so
+                         # this branch is reachable with a malformed principal.
+                         "actual_role": getattr(current_user.role, "value", current_user.role),
                          "method": request.method, "path": request.url.path},
                 ip_address=request.client.host if request.client else None,
                 user_agent=request.headers.get("user-agent"),
@@ -262,16 +294,6 @@ def require_perm(code: str):
                 detail=f"Access denied. Required capability: {code}",
             )
         return current_user
-
-    # `db`/`current_user` are resolved via the same dependencies require_roles
-    # uses, imported lazily to avoid a circular import (dependencies.py does
-    # not import this module, so there is nothing to break either way — kept
-    # lazy anyway so this module can be imported before the app is built,
-    # e.g. from a script that only wants CAPABILITIES/ROLE_CAPABILITIES).
-    from app.core.dependencies import CurrentUser, DbSession
-
-    def _dependency(request: Request, current_user: CurrentUser, db: DbSession):
-        return _checker(request, db, current_user)
 
     return Depends(_dependency)
 

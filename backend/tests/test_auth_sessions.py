@@ -90,6 +90,17 @@ def test_each_login_is_its_own_session_and_the_token_names_it(world):
     assert live == 2
 
 
+def test_refresh_mints_a_perms_claim_matching_the_role(world):
+    """MED 2, coordinator audit 2026-09-28: only login/_open_session used to
+    embed perms; a session that lived past its 15-minute access token lost the
+    claim on every refresh after the first."""
+    from app.core.permissions import role_capabilities
+    first = _login(world, world["mgr"], "laptop-1")
+    assert decode_token(first["access_token"])["perms"] == sorted(role_capabilities(UserRole.AGENCY_MANAGER))
+    rotated = auth_service.refresh_tokens(world["db"], first["refresh_token"], _request())
+    assert decode_token(rotated["access_token"])["perms"] == sorted(role_capabilities(UserRole.AGENCY_MANAGER))
+
+
 def test_refresh_rotates_and_a_replayed_token_revokes_only_that_session(world):
     first = _login(world, world["mgr"], "laptop-1")
     other_device = _login(world, world["mgr"], "tablet-2")
