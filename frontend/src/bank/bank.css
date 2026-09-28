@@ -1,0 +1,852 @@
+/* ─── CHANGELOG (prototype → product) ────────────────────────────────────────
+   2026-09-24 — New file (task UI02). Command Center's `src/index.css`, ported
+   IN ORDER and scoped to `.bank-root`, per docs/ui/COMMAND-CENTER-UI-SPEC.md
+   §7.2. Loaded only by the lazy bank route tree (BankLayout.tsx imports it), so
+   the agency and agent views never download it.
+
+   WHY IN ORDER, AND WHY EVERY SELECTOR GAINS EXACTLY ONE `.bank-root`. What CC
+   renders is not what its design doc declares: an unlayered "Soft Card" block
+   at the end of its index.css overrides the layered "Apple Glass" tokens (spec
+   §0). The cascade decides the look, so the cascade is what is ported. Adding
+   one class to every rule keeps every relative specificity, and keeping the
+   source order keeps every tie, so each rule wins or loses here exactly as it
+   does in CC. Four adaptations, all from spec §7.2:
+
+     `:root {…}`  →  `.bank-root {…}`, declaring ALL of CC's variables. Ours
+                     share names with different values (`--primary` is #2563EB
+                     in TIQCollect, #4F46E5 in CC), so anything not redeclared
+                     here would silently inherit ours.
+     `body {…}`   →  `.bank-root {…}` + `min-height: 100vh`.
+     `* {…}`      →  `:where(.bank-root) *` — :where() keeps it at (0,0,0), as
+                     in CC. Elements only, like CC's: its `*` never matched
+                     ::before/::after, which keep preflight's border colour.
+     keyframes    →  renamed `bank-*`: keyframe names are global.
+
+   `@layer utilities` classes are prefixed by `important: ".bank-root"` in the
+   config and are written bare below; everything else carries the prefix by
+   hand. Deliberately NOT ported: `html, body { height: 100% }` (document-level;
+   TIQCollect already sets it) and CC's ambient background blobs (painted over
+   by the opaque shell in CC itself — spec §0.2).
+
+   WHAT @apply ABSORBS. Tailwind's @apply takes every rule in the file that
+   names the applied class, not just the utility. Compiling CC's own index.css
+   with CC's own config (3.4.19) shows it: `.panel { @apply … p-6 }` also emits
+   `.app-content > .panel { padding: 0 }` from CC's `.app-content > .p-6`, and
+   `@apply font-bold` in `.chip-badge` and `table:not(.tiq-table) th` compiles
+   to `font-weight: 600`, CC's own `.font-bold` override. Ported literally
+   here, those two user rules and their @apply parents would share the
+   `.bank-root` class, and Tailwind rejects that as a circular dependency. So
+   the two user rules are written as `[class~="…"]` (same elements, same
+   specificity, outside the @apply cache) and the four rules CC derives are
+   written out beside their parents, marked "Derived".
+
+   The last section is NOT from CC. It guards against the reverse leak the spec
+   does not cover — TIQCollect's own global rules reaching INTO `.bank-root` —
+   and says why each guard exists.
+   ───────────────────────────────────────────────────────────────────────── */
+
+@config "../../tailwind.bank.config.js";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  .bank-root {
+    /* Brand Colors — unchanged from product */
+    --primary:            213 100% 54%;   /* #1677FF */
+    --primary-foreground: 0 0% 100%;
+    --secondary:          258 90% 66%;    /* #8B5CF6 */
+    --secondary-foreground: 0 0% 100%;
+
+    /* Status Colors — semantic meaning only, never decorative */
+    --success:            142 71% 36%;    /* #16A34A */
+    --success-foreground: 0 0% 100%;
+    --warning:            32 95% 44%;     /* #D97706 */
+    --warning-foreground: 20 14% 12%;     /* dark text on amber fill */
+    --destructive:        0 72% 51%;      /* #DC2626 */
+    --destructive-foreground: 0 0% 100%;
+
+    /* Additional Spec Tokens */
+    --primary-dark:       217 88% 37%;    /* #0C4DB3 */
+    --teal:               175 84% 32%;    /* #0D9488 */
+
+    /* Surface & Background */
+    --background:         240 15% 98%;    /* ≈ #F9F9FB, ultra-soft off-white */
+    --foreground:         240 10% 12%;    /* ≈ #1C1C1F, carbon gray */
+    --card:               0 0% 100%;
+    --card-foreground:    240 10% 12%;
+    --popover:            0 0% 100%;
+    --popover-foreground: 240 10% 12%;
+    --muted:              240 5% 95%;
+    --muted-foreground:   240 4% 46%;
+    --accent:             213 100% 96%;   /* soft blue tint — used sparingly */
+    --accent-foreground:  213 100% 32%;
+    --border:             240 6% 90%;     /* always at 0.6 opacity, never solid */
+    --input:              240 6% 90%;
+    --ring:               213 100% 54%;
+
+    /* Radius — card=22px, control=12px, modal=26px. Nesting rule: parent > child. */
+    --radius: 1.375rem; /* 22px — card radius, the baseline (validated against reference mockup) */
+
+    /* Legacy CSS variables for inline compat */
+    --color-bg-app:     #FAFAFC;
+    --color-bg-content: #FFFFFF;
+    --color-primary:    #1677ff;
+  }
+
+  :where(.bank-root) * {
+    border-color: hsl(var(--border) / 0.6);
+  }
+
+  /* CC's `body` rule. */
+  .bank-root {
+    margin: 0;
+    @apply bg-background text-foreground font-sans antialiased;
+    font-feature-settings: "rlig" 1, "calt" 1;
+    letter-spacing: -0.011em; /* SF Pro / system font kerning */
+    min-height: 100vh;
+  }
+
+  /* Global easing override — every Tailwind transition class gets the spec curve.
+     No more stray ease/ease-in-out from default Tailwind. */
+  .bank-root [class*="transition-"] {
+    transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+  }
+}
+
+@layer components {
+  /* ── TIQCollect → bank leak guards, part 1 (NOT from CC; see the last
+     section for the why). These sit first in the components layer so that
+     every CC rule and every utility, all at (0,2,0) or more and all later in
+     the file, still beats them — while their own (0,1,1)–(0,2,1) beats the
+     TIQCollect rule each one neutralises. `unset` = what the element would
+     have had if the TIQCollect rule did not exist (inherit for inherited
+     properties, initial otherwise). ─────────────────────────────────── */
+
+  /* TIQ `.badge-premium-*` (0,1,0) adds min-height 24px, line-height 1,
+     nowrap and a 6px ::before dot. CC's badge has none of them. */
+  .bank-root :is(.badge-premium-blue, .badge-premium-green, .badge-premium-red, .badge-premium-amber) {
+    min-height: unset;
+    align-items: unset;
+    gap: unset;
+    line-height: unset;
+    white-space: unset;
+  }
+  .bank-root :is(.badge-premium-blue, .badge-premium-green, .badge-premium-red, .badge-premium-amber)::before {
+    content: none;
+  }
+
+  /* TIQ `label` (0,0,1) forces 13px / 400 / muted on every label. */
+  .bank-root label {
+    color: unset;
+    font-size: unset;
+    font-weight: unset;
+    letter-spacing: unset;
+    text-transform: unset;
+  }
+
+  /* TIQ `select, textarea` (0,0,1): 1px border, 10px radius, white fill. CC's
+     are preflight's: no border, the UA radius and fill, inherited colour. */
+  .bank-root :where(select, textarea) {
+    border: 0 solid hsl(var(--border) / 0.6);
+    border-radius: revert;
+    background-color: revert;
+    color: inherit;
+  }
+  /* TIQ `input::placeholder` (0,0,2) → #98A2B3; CC keeps preflight's gray-400. */
+  .bank-root :where(input, textarea)::placeholder {
+    color: #9ca3af;
+  }
+  /* TIQ `input:focus, select:focus, textarea:focus` (0,1,1): blue #2563EB
+     border and ring; `button:focus-visible, a:focus-visible…` (0,1,1): a 2px
+     blue outline. CC shows the browser's own focus ring on bare controls. */
+  .bank-root :where(input, select, textarea):focus {
+    border-color: hsl(var(--border) / 0.6);
+    outline: revert;
+    box-shadow: unset;
+  }
+  .bank-root :where(button, a, input, select, textarea):focus-visible {
+    outline: revert;
+    outline-offset: revert;
+  }
+
+  /* TIQ `.btn-ghost` (0,1,0): 40px min-height, 10px radius, a transparent
+     1px border, 0 12px padding, a hover fill. CC's `.btn-ghost` is text-only. */
+  .bank-root .btn-ghost {
+    min-height: unset;
+    border-radius: unset;
+    border: 0 solid hsl(var(--border) / 0.6);
+    padding: 0;
+  }
+  .bank-root .btn-ghost:hover {
+    background-color: transparent;
+    background-image: none;
+  }
+  /* TIQ `.btn-primary:disabled` (0,2,0) fades it to 50%. CC does not. */
+  .bank-root .btn-primary:disabled {
+    opacity: unset;
+    cursor: default;
+  }
+
+  /* TIQ `.panel, .card-base, .agentic-panel, .tiq-glass` (0,1,0) add
+     min/max-width and an ink colour; `.tiq-glass` also a 16px radius and a
+     shadow. CC sets none of these (its `.app-content` rule restores the
+     min/max-width where CC has them). */
+  .bank-root :is(.panel, .card-base, .agentic-panel, .tiq-glass) {
+    min-width: unset;
+    max-width: unset;
+    color: unset;
+  }
+  .bank-root .tiq-glass {
+    border-radius: unset;
+    box-shadow: unset;
+  }
+  /* TIQ `.group:hover .icon-circle` (0,3,0) tilts any icon circle in a group. */
+  .bank-root .group:hover .icon-circle {
+    transform: none;
+  }
+
+  /* ── Panel — Data Card ─────────────────────────────────────────────────────
+     Uses --radius (16px = rounded-card). Nesting rule: controls inside must
+     use rounded-control (12px), badges use rounded-pill.
+     Hover-lift is preserved — clickable panels use it as their affordance.   */
+  .bank-root .panel {
+    @apply bg-card border border-border/60 p-6 transition-all;
+    border-radius: var(--radius); /* 22px — card radius token, validated against reference mockup */
+    box-shadow: 0 1px 2px rgba(17,24,39,0.03), 0 1px 3px rgba(17,24,39,0.04);
+    transition: box-shadow 180ms cubic-bezier(0.16, 1, 0.3, 1),
+                border-color 180ms cubic-bezier(0.16, 1, 0.3, 1),
+                transform 180ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  /* Derived by CC's @apply of `p-6` (see "WHAT @apply ABSORBS"). */
+  .bank-root .app-content > .panel {
+    padding: 0;
+  }
+  .bank-root .panel:hover {
+    box-shadow: 0 6px 20px rgba(22,119,255,0.12), 0 2px 6px rgba(17,24,39,0.06);
+    border-color: hsl(var(--border) / 0.9);
+    transform: translateY(-2px); /* visible lift — affordance for clickable panels */
+  }
+
+  /* Panel section header — uppercase for identity, semibold (600 max) */
+  .bank-root .panel-title {
+    @apply text-[9.5px] font-semibold tracking-widest text-muted-foreground uppercase mb-5;
+  }
+
+  /* ── Card Base (Overhaul) ────────────────────────────────────────────────── */
+  .bank-root .card-base {
+    @apply bg-card border border-border/60 transition-all;
+    border-radius: var(--radius); /* 22px */
+    box-shadow: 0 1px 2px rgba(17,24,39,0.03), 0 1px 3px rgba(17,24,39,0.04);
+  }
+  .bank-root .card-base:hover {
+    box-shadow: 0 6px 20px rgba(22,119,255,0.12), 0 2px 6px rgba(17,24,39,0.06);
+    border-color: hsl(var(--border) / 0.9);
+    transform: translateY(-4px); /* visible 4px lift */
+  }
+
+  /* ── Agentic Panel ───────────────────────────────────────────────────────── */
+  .bank-root .agentic-panel {
+    @apply bg-[#0B0D14] transition-all relative overflow-hidden;
+    border-radius: var(--radius);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2), 0 28px 56px -18px rgba(139, 92, 246, 0.3);
+  }
+  .bank-root .agentic-panel:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.25), 0 36px 64px -16px rgba(139, 92, 246, 0.36);
+  }
+
+  /* ── Icon Circle ─────────────────────────────────────────────────────────── */
+  .bank-root .icon-circle {
+    @apply w-10 h-10 rounded-full flex items-center justify-center text-white shrink-0;
+    transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .bank-root .card-base:hover .icon-circle,
+  .bank-root .panel:hover .icon-circle,
+  .bank-root .agentic-panel:hover .icon-circle,
+  .bank-root .mini-card:hover .icon-circle,
+  .bank-root .npa-card:hover .icon-circle {
+    transform: scale(1.08) rotate(-4deg);
+  }
+
+  /* ── Chip Badge ──────────────────────────────────────────────────────────── */
+  .bank-root .chip-badge {
+    @apply px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider rounded-full inline-block;
+  }
+  /* Derived: CC's @apply of `font-bold` compiles to 600 (see "WHAT @apply ABSORBS"). */
+  .bank-root .chip-badge {
+    font-weight: 600;
+  }
+
+  /* ── Glass Surfaces ─────────────────────────────────────────────────────────
+     Used on: sidebar, sticky header, modals, AI co-pilot panel.
+     NOT on primary content cards — glass only reads as glass when there's
+     an ambient background behind it to refract.                              */
+  .bank-root .tiq-glass {
+    background: rgba(255, 255, 255, 0.68);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.4);
+  }
+
+  /* ── Inputs ─────────────────────────────────────────────────────────────── */
+  .bank-root .tiq-input {
+    @apply w-full bg-muted/40 border border-border/55 px-4 py-2.5 text-[12.5px] text-foreground outline-none placeholder:text-muted-foreground/50;
+    border-radius: 0.75rem; /* control radius = 12px */
+    transition: border-color 160ms cubic-bezier(0.16, 1, 0.3, 1),
+                box-shadow 160ms cubic-bezier(0.16, 1, 0.3, 1),
+                background 160ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .bank-root .tiq-input:focus {
+    @apply bg-card border-primary/50;
+    box-shadow: 0 0 0 3px hsl(var(--primary) / 0.08);
+  }
+  .bank-root .tiq-input:focus-visible {
+    outline: 2px solid hsl(var(--primary) / 0.5);
+    outline-offset: 1px;
+  }
+  .bank-root .tiq-label {
+    @apply block text-[11.5px] font-semibold text-foreground/80 mb-1.5 uppercase tracking-wider;
+  }
+  .bank-root .tiq-file-upload {
+    @apply border border-dashed border-border/70 p-6 text-center bg-muted/20 transition-all cursor-pointer;
+    border-radius: 0.75rem;
+  }
+  /* Derived by CC's @apply of `p-6` (see "WHAT @apply ABSORBS"). */
+  .bank-root .app-content > .tiq-file-upload {
+    padding: 0;
+  }
+  .bank-root .tiq-file-upload:hover {
+    @apply border-primary/55 bg-muted/40;
+  }
+
+  /* ── Buttons ────────────────────────────────────────────────────────────── */
+  /* font-semibold (600) — max weight per design.md. rounded-control (12px).  */
+  .bank-root .btn-primary {
+    @apply inline-flex items-center justify-center gap-1.5 bg-primary hover:bg-primary/90 text-primary-foreground font-semibold text-xs px-5 py-2.5 shadow-sm;
+    border-radius: 0.75rem;
+    transition: background-color 160ms cubic-bezier(0.16, 1, 0.3, 1),
+                box-shadow 160ms cubic-bezier(0.16, 1, 0.3, 1),
+                transform 160ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .bank-root .btn-primary:hover {
+    box-shadow: 0 2px 8px hsl(var(--primary) / 0.3);
+  }
+  .bank-root .btn-primary:focus-visible {
+    outline: 2px solid hsl(var(--primary) / 0.6);
+    outline-offset: 2px;
+  }
+  .bank-root .btn-primary:active {
+    transform: scale(0.98);
+  }
+
+  .bank-root .btn-secondary {
+    @apply inline-flex items-center justify-center gap-1.5 bg-muted hover:bg-muted/80 text-foreground font-semibold text-xs px-4 py-2.5 border border-border/40;
+    border-radius: 0.75rem;
+    transition: background-color 160ms cubic-bezier(0.16, 1, 0.3, 1),
+                border-color 160ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .bank-root .btn-secondary:focus-visible {
+    outline: 2px solid hsl(var(--primary) / 0.4);
+    outline-offset: 2px;
+  }
+
+  .bank-root .btn-ghost {
+    @apply inline-flex items-center gap-1.5 text-muted-foreground hover:text-foreground text-[12px] font-semibold;
+    transition: color 160ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  /* ── Tables ─────────────────────────────────────────────────────────────── */
+  .bank-root .tiq-table {
+    @apply w-full border-collapse;
+  }
+  .bank-root .tiq-table th {
+    @apply text-muted-foreground font-semibold uppercase text-[9px] tracking-widest px-5 py-3.5 border-b border-border/40 text-left bg-muted/10;
+  }
+  .bank-root .tiq-table td {
+    @apply px-5 py-4 border-b border-border/30 text-[12px] text-foreground font-semibold;
+  }
+  .bank-root .tiq-table tbody tr {
+    transition: background-color 150ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .bank-root .tiq-table tbody tr:hover {
+    @apply bg-muted/30;
+  }
+
+  /* ── Clean Default Tables (Borderless) ──────────────────────────────────── */
+  /* These outrank the utilities on most tables — spec §0.3. Kept on purpose. */
+  .bank-root table:not(.tiq-table) th {
+    @apply pb-3 font-bold;
+  }
+  /* Derived: CC's @apply of `font-bold` compiles to 600 (see "WHAT @apply ABSORBS"). */
+  .bank-root table:not(.tiq-table) th {
+    font-weight: 600;
+  }
+  .bank-root table:not(.tiq-table) td {
+    @apply py-2.5;
+  }
+  .bank-root table:not(.tiq-table) tbody tr {
+    transition: background-color 150ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .bank-root table:not(.tiq-table) tbody tr:hover {
+    @apply bg-muted/30;
+  }
+
+  /* ── Status Badges (pill radius) ────────────────────────────────────────── */
+  /* Status colors only — never for decoration.                               */
+  .bank-root .badge-premium-blue {
+    @apply bg-primary/5 border border-primary/10 text-primary px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider inline-block;
+    border-radius: 9999px;
+  }
+  .bank-root .badge-premium-green {
+    @apply bg-success/5 border border-success/10 text-success px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider inline-block;
+    border-radius: 9999px;
+  }
+  .bank-root .badge-premium-red {
+    @apply bg-destructive/5 border border-destructive/10 text-destructive px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider inline-block;
+    border-radius: 9999px;
+  }
+  .bank-root .badge-premium-amber {
+    @apply bg-warning/10 border border-warning/20 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider inline-block;
+    border-radius: 9999px;
+    color: hsl(var(--warning));
+  }
+
+}
+
+@layer utilities {
+  /* ── Entrance Animations — all use spec easing ──────────────────────────── */
+  .page-fade-in {
+    animation: bank-fadeIn 350ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+  @keyframes bank-fadeIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .card-enter {
+    animation: bank-slideUpCard 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  @keyframes bank-slideUpCard {
+    from { opacity: 0; transform: translateY(18px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .hero-fade-up {
+    animation: bank-heroFadeUp 500ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  @keyframes bank-heroFadeUp {
+    from { opacity: 0; transform: translateY(14px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ── Stagger Utilities ──────────────────────────────────────────────────────
+     Apply .card-enter and set --stagger-i as an inline CSS var.
+     Usage: <div className="card-enter" style={{"--stagger-i": i}}>
+     The delay animates items in sequentially (40-60ms per item per design.md). */
+  .stagger-item {
+    animation-delay: calc(var(--stagger-i, 0) * 50ms);
+    animation-fill-mode: both;
+  }
+
+  .hero-glow-primary {
+    box-shadow: 0 0 80px -20px rgba(22, 119, 255, 0.25);
+  }
+  .hero-glow-destructive {
+    box-shadow: 0 0 80px -20px rgba(220, 38, 38, 0.2);
+  }
+  .hero-glow-warning {
+    box-shadow: 0 0 80px -20px rgba(217, 119, 6, 0.2);
+  }
+  .hero-glow-success {
+    box-shadow: 0 0 80px -20px rgba(22, 163, 74, 0.2);
+  }
+
+  /* ── Sidebar Section Collapse ───────────────────────────────────────────── */
+  .sidebar-section-items {
+    overflow: hidden;
+    transition: max-height 200ms cubic-bezier(0.16, 1, 0.3, 1),
+                opacity 200ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .sidebar-section-items.collapsed {
+    max-height: 0;
+    opacity: 0;
+  }
+  .sidebar-section-items.expanded {
+    max-height: 400px;
+    opacity: 1;
+  }
+
+  /* ── Status dot ─────────────────────────────────────────────────────────── */
+  .live-dot {
+    animation: bank-liveRing 1.8s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+  }
+  @keyframes bank-liveRing {
+    0%   { box-shadow: 0 0 0 0   rgba(52, 211, 153, 0.55); }
+    65%  { box-shadow: 0 0 0 7px rgba(52, 211, 153, 0); }
+    100% { box-shadow: 0 0 0 0   rgba(52, 211, 153, 0); }
+  }
+
+  /* ── Cursor blink ───────────────────────────────────────────────────────── */
+  .cursor-blink {
+    animation: bank-cursorBlink 0.75s step-end infinite;
+    display: inline-block;
+    width: 3px;
+    background: currentColor;
+    margin-left: 2px;
+    border-radius: 1px;
+    vertical-align: baseline;
+    position: relative;
+    top: -2px;
+  }
+  @keyframes bank-cursorBlink {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0; }
+  }
+
+  /* ── Scrollbars ─────────────────────────────────────────────────────────── */
+  .scrollbar-thin::-webkit-scrollbar       { width: 5px; height: 5px; }
+  .scrollbar-thin::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 9999px; }
+  .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+
+  .sidebar-scrollbar-hide::-webkit-scrollbar { display: none; }
+  .sidebar-scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+}
+
+/* Global scrollbar */
+.bank-root ::-webkit-scrollbar       { width: 5px; height: 5px; }
+.bank-root ::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 9999px; }
+.bank-root ::-webkit-scrollbar-track { background: transparent; }
+
+/* ── Range sliders — Apple style ─────────────────────────────────────────── */
+.bank-root input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+.bank-root input[type="range"]::-webkit-slider-track {
+  height: 4px;
+  border-radius: 9999px;
+  background: hsl(var(--border) / 0.5);
+}
+.bank-root input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #FFFFFF;
+  border: 1px solid rgba(0,0,0,0.1);
+  box-shadow: 0 2px 5px rgba(0,0,0,0.1), 0 1px 1px rgba(0,0,0,0.05);
+  margin-top: -7px;
+  transition: transform 120ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.bank-root input[type="range"]::-webkit-slider-thumb:hover  { transform: scale(1.1); }
+.bank-root input[type="range"]::-webkit-slider-thumb:active { transform: scale(0.95); }
+
+/* Soft Card UI theme -------------------------------------------------------
+   Kept as a final compatibility layer so legacy route markup inherits the
+   new design without duplicating styles across every feature page.
+   (In CC this block is what RENDERS — spec §0. These are the effective
+   values of spec §1.1.) */
+.bank-root {
+  --primary: 243 75% 59%;
+  --primary-foreground: 0 0% 100%;
+  --primary-dark: 245 58% 51%;
+  --secondary: 255 91% 66%;
+  --success: 153 82% 39%;
+  --warning: 35 93% 50%;
+  --destructive: 4 86% 58%;
+  --background: 220 13% 96%;
+  --foreground: 220 43% 11%;
+  --card: 0 0% 100%;
+  --muted: 220 18% 97%;
+  --muted-foreground: 218 15% 46%;
+  --accent: 242 80% 96%;
+  --accent-foreground: 243 75% 59%;
+  --border: 230 14% 94%;
+  --input: 225 15% 90%;
+  --ring: 243 75% 59%;
+  --radius: 1rem;
+  --color-bg-app: #F4F5F7;
+  --color-bg-content: #FFFFFF;
+  --color-primary: #4F46E5;
+}
+
+/* CC's second `body` rule. */
+.bank-root {
+  line-height: 1.5;
+  letter-spacing: 0;
+}
+
+.bank-root [class*="transition-"] {
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+
+.bank-root .rounded-card { border-radius: 16px !important; }
+.bank-root .rounded-inner { border-radius: 12px !important; }
+.bank-root .rounded-control { border-radius: 10px !important; }
+.bank-root .rounded-modal { border-radius: 16px !important; }
+.bank-root .shadow-menu { box-shadow: 0 8px 24px rgba(16, 24, 40, 0.10) !important; }
+.bank-root .shadow-modal { box-shadow: 0 20px 48px rgba(16, 24, 40, 0.16) !important; }
+
+.bank-root .hero .hf-l {
+  color: #98A2B3;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  opacity: 1;
+}
+
+.bank-root .hero .hf-v {
+  color: #101828;
+  font-size: 20px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.bank-root .alert-detail table {
+  min-width: 720px;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+}
+
+.bank-root .alert-detail thead tr {
+  background: #F7F8FA;
+  border: 0;
+}
+
+.bank-root .alert-detail thead th {
+  padding: 12px 16px !important;
+  color: #98A2B3 !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  letter-spacing: .06em;
+}
+
+.bank-root .alert-detail tbody td {
+  padding: 14px 16px !important;
+  border-bottom: 1px solid #ECEDF1;
+  font-size: 13px;
+}
+
+.bank-root .alert-detail tbody tr:last-child td { border-bottom: 0; }
+.bank-root .alert-detail tbody tr:hover { background: #F7F8FA; }
+
+/* Route-level containment. Every screen gets a reliable content gutter, while
+   cards and grid/flex children are allowed to shrink instead of escaping. */
+.bank-root .app-content > * {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+/* Never matches in CC either: page roots are grandchildren of `main` (spec §0.10).
+   `[class~="p-6"]` rather than `.p-6`: same elements, same specificity, but
+   invisible to Tailwind's @apply cache — see "WHAT @apply ABSORBS" below. */
+.bank-root .app-content > [class~="p-6"] {
+  padding: 0;
+}
+
+.bank-root .app-content :is(.panel, .card-base, .rounded-card) {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.bank-root .app-content .card-base:not([class*="p-"]) {
+  padding: 24px;
+}
+
+.bank-root .app-content [class*="grid"] > *,
+.bank-root .app-content [class*="flex"] > * {
+  min-width: 0;
+}
+
+.bank-root .app-content :is(p, h1, h2, h3, h4, td, th) {
+  overflow-wrap: anywhere;
+}
+
+.bank-root .app-content :is(img, video, canvas) {
+  max-width: 100%;
+}
+
+@media (max-width: 640px) {
+  .bank-root .app-content { padding: 16px; }
+  .bank-root .app-content .card-base:not([class*="p-"]) { padding: 20px; }
+}
+
+.bank-root .panel,
+.bank-root .card-base {
+  background: #FFFFFF;
+  border: 1px solid #ECEDF1;
+  border-radius: 16px !important;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04) !important;
+  transform: none !important;
+}
+
+.bank-root .panel:hover,
+.bank-root .card-base:hover {
+  border-color: #E1E3E9;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04) !important;
+  transform: none !important;
+}
+
+.bank-root .panel-title {
+  color: #98A2B3;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .06em;
+}
+
+.bank-root .tiq-glass {
+  background: #FFFFFF;
+  border-color: #ECEDF1;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.bank-root .tiq-input {
+  height: 40px;
+  padding: 0 12px;
+  border: 1px solid #E1E3E9;
+  border-radius: 10px;
+  background: #FFFFFF;
+  color: #101828;
+  font-size: 14px;
+}
+
+.bank-root .tiq-label {
+  color: #98A2B3;
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.bank-root .btn-primary,
+.bank-root .btn-secondary {
+  min-height: 40px;
+  padding: 0 16px;
+  border-radius: 10px;
+  background: #FFFFFF;
+  font-size: 14px;
+  font-weight: 500;
+  box-shadow: none !important;
+}
+
+.bank-root .btn-primary {
+  color: #4F46E5;
+  border: 1px solid #4F46E5;
+}
+
+.bank-root .btn-primary:hover { background: #EEEDFD; }
+
+.bank-root .btn-secondary {
+  color: #101828;
+  border: 1px solid #E1E3E9;
+}
+
+.bank-root .btn-secondary:hover { background: #F7F8FA; }
+
+.bank-root .tiq-table th {
+  background: #F7F8FA;
+  color: #98A2B3;
+  font-size: 11px;
+  letter-spacing: .06em;
+}
+
+.bank-root .tiq-table td {
+  border-color: #ECEDF1;
+  color: #101828;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.bank-root .badge-premium-blue,
+.bank-root .badge-premium-green,
+.bank-root .badge-premium-red,
+.bank-root .badge-premium-amber {
+  border: 0;
+  color: #101828;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.bank-root .badge-premium-blue { background: #E8F1FE; }
+.bank-root .badge-premium-green { background: #DCF5E9; }
+.bank-root .badge-premium-red { background: #FDE7E6; }
+.bank-root .badge-premium-amber { background: #FDF0DC; }
+
+@media (prefers-reduced-motion: reduce) {
+  .bank-root *, .bank-root *::before, .bank-root *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-property: opacity, color, background-color, border-color !important;
+    transition-duration: 1ms !important;
+  }
+}
+
+/* Cross-service typography baseline. Command Center is the reference: one
+   native sans family, regular body copy, medium controls, and 600 as the
+   strongest text emphasis. */
+.bank-root .font-mono,
+.bank-root .font-display {
+  font-family: inherit !important;
+}
+
+/* Attribute form for the same reason as `[class~="p-6"]` above. */
+.bank-root [class~="font-bold"],
+.bank-root [class~="font-extrabold"],
+.bank-root [class~="font-black"] {
+  font-weight: 600 !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Everything below is NOT from CC.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* The portal container (lib/portal.ts). Dialogs and drawers portal here, not
+   to <body>, so they stay inside `.bank-root` and keep the variables and every
+   scoped rule — the trap CC's own FieldAnalytics.css:194-195 fell into (spec
+   §7.3). `display: contents` gives it no box: without it the `.bank-root` rule
+   above would paint a 100vh grey block at the foot of <body>, on every page,
+   once the bank tree had been opened. */
+.bank-root[data-bank-portal] {
+  display: contents;
+}
+
+/* ── TIQCollect → bank leak guards, part 2 ─────────────────────────────────
+   WHY THEY EXIST. Spec §7 scopes the bank's CSS so it cannot reach OUT. The
+   reverse was not covered: TIQCollect's index.css is global and unlayered,
+   and several of its rules match elements inside `.bank-root` and set
+   properties CC never sets. Part 1 (top of the components layer) handles
+   every such rule at (0,1,1) or below. This rule cannot be handled there:
+
+     input:not([type=checkbox]):not([type=radio]):not([type=range])
+       → border 1px #E1E3E9, radius 10px, white fill, ink colour   (0,3,1)
+
+   (0,3,1) outranks every `.bank-root` utility (0,2,0), so it cannot be reset
+   from underneath without also beating the utilities. Instead these restore
+   — at a specificity that clears it — exactly what CC renders for the three
+   input patterns the bank ports: a bare field (TopBar and filter-bar search,
+   no border class), a `bg-transparent` field, and the Input primitive's
+   border colours. An input pattern outside these three will show TIQ's
+   border/fill; add its restore here rather than restyling the markup. */
+.bank-root input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([class~="border"]) {
+  border-width: 0;
+}
+.bank-root input.bg-transparent:not([type="checkbox"]):not([type="radio"]):not([type="range"]) {
+  background-color: transparent;
+}
+.bank-root input.border-input:not([type="checkbox"]):not([type="radio"]):not([type="range"]) {
+  border-color: hsl(var(--input));
+}
+.bank-root input.focus-visible\:border-primary:not([type="checkbox"]):not([type="radio"]):not([type="range"]):focus-visible {
+  border-color: hsl(var(--primary));
+}

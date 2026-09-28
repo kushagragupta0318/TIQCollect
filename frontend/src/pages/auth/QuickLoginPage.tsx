@@ -4,6 +4,7 @@ import { useNavigate, useSearchParams } from "react-router";
 import { toast } from "react-hot-toast";
 import { quickLogin } from "@/api/auth";
 import { useAuthStore } from "@/store/authStore";
+import { quickLoginLanding } from "@/lib/roles";
 
 export default function QuickLoginPage() {
   const navigate = useNavigate();
@@ -25,7 +26,7 @@ export default function QuickLoginPage() {
       .then((data) => {
         setTokens(data.access_token, data.refresh_token);
         setUser({ id: data.user_id, email: "", full_name: data.full_name, role: data.role, is_active: true });
-        navigate(data.role === "FIELD_AGENT" ? "/agent/home" : "/manager/analytics", { replace: true });
+        navigate(quickLoginLanding(data.role), { replace: true });
       })
       .catch(() => {
         toast.error("This link is invalid or has expired.");
