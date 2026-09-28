@@ -107,6 +107,12 @@ def test_suspend_without_a_reason_is_refused(w):
     assert exc.value.status_code == 422
 
 
+def test_suspend_with_a_reason_over_500_characters_is_refused(w):
+    with pytest.raises(AppException) as exc:
+        suspend_agent(w["db"], w["mgr"], w["agent_id"], reason="A" * 501)
+    assert exc.value.status_code == 422
+
+
 def test_suspending_an_already_suspended_agent_is_refused(w):
     db = w["db"]
     suspend_agent(db, w["mgr"], w["agent_id"], reason="First reason")

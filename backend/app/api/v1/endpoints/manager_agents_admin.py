@@ -50,7 +50,7 @@ from pydantic import BaseModel
 
 from app.core.dependencies import DbSession
 from app.core.errors import AppException
-from app.core.ids import UUIDPath
+from app.core.ids import UUIDPath, UUIDStr
 from app.core.permissions import require_perm
 from app.core.ratelimit import AUTH_LIMIT, limiter
 from app.models.agent import AgentSpecialization
@@ -70,7 +70,7 @@ class CreateAgentRequest(BaseModel):
     base_latitude: float
     base_longitude: float
     territory: str
-    territory_region_id: str | None = None
+    territory_region_id: UUIDStr | None = None
     gender: str | None = None
     specialization: AgentSpecialization | None = None
     vehicle_type: str | None = None

@@ -125,8 +125,13 @@ def create_agent(
     _require_manager(manager)
 
     full_name = (full_name or "").strip()
-    if not full_name:
-        raise AppException(422, ErrorCode.VALIDATION_ERROR, "Enter the agent's full name.")
+    # Matches User.full_name's own column width (String(200)) — Postgres
+    # enforces it and raises a raw DB error on INSERT; SQLite does not
+    # (VARCHAR(n) is unenforced there), which is exactly the shape of gap
+    # that stays invisible in this suite's sqlite tests and only surfaces
+    # against real Postgres. Checked here so it is a clean 422 either way.
+    if not full_name or len(full_name) > 200:
+        raise AppException(422, ErrorCode.VALIDATION_ERROR, "Enter the agent's full name (up to 200 characters).")
     email = _normalise_email(email)
     if not email or "@" not in email:
         raise AppException(422, ErrorCode.VALIDATION_ERROR, "Enter a valid email address.")
@@ -134,8 +139,8 @@ def create_agent(
     employee_code = _validate_employee_code(employee_code)
     id_card_number = _validate_id_card_number(id_card_number)
     territory = (territory or "").strip()
-    if not territory:
-        raise AppException(422, ErrorCode.VALIDATION_ERROR, "Enter the agent's territory.")
+    if not territory or len(territory) > 100:   # Agent.territory: String(100)
+        raise AppException(422, ErrorCode.VALIDATION_ERROR, "Enter the agent's territory (up to 100 characters).")
     _validate_base_location(base_latitude, base_longitude, territory_region_id, manager, db)
 
     if db.query(User.id).filter((User.email == email) | (User.phone == phone)).first():
@@ -211,6 +216,8 @@ def suspend_agent(db: Session, manager: User, agent_id: str, *, reason: str,
     reason = (reason or "").strip()
     if not reason:
         raise AppException(422, ErrorCode.VALIDATION_ERROR, "Enter a reason for the suspension.")
+    if len(reason) > 500:   # suspended_reason is Text (unbounded in Postgres) — capped here, not by the column
+        raise AppException(422, ErrorCode.VALIDATION_ERROR, "Keep the suspension reason under 500 characters.")
     if agent.status == AgentStatus.SUSPENDED:
         raise AppException(409, ErrorCode.CONFLICT, "This agent is already suspended.")
 

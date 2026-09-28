@@ -158,6 +158,31 @@ def test_duplicate_employee_code_in_the_same_agency_is_refused(w):
     assert exc.value.status_code == 409
 
 
+def test_a_full_name_over_200_characters_is_refused(w):
+    """Matches User.full_name's own column width (String(200)) — Postgres
+    enforces it and raises a raw DB error on INSERT; SQLite does not, which
+    is exactly the shape of gap a sqlite-only test suite would miss."""
+    with pytest.raises(AppException) as exc:
+        create_agent(w["db"], w["mgr"], **_valid_body(full_name="A" * 201))
+    assert exc.value.status_code == 422
+
+
+def test_a_territory_over_100_characters_is_refused(w):
+    with pytest.raises(AppException) as exc:
+        create_agent(w["db"], w["mgr"], **_valid_body(territory="A" * 101))
+    assert exc.value.status_code == 422
+
+
+def test_a_malformed_territory_region_id_in_the_body_is_a_422_not_a_500(w):
+    """core/ids.UUIDStr on the request model — a malformed id in a BODY
+    field is caught by pydantic before create_agent's own DB lookup ever
+    runs (the same boundary rule UUIDPath applies to path parameters)."""
+    client = TestClient(app)
+    r = client.post("/api/v1/manager/agents",
+                    json=_valid_body(territory_region_id="not-a-uuid"), headers=_h(w["mgr"]))
+    assert r.status_code == 422
+
+
 def test_base_location_outside_the_named_regions_coverage_is_refused(w):
     with pytest.raises(AppException) as exc:
         create_agent(w["db"], w["mgr"], **_valid_body(
