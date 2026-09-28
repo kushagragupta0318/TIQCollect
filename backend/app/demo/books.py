@@ -358,6 +358,9 @@ def generate_book(conn: Connection, w: AgencyWorld, *, slots_per_agent: float, s
             vlat, vlon = _offset(clat, clon, float(rng.uniform(20, 400)), float(rng.uniform(0, 2 * math.pi)))
         else:
             vlat, vlon = _offset(clat, clon, float(rng.uniform(3, 85)), float(rng.uniform(0, 2 * math.pi)))
+        # Stored at 6 dp, so the flag and the distance are derived from the
+        # stored coordinates, exactly as a reader recomputing them would.
+        vlat, vlon = round(vlat, 6), round(vlon, 6)
         check_in = _moment(start, int(v.day), _hour(rng, "visit_met" if met else "visit_missed"))
         if not is_within_contact_hours(check_in):
             raise AssertionError("a generated visit fell outside the contact window")
@@ -365,6 +368,7 @@ def generate_book(conn: Connection, w: AgencyWorld, *, slots_per_agent: float, s
         if not geo_ok and outcome != "ADDRESS_ISSUE":
             # The product refuses it (visit_service); the agent re-checks-in at the door.
             vlat, vlon = _offset(clat, clon, float(rng.uniform(3, 60)), float(rng.uniform(0, 2 * math.pi)))
+            vlat, vlon = round(vlat, 6), round(vlon, 6)
             distance, geo_ok = within_geo_fence(vlat, vlon, clat, clon)
         vid = lid("visit", v.visit_id)
         # an attempt refused for contact hours, before the real visit

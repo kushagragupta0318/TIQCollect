@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 
 from app.demo import roster as R
 
@@ -81,7 +81,9 @@ def pdf_bytes(title: str, lines: list[str], footer: str = R.SPECIMEN_FOOTER) -> 
 def _issued(agency: R.AgencyRoster, doc_type: str) -> date:
     """Issue dates that tell the onboarding story: corporate documents years
     before, the agreement and policies around onboarding."""
-    start = agency.contract["start_date"]
+    # An agency still onboarding (Hooghly) has a draft contract dated in the
+    # future; its papers were issued before the invite went out.
+    start = agency.contract["start_date"] if agency.onboarded else agency.invite_sent - timedelta(days=14)
     if doc_type == "INCORPORATION_CERT":
         year = int(agency.row["cin"][8:12]) if agency.row["entity_type"] == "PVT_LTD" else start.year - 3
         return date(year, 4 + (sum(map(ord, agency.key)) % 6), 11)
