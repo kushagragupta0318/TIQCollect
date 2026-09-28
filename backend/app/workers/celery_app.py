@@ -143,3 +143,15 @@ celery_app.conf.update(
         },
     },
 )
+
+
+# 2026-09-28 (B14): Celery worker processes run nightly jobs that legitimately
+# take minutes; the API's 15 s statement timeout would kill them. Each worker
+# process switches to JOB_STATEMENT_TIMEOUT_MS as it starts.
+from celery.signals import worker_process_init  # noqa: E402
+
+
+@worker_process_init.connect
+def _use_job_timeouts(**_kwargs):
+    from app.core.database import use_job_statement_timeout
+    use_job_statement_timeout()
