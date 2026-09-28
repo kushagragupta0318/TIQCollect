@@ -31,18 +31,37 @@ for _name, _value in {
 
 
 # 2026-09-28 (B19): the Postgres suite (tests/pg/) talks to exactly one
-# database server, named by TIQ_PG_TEST_URL. Its host is the ONE address let
-# through; everything else stays blocked. Unset (every ordinary run), nothing
-# changes and tests/pg skips.
-def _pg_test_host() -> str | None:
-    url = os.environ.get("TIQ_PG_TEST_URL", "")
-    if not url:
+# database server, named by TIQ_PG_TEST_URL. That host AND port is the ONE
+# address let through; everything else stays blocked. Unset, or an unresolved
+# "${...}", and nothing changes (tests/pg skips).
+# (bb's review of ec9f2c6: the first version allowed the host on ANY port —
+# Redis, MinIO or the API on the same machine would have passed — and resolved
+# DNS on every connect. Host AND port now, resolved once.)
+def pg_test_target(url: str | None) -> tuple[str, int] | None:
+    """(host, port) named by a Postgres URL, or None when unset or unresolved."""
+    if not url or "${" in url:
         return None
     from urllib.parse import urlsplit
-    return urlsplit(url.replace("+psycopg2", "")).hostname
+    u = urlsplit(url.replace("+psycopg2", ""))
+    return (u.hostname, u.port or 5432) if u.hostname else None
 
 
-_PG_TEST_HOST = _pg_test_host()
+def resolve_addresses(host: str) -> frozenset[str]:
+    out = {host}
+    try:
+        out |= {ai[4][0] for ai in socket.getaddrinfo(host, None)}
+    except OSError:
+        pass
+    return frozenset(out)
+
+
+def allowed_pg_address(address, target, addresses) -> bool:
+    return (target is not None and isinstance(address, tuple) and len(address) >= 2
+            and str(address[0]) in addresses and address[1] == target[1])
+
+
+_PG_TARGET = pg_test_target(os.environ.get("TIQ_PG_TEST_URL"))
+_PG_ADDRESSES = resolve_addresses(_PG_TARGET[0]) if _PG_TARGET else frozenset()
 
 
 def _is_local(address) -> bool:
@@ -51,22 +70,12 @@ def _is_local(address) -> bool:
     host = str(address[0])
     if host in ("localhost", ""):
         return True
-    if _PG_TEST_HOST and host in _pg_test_addresses():
+    if allowed_pg_address(address, _PG_TARGET, _PG_ADDRESSES):
         return True
     try:
         return ipaddress.ip_address(host).is_loopback
     except ValueError:
         return False                                  # a hostname: resolving it is network
-
-
-def _pg_test_addresses() -> set[str]:
-    """The Postgres test host and what it resolves to (the socket sees the IP)."""
-    out = {_PG_TEST_HOST}
-    try:
-        out |= {ai[4][0] for ai in socket.getaddrinfo(_PG_TEST_HOST, None)}
-    except OSError:
-        pass
-    return out
 
 
 _real_connect = socket.socket.connect
