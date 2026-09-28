@@ -17,26 +17,29 @@ import uuid
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
-from app.core.database import Base, get_db
+from app.core.database import get_db
+from tests._db import TEST_AGENCY_ID, TEST_BANK_ID, create_schema, drop_schema, make_engine, make_session_factory
 from app.core.security import hash_password, verify_password
 from app.main import app
 from app.models.agent import Agent, AgentSpecialization, AgentStatus, AgentTier
 from app.models.user import User, UserRole
 from scripts import apply_demo_logins as demo
 
-engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
-Session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+# 2026-09-28: converted to the v2 harness (tests/_db) at the merge of v1 main
+# into standalone-p1. On v2 the three master accounts are a BANK user, an
+# agency manager and a field agent (the owner's decision; v1's were
+# AGENCY_ADMIN / AGENCY_MANAGER / FIELD_AGENT), so the admin slot below is a
+# BANK_ADMIN.
+engine = make_engine()
+Session = make_session_factory(bind=engine, autoflush=False)
 
 MASTER = "correct-horse-battery-staple-2026"          # a test value, 33 chars
 ACCOUNTS = "admin@tiqcollect.in, manager1@tiqcollect.in ,AGENT002@tiqcollect.in"
 # The seed's published passwords — the ones this retires.
-SEED = {UserRole.AGENCY_ADMIN: "Admin@123", UserRole.AGENCY_MANAGER: "Manager@123", UserRole.FIELD_AGENT: "Agent@123"}
+SEED = {UserRole.BANK_ADMIN: "Admin@123", UserRole.AGENCY_MANAGER: "Manager@123", UserRole.FIELD_AGENT: "Agent@123"}
 PEOPLE = [
-    ("admin@tiqcollect.in", UserRole.AGENCY_ADMIN),
+    ("admin@tiqcollect.in", UserRole.BANK_ADMIN),
     ("manager1@tiqcollect.in", UserRole.AGENCY_MANAGER),
     ("manager2@tiqcollect.in", UserRole.AGENCY_MANAGER),
     ("agent001@tiqcollect.in", UserRole.FIELD_AGENT),
@@ -47,33 +50,49 @@ MASTER_EMAILS = {"admin@tiqcollect.in", "manager1@tiqcollect.in", "agent002@tiqc
 CC_ACCOUNT = "manager2@tiqcollect.in"                   # stands in for a Command Center service login
 
 
+def _live_session(user, tag):
+    """A live UserSession for `user` (v2 keeps sessions in tenancy.user_sessions)."""
+    from datetime import datetime, timedelta, timezone
+    from app.models.identity import UserSession
+    return UserSession(id=str(uuid.uuid4()), user_id=user.id, device_id=f"dev-{tag}",
+                       refresh_token_sha256=uuid.uuid4().hex + uuid.uuid4().hex, refresh_jti=uuid.uuid4().hex,
+                       expires_at=datetime.now(timezone.utc) + timedelta(days=7))
+
+
+def _live(db, user) -> int:
+    from app.models.identity import UserSession
+    return db.query(UserSession).filter(UserSession.user_id == user.id, UserSession.revoked_at.is_(None)).count()
+
+
 @pytest.fixture
 def db():
-    Base.metadata.create_all(engine)
+    create_schema(engine)
     s = Session()
     mgr_id = None
     for i, (email, role) in enumerate(PEOPLE):
         u = User(id=str(uuid.uuid4()), email=email, phone=f"90000002{i:02d}", full_name=f"Person {i}",
-                 hashed_password=hash_password(SEED[role]), hashed_refresh_token="old-refresh-hash",
-                 role=role, is_active=True, is_verified=True)
+                 hashed_password=hash_password(SEED[role]),
+                 role=role, is_active=True, is_verified=True, bank_id=TEST_BANK_ID,
+                 agency_id=None if role == UserRole.BANK_ADMIN else TEST_AGENCY_ID)
         s.add(u)
         s.flush()
+        s.add(_live_session(u, "old-refresh"))    # v2: a live session in place of v1's hashed_refresh_token
         if role == UserRole.AGENCY_MANAGER and mgr_id is None:
             mgr_id = u.id
         if role == UserRole.FIELD_AGENT:
             s.add(Agent(id=str(uuid.uuid4()), user_id=u.id, employee_code=f"EMP2{i:02d}", id_card_number=f"ID2{i:02d}",
-                        agency_id="AG1", manager_user_id=mgr_id, gender="F", base_latitude=28.45, base_longitude=77.07,
+                        agency_id=TEST_AGENCY_ID, manager_user_id=mgr_id, gender="F", base_latitude=28.45, base_longitude=77.07,
                         territory="Gurugram", languages_spoken=["HINDI"], status=AgentStatus.ON_DUTY,
                         tier=AgentTier.TIER_1, specialization=AgentSpecialization.BOTH, ranking_score=70.0,
                         max_cases_per_day=5))
     s.commit()
     yield s
     s.close()
-    Base.metadata.drop_all(engine)
+    drop_schema(engine)
 
 
 def _hashes(db):
-    return {u.email: (u.hashed_password, u.hashed_refresh_token) for u in db.query(User).all()}
+    return {u.email: (u.hashed_password, _live(db, u)) for u in db.query(User).all()}
 
 
 def _apply(db, password=MASTER, accounts=ACCOUNTS, demo_mode=True, **kw):
@@ -94,7 +113,7 @@ def test_the_three_accounts_take_the_master_password_and_nobody_else_can_log_in(
             assert not verify_password(MASTER, u.hashed_password)
         for published in SEED.values():                 # the published passwords are gone, for everyone
             assert not verify_password(published, u.hashed_password)
-        assert u.hashed_refresh_token is None           # every changed password revokes the session
+        assert _live(db, u) == 0                        # every changed password revokes the session
 
 
 def test_a_second_boot_changes_nothing_and_does_not_rehash(db):
@@ -109,14 +128,14 @@ def test_a_second_boot_changes_nothing_and_does_not_rehash(db):
 def test_a_new_master_password_rehashes_and_revokes(db):
     _apply(db)
     for u in db.query(User).filter(User.email.in_(MASTER_EMAILS)):
-        u.hashed_refresh_token = "a-live-session"
+        db.add(_live_session(u, "a-live-session"))
     db.commit()
     out = _apply(db, password=MASTER + "-rotated")
     assert sorted(out.master_set) == sorted(MASTER_EMAILS)
     for u in db.query(User).filter(User.email.in_(MASTER_EMAILS)):
         assert verify_password(MASTER + "-rotated", u.hashed_password)
         assert not verify_password(MASTER, u.hashed_password)
-        assert u.hashed_refresh_token is None
+        assert _live(db, u) == 0
 
 
 # ── refusals change nothing ──────────────────────────────────────────────────

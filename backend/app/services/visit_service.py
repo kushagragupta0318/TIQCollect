@@ -56,7 +56,6 @@ from app.services.ai_report_service import AIReportService
 from app.services.brand import brand_for
 from app.services.borrower_stance import check_visit_stance
 from app.services.notification_service import NotificationService
-from app.models.customer import CUSTOMER_TAG_DECEASED
 
 logger = structlog.get_logger()
 
