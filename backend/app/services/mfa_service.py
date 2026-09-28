@@ -169,7 +169,7 @@ def admin_reset(db: Session, admin: User, target: User, *, request: Request | No
     person's credentials — so a bank admin never clears a fellow bank admin's
     factor (coordinator's audit HIGH); only the platform admin does."""
     from app.services.password_service import can_manage
-    if target.role not in BANK_ROLES or not can_manage(admin, target):
+    if target.role not in BANK_ROLES or not can_manage(db, admin, target):
         raise AppException(404, ErrorCode.NOT_FOUND, "User not found")
     _clear(target)
     from app.services import auth_service
