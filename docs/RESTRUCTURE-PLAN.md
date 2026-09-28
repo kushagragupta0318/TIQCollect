@@ -265,7 +265,7 @@ What follows from these numbers:
 - **Connections.** Each process has a pool of 20 + 40. Four API workers and two Celery children
   can open 360 against `max_connections=100`. Set the pool to 5 + 5 per process and put
   PgBouncer in front (B14).
-- **Rate limiting** is per process today (in-memory storage); step 1.8 moves it to Redis.
+- **Rate limiting** counts in Redis since step 1.8 (`RATE_LIMIT_STORAGE_URI`, default `REDIS_URL`), with a per-process fallback while Redis is down.
 - **The nightly window** (19:30 ingest → 20:00 allocation, 06:00 beat push) **has never been
   timed.** No stage records its duration, and ingest is not even scheduled.
   - Proposed budget at 1,000 agents: ingest ≤ 10 min, scoring ≤ 5 min, allocation plus routing
