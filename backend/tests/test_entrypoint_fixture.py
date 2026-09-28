@@ -79,8 +79,13 @@ def _run(tmp_path: Path, *, generation: str, fixture: str | None, env: dict | No
     _stub(bindir, "pg_isready")
     # The only psql call that reads output is the generation probe. The
     # loader (ON_ERROR_STOP) has its stdin — the restore SQL — kept.
-    _stub(bindir, "psql", ('case "$*" in *ON_ERROR_STOP*) cat > "$STUB_LOG.sql";; esac\n'
-                           + ("exit 1" if generation == "FAIL" else f"echo {generation}")))
+    if generation == "empty-then-v2":        # the API builds it while we wait
+        answer = ('n=$(cat "$STUB_LOG.n" 2>/dev/null || echo 0); echo $((n+1)) > "$STUB_LOG.n"\n'
+                  'if [ "$n" = 0 ]; then echo empty; else echo v2; fi')
+    else:
+        answer = "exit 1" if generation == "FAIL" else f"echo {generation}"
+    _stub(bindir, "psql", 'case "$*" in *ON_ERROR_STOP*) cat > "$STUB_LOG.sql";; esac\n' + answer)
+    _stub(bindir, "sleep")                     # the waits cost nothing under test
     listing = "echo '123; 2615 16386 SCHEMA - workforce fieldops'" if fixture == "v2" else \
               "echo '123; 1259 16400 TABLE public agents fieldops'"
     if big_toc:
@@ -234,14 +239,31 @@ def test_a_failed_restore_stops_the_container_rather_than_seeding_over_it(tmp_pa
     assert sql[:1] == ["BEGIN;"] and "COMMIT;" not in sql
 
 
-def test_worker_and_beat_never_change_the_database(tmp_path):
-    proc, calls = _run(tmp_path, generation="empty", fixture="v2", env={"RUN_SEED": "false"})
-    assert proc.returncode == 0, proc.stderr
-    # The generation probe, and nothing else. (Its SQL spans lines, so the stub
-    # log splits that one call; count the lines that START a call.)
-    starts = [n for n in _names(calls) if n in ("pg_isready", "psql", "pg_restore", "alembic", "python")]
-    assert starts == ["pg_isready", "psql"], calls
-    assert "is empty" in proc.stdout          # said out loud, not silent
+def _starts(calls):
+    # The probe's SQL spans lines, so the stub log splits one call; count only
+    # the lines that START a call.
+    return [n for n in _names(calls) if n in ("pg_isready", "psql", "pg_restore", "alembic", "python", "sleep")]
+
+
+def test_worker_and_beat_never_change_the_database_and_refuse_one_that_stays_empty(tmp_path):
+    """2026-09-28 (audit LOW): they used to warn and start on an empty database
+    and never check again. They now wait for the API to build it, and refuse
+    if it never does — changing nothing either way."""
+    proc, calls = _run(tmp_path, generation="empty", fixture="v2",
+                       env={"RUN_SEED": "false", "DB_WAIT_SECONDS": "10"})
+    assert proc.returncode != 0
+    assert "still 'empty'" in proc.stdout
+    assert _changed_nothing(calls)
+    assert _starts(calls).count("psql") == 3                  # the first probe + one per 5 s waited
+    assert not any(n in ("python", "alembic", "pg_restore") for n in _starts(calls))
+
+
+def test_worker_and_beat_wait_for_the_api_then_take_the_v2_checks(tmp_path):
+    proc, calls = _run(tmp_path, generation="empty-then-v2", fixture="v2", env={"RUN_SEED": "false"})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "waiting up to" in proc.stdout
+    assert "python -m scripts.check_migrations" in calls         # the check a v2 start takes
+    assert _changed_nothing(calls)
 
 
 @pytest.mark.parametrize("generation", ["v1", "FAIL"])

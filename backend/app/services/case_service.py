@@ -517,7 +517,7 @@ class CaseService:
             return None
 
     def case_detail(self, agent: Agent, case_id: str) -> dict:
-        from app.api.v1.endpoints.agent import _effective_day, _format_case
+        from app.api.v1.endpoints.agent import _format_case
         from app.services.visit_priority_service import score_cases
 
         case = (
@@ -540,11 +540,14 @@ class CaseService:
 
         base = _format_case(case)
 
-        # Keep the detail badge on the same live score and effective day as the
+        # Keep the detail badge on the same live score and the same day as the
         # agent's case list. Case.priority remains only for backwards-compatible
         # storage; it is no longer decision-support data for the UI.
+        # 2026-09-28 (audit LOW): dated by scope.access_day() (IST), as the list
+        # is since A03 — it read endpoints/agent._effective_day, so list and
+        # detail could score one case against two different days.
         base["visit_priority"] = score_cases(
-            self.db, [case], today=_effective_day(agent.id, self.db)
+            self.db, [case], today=access_day()
         ).get(case.id)
 
         # Repayment likelihood, computed live for this one loan rather than read

@@ -101,10 +101,14 @@ echo "[entrypoint] postgres is up"
 #     seeding container, and fails the start if a new connection still does
 #     not see them; the other containers --check and warn.
 export PGPASSWORD="${_creds#*:}"
-generation=$(psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -tAc \
-  "SELECT CASE WHEN to_regclass('workforce.agents') IS NOT NULL THEN 'v2'
-               WHEN to_regclass('public.agents') IS NOT NULL THEN 'v1'
-               ELSE 'empty' END" 2>/dev/null || echo "unknown")
+# The one generation probe (here, and in the worker/beat wait below).
+probe_generation() {
+  psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -tAc \
+    "SELECT CASE WHEN to_regclass('workforce.agents') IS NOT NULL THEN 'v2'
+                 WHEN to_regclass('public.agents') IS NOT NULL THEN 'v1'
+                 ELSE 'empty' END" 2>/dev/null || echo "unknown"
+}
+generation=$(probe_generation)
 if [ "$generation" = "v1" ]; then
   echo "[entrypoint] REFUSING TO START: database ${DB_NAME} holds the v1 schema (public.agents)"
   echo "[entrypoint] and this image runs the v2 data model. Nothing was changed."
@@ -125,10 +129,23 @@ fi
 # on a mismatch, printing both revisions and the command to run.
 if [ "${RUN_SEED:-false}" != "true" ]; then
   if [ "$generation" = "empty" ]; then
-    # Not a refusal: worker and beat routinely start before the API container
-    # has built the schema. Said out loud so an empty database is never silent.
-    echo "[entrypoint] WARNING: database ${DB_NAME} is empty; only the API container (RUN_SEED=true) builds it — this container will not"
-  elif [ "$generation" = "v2" ]; then
+    # Worker and beat can start before the API container has built the schema.
+    # 2026-09-28 (audit LOW): they used to warn and start blind, never checking
+    # again. Now they WAIT for the API to build it (DB_WAIT_SECONDS, default
+    # 300), then take the same checks as a v2 start below; still empty after
+    # the wait, they refuse and their restart policy tries again.
+    echo "[entrypoint] database ${DB_NAME} is empty; only the API container (RUN_SEED=true) builds it — waiting up to ${DB_WAIT_SECONDS:-300}s"
+    waited=0
+    while [ "$generation" = "empty" ] && [ "$waited" -lt "${DB_WAIT_SECONDS:-300}" ]; do
+      sleep 5; waited=$((waited + 5))
+      generation=$(probe_generation)
+    done
+    if [ "$generation" != "v2" ]; then
+      echo "[entrypoint] REFUSING TO START: database ${DB_NAME} is still '${generation}' after ${waited}s, not an initialised v2 database"
+      exit 1
+    fi
+  fi
+  if [ "$generation" = "v2" ]; then
     if ! python -m scripts.ensure_db_settings --check; then
       echo "[entrypoint] WARNING: database-level search_path/timezone are not set; the API container re-applies them on start"
     fi
