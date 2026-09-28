@@ -26,14 +26,37 @@
 #     the check degenerates to "tenant A's ids are not in an empty or
 #     unrelated body", which is still a real (if weaker) assertion.
 #   - a `case_id` / `agent_id` / `visit_id` path param: called with tenant
-#     A's real id, AS TENANT B's principal, and must refuse (non-200) — this
-#     is the same "uniform 404" shape scope.py and A03 already established,
-#     now checked over every route that takes one of these three ids rather
-#     than only the ones someone thought to write a test for.
-#   - any other path param (only `candidate_id`, `/manager/ml/candidates/
+#     A's real id, AS TENANT B's principal, and must be EXACTLY 404 (not
+#     merely non-200 — a 422 from FastAPI's own validation would otherwise
+#     pass as "refused" without the route's own access check ever running).
+#     Cross-checked against a genuinely nonexistent id: the two bodies must
+#     be identical, so "belongs to someone else" and "does not exist" stay
+#     indistinguishable, the same "uniform 404" shape scope.py and A03
+#     already established for the agent case-detail route — now checked on
+#     every route that takes one of these three ids, not only the one
+#     someone thought to write a test for. (coordinator audit, 2026-09-28)
+#   - a QUERY param named `*_id` (found the same way — introspecting
+#     `route.dependant.query_params` rather than hand-listing them):
+#     tenant A's real id, as tenant B's principal. These are typically
+#     FILTERS, not lookups, so a bare 200 is not automatically wrong — an
+#     agent_id filter that matches nobody in tenant B's own scope can
+#     legitimately return an empty, filtered list. The check is therefore
+#     EITHER 404 OR no tenant A marker in the body, same as the
+#     parameterless case below. `run_id` (allocation/export-decisions) is
+#     skipped: no AllocationRun in this fixture, the same shape of gap as
+#     `candidate_id` below, not a hole in the method.
+#   - any other PATH param (only `candidate_id`, `/manager/ml/candidates/
 #     {candidate_id}`) is skipped, named explicitly below, because this
 #     fixture has no ModelCandidate row to seed and manufacturing one is a
 #     separate fixture, not a gap in the METHOD.
+#
+# A separate test (test_aggregate_counts_do_not_move_when_another_tenant_
+# gains_cases_and_payments) covers what the marker scan structurally cannot:
+# a COUNT or SUM leak. Tenant B's own /manager/dashboard is captured, tenant
+# A is given three more cases and two more verified payments, and tenant
+# B's dashboard is re-fetched and must be byte-for-byte the response it was
+# before — a marker scan only catches a foreign ROW appearing; it cannot see
+# a foreign row's amount silently added into someone else's total.
 #
 # What this does NOT cover: POST/PUT/DELETE routes (a separate, larger
 # sweep — the GET side is what "no foreign row" is about); BANK_*, SERVICE
@@ -64,9 +87,9 @@ from app.models.user import User, UserRole
 from app.models.visit import Visit, VisitOutcome
 from tests._db import create_schema, make_engine, make_session_factory, test_id
 
-# Routes whose only path param this fixture cannot supply a real foreign id
-# for. Named here, not silently skipped by the walker.
-_SKIPPED_PARAM_ROUTES = {"candidate_id"}
+# Path or query params this fixture cannot supply a real foreign id for.
+# Named here, not silently skipped by the walker.
+_SKIPPED_PARAM_ROUTES = {"candidate_id", "run_id"}
 
 _TENANT_ID_FIELDS = ("case_id", "agent_id", "visit_id")
 
@@ -171,8 +194,12 @@ def _headers(user: User, device: str = "dev-1") -> dict:
     return {"Authorization": "Bearer " + create_access_token(user.id, user.role.value, device)}
 
 
-def _get_routes() -> list[tuple[str, list[str]]]:
-    """(path template, param names) for every /agent or /manager GET route."""
+def _get_routes() -> list[tuple[str, list[str], list[str]]]:
+    """(path template, path param names, *_id query param names) for every
+    /agent or /manager GET route. Query params come from `route.dependant`
+    — the same object FastAPI itself resolves a request against — not from
+    reading source text, so a query param renamed or removed is picked up
+    automatically."""
     out = []
     for r in app.routes:
         methods = getattr(r, "methods", None)
@@ -181,8 +208,11 @@ def _get_routes() -> list[tuple[str, list[str]]]:
             continue
         if not (path.startswith("/api/v1/agent") or path.startswith("/api/v1/manager")):
             continue
-        params = re.findall(r"\{(\w+)\}", path)
-        out.append((path, params))
+        path_params = re.findall(r"\{(\w+)\}", path)
+        dependant = getattr(r, "dependant", None)
+        query_params = [p.name for p in (dependant.query_params if dependant else [])
+                        if p.name.endswith("_id") or p.name == "id"]
+        out.append((path, path_params, query_params))
     return out
 
 
@@ -196,38 +226,121 @@ ROUTES = _get_routes()
 assert ROUTES, "route discovery found nothing — app.routes shape changed, fix the walker before trusting this file"
 
 
-@pytest.mark.parametrize("path,params", ROUTES, ids=[p for p, _ in ROUTES])
-def test_no_foreign_row_on_any_agent_or_manager_get(tenants, path: str, params: list[str]):
-    a, b = tenants["a"], tenants["b"]
-    role_principal = b["manager"] if path.startswith("/api/v1/manager") else b["agent_user"]
-    client = TestClient(app)
+def _tenant_id_value(field: str, a: dict) -> str:
+    return {"case_id": a["case"].id, "agent_id": a["agent"].id, "visit_id": a["visit"].id}[field]
 
-    id_params = [p for p in params if p in _TENANT_ID_FIELDS]
-    unknown_params = [p for p in params if p not in _TENANT_ID_FIELDS and p not in _SKIPPED_PARAM_ROUTES]
-    if unknown_params:
-        pytest.skip(f"path param(s) {unknown_params} not covered by this fixture — see file header")
-    skip_params = [p for p in params if p in _SKIPPED_PARAM_ROUTES]
-    if skip_params:
-        pytest.skip(f"path param(s) {skip_params} explicitly deferred — see file header")
 
-    if id_params:
-        # Tenant A's real id, requested as tenant B's principal: must refuse.
-        values = {}
-        for p in id_params:
-            values[p] = {"case_id": a["case"].id, "agent_id": a["agent"].id, "visit_id": a["visit"].id}[p]
-        r = client.get(_fill(path, values), headers=_headers(role_principal))
-        assert r.status_code != 200, (
-            f"{path} returned 200 for tenant A's {id_params} to a tenant B principal — "
-            f"body: {r.text[:300]}")
-        return
-
-    # No path params: a normal call as tenant B's own principal must never
-    # surface tenant A's identifiers anywhere in the body.
-    r = client.get(path, headers=_headers(role_principal))
-    body = r.text
-    foreign_markers = {
+def _foreign_markers(a: dict) -> dict:
+    return {
         "case_id": a["case"].id, "agent_id": a["agent"].id, "customer_name": a["customer"].full_name,
         "customer_phone": a["customer"].phone_primary, "loan_account_number": a["loan"].loan_account_number,
     }
-    for label, marker in foreign_markers.items():
-        assert marker not in body, f"{path} (status {r.status_code}) leaked tenant A's {label} ({marker!r})"
+
+
+@pytest.mark.parametrize("path,path_params,query_params", ROUTES,
+                         ids=[p for p, _, _ in ROUTES])
+def test_no_foreign_row_on_any_agent_or_manager_get(
+    tenants, path: str, path_params: list[str], query_params: list[str],
+):
+    a, b = tenants["a"], tenants["b"]
+    role_principal = b["manager"] if path.startswith("/api/v1/manager") else b["agent_user"]
+    client = TestClient(app)
+    headers = _headers(role_principal)
+
+    unknown_path = [p for p in path_params if p not in _TENANT_ID_FIELDS and p not in _SKIPPED_PARAM_ROUTES]
+    if unknown_path:
+        pytest.skip(f"path param(s) {unknown_path} not covered by this fixture — see file header")
+    skipped_path = [p for p in path_params if p in _SKIPPED_PARAM_ROUTES]
+    if skipped_path:
+        pytest.skip(f"path param(s) {skipped_path} explicitly deferred — see file header")
+    skipped_query = [p for p in query_params if p in _SKIPPED_PARAM_ROUTES]
+    if skipped_query and not path_params:
+        # A skipped query param on an otherwise parameterless route doesn't
+        # block the marker-scan check below — only the id-in-query check.
+        query_params = [p for p in query_params if p not in _SKIPPED_PARAM_ROUTES]
+
+    if path_params:
+        # Tenant A's real id, requested as tenant B's principal: must be
+        # EXACTLY 404, and the same 404 a genuinely nonexistent id gets —
+        # not merely non-200, and not a route-specific "found but hidden"
+        # body that would let a caller tell the two cases apart.
+        values = {p: _tenant_id_value(p, a) for p in path_params}
+        foreign = client.get(_fill(path, values), headers=headers)
+        missing_values = {p: test_id(f"nonexistent:{p}") for p in path_params}
+        missing = client.get(_fill(path, missing_values), headers=headers)
+        assert foreign.status_code == 404, (
+            f"{path} returned {foreign.status_code} (not 404) for tenant A's "
+            f"{path_params} to a tenant B principal — body: {foreign.text[:300]}")
+        assert foreign.status_code == missing.status_code and foreign.json() == missing.json(), (
+            f"{path} answers a foreign id differently from a nonexistent one — "
+            f"foreign: {foreign.text[:300]!r} missing: {missing.text[:300]!r}")
+        return
+
+    # No path params. If the route takes a *_id query filter, try tenant A's
+    # real id through it as tenant B's principal: a filter is allowed to
+    # answer 200 with an empty/filtered result (it names criteria, not a
+    # single resource), so the bar is 404 OR no tenant A marker — never a
+    # tenant A row surfacing because the filter matched across the tenant
+    # wall instead of narrowing within it.
+    markers = _foreign_markers(a)
+    for qp in query_params:
+        # Unrecognised here on purpose: a *_id query param this file doesn't
+        # know how to fill must fail loudly (KeyError) rather than guess a
+        # value, the same reason an unknown PATH param is a skip, not a
+        # silent no-op.
+        r = client.get(path, params={qp: _tenant_id_value(qp, a)}, headers=headers)
+        if r.status_code == 404:
+            continue
+        for label, marker in markers.items():
+            assert marker not in r.text, (
+                f"{path}?{qp}=<tenant A id> (status {r.status_code}) leaked tenant A's "
+                f"{label} ({marker!r})")
+
+    # The plain call, no filter: a normal call as tenant B's own principal
+    # must never surface tenant A's identifiers anywhere in the body.
+    r = client.get(path, headers=headers)
+    for label, marker in markers.items():
+        assert marker not in r.text, f"{path} (status {r.status_code}) leaked tenant A's {label} ({marker!r})"
+
+
+def test_aggregate_counts_do_not_move_when_another_tenant_gains_cases_and_payments(tenants):
+    """A marker scan can only see a foreign ROW arrive; it is structurally
+    blind to a foreign row's amount being folded into someone ELSE's count
+    or sum — the query would still be `Case.agent_id.in_(my_agent_ids)` /
+    `Payment.agent_id.in_(my_agent_ids)` correctly scoped and still never
+    mention tenant A by name, while still, say, joining across the tenant
+    wall with no agency predicate and quietly inflating tenant B's number.
+    /manager/dashboard is the sharpest place to see it: every count and sum
+    on it is a live aggregate over "this manager's agents" (verified by
+    reading it — every query filters `agent_id.in_(my_agent_ids)`), so it's
+    the one response most likely to move if any query anywhere lost its
+    tenant scope. (coordinator audit, 2026-09-28)"""
+    from app.models.payment import Payment, PaymentMode, PaymentStatus
+
+    a, b = tenants["a"], tenants["b"]
+    db = tenants["db"]
+    client = TestClient(app)
+    headers = _headers(b["manager"])
+
+    before = client.get("/api/v1/manager/dashboard", headers=headers)
+    assert before.status_code == 200, before.text
+
+    for i in range(3):
+        db.add(Case(id=test_id(f"case:extra-a-{i}"), case_number=f"MERIDIAN-EXTRA-{i}",
+                    customer_id=a["customer"].id, loan_id=a["loan"].id, agent_id=a["agent"].id,
+                    status=CaseStatus.ASSIGNED, target_amount=50000.0, collected_amount=0.0,
+                    bank_id=a["bank_id"], agency_id=a["agency_id"]))
+    for i in range(2):
+        db.add(Payment(id=test_id(f"payment:extra-a-{i}"), case_id=a["case"].id, loan_id=a["loan"].id,
+                       agent_id=a["agent"].id, amount=25000.0, mode=PaymentMode.UPI,
+                       status=PaymentStatus.VERIFIED, receipt_number=f"MERIDIAN-RCPT-{i}",
+                       payment_date=datetime.now(timezone.utc),
+                       bank_id=a["bank_id"], agency_id=a["agency_id"]))
+    db.commit()
+
+    after = client.get("/api/v1/manager/dashboard", headers=headers)
+    assert after.status_code == 200, after.text
+    assert before.json() == after.json(), (
+        "tenant B's /manager/dashboard changed after tenant A gained cases and "
+        "verified payments — a count or sum crossed the tenant wall\n"
+        f"before: {before.json()}\nafter:  {after.json()}")
