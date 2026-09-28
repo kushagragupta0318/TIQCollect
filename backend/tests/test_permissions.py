@@ -256,3 +256,26 @@ def test_service_role_cannot_reach_a_human_only_capability(app_and_db):
     client = TestClient(app)
 
     assert client.get("/agencies/agency-1/suspend").status_code == 403
+
+
+def test_a_none_role_403s_cleanly_instead_of_500ing_on_role_value(app_and_db):
+    """LOW, coordinator audit 2026-09-28: has_capability(None, code) already
+    returns False (frozenset membership never raises), so the refusal branch
+    is reachable with a malformed principal — a transient User, never
+    persisted (role=None would fail the column's own NOT NULL the moment it
+    was flushed, so this can only be a detached object, exactly the shape a
+    caller-supplied current_user override could take). Before the getattr
+    guard this hit .value on None and turned a clean 403 into an unhandled
+    500; the point of this test is the status code, not the audit row — the
+    row write itself fails its own FK (user_id names nobody in this DB) and
+    is swallowed by write_audit's own already-covered failure path, not by
+    this fix."""
+    app, db = app_and_db
+    user = User(id="malformed-user-1", email="broken@meridiantrust.example", phone="9876500099",
+               full_name="Malformed", hashed_password="x", role=None, bank_id=DEFAULT_TENANT["bank_id"])
+    app.dependency_overrides[get_current_user] = lambda: user
+    client = TestClient(app)
+
+    r = client.get("/agencies/agency-1/suspend")
+    assert r.status_code == 403
+    assert "agency.suspend" in r.json()["detail"]

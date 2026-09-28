@@ -5,10 +5,17 @@
 #     including the literal string an unresolved `${VAR}` arrives as.
 #   - the field-ops preservation claim originally here (a live mount check
 #     plus a structural PRODUCT_MODE-conditional tripwire) is WITHDRAWN,
-#     2026-09-28: bb's owner-approved Wave 1 D4 (0c32082) deleted
-#     /api/field-ops/* as unused before this landed, so "preserved" is now
-#     false and the two tests asserting it were dropped rather than left to
-#     fail at merge. Nothing in this file depends on that route existing.
+#     2026-09-28: /api/field-ops/* is deleted by lead-structure D4 (0c32082)
+#     when that merges — 0c32082 is on lead-structure, not yet merged here,
+#     so the route and its mount still exist on p1-ce today. Corrected
+#     2026-09-28 (coordinator audit) — the earlier wording claimed the
+#     deletion had already happened, which is false on THIS branch. Dropped
+#     the two tests that asserted preservation anyway, because the claim
+#     they defended is going away by construction, not because it is false
+#     yet. When lead-structure merges, service.field_ops.read
+#     (permissions.py:216) becomes a dangling capability — nothing left to
+#     preserve — and should be removed along with its test at that point
+#     (tracked on the claims board).
 #   - SERVICE role accounts replace manager-password service logins: a
 #     dedicated User row with role=SERVICE logs in through the ORDINARY
 #     /auth/login (no new credential scheme, no schema change — see the

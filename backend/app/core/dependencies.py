@@ -1,5 +1,5 @@
 from typing import Annotated
-from fastapi import Depends, HTTPException, Header, Request, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
@@ -93,12 +93,3 @@ ManagerOnly = Annotated[User, Depends(require_roles(UserRole.AGENCY_MANAGER, Use
 AgentOnly = Annotated[User, Depends(require_roles(UserRole.FIELD_AGENT))]
 AnyRole = Annotated[User, Depends(require_roles(UserRole.FIELD_AGENT, UserRole.AGENCY_MANAGER, UserRole.AGENCY_ADMIN))]
 
-
-def get_command_centre_key(x_api_key: str = Header(..., alias="X-API-Key")) -> str:
-    from app.core.config import settings
-    if x_api_key != settings.COMMAND_CENTRE_API_KEY:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
-    return x_api_key
-
-
-CommandCentreKey = Annotated[str, Depends(get_command_centre_key)]
