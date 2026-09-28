@@ -24,30 +24,10 @@ import { toast } from "react-hot-toast";
 import {
   UPDATE_CHECK_INTERVAL_MS, createSwLifecycle, unregisterAllWorkers,
 } from "@/lib/swLifecycle";
+import { ToastWithAction } from "@/lib/ToastWithAction";
 
 /** One toast however many times the waiting version is announced. */
 const UPDATE_TOAST_ID = "sw-update-ready";
-
-function ToastWithAction({ title, note, action, onAction }: {
-  title: string; note: string; action: string; onAction: () => void;
-}) {
-  return (
-    <span className="flex items-center gap-3">
-      <span>
-        {title}
-        <span className="block text-[12px] font-normal text-muted-foreground">{note}</span>
-      </span>
-      <button
-        type="button"
-        onClick={onAction}
-        className="tap-target flex-shrink-0 rounded-xl px-3 py-1.5 text-xs font-semibold text-white"
-        style={{ background: "#2563EB" }}
-      >
-        {action}
-      </button>
-    </span>
-  );
-}
 
 export function registerServiceWorker(): void {
   if (import.meta.env.DEV) {
