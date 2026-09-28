@@ -2941,6 +2941,41 @@ The five views are refreshed `CONCURRENTLY` in the order listed.
 
 ---
 
+### 6.4 As built: B13a (`v2_0007`) and B13b (`v2_0013`, 2026-09-28)
+
+The API reads **only** the `*_scoped` views and `v_*` views, through `dependencies.AnalyticsDb`, which binds the caller's tenant as `get_current_user` does.
+
+| Scoped view | Over | Notes |
+|---|---|---|
+| `portfolio_daily_scoped` | `mv_portfolio_daily` | `is_backfill` is **in the grain**, so a delta can be taken like for like. `contacted_7d_*` is a subset of `placed_*` (a met visit or answered call on a placed loan) |
+| `bucket_transitions_monthly_scoped` | `mv_bucket_transitions_monthly` | `month_end` is the **to**-month. Adds `excluded_missing_pairs`; a missing to-reading is `to_state = 'NO_READING'`. Only complete months (month-end ≤ the bank's latest reading) |
+| `agency_scorecard_monthly_scoped` | `mv_agency_scorecard_monthly` | See the column notes below |
+| `collections_daily_scoped`, `field_activity_daily_scoped` | the B13a MVs | Unchanged columns |
+
+`v_visit_to_pay` (per visit): a VERIFIED payment on the same case, at or after check-in, within 7 days of the bank's calendar.
+
+**Deviations from the text above, all deliberate.**
+- **The `*_scoped` views are not `security_invoker`.** An invoker view needs the caller to hold `SELECT` on the materialized view beneath it, and `tiq_app` holds none.
+  Each wrapper instead runs as its owner, with the tenant predicate in its own `WHERE`. It returns nothing when no tenant is set.
+  `v_visit_to_pay` is `security_invoker` **and** tenant-filtered, because RLS is not yet enforced for the API.
+- **Scorecard column notes.**
+  - `agent_days_with_visits` replaces `agent_days_present`: there is no attendance table.
+  - Added: `agents_exited`, `agent_leave_days` (ce: attrition and leave rate) and `collectible_due_unread`.
+  - `expected_recovery_inr` is the cohort of placements **placed** in the month.
+  - `verified_collections` excludes `BANK_DIRECT`, which is its own column.
+  - Commission is `verified × commission_pct / 100` via the placement's contract terms, rounded to paise.
+- **NULL means unknown, never zero.**
+  - `collectible_due` is NULL for a (bank, month) with no instalment due in it; the demo fixture windows instalments.
+  - `field_cost` is NULL when any visit in the cell has no `FIELD_VISIT` rate in `strategy.cost_rates`, and that table starts empty.
+- **The region sentinel row is not a total.** Agent-level measures live only there, together with loan-linked measures whose region cannot be resolved. `SUM` over all rows is exact.
+- **The NPA split is not point in time.** `portfolio_state` takes `npa_since` from `lending.loans` (current), since the history row does not carry it.
+
+**Measured on the committed demo fixture** (`fieldops-demo-v2.dump` at v2_0010, upgraded to v2_0013).
+- Portfolio: 0 days mismatched against `loan_dpd_history`.
+- Transitions: 0 months mismatched; every from-reading of a complete pair is a pair, stale or missing.
+- Scorecard: collections, visits, placements, matured and kept PTPs, ended placements and confirmed fraud are all exactly equal to the base tables.
+- Refresh times: 11.5 s (portfolio), 1.6 s (transitions), 23.8 s (scorecard).
+
 ## 7. Partitioning
 
 ### 7.1 Which tables, and how
@@ -3160,6 +3195,43 @@ safer than giving the API a bypass role.
 - **`tests/pg` must include a fail-closed test**: with no context set, every
   RLS table returns 0 rows to `tiq_app`. It must also include the plan §3.3
   cross-tenant test run **as** `tiq_app` (B19).
+
+### 8.6 What is built (A13 step 1) and what is not (step 2, OWNER-gated)
+
+**Step 1, `v2_0012_rls` (2026-09-28): the policies exist and are proven, but the API is not yet held to them.**
+- The three helpers from §8.2. `p_tenant` on every table of §8.3, `ENABLE`d, **not `FORCE`d**.
+- The table owner, which is the API's own login today (the fixture restores `--no-owner`), still bypasses the policies, so no running stack changes behaviour. A superuser bypasses them in any case.
+- Roles `tiq_app` (`NOLOGIN NOBYPASSRLS`) and `tiq_jobs` (`NOLOGIN BYPASSRLS`).
+  - They are created only if absent and only when the migrating user may create roles; otherwise the revision prints a NOTICE and skips the grants.
+  - Grants go to named tables, never to a whole schema, because a partition read directly is not filtered by its parent's policy.
+  - `audit_logs` gets `SELECT, INSERT` only.
+  - The `mv_*` views are not granted to `tiq_app`.
+- The request hook: `get_current_user` binds the principal's bank, agency, scope and user to the session. `database._tenant_on_begin` re-applies them at the start of every transaction with `set_config(…, true)`, with bound parameters, so they end with the transaction.
+- The scope is `models/user.tenant_scope`, also exposed as `RequestContext.scope`.
+- `tests/pg/test_pg_rls.py` runs **as** `tiq_app` and `tiq_jobs` via `SET LOCAL ROLE`. It covers:
+  - fail-closed, both unset and reset;
+  - bank, agency, other agency, other bank, missing scope and PLATFORM;
+  - the `WITH CHECK` refusal;
+  - the grants that must be refused;
+  - the binding of values.
+- `tests/test_rls_policy_map.py` fails when a table is in neither the policy lists nor `NO_RLS`.
+
+**Deviations from §8.3–8.4, all deliberate.**
+- `model_predictions` and `loan_dpd_history` carry `agency_id`, so they take template (a), which is stricter than (b).
+- `tiq_owner` and `tiq_analytics_ro` are not created: the owner is still the API's login, and the analytics connection is step 2.
+- There are no `*_scoped` views yet, so the API gets no grant on `mv_*` (§6).
+
+**Step 2 needs the owner, because it changes what production connects as.**
+1. Create `LOGIN` roles for the API (a member of `tiq_app`) and the workers (a member of `tiq_jobs`), and a separate owner for migrations. `DATABASE_URL` points at the API login and a new `JOBS_DATABASE_URL` at the workers. Both Docker setups and the platform's secrets change.
+2. Move the pre-authentication reads into `SECURITY DEFINER` functions owned by the owner: login by email, `get_current_user`'s own user and session lookup, refresh by session, and invite or reset by token hash. This is §8.4.
+3. Set the tenant on the analytics session (`get_analytics_db`), which has no user today.
+4. `REFRESH MATERIALIZED VIEW` needs ownership: run the refresher as the owner, or make `tiq_jobs` a member of it.
+5. Only then `FORCE`, and only once the full suite passes against a stack that connects as `tiq_app`.
+6. **Decided, not an oversight:** `PLATFORM` scope reads no bank's `banks` or `agencies` rows.
+   Platform support goes through a time-boxed, audited BANK session, never a bypass (Q20; accepted 2026-09-28).
+   A platform tenant directory would need its own `SECURITY DEFINER` function, which is an owner decision.
+7. Every authenticated transaction now makes one extra round trip (`set_config` ×4 in one `SELECT`).
+   It is cheap, but it has not been measured on `stress`.
 
 ---
 

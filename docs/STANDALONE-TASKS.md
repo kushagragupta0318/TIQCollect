@@ -84,7 +84,7 @@ P0 runs alongside P1. P3 and P5 may overlap once P1 is done.
 - [ ] **B10** Lookup tables for free-text domains (`legal_status`, `settlement_status`, decision outcome, objective, leave type). *S*
 - [ ] **B11** Real Alembic v2 baseline (`include_schemas`, version table in `public`); `seed_data.py` stops calling `create_all` — closes known issue 5. *M*
 - [ ] **B12** Partition maintenance task: create next 3 months, detach past retention; replaces the row-delete location sweep. *S*
-- [ ] **B13** `analytics` schema: `dim_*` views, the five `mv_*` materialized views (§4.4), `REFRESH … CONCURRENTLY` task at 20:30. *L*
+- [x] **B13** `analytics` schema: `dim_*` views, the five `mv_*` materialized views (§4.4), `REFRESH … CONCURRENTLY` task at 20:30. *L* B13a `v2_0007`; B13b `v2_0013`: portfolio, transitions, agency scorecard, the five `*_scoped` views, `v_visit_to_pay`, `strategy.cost_rates` (DATA-MODEL-V2 §6.4).
 - [ ] **B14** DB config: API `statement_timeout`, read-only analytics session + replica hook, PgBouncer-safe (`SET LOCAL` only). *S*
 - [ ] **B15** `scripts/migrate_v1_to_v2.py`: today's fixture → v2 (ABC Bank, ABC Collections, manager1 → AGENCY_ADMIN, dates parsed, dpd history back-filled with `is_backfill`). *M*
 - [ ] **B16** Generator: extend the ledger simulator with tenancy, 4 zones / ~14 cities, **latent agency and agent skill**, contact time-of-day, settlement offers, disputes, complaints, injected compliance breaches — and a ground-truth manifest. **Onboards the Appendix C roster with every invented detail** (identity, people, coverage, contract + commission slab, specimen documents in MinIO, DRA register, onboarding audit history, lifecycle mix: 7 active / 1 suspended / 1 onboarding). *L*
@@ -109,7 +109,8 @@ P0 runs alongside P1. P3 and P5 may overlap once P1 is done.
 - [ ] **A10** **Remove the static login** — the eight places in §1: LoginPage demo buttons, LandingPage prefill, `/manager-bridge`, `public/collection_dashboard/`, credentials printed in compose/README. A grep test forbids hardcoded credentials in `frontend/src`. *S*
 - [ ] **A11** Frontend auth pages: clean login, set-password (invite), change-password, forgot-password; role-based home incl. `/bank`. *M*
 - [ ] **A12** Cross-tenant behavioural test: 2 banks × 2 agencies, every GET as every principal, no foreign row. *M*
-- [ ] **A13** Postgres RLS on tenant tables + `BYPASSRLS` job role — only after A12 is green. *M*
+- [x] **A13** Postgres RLS on tenant tables + `BYPASSRLS` job role — only after A12 is green. *M* Step 1 (`v2_0012_rls`, branch `a13-rls`): policies enabled and proven as `tiq_app`, not enforced for the API (DATA-MODEL-V2 §8.6).
+- [ ] **A13b** **OWNER-gated.** Enforce RLS: API and workers log in as `tiq_app` / `tiq_jobs` (`JOBS_DATABASE_URL`), SECURITY DEFINER pre-auth lookups, tenant on the analytics session, MV refresh ownership, then `FORCE`. Plan: DATA-MODEL-V2 §8.6 step 2. *M*
 - [ ] **A14** Brand as data: "ABC Bank" in SMS/WhatsApp/receipts/UPI QR (7 files), "Agency Manager" header, RBI reg. no. on the ID card. Also the hardcoded Gurugram coordinates used when GPS fails at check-in (`AgentHomePage`) and visit submit (`RecordVisitPage`) — carried over from P0-02. *S*
 - [ ] **A15** `PRODUCT_MODE = standalone | embedded`; `/api/field-ops` contract preserved; `SERVICE` role accounts replace manager-password service logins. *S*
 - [ ] **A16** New audit actions wired through `write_audit` (invites, sessions, agency lifecycle, placements). *S*
