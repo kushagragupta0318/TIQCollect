@@ -136,6 +136,12 @@ async def revoke_invite(invite_id: UUIDPath, admin: AccountAdmin, request: Reque
 
 @admin_router.post("/users/{user_id}/password-reset",
                    summary="Text a single-use reset link to the user (the admin never sees it)")
+# Every manager reaches this now: an SMS-cost lever (audit of 12c3232). A
+# SHARED scope, not @limiter.limit: slowapi counts a plain limit per URL PATH,
+# so with {user_id} in the path each target got its own ten a minute and a
+# caller spraying resets across many people was never limited (measured: 12
+# calls to 12 ids, 12 x 404, no 429). One bucket per caller for the route.
+@limiter.shared_limit(AUTH_LIMIT, scope="admin-credential-links")
 async def admin_password_reset(user_id: UUIDPath, admin: CredentialManager, request: Request, db: DbSession):
     return password_service.admin_reset(db, admin, user_id, request=request)
 

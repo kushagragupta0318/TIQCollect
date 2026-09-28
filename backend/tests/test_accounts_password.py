@@ -430,3 +430,95 @@ def test_only_the_agents_own_manager_or_agency_admin_issues_it(world, admin):
 
 def test_the_agency_admin_may_issue_it_too(world):
     assert password_service.issue_first_password(world["db"], world["agency_admin"], world["own_agent"])["sent"]
+
+
+
+# ── coordinator's audit of 12c3232 ──────────────────────────────────────────
+
+def test_a_first_password_cannot_target_an_established_agent(world):
+    """An agent who has signed in has a password: a "first" link would spend
+    their tokens and leave their sessions running. 409, nothing changed."""
+    agent = world["own_agent"]
+    _login(world, agent, device="agent-phone-01")
+    live_before = _live(world["db"], agent)
+    with pytest.raises(AppException) as e:
+        password_service.issue_first_password(world["db"], world["manager"], agent)
+    assert e.value.status_code == 409
+    assert world["db"].query(PasswordResetToken).filter(PasswordResetToken.user_id == agent.id).count() == 0
+    assert _live(world["db"], agent) == live_before and world["sent"] == []
+
+
+@pytest.mark.parametrize("fact", ["last_login_at", "password_changed_at"])
+def test_either_fact_of_an_established_account_refuses_a_first_password(world, fact):
+    setattr(world["own_agent"], fact, password_service.now())
+    world["db"].commit()
+    with pytest.raises(AppException) as e:
+        password_service.issue_first_password(world["db"], world["manager"], world["own_agent"])
+    assert e.value.status_code == 409
+
+
+def test_one_link_per_person_per_ten_minutes(world):
+    password_service.admin_reset(world["db"], world["agency_admin"], world["manager"].id)
+    with pytest.raises(AppException) as e:
+        password_service.admin_reset(world["db"], world["agency_admin"], world["manager"].id)
+    assert e.value.status_code == 429 and e.value.code == ErrorCode.RATE_LIMITED
+    assert len(world["sent"]) == 1
+    assert world["db"].query(PasswordResetToken).filter(PasswordResetToken.used_at.is_(None)).count() == 1
+    # A different person is not held up by it.
+    assert password_service.admin_reset(world["db"], world["agency_admin"], world["fresh"].id)["sent"]
+
+
+def test_the_cooldown_is_not_spent_when_nothing_could_be_sent(world, monkeypatch):
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "PUBLIC_BASE_URL", "")
+    with pytest.raises(AppException):
+        password_service.admin_reset(world["db"], world["agency_admin"], world["manager"].id)
+    monkeypatch.setattr(settings, "PUBLIC_BASE_URL", "https://fieldops.example.in")
+    assert password_service.admin_reset(world["db"], world["agency_admin"], world["manager"].id)["sent"]
+
+
+def test_a_manager_cannot_reset_a_suspended_agent(world):
+    from app.models.agent import Agent, AgentStatus
+    agent_row = world["db"].query(Agent).filter(Agent.user_id == world["own_agent"].id).one()
+    agent_row.status = AgentStatus.SUSPENDED
+    world["db"].commit()
+    for call in (lambda: password_service.admin_reset(world["db"], world["manager"], world["own_agent"].id),
+                 lambda: password_service.issue_first_password(world["db"], world["manager"], world["own_agent"])):
+        with pytest.raises(AppException) as e:
+            call()
+        assert e.value.status_code == 404
+
+
+def test_the_reset_route_is_rate_limited(world):
+    """Behaviour, as tests/test_rate_limits.py does it: with the limiter on,
+    the 11th call inside a minute is refused by the limiter itself (unknown
+    targets, so the per-target cooldown never gets a say)."""
+    import uuid
+    from fastapi.testclient import TestClient
+    from sqlalchemy.orm import sessionmaker
+    from app.core.database import get_db
+    from app.core.ratelimit import AUTH_LIMIT, limiter
+    from app.core.security import create_access_token
+    from app.main import app
+    S = sessionmaker(bind=world["db"].get_bind(), info={})
+
+    def override():
+        s = S()
+        try:
+            yield s
+        finally:
+            s.close()
+    app.dependency_overrides[get_db] = override
+    was, limiter.enabled = limiter.enabled, True
+    limiter.reset()
+    try:
+        c = TestClient(app)
+        hdr = {"Authorization": f"Bearer {create_access_token(world['manager'].id, 'AGENCY_MANAGER', 'dev-device-01')}"}
+        n = int(str(AUTH_LIMIT).split("/")[0])
+        codes = [c.post(f"/api/v1/admin/users/{uuid.uuid4()}/password-reset", headers=hdr).status_code
+                 for _ in range(n + 1)]
+        assert codes[:n] == [404] * n and codes[n] == 429
+    finally:
+        limiter.reset()
+        limiter.enabled = was
+        app.dependency_overrides.pop(get_db, None)
