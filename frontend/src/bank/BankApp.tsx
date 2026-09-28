@@ -15,6 +15,12 @@ import { guardRedirect } from "@/lib/roles";
 import { BANK_PORTAL_ROLES, BANK_ROLE_LABELS, isBankPortalRole } from "./layout/bankRoles";
 import { BANK_NAV_ITEMS } from "./layout/navigation";
 import { BankPlaceholderPage } from "./pages/BankPlaceholderPage";
+import OnboardAgencyWizardPage from "./pages/onboarding/OnboardAgencyWizardPage";
+
+/** The one nav item with a real page instead of the generic placeholder
+ *  (D01-D03). Kept out of the BANK_NAV_ITEMS.map() below so the two routes
+ *  never collide on the same path — see this file's own route list. */
+const ONBOARD_AGENCY_PATH = "agencies/onboard";
 
 
 export default function BankApp() {
@@ -44,9 +50,12 @@ export default function BankApp() {
     <Routes>
       <Route element={<BankLayout persona={persona} onSignOut={signOut} />}>
         <Route index element={<Navigate to="overview" replace />} />
-        {BANK_NAV_ITEMS.map((item) => (
+        {BANK_NAV_ITEMS.filter((item) => item.path !== ONBOARD_AGENCY_PATH).map((item) => (
           <Route key={item.path} path={item.path} element={<BankPlaceholderPage item={item} />} />
         ))}
+        {/* D01-D03: fresh draft (no id yet), or resuming one by its agency_id. */}
+        <Route path={ONBOARD_AGENCY_PATH} element={<OnboardAgencyWizardPage />} />
+        <Route path={`${ONBOARD_AGENCY_PATH}/:agencyId`} element={<OnboardAgencyWizardPage />} />
         {BankComponentGalleryPage && (
           <Route
             path="_gallery"
