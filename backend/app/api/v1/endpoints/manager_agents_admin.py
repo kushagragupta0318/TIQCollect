@@ -51,8 +51,11 @@
 #   suspended agent" there is nothing conflicting about submitting a form
 #   with no changes on it.
 # ────────────────────────────────────────────────────────────────────────────
-from __future__ import annotations
-
+# No `from __future__ import annotations` here (2026-09-28, found on a live
+# v2-preview smoke test, not by pytest): with it, FastAPI/Pydantic 2.10 fails
+# to resolve the CreateAgentRequest forward ref — GET /openapi.json 500s and
+# POST /manager/agents 422s ("body"/"db" reported as missing QUERY params).
+# Confirmed by removing this one line: both cleared, verified over real HTTP.
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
