@@ -74,3 +74,11 @@ def test_each_table_gets_the_template_of_its_group():
 def test_the_scope_of_every_role(role):
     want = "PLATFORM" if role == UserRole.PLATFORM_ADMIN else "BANK" if role in BANK_ROLES else "AGENCY"
     assert tenant_scope(role) == want
+
+
+def test_the_downgrade_revokes_exactly_what_the_upgrade_granted():
+    """Coordinator's audit LOW: it used to REVOKE ALL ON ALL TABLES IN SCHEMA,
+    which would also strip grants another revision made."""
+    granted = [g.replace(" TO ", " FROM ").replace("GRANT ", "REVOKE ") for g in RLS._grants()]
+    assert sorted(granted) == sorted(RLS._revokes())
+    assert not [r for r in RLS._revokes() if "ALL TABLES IN SCHEMA" in r]
