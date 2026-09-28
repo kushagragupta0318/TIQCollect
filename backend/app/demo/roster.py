@@ -48,6 +48,14 @@ class RosterError(ValueError):
     pass
 
 
+def plus_years(d: date, years: int) -> date:
+    """The same calendar day `years` later; 29 February becomes the 28th."""
+    try:
+        return d.replace(year=d.year + years)
+    except ValueError:
+        return d.replace(year=d.year + years, day=28)
+
+
 def new_id(kind: str, key: str) -> str:
     """Deterministic id for a row v1 did not have (§9.2): two runs agree."""
     return str(uuid.uuid5(NAMESPACE_TIQ_V2, f"{kind}:{key}"))
@@ -281,6 +289,10 @@ LOCALITIES = {
 #: Girivan branches outside NCR (B15 made NCR's from the v1 loans' codes, in
 #: v1's GGN044 format; these follow it). code -> (city, name).
 GIRIVAN_BRANCHES_EXTRA = {
+    # B15's 494 NCR branches all resolve to Gurugram (v1's codes are GGN* /
+    # BR*); Delhi and Noida get branches of their own.
+    "DEL014": ("DELHI", "Delhi Laxmi Nagar"), "DEL022": ("DELHI", "Delhi Janakpuri"),
+    "NOI008": ("NOIDA", "Noida Sector 18"), "NOI015": ("NOIDA", "Noida Sector 62"),
     "GZB021": ("GHAZIABAD", "Ghaziabad Indirapuram"),
     "JPR011": ("JAIPUR", "Jaipur Malviya Nagar"), "JPR017": ("JAIPUR", "Jaipur Vaishali Nagar"),
     "AJM004": ("AJMER", "Ajmer Civil Lines"),
@@ -440,6 +452,10 @@ RAJPUTANA = AgencyRoster(
     products=("PERSONAL", "AUTO", "GOLD", "BUSINESS", "MICROFINANCE"),
     managers=("Surendra Choudhary", "Anjali Meena"))
 
+# The suspension figures are MEASURED on the generated book (demo profile,
+# seed 20260922, 2026-09-28: Awadh 33.7% of 315 August visits outside the
+# fence, the other agencies 4.3% of 5,332); tests/pg/test_pg_demo_fixture.py
+# re-measures them on the committed dump, so the text cannot drift from the data.
 AWADH = AgencyRoster(
     key="AWADH", bank_key="GIRIVAN", domain="awadhfield.test", zone="NORTH",
     serves=("LUCKNOW", "KANPUR"), n_agents=14, onboarded=date(2026, 2, 20), agency_region="AWADH",
@@ -453,9 +469,9 @@ AWADH = AgencyRoster(
                         ("Compliance Officer", "Pooja Awasthi", "9839205503")],
                 status="SUSPENDED", activated=_at(date(2026, 2, 20)),
                 suspended=(_at(date(2026, 9, 2), 11, 15),
-                           "Geofence-failure spike under review: 31% of August visits recorded outside "
-                           "the 100 m fence against a book average of 6%. Placements paused pending the "
-                           "evidence audit.")),
+                           "Geofence-failure spike under review: 34% of August visits recorded outside "
+                           "the 100 m fence against 4% across Girivan's other agencies. Placements paused "
+                           "pending the evidence audit.")),
     contract=_contract("AWADH-2026", BANK, no="GFL/AGY/2026/0026", start=date(2026, 2, 20),
                        end=date(2027, 2, 19), cases=1800, seats=18, sla=7, recall=60, deposit="500000.00",
                        on_breach=True),

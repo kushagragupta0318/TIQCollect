@@ -85,12 +85,13 @@ def _group_of(role: UserRole) -> int | None:
     return next((i for i, (_, roles) in enumerate(REQUIRED_ROLE_GROUPS) if role in roles), None)
 
 
-# The committed demo book: backend/fixtures/fieldops-demo-v2.dump (B15,
-# 2026-09-28) holds 24 users, every one @girivanfinance.test or
-# @aravallifs.test. A box with more users than that has users the demo did
-# not create, and is not one whose passwords this may retire. (Was 21, the v1
-# book's users.csv, all @tiqcollect.in.) B16-B18's generator raises it.
-FIXTURE_USER_COUNT = 24
+# The committed demo book: backend/fixtures/fieldops-demo-v2.dump (B16-B18,
+# 2026-09-28) holds 198 users, every one on a roster domain
+# (settings.DEMO_EMAIL_DOMAINS). A box with more users than that has users the
+# demo did not create, and is not one whose passwords this may retire.
+# tests/pg/test_pg_demo_fixture.py counts the dump's users against this.
+# (Was 24 for B15's book, and 21 for v1's users.csv, all @tiqcollect.in.)
+FIXTURE_USER_COUNT = 198
 
 EXIT_APPLIED, EXIT_REFUSED, EXIT_NOT_CONFIGURED = 0, 1, 3
 

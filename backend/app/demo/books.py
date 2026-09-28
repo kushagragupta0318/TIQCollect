@@ -465,7 +465,11 @@ def generate_book(conn: Connection, w: AgencyWorld, *, slots_per_agent: float, s
         k, d = p.loan_id, int(p.payment_day)
         ag = agent_for[k]
         vr = visits_by_loan_day.get((k, d))
-        recent = any(0 <= d - x <= 7 for x in contacts_by_loan.get(k, ()))
+        # Attributed to the agent when it follows their contact: always within
+        # a week (the ledger's own contact effect lasts call_contact_days=7),
+        # usually within three (the agency's payment link, a follow-up call).
+        gaps = [d - x for x in contacts_by_loan.get(k, ()) if d - x >= 0]
+        recent = bool(gaps) and (min(gaps) <= 7 or (min(gaps) <= 21 and rng.random() < 0.6))
         amount = round(float(p.amount), 2)
         if amount <= 0:
             continue

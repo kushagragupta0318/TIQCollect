@@ -52,8 +52,15 @@ def at(d: date, hh: int = 10, mm: int = 0) -> datetime:
 
 
 def insert(conn: Connection, table: str, rows: list[dict]) -> int:
-    for i in range(0, len(rows), 2000):
-        conn.execute(T[table].insert(), rows[i:i + 2000])
+    """Bulk insert. An executemany needs one column set per batch, so rows are
+    grouped by the keys they carry; a column a row leaves out keeps its
+    server default rather than becoming NULL."""
+    groups: dict[tuple, list[dict]] = {}
+    for r in rows:
+        groups.setdefault(tuple(sorted(r)), []).append(r)
+    for batch in groups.values():
+        for i in range(0, len(batch), 2000):
+            conn.execute(T[table].insert(), batch[i:i + 2000])
     return len(rows)
 
 
@@ -140,9 +147,16 @@ def _audit(conn_rows: list, *, when: datetime, action: AuditAction, user_id, ban
                           entity_id=str(entity_id)[:50], details=details, success=success))
 
 
+def _user_id_by_email(conn: Connection, email: str) -> str:
+    uid = conn.execute(sa.select(T["users"].c.id).where(T["users"].c.email == email)).scalar_one_or_none()
+    if uid is None:
+        raise R.RosterError(f"expected user {email} is not in the database (run the B15 transform first)")
+    return str(uid)
+
+
 # ── the world ───────────────────────────────────────────────────────────────
 def build_world(conn: Connection, *, agency_keys: tuple[str, ...], agents_cap: int | None = None,
-                seed: int = 20260922) -> World:
+                agents_scale: float = 1.0, seed: int = 20260922) -> World:
     """Write the tenancy for `agency_keys` (and, always, the documents and
     onboarding trail for Aravalli, which B15 wrote without them)."""
     rng = np.random.default_rng(seed)
@@ -251,7 +265,8 @@ def build_world(conn: Connection, *, agency_keys: tuple[str, ...], agents_cap: i
         for mi, mname in enumerate(a.managers):
             w.manager_ids.append(user(f"mgr{mi}", mname, "AGENCY_MANAGER", f"9{n + 10:02d}9{mi:06d}",
                                       a.onboarded + timedelta(days=3)))
-        n_agents = a.n_agents if agents_cap is None else min(a.n_agents, agents_cap)
+        n_agents = int(round(a.n_agents * agents_scale))
+        n_agents = n_agents if agents_cap is None else min(n_agents, agents_cap)
         weights = np.array([2.0] + [1.0] * (len(a.serves) - 1))
         for i in range(n_agents):
             female = bool(rng.random() < 0.35)
@@ -264,7 +279,7 @@ def build_world(conn: Connection, *, agency_keys: tuple[str, ...], agents_cap: i
             loc = R.LOCALITIES[city][int(rng.integers(len(R.LOCALITIES[city])))]
             lat, lon = jitter(rng, loc[1], loc[2], 1500)
             issued = joined - timedelta(days=int(rng.integers(90, 900)))
-            expires = issued.replace(year=issued.year + 3)
+            expires = R.plus_years(issued, 3)
             if rng.random() < 0.05:                  # a few lapsed, for the compliance tile
                 expires = R.ANCHOR_DATE - timedelta(days=int(rng.integers(5, 120)))
             aid = R.new_id("agent", f"{a.key}:{i}")
@@ -309,9 +324,11 @@ def build_world(conn: Connection, *, agency_keys: tuple[str, ...], agents_cap: i
             issued = joined - timedelta(days=int(rng.integers(120, 900)))
             conn.execute(ag.update().where(ag.c.id == r.id).values(
                 gender=R.ARAVALLI_V1_AGENT_GENDER[r.full_name], dra_certificate_no=_dra_no(rng, issued),
-                dra_certificate_expires_on=issued.replace(year=issued.year + 3)))
+                dra_certificate_expires_on=R.plus_years(issued, 3)))
         counts["aravalli v1 agents: gender + DRA set"] = len(rows)
-        mgr_by_name = {name: R.new_id("user", local) for local, name, role in R.V1_STAFF.values()}
+        # B15 kept v1's own user ids, so its staff are found by their roster e-mail.
+        mgr_by_name = {name: _user_id_by_email(conn, f"{local}@{R.AGENCY_DOMAIN}")
+                       for local, name, role in R.V1_STAFF.values()}
         new_users, new_agents = [], []
         for name, gender, joined, city, loc_i, manager, code, card, phone in R.ARAVALLI_NEW_AGENTS:
             email = R.email_for(name, R.AGENCY_DOMAIN)
@@ -332,7 +349,7 @@ def build_world(conn: Connection, *, agency_keys: tuple[str, ...], agents_cap: i
                 territory_region_id=R.new_id("region", city), languages_spoken=["ENGLISH", "HINDI"],
                 specialization="BOTH", max_cases_per_day=12, vehicle_type="TWO_WHEELER", status="ON_DUTY",
                 tier="TIER_3", ranking_score=0.0, joined_on=joined, dra_certificate_no=_dra_no(rng, issued),
-                dra_certificate_expires_on=issued.replace(year=issued.year + 3),
+                dra_certificate_expires_on=R.plus_years(issued, 3),
                 manager_user_id=mgr_by_name[manager]))
         counts["aravalli new agents"] = insert(conn, "users", new_users) and insert(conn, "agents", new_agents)
 
@@ -340,8 +357,8 @@ def build_world(conn: Connection, *, agency_keys: tuple[str, ...], agents_cap: i
     docs = []
     for a in [x for x in R.AGENCIES if x.key in agency_keys]:
         admin = bank_admin[a.bank_key]
-        agency_admin = (worlds[a.key].admin_user_id if a.key in worlds
-                        else R.new_id("user", "meera.khanna"))            # Aravalli: B15's AGENCY_ADMIN
+        agency_admin = (worlds[a.key].admin_user_id if a.key in worlds       # Aravalli: B15's AGENCY_ADMIN
+                        else _user_id_by_email(conn, f"meera.khanna@{R.AGENCY_DOMAIN}"))
         start = a.onboarded or a.invite_sent
         draft = start - timedelta(days=28)
         base = dict(bank_id=a.bank_id, agency_id=a.id)
@@ -389,9 +406,10 @@ def build_world(conn: Connection, *, agency_keys: tuple[str, ...], agents_cap: i
                 role="AGENCY_ADMIN", token_sha256=token, delivery_channel="LINK", invited_by=admin,
                 expires_at=at(a.invite_sent + timedelta(days=14), 23, 59), created_at=at(a.invite_sent, 16, 45))])
             counts["user_invites"] = counts.get("user_invites", 0) + 1
-        # The contract's signed agreement is one of the documents.
+    counts["agency_documents"] = insert(conn, "agency_documents", docs)
+    # Each contract's signed agreement is one of the documents just written.
+    for a in [x for x in R.AGENCIES if x.key in agency_keys]:
         conn.execute(T["agency_contracts"].update().where(T["agency_contracts"].c.id == a.contract["id"])
                      .values(agreement_document_id=R.new_id("agency_document", f"{a.key}:AGREEMENT")))
-    counts["agency_documents"] = insert(conn, "agency_documents", docs)
     counts["audit_logs(onboarding)"] = insert(conn, "audit_logs", audit_rows)
     return World(agencies=worlds, bank_admin=bank_admin, counts=counts)

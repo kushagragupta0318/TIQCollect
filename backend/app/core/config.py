@@ -38,8 +38,11 @@
 import os
 from functools import lru_cache
 from typing import List, Literal
+
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.demo.roster import DEMO_EMAIL_DOMAINS as _DEMO_ROSTER_DOMAINS  # a stdlib-only module: no cycle
 
 
 class Settings(BaseSettings):
@@ -203,9 +206,12 @@ class Settings(BaseSettings):
     # DEMO_MODE cannot be it: .env.example ships DEMO_MODE=true and compose
     # defaults it on, so a real deployment may well run with it.
     DEMO_MASTER_DISABLE_OTHERS: str = ""
-    # Accounts outside these are never retired. The v2 demo book (B15, 2026-09-28):
-    # Girivan Finance's bank users and Aravalli's staff and agents. (Was "tiqcollect.in", the v1 book.)
-    DEMO_EMAIL_DOMAINS: str = "girivanfinance.test,aravallifs.test"
+    # Accounts outside these are never retired. The v2 demo book: every domain
+    # of the roster (B16, 2026-09-28: both banks and all ten agencies, from
+    # app/demo/roster.py, the one place a demo name lives). (Was
+    # "girivanfinance.test,aravallifs.test" for B15's book, and "tiqcollect.in"
+    # for v1's.)
+    DEMO_EMAIL_DOMAINS: str = ",".join(_DEMO_ROSTER_DOMAINS)
     # 2026-09-24 (hotfix PAY-1) — accept the demo auto-confirm's DEMO-UPI-
     # reference. A flag production never sets: NOT DEMO_MODE, which the live
     # site runs with. Off => every UPI reference must be a 12-digit UTR.

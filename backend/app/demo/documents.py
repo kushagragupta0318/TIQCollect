@@ -97,7 +97,7 @@ def _expires(agency: R.AgencyRoster, doc_type: str, years: int | None, issued: d
         return date.fromordinal(R.ANCHOR_DATE.toordinal() + agency.expiring_docs[doc_type])
     if years is None:
         return None
-    return date.fromordinal(issued.replace(year=issued.year + years).toordinal() - 1)
+    return date.fromordinal(R.plus_years(issued, years).toordinal() - 1)
 
 
 def specimens(agency: R.AgencyRoster) -> list[Specimen]:

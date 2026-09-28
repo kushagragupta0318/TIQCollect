@@ -421,3 +421,24 @@ def test_celery_never_runs_the_master_login(tmp_path):
                         {"RUN_SEED": "false", "DEMO_MASTER_PASSWORD": _SECRET})
     assert proc.returncode == 0, proc.stderr
     assert not any("apply_demo_logins" in c for c in calls)
+
+
+def test_a_restored_fixture_re_uploads_the_specimen_documents_and_a_failure_is_not_fatal(tmp_path):
+    """B16: the agencies' specimen PDFs are object storage, which the dump
+    does not carry. Re-uploaded after the restore; MinIO being down must not
+    stop the boot."""
+    proc, calls = _run(tmp_path, generation="empty", fixture="v2")
+    assert proc.returncode == 0, proc.stderr
+    names = _names(calls)
+    up = calls.index("python -m scripts.ensure_demo_documents")
+    assert names.index("alembic") < up, "after the migrations, so the rows it reads exist"
+    (tmp_path / "down").mkdir()
+    proc2, calls2 = _run(tmp_path / "down", generation="empty", fixture="v2", python_fails_on="ensure_demo_documents")
+    assert proc2.returncode == 0, proc2.stderr
+    assert "not uploaded" in proc2.stdout
+
+
+def test_documents_are_not_touched_when_nothing_is_restored(tmp_path):
+    proc, calls = _run(tmp_path, generation="v2", fixture="v2")
+    assert proc.returncode == 0, proc.stderr
+    assert not any("ensure_demo_documents" in c for c in calls)
