@@ -64,13 +64,25 @@ def point_in_geojson_polygon(lat: float, lon: float, geojson: dict | None) -> bo
     base location roughly inside the region's coverage area", not a survey
     tool. `geojson=None` (most regions today have no coverage_geojson at
     all) is treated as "nothing to check against" by the CALLER, not here —
-    this function only answers the geometry question it's asked."""
+    this function only answers the geometry question it's asked.
+
+    Two known limitations, not bugs to fix here: planar ray-casting on raw
+    (lon, lat) does not handle a ring that crosses the ±180° antimeridian —
+    the intended coverage area's "short way" round becomes the "long way",
+    inverting inside/outside for nearly every point — a non-issue for the
+    Indian territories this gates today, worth remembering the day a
+    region's boundary is drawn near the dateline. And this treats a soft
+    check's bad input as "does not match" rather than validating
+    coverage_geojson's shape — a malformed ring (any empty polygon entry in
+    a MultiPolygon) is guarded below rather than raising, but a region
+    editor that WRITES this field should validate it going in, including a
+    cap on vertex count (unbounded here, tiq-auditor's LOW finding)."""
     if not geojson:
         return False
     kind = geojson.get("type")
     coords = geojson.get("coordinates")
-    if kind == "Polygon" and coords:
+    if kind == "Polygon" and coords and coords[0]:
         return _point_in_ring(lat, lon, coords[0])
     if kind == "MultiPolygon" and coords:
-        return any(_point_in_ring(lat, lon, poly[0]) for poly in coords)
+        return any(_point_in_ring(lat, lon, poly[0]) for poly in coords if poly and poly[0])
     return False

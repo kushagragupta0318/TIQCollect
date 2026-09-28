@@ -25,18 +25,17 @@
 + its User row) on behalf of the manager who owns them."""
 from __future__ import annotations
 
-import secrets
 from datetime import datetime, timezone
 
 from fastapi import Request
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.audit import stage_audit, write_audit
+from app.core.audit import stage_audit
 from app.core.errors import AppException, ErrorCode
 from app.core.geo import point_in_geojson_polygon
-from app.core.security import hash_password
-from app.models.agent import Agent, AgentSpecialization, AgentStatus, AgentTier
+from app.core.security import disabled_password_hash
+from app.models.agent import AGENT_GENDER_VALUES, VEHICLE_TYPES, Agent, AgentSpecialization, AgentStatus, AgentTier
 from app.models.audit_log import AuditAction
 from app.models.tenancy import Region
 from app.models.user import User, UserRole
@@ -45,6 +44,16 @@ from app.services.scope import agents_in_scope
 
 _LAT_RANGE = (-90.0, 90.0)
 _LON_RANGE = (-180.0, 180.0)
+_MAX_LANGUAGES = 10
+_MAX_LANGUAGE_LENGTH = 30
+_MAX_CASES_PER_DAY_RANGE = (1, 50)
+# coordinator audit MED: a collision is refused the same way regardless of
+# WHICH field collided — naming email vs. phone vs. employee_code vs. ID
+# card number would let a caller probe, one field at a time, whether a
+# specific value already exists somewhere in the system (across tenants for
+# email/phone, since that uniqueness is intentionally global — see
+# create_agent's own note on the pre-check below).
+_CONFLICT_MESSAGE = "This could not be created — a detail collides with an existing record."
 
 
 def _client_ip(request: Request | None) -> str | None:
@@ -141,40 +150,69 @@ def create_agent(
     territory = (territory or "").strip()
     if not territory or len(territory) > 100:   # Agent.territory: String(100)
         raise AppException(422, ErrorCode.VALIDATION_ERROR, "Enter the agent's territory (up to 100 characters).")
+    if gender is not None and gender.strip().upper() not in AGENT_GENDER_VALUES:
+        # Matches Agent's own CHECK constraint (ck_agents_gender) — Postgres
+        # enforces it, SQLite does not, same shape of gap as the length caps
+        # above.
+        raise AppException(422, ErrorCode.VALIDATION_ERROR, "That gender value is not recognised.")
+    if vehicle_type is not None and vehicle_type.strip().upper() not in VEHICLE_TYPES:
+        raise AppException(422, ErrorCode.VALIDATION_ERROR, "That vehicle type is not recognised.")
+    if max_cases_per_day is not None and not (
+        _MAX_CASES_PER_DAY_RANGE[0] <= max_cases_per_day <= _MAX_CASES_PER_DAY_RANGE[1]
+    ):
+        raise AppException(422, ErrorCode.VALIDATION_ERROR,
+                           f"Cases per day must be between {_MAX_CASES_PER_DAY_RANGE[0]} "
+                           f"and {_MAX_CASES_PER_DAY_RANGE[1]}.")
+    if languages_spoken:
+        if len(languages_spoken) > _MAX_LANGUAGES:
+            raise AppException(422, ErrorCode.VALIDATION_ERROR, f"Enter up to {_MAX_LANGUAGES} languages.")
+        if any(not isinstance(lang, str) or not lang.strip() or len(lang) > _MAX_LANGUAGE_LENGTH
+              for lang in languages_spoken):
+            raise AppException(422, ErrorCode.VALIDATION_ERROR,
+                               f"Each language must be text of up to {_MAX_LANGUAGE_LENGTH} characters.")
     _validate_base_location(base_latitude, base_longitude, territory_region_id, manager, db)
 
+    # Global, not agency-scoped, ON PURPOSE: one login per identity across
+    # the whole deployment (the same rule invite_service.create_agent
+    # relies on for its own email/phone check). Because it is global, the
+    # message says nothing about which field collided or with whose
+    # account — the alternative would let a caller probe, one field at a
+    # time, whether a given email or phone exists in ANOTHER tenant, which
+    # a manager has no legitimate reason to learn.
     if db.query(User.id).filter((User.email == email) | (User.phone == phone)).first():
-        raise AppException(409, ErrorCode.CONFLICT, "An account with this email or phone already exists.")
+        raise AppException(409, ErrorCode.CONFLICT, _CONFLICT_MESSAGE)
 
     user = User(
         email=email, phone=phone, full_name=full_name, role=UserRole.FIELD_AGENT,
         bank_id=manager.bank_id, agency_id=manager.agency_id,
-        # Unusable and discarded immediately — nobody, including this
-        # process a moment from now, knows this value. The agent's real
-        # first password is chosen by them, through the activation link.
-        hashed_password=hash_password(secrets.token_urlsafe(32)),
+        # The one recognised "no real password" marker (core/security.
+        # disabled_password_hash), not a throwaway random hash — the agent's
+        # real first password is chosen by them, through the activation link.
+        hashed_password=disabled_password_hash(),
         is_active=True, is_verified=True, must_change_password=True,
     )
     db.add(user)
-    db.flush()
-
-    agent = Agent(
-        user_id=user.id, employee_code=employee_code, id_card_number=id_card_number,
-        manager_user_id=manager.id, bank_id=manager.bank_id, agency_id=manager.agency_id,
-        base_latitude=base_latitude, base_longitude=base_longitude, territory=territory,
-        territory_region_id=territory_region_id, gender=gender,
-        specialization=specialization or AgentSpecialization.BOTH,
-        vehicle_type=vehicle_type or "TWO_WHEELER",
-        max_cases_per_day=max_cases_per_day or 15,
-        languages_spoken=languages_spoken or [], status=AgentStatus.OFF_DUTY, tier=AgentTier.TIER_3,
-    )
-    db.add(agent)
     try:
-        # One try/except from here through the commit: the (agency_id,
-        # employee_code) and (bank_id, id_card_number) uniqueness constraints
-        # can only be discovered by the database, and the first of the two
-        # flushes below (to get agent.id for the audit row) is exactly where
-        # SQLite raises them — catching only around commit() missed it.
+        # One try/except from HERE — the User's own flush is a genuine race
+        # window (tiq-auditor's HIGH finding: two concurrent calls with the
+        # same email/phone can both clear the pre-check above and then race
+        # each other at this flush) — through the final commit. Every DB-
+        # discoverable uniqueness violation in this function (User.email,
+        # User.phone, the composite (agency_id, employee_code) and
+        # (bank_id, id_card_number) on Agent) is caught the same way.
+        db.flush()
+
+        agent = Agent(
+            user_id=user.id, employee_code=employee_code, id_card_number=id_card_number,
+            manager_user_id=manager.id, bank_id=manager.bank_id, agency_id=manager.agency_id,
+            base_latitude=base_latitude, base_longitude=base_longitude, territory=territory,
+            territory_region_id=territory_region_id, gender=gender,
+            specialization=specialization or AgentSpecialization.BOTH,
+            vehicle_type=vehicle_type or "TWO_WHEELER",
+            max_cases_per_day=max_cases_per_day or 15,
+            languages_spoken=languages_spoken or [], status=AgentStatus.OFF_DUTY, tier=AgentTier.TIER_3,
+        )
+        db.add(agent)
         db.flush()
         stage_audit(db, action=AuditAction.USER_CREATED, user_id=manager.id, entity_type="Agent",
                    entity_id=agent.id, ip_address=_client_ip(request),
@@ -183,8 +221,7 @@ def create_agent(
         db.commit()
     except IntegrityError:
         db.rollback()
-        raise AppException(409, ErrorCode.CONFLICT,
-                           "This employee code or ID card number is already in use.")
+        raise AppException(409, ErrorCode.CONFLICT, _CONFLICT_MESSAGE)
 
     return {
         "agent_id": agent.id, "user_id": user.id, "employee_code": agent.employee_code,
@@ -227,12 +264,23 @@ def suspend_agent(db: Session, manager: User, agent_id: str, *, reason: str,
     agent.status = AgentStatus.SUSPENDED
     agent.suspended_at = datetime.now(timezone.utc)
     agent.suspended_reason = reason
+    # coordinator audit HIGH: Agent.status alone did not stop a sign-in —
+    # auth_service checks only User.is_active, and login/refresh's own
+    # belt-and-braces Agent.status check exists for exactly the case where
+    # these two columns ever disagree, not as a substitute for keeping them
+    # in step here.
+    agent_user = db.get(User, agent.user_id)
+    agent_user.is_active = False
     revoke_user_sessions(db, agent.user_id, "ADMIN_REVOKED", by=manager.id)
-    db.commit()
-    write_audit(db, action=AuditAction.AGENT_STATUS_CHANGED, user_id=manager.id, entity_type="Agent",
+    # stage_audit, not write_audit (coordinator audit MED): the audit row
+    # belongs in the SAME commit as the status change, not a second one
+    # after it — a crash between the two used to leave a suspension with no
+    # audit trail at all.
+    stage_audit(db, action=AuditAction.AGENT_STATUS_CHANGED, user_id=manager.id, entity_type="Agent",
                entity_id=agent.id, ip_address=_client_ip(request),
                details={"event": "AGENT_SUSPENDED", "reason": reason,
                         "from_status": previous_status.value, "to_status": AgentStatus.SUSPENDED.value})
+    db.commit()
     return {"agent_id": agent.id, "status": agent.status.value, "suspended_reason": agent.suspended_reason}
 
 
@@ -249,11 +297,13 @@ def reactivate_agent(db: Session, manager: User, agent_id: str, *, request: Requ
     agent.status = AgentStatus.OFF_DUTY
     agent.suspended_at = None
     agent.suspended_reason = None
-    db.commit()
-    write_audit(db, action=AuditAction.AGENT_STATUS_CHANGED, user_id=manager.id, entity_type="Agent",
+    agent_user = db.get(User, agent.user_id)
+    agent_user.is_active = True
+    stage_audit(db, action=AuditAction.AGENT_STATUS_CHANGED, user_id=manager.id, entity_type="Agent",
                entity_id=agent.id, ip_address=_client_ip(request),
                details={"event": "AGENT_REACTIVATED", "from_status": AgentStatus.SUSPENDED.value,
                         "to_status": AgentStatus.OFF_DUTY.value})
+    db.commit()
     return {"agent_id": agent.id, "status": agent.status.value}
 
 

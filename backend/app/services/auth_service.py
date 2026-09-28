@@ -40,7 +40,7 @@ from app.core.audit import stage_audit
 from app.core.config import settings
 from app.core.permissions import role_capabilities
 from app.core.errors import AppException, ErrorCode
-from app.models.agent import Agent, AgentDevice
+from app.models.agent import Agent, AgentDevice, AgentStatus
 from app.models.identity import UserSession
 from app.models.user import User, UserRole
 from app.models.audit_log import AuditLog, AuditAction
@@ -188,6 +188,18 @@ def _enforce_device_binding(db: Session, user: User, device_id: str, request: Re
     device.last_seen_at = now
 
 
+def _agent_is_suspended(db: Session, user: User) -> bool:
+    """G02 (coordinator audit HIGH): suspend_agent sets both Agent.status and
+    User.is_active, so this is belt-and-braces, not the primary gate — a
+    FIELD_AGENT whose Agent.status is SUSPENDED must never sign in even if
+    is_active somehow disagrees (a future code path that touches one column
+    without the other, a manual data fix, a race)."""
+    if user.role != UserRole.FIELD_AGENT:
+        return False
+    agent = db.query(Agent).filter(Agent.user_id == user.id).first()
+    return agent is not None and agent.status == AgentStatus.SUSPENDED
+
+
 def _login_response(user: User, tokens: dict) -> dict:
     return {
         **tokens,
@@ -219,7 +231,7 @@ def login(db: Session, email: str, password: str, device_id: str, request: Reque
         _log(db, AuditAction.LOGIN_FAILED, user.id, request, success=False, failure_reason="Wrong password")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
-    if not user.is_active:
+    if not user.is_active or _agent_is_suspended(db, user):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account deactivated")
 
     # 2026-09-28 (A08, A07; d4) — after the password, before any session.
@@ -354,7 +366,7 @@ def refresh_tokens(db: Session, refresh_token: str, request: Request) -> dict:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token type")
 
     user = db.get(User, payload["sub"])
-    if not user or not user.is_active:
+    if not user or not user.is_active or _agent_is_suspended(db, user):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired")
 
     session = (db.query(UserSession)

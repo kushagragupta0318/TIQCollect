@@ -46,10 +46,10 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.core.dependencies import DbSession
-from app.core.errors import AppException
+from app.core.errors import AppException, ErrorCode
 from app.core.ids import UUIDPath, UUIDStr
 from app.core.permissions import require_perm
 from app.core.ratelimit import AUTH_LIMIT, limiter
@@ -74,8 +74,11 @@ class CreateAgentRequest(BaseModel):
     gender: str | None = None
     specialization: AgentSpecialization | None = None
     vehicle_type: str | None = None
-    max_cases_per_day: int | None = None
-    languages_spoken: list[str] | None = None
+    # agent_management_service.create_agent re-validates all four against
+    # Agent's own CHECK constraints / column widths regardless — these are
+    # the fast, boundary-level rejection, not the only one.
+    max_cases_per_day: int | None = Field(default=None, ge=1, le=50)
+    languages_spoken: list[str] | None = Field(default=None, max_length=10)
 
 
 @router.post("/agents")
@@ -101,9 +104,16 @@ async def create_agent_route(
     try:
         activation = password_service.issue_first_password(db, current_user, agent_user, request=request)
     except AppException as exc:
-        # The expected failure mode is 503 (no PUBLIC_BASE_URL configured) —
-        # caught narrowly so a real bug in this wiring (anything else) still
-        # surfaces as a 500 instead of reading as "the SMS didn't send".
+        # tiq-auditor (self-requested review): this used to catch every
+        # AppException, so a 404 from can_manage or a 409 from
+        # never_had_a_password — genuine bugs in this wiring, since the
+        # agent just created must always satisfy both — would have read as
+        # an ordinary "the SMS didn't send" instead of the loud failure the
+        # comment already claimed this gave. Narrowed to the one expected
+        # failure mode (no PUBLIC_BASE_URL configured); anything else
+        # re-raises as the 500 it actually is.
+        if exc.code != ErrorCode.CHANNEL_UNAVAILABLE:
+            raise
         activation = {"sent": False, "error": exc.detail}
     result["activation"] = activation
     return result

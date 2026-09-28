@@ -81,6 +81,83 @@ def _live_session(db, user_id: str, device: str) -> UserSession:
 
 
 # ── suspend ───────────────────────────────────────────────────────────────
+def _make_agent_with_a_real_password(w, tag: str, password: str = "Rakshit@2026") -> tuple[User, Agent]:
+    """Unlike create_agent's own agents (disabled_password_hash by design —
+    nobody, including the manager, ever knows their password), these tests
+    need to actually sign one in, so this constructs the User/Agent pair
+    directly with a real, known password."""
+    from app.core.security import hash_password
+    db = w["db"]
+    u = User(id=test_id(f"u:agent:{tag}"), email=f"{tag}@meridiantrust.example", phone=f"98100060{len(tag):02d}",
+             full_name=f"Agent {tag}", hashed_password=hash_password(password), role=UserRole.FIELD_AGENT,
+             bank_id=TEST_BANK_ID, agency_id=TEST_AGENCY_ID, is_active=True, is_verified=True)
+    db.add(u)
+    db.flush()
+    a = Agent(id=test_id(f"agent:{tag}"), user_id=u.id, employee_code=f"{tag.upper()}01",
+             id_card_number=f"{tag.upper()}-ID-01", manager_user_id=w["mgr"].id,
+             base_latitude=28.45, base_longitude=77.07, territory="Sector 44, Gurugram",
+             bank_id=TEST_BANK_ID, agency_id=TEST_AGENCY_ID, status=AgentStatus.OFF_DUTY)
+    db.add(a)
+    db.commit()
+    return u, a
+
+
+def _request():
+    from starlette.requests import Request
+    return Request({"type": "http", "method": "POST", "path": "/", "headers": [],
+                    "client": ("10.0.0.9", 1), "query_string": b""})
+
+
+def test_a_suspended_agent_is_deactivated_and_cannot_log_in(w):
+    """coordinator audit HIGH: suspend_agent used to touch only Agent.status
+    — User.is_active stayed True, and login/refresh check only is_active,
+    so a suspended agent could sign straight back in on a fresh device."""
+    from app.services import auth_service
+
+    db = w["db"]
+    u, a = _make_agent_with_a_real_password(w, "highsev")
+    suspend_agent(db, w["mgr"], a.id, reason="Compliance hold")
+    db.expire_all()
+    assert db.get(User, u.id).is_active is False
+
+    with pytest.raises(Exception) as exc:
+        auth_service.login(db, u.email, "Rakshit@2026", "dev-1", _request())
+    assert getattr(exc.value, "status_code", None) == 403
+
+
+def test_a_suspended_agents_refresh_token_is_refused_even_if_the_session_somehow_survived(w):
+    """Belt and braces: suspend_agent already revokes every live session, so
+    this constructs a session AFTER suspension (simulating is_active and
+    Agent.status having gone out of sync some other way) to prove the
+    Agent.status check in refresh_tokens is real, not just redundant with
+    the session revocation."""
+    from app.core.security import create_refresh_token, token_sha256
+    from app.services import auth_service
+
+    db = w["db"]
+    u, a = _make_agent_with_a_real_password(w, "highsev2")
+    suspend_agent(db, w["mgr"], a.id, reason="Compliance hold")
+
+    sid = test_id("session:highsev2")
+    token = create_refresh_token(u.id, "dev-1", sid=sid)
+    db.add(UserSession(id=sid, user_id=u.id, device_id="dev-1", refresh_token_sha256=token_sha256(token),
+                       refresh_jti="jti-highsev2", expires_at=datetime(2030, 1, 1)))
+    db.commit()
+
+    with pytest.raises(Exception) as exc:
+        auth_service.refresh_tokens(db, token, _request())
+    assert getattr(exc.value, "status_code", None) == 401
+
+
+def test_reactivate_restores_is_active(w):
+    db = w["db"]
+    u, a = _make_agent_with_a_real_password(w, "reactive")
+    suspend_agent(db, w["mgr"], a.id, reason="Under review")
+    reactivate_agent(db, w["mgr"], a.id)
+    db.expire_all()
+    assert db.get(User, u.id).is_active is True
+
+
 def test_suspend_sets_status_and_reason(w):
     db = w["db"]
     out = suspend_agent(db, w["mgr"], w["agent_id"], reason="Repeated compliance violations")

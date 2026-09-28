@@ -6,7 +6,35 @@
 # ───────────────────────────────────────────────────────────────────────────
 from datetime import datetime, timezone
 
-from app.core.geo import haversine_metres, within_geo_fence, is_within_contact_hours
+from app.core.geo import haversine_metres, within_geo_fence, is_within_contact_hours, point_in_geojson_polygon
+
+_SQUARE = {"type": "Polygon", "coordinates": [[
+    [77.0, 28.4], [77.2, 28.4], [77.2, 28.6], [77.0, 28.6], [77.0, 28.4],
+]]}
+
+
+def test_point_in_geojson_polygon_inside_and_outside():
+    assert point_in_geojson_polygon(28.5, 77.1, _SQUARE) is True
+    assert point_in_geojson_polygon(12.9, 77.6, _SQUARE) is False
+
+
+def test_point_in_geojson_polygon_none_or_empty_is_false_not_a_crash():
+    assert point_in_geojson_polygon(28.5, 77.1, None) is False
+    assert point_in_geojson_polygon(28.5, 77.1, {}) is False
+    assert point_in_geojson_polygon(28.5, 77.1, {"type": "Polygon", "coordinates": []}) is False
+    assert point_in_geojson_polygon(28.5, 77.1, {"type": "Polygon", "coordinates": [[]]}) is False
+
+
+def test_multipolygon_with_an_empty_entry_does_not_crash():
+    """tiq-auditor LOW: `any(_point_in_ring(lat, lon, poly[0]) for poly in coords)`
+    indexed poly[0] before checking poly was non-empty, so one malformed
+    entry in an otherwise-valid MultiPolygon raised an unhandled IndexError
+    — a 500 on an unrelated request — instead of being treated as "nothing
+    to check against" the same way an empty Polygon ring already was."""
+    multi_with_empty = {"type": "MultiPolygon", "coordinates": [[], _SQUARE["coordinates"]]}
+    assert point_in_geojson_polygon(28.5, 77.1, multi_with_empty) is True
+    assert point_in_geojson_polygon(12.9, 77.6, multi_with_empty) is False
+    assert point_in_geojson_polygon(28.5, 77.1, {"type": "MultiPolygon", "coordinates": [[]]}) is False
 
 
 def test_haversine_zero_distance():

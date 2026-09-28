@@ -158,6 +158,68 @@ def test_duplicate_employee_code_in_the_same_agency_is_refused(w):
     assert exc.value.status_code == 409
 
 
+def test_every_kind_of_collision_gives_the_identical_conflict_message(w):
+    """coordinator audit MED: a manager must not be able to tell, from the
+    response, WHICH field collided — an email/phone collision can be with
+    an account in another tenant entirely, and naming the field would let a
+    caller probe one at a time whether a given value exists anywhere on the
+    platform."""
+    db, mgr = w["db"], w["mgr"]
+    create_agent(db, mgr, **_valid_body())
+
+    messages = set()
+    with pytest.raises(AppException) as exc:
+        create_agent(db, mgr, **_valid_body(email=w["field_agent"].email))
+    messages.add(exc.value.detail)
+    with pytest.raises(AppException) as exc:
+        # Same employee_code AND id_card_number as the first call — reaches
+        # the database-level catch (the IntegrityError branch), not the
+        # pre-check, proving that branch gives the same message too.
+        create_agent(db, mgr, **_valid_body(email="third@meridiantrust.example", phone="9810004005"))
+    messages.add(exc.value.detail)
+    assert len(messages) == 1
+
+
+def test_an_unrecognised_gender_is_refused(w):
+    """tiq-auditor MEDIUM: gender/vehicle_type had no app-level check against
+    Agent's own CHECK constraints — an invalid value used to reach the
+    database and (on Postgres) raise a DataError the broad IntegrityError
+    catch mis-reported as an employee_code/id_card_number conflict."""
+    with pytest.raises(AppException) as exc:
+        create_agent(w["db"], w["mgr"], **_valid_body(gender="ALIEN"))
+    assert exc.value.status_code == 422
+
+
+def test_an_unrecognised_vehicle_type_is_refused(w):
+    with pytest.raises(AppException) as exc:
+        create_agent(w["db"], w["mgr"], **_valid_body(vehicle_type="HOVERCRAFT"))
+    assert exc.value.status_code == 422
+
+
+@pytest.mark.parametrize("value", [0, -5, 51, 999999])
+def test_max_cases_per_day_out_of_range_is_refused(w, value):
+    """tiq-auditor MEDIUM: `max_cases_per_day or 15` silently replaced an
+    explicit 0 with the default via Python truthiness, and a value outside
+    Postgres SMALLINT range (-32768..32767) would have reached the database
+    as an unhandled DataError (a different exception class than the
+    IntegrityError this file already catches)."""
+    with pytest.raises(AppException) as exc:
+        create_agent(w["db"], w["mgr"], **_valid_body(max_cases_per_day=value))
+    assert exc.value.status_code == 422
+
+
+def test_too_many_languages_is_refused(w):
+    with pytest.raises(AppException) as exc:
+        create_agent(w["db"], w["mgr"], **_valid_body(languages_spoken=[f"L{i}" for i in range(11)]))
+    assert exc.value.status_code == 422
+
+
+def test_an_overlong_language_entry_is_refused(w):
+    with pytest.raises(AppException) as exc:
+        create_agent(w["db"], w["mgr"], **_valid_body(languages_spoken=["A" * 31]))
+    assert exc.value.status_code == 422
+
+
 def test_a_full_name_over_200_characters_is_refused(w):
     """Matches User.full_name's own column width (String(200)) — Postgres
     enforces it and raises a raw DB error on INSERT; SQLite does not, which
@@ -239,6 +301,25 @@ def test_http_create_is_refused_for_a_field_agent_principal(w):
     client = TestClient(app)
     r = client.post("/api/v1/manager/agents", json=_valid_body(), headers=_h(w["field_agent"]))
     assert r.status_code == 403
+
+
+def test_a_non_channel_unavailable_activation_failure_is_not_swallowed(w, monkeypatch):
+    """tiq-auditor LOW-MEDIUM: the route's own comment claimed a real bug in
+    the activation wiring would surface as a 500, but the catch was broad
+    enough to swallow every AppException issue_first_password can raise
+    (404 from can_manage, 409 from never_had_a_password, 429 from the
+    cooldown) into an ordinary-looking 200. Narrowed to the one expected
+    failure (503, no PUBLIC_BASE_URL) — anything else must still blow up."""
+    from app.core.errors import AppException, ErrorCode
+    from app.services import password_service
+
+    def _boom(*a, **k):
+        raise AppException(404, ErrorCode.NOT_FOUND, "User not found")
+    monkeypatch.setattr(password_service, "issue_first_password", _boom)
+
+    client = TestClient(app)
+    r = client.post("/api/v1/manager/agents", json=_valid_body(), headers=_h(w["mgr"]))
+    assert r.status_code == 404
 
 
 def test_a_manager_cannot_smuggle_a_different_agency_into_the_request_body(w):
