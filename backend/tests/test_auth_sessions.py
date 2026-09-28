@@ -390,3 +390,25 @@ def test_the_id_card_registration_is_the_agencys_own_or_nothing(world, monkeypat
     world["db"].get(Agency, TEST_AGENCY_ID).rbi_registration_no = "DRA/NCR/2031/0417"
     world["db"].commit()
     assert client.get("/api/v1/agent/profile", headers=h).json()["agency_rbi_registration_no"] == "DRA/NCR/2031/0417"
+
+
+# ── Opus audit of 014fe58 (LOW 1 + 2) ───────────────────────────────────────
+
+@pytest.mark.parametrize("method", ["invite", "mfa_enrollment"])
+def test_a_secretless_session_route_refuses_a_bound_agent_and_commits_nothing_staged(world, monkeypatch, method):
+    """Invite accept and MFA confirm pass no device secret. A field agent with
+    a bound device is refused with the uniform 403, and the caller's staged
+    rows (an invite accepted, a user created) are rolled back, not committed
+    by the refusal's own audit write."""
+    from app.core.audit import stage_audit
+    monkeypatch.setattr(settings, "DEMO_DEVICE_REBIND", False)
+    _login(world, world["agent_user"], DEVICE_A)
+    db = world["db"]
+    stage_audit(db, action=AuditAction.USER_CREATED, user_id=world["agent_user"].id, entity_type="User",
+                entity_id=world["agent_user"].id, details={"probe": method})
+    with pytest.raises(HTTPException) as exc:
+        auth_service.complete_login(db, world["agent_user"], DEVICE_A, _request(), method=method)
+    assert exc.value.status_code == 403 and exc.value.detail == "Device not authorized. Contact your manager."
+    db.expire_all()
+    assert not [r for r in _audits(db, AuditAction.USER_CREATED) if (r.details or {}).get("probe") == method]
+    assert _audits(db, AuditAction.DEVICE_MISMATCH)[-1].failure_reason == "Device secret missing or wrong"

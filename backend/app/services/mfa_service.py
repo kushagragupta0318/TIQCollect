@@ -249,4 +249,6 @@ def ticket_confirm(db: Session, ticket: str, code: str, device_id: str, request:
     _store().delete(key)                          # single-use
     # Through the same post-gate path as /auth/login: device binding and the
     # LOGIN row (coordinator's audit MED).
-    return auth_service.complete_login(db, user, device_id, request, method="mfa_enrollment")
+    # No device secret on this route: a field agent with a bound device gets the uniform 403.
+    return auth_service.complete_login(db, user, device_id, request, method="mfa_enrollment",
+                                       device_secret=None)

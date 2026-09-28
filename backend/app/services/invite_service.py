@@ -306,7 +306,8 @@ def accept_invite(db: Session, token: str, password: str, device_id: str, reques
     # Through the same post-gate path as /auth/login: device binding, the
     # LOGIN row, one commit that also carries the two rows staged above
     # (coordinator's audit MED).
-    return auth_service.complete_login(db, user, device_id, request, method="invite")
+    # No device secret on this route: a field agent with a bound device gets the uniform 403.
+    return auth_service.complete_login(db, user, device_id, request, method="invite", device_secret=None)
 
 
 def _stage_accept(db: Session, inv: UserInvite, user: User, request: Request | None) -> None:
