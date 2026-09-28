@@ -230,6 +230,19 @@ def test_agent_rows_carry_today_figures(client, seeded):
         assert key in row
 
 
+def test_agent_rows_carry_email_phone_and_base_location(client, seeded):
+    """G02 (Manage Agents): the table and edit drawer need these — already
+    on the row through the existing joinedload(Agent.user), not a new
+    query."""
+    r = client.get("/api/v1/manager/agents", headers=auth_headers(seeded["manager"]))
+    row = r.json()[0]
+    for key in ("email", "phone", "gender", "vehicle_type", "territory_region_id",
+               "base_latitude", "base_longitude", "suspended_at", "suspended_reason"):
+        assert key in row
+    assert row["email"] and "@" in row["email"]
+    assert row["base_latitude"] is not None and row["base_longitude"] is not None
+
+
 def test_agent_ptp_rate_counts_verified_payment_evidence(client, seeded):
     db = seeded["db"]
     ag1 = seeded["agents"][0]

@@ -949,6 +949,18 @@ def list_agents(current_user: ManagerOnly, db: DbSession):
             "id_card_number": agent.id_card_number,
             "full_name": agent.user.full_name,
             "date_of_birth": agent.user.date_of_birth,
+            # G02 (Manage Agents): the table and edit drawer both need these,
+            # already on the row through the same joinedload(Agent.user)
+            # above — no new query, just two more keys off it.
+            "email": agent.user.email,
+            "phone": agent.user.phone,
+            "gender": agent.gender,
+            "vehicle_type": agent.vehicle_type,
+            "territory_region_id": agent.territory_region_id,
+            "base_latitude": agent.base_latitude,
+            "base_longitude": agent.base_longitude,
+            "suspended_at": agent.suspended_at,
+            "suspended_reason": agent.suspended_reason,
             "territory": agent.territory,
             "tier": agent.tier,
             "status": effective_status(agent, on_leave_today),
