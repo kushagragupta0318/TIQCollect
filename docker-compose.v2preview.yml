@@ -1,0 +1,87 @@
+# The v2 PREVIEW stack — a second, separate stack beside the v1 dev stack.
+#
+#   cp v2preview.env.example v2preview.env      # then set DEMO_MASTER_PASSWORD (16+ chars)
+#   docker compose -p tiq-v2 -f docker-compose.yml -f docker-compose.v2preview.yml up -d --build
+#   open http://localhost:5474                    (API http://localhost:8401/docs)
+#   docker compose -p tiq-v2 -f docker-compose.yml -f docker-compose.v2preview.yml down   # keeps its data
+#
+# Run it from a checkout of standalone-p1 (the v2 data model). It never touches
+# the v1 dev stack: its own project name (so its own volumes and network), its
+# own container names, image tag and host ports. On the first start its seed
+# container restores backend/fixtures/fieldops-demo-v2.dump (B15) into its own
+# empty database; the master login below is applied on every API boot.
+#
+# The three demo logins (backend/fixtures/README.md): a bank admin, an agency
+# manager and a field agent. The password is read from v2preview.env, which is
+# gitignored and must never be committed.
+#
+# 2026-09-28 (B15 follow-up, coordinator request): new file.
+
+x-v2-env: &v2-env
+  DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-fieldops}:${POSTGRES_PASSWORD:-fieldops_dev_pass}@postgres:5432/tiq_v2
+  DEMO_MODE: "true"
+  DEMO_MASTER_ACCOUNTS: ananya.iyer@girivanfinance.test,vikram.malhotra@aravallifs.test,piyush.sharma@aravallifs.test
+  DEMO_FIXTURE: /app/fixtures/fieldops-demo-v2.dump
+  ALLOWED_ORIGINS: http://localhost:5474,http://localhost:8401
+  MINIO_PUBLIC_ENDPOINT: localhost:19002
+
+x-v2-env-file: &v2-env-file
+  - path: ./backend/.env
+    required: false
+  - path: ./v2preview.env          # DEMO_MASTER_PASSWORD lives here; gitignored
+    required: true
+
+services:
+  postgres:
+    container_name: tiq_v2_postgres
+    environment:
+      POSTGRES_DB: tiq_v2
+    ports: !override
+      - "15433:5432"
+
+  redis:
+    container_name: tiq_v2_redis
+    ports: !override
+      - "16380:6379"
+
+  osrm:
+    container_name: tiq_v2_osrm
+    ports: !override
+      - "15001:5000"
+
+  minio:
+    container_name: tiq_v2_minio
+    ports: !override
+      - "19002:9000"
+      - "19003:9001"
+
+  api:
+    image: tiq-v2-dev:latest
+    container_name: tiq_v2_api
+    env_file: *v2-env-file
+    environment: *v2-env
+    ports: !override
+      - "8401:8000"
+
+  seed:
+    image: tiq-v2-dev:latest
+    container_name: tiq_v2_seed
+    env_file: *v2-env-file
+    environment: *v2-env
+
+  celery_worker:
+    image: tiq-v2-dev:latest
+    container_name: tiq_v2_celery_worker
+    env_file: *v2-env-file
+    environment: *v2-env
+
+  celery_beat:
+    image: tiq-v2-dev:latest
+    container_name: tiq_v2_celery_beat
+    env_file: *v2-env-file
+    environment: *v2-env
+
+  web:
+    container_name: tiq_v2_web
+    ports: !override
+      - "5474:5473"
