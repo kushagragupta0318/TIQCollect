@@ -111,4 +111,25 @@ if [ "${RUN_SEED:-false}" = "true" ]; then
   unset PGPASSWORD
 fi
 
+# 2026-09-24 (hotfix DEMO-LOGIN) — on EVERY boot of the API (and of the seed
+# container, after it seeds): the three DEMO_MASTER_ACCOUNTS log in with
+# DEMO_MASTER_PASSWORD and every other account's password becomes unusable,
+# which retires the published seed passwords. OUTSIDE the RUN_SEED gate on
+# purpose: the dev compose runs the api with RUN_SEED=false (only the one-shot
+# seed container has it true), so inside that gate this ran once at first
+# bring-up and never on the restart that deploys it — the published passwords
+# would have kept working (found in review before merge). Skipped for the
+# Celery worker and beat, which share this image. The password reaches the
+# script through the environment only, never this command line. Never fatal: a
+# refusal is logged and the container still starts.
+if [ -n "${DEMO_MASTER_PASSWORD:-}" ] && [ "${1:-}" != "celery" ]; then
+  rc=0
+  python -m scripts.apply_demo_logins || rc=$?
+  case "$rc" in
+    0) echo "[entrypoint] demo master login applied" ;;
+    3) echo "[entrypoint] demo master login not configured — nothing changed" ;;
+    *) echo "[entrypoint] demo master login NOT applied — see the error above; nothing was changed" ;;
+  esac
+fi
+
 exec "$@"

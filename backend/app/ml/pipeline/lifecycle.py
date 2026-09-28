@@ -392,6 +392,24 @@ class ApprovalRefused(RuntimeError):
     """The decision could not be applied. The champion is unchanged."""
 
 
+def _refuse_while_demo_master_login(db: Session, *, user_id: str, candidate_id: str, step: str) -> None:
+    """2026-09-24 (hotfix DEMO-LOGIN) — one shared password for an admin AND a
+    manager lets one person approve as one and promote as the other, which
+    satisfies the four-eyes rule below while being one pair of eyes, and
+    rewrites champion.txt for the whole deployment. A demo box does not
+    promote models: while the master login is on, approve and promote refuse
+    (the endpoints answer 409) and the attempt is audited."""
+    from app.core.audit import write_audit
+    from app.core.security import demo_master_login_active
+    from app.models.audit_log import AuditAction
+    if not demo_master_login_active():
+        return
+    write_audit(db, action=AuditAction.ROLE_VIOLATION_ATTEMPT, user_id=user_id,
+                entity_type="ModelCandidate", entity_id=candidate_id, success=False,
+                failure_reason=f"{step} refused: the demo master login is active on this box")
+    raise ApprovalRefused(f"model {step} is disabled while the shared demo login is active")
+
+
 def approve(db: Session, candidate_id: str, *, user_id: str,
             note: str | None = None) -> ModelCandidate:
     """Move PENDING_APPROVAL -> APPROVED. Does NOT promote.
@@ -403,6 +421,7 @@ def approve(db: Session, candidate_id: str, *, user_id: str,
     IDEMPOTENT: approving an already-approved candidate returns it unchanged
     rather than raising, so a double-clicked button is not an error.
     """
+    _refuse_while_demo_master_login(db, user_id=user_id, candidate_id=candidate_id, step="approval")
     cand = db.query(ModelCandidate).filter(ModelCandidate.id == candidate_id).one()
     if cand.state == CandidateState.APPROVED:
         return cand
@@ -465,6 +484,7 @@ def promote(db: Session, candidate_id: str, *, user_id: str) -> ModelCandidate:
     from app.ml.pipeline import registry
     from app.ml.pipeline.engine import DecisionEngine
 
+    _refuse_while_demo_master_login(db, user_id=user_id, candidate_id=candidate_id, step="promotion")
     cand = db.query(ModelCandidate).filter(ModelCandidate.id == candidate_id).one()
     if cand.state == CandidateState.PROMOTED:
         return cand

@@ -6,6 +6,12 @@
 #   no password, for up to 90 days. Single-use enforcement lives in
 #   auth_service.quick_login()/models/quick_login_token.py (this function has
 #   no DB access). Full detail: /changelog.md.
+# 2026-09-24 (hotfix DEMO-LOGIN) — disabled_password_hash() /
+#   is_disabled_password_hash(): the one definition of "this account's
+#   password was retired by scripts/apply_demo_logins.py", read by that
+#   script and by quick-login (which must refuse such an account: its
+#   quick-login links are stateless JWTs and outlive the password). And
+#   demo_master_login_active(), read by the ML approve/promote gate.
 # ───────────────────────────────────────────────────────────────────────────
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -26,6 +32,45 @@ def hash_password(password: str) -> str:
 
 def verify_password(plain: str, hashed: str) -> bool:
     return pwd_context.verify(plain, hashed)
+
+
+# Every retired password shares this bcrypt salt, so the marker is a string
+# check, not a bcrypt verify per user per boot. The SECRET behind each hash is
+# 32 fresh random bytes, discarded at once: a known salt does not make an
+# unknown secret guessable. 22 chars of bcrypt's alphabet, ending in one of
+# ".Oeu" (the last salt character carries two bits; others are rewritten).
+DISABLED_PASSWORD_SALT = "DisabledDemoLoginsTIQe"
+
+
+def disabled_password_hash() -> str:
+    from passlib.hash import bcrypt
+    return bcrypt.using(salt=DISABLED_PASSWORD_SALT).hash(secrets.token_urlsafe(32))
+
+
+def is_disabled_password_hash(hashed: str | None) -> bool:
+    """"$2b$<rounds>$<22-char salt><31-char digest>": compare the salt's first
+    21 characters, which no bcrypt implementation rewrites."""
+    parts = (hashed or "").split("$")
+    return len(parts) == 4 and parts[3][:21] == DISABLED_PASSWORD_SALT[:21]
+
+
+def explicit_true(value) -> bool:
+    """A demo switch is on only when it says "true" (any case). Read as a
+    string, not a pydantic bool, so a literal ${VAR} left unresolved in an env
+    file reads as OFF instead of failing settings at boot (coordinator
+    re-audit of bb4371a). Used for DEMO_MASTER_DISABLE_OTHERS and
+    DEMO_UPI_ACCEPT."""
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() == "true"
+
+
+def demo_master_login_active() -> bool:
+    """True while this box runs the shared demo master login. One password
+    for an admin AND a manager lets one person be both halves of a four-eyes
+    check, so the gates that rely on two people refuse while it is on."""
+    v = (settings.DEMO_MASTER_PASSWORD or "").strip()
+    return bool(v) and not v.startswith("${")
 
 
 def _make_token(subject: str, token_type: str, expires_delta: timedelta, extra: dict[str, Any] | None = None) -> str:

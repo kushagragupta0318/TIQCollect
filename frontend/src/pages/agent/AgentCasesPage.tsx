@@ -156,9 +156,9 @@ export default function AgentCasesPage() {
     return list;
   }, [activeList, search, statusFilter, searchParams]);
 
-  function callCustomer(phone: string, name: string, e: React.MouseEvent) {
+  function callCustomer(caseId: string, phone: string, name: string, e: React.MouseEvent) {
     e.stopPropagation();
-    startCall(phone, name);
+    startCall(caseId, phone, name);
   }
 
   function openGoogleMaps(lat: number, lon: number, name: string, e: React.MouseEvent) {
@@ -269,7 +269,7 @@ export default function AgentCasesPage() {
               rankBadgeColor={ranked?.rank_badge_color}
               rankReason={ranked?.rank_reason}
               onNavigate={(e) => openGoogleMaps(c.customer.latitude, c.customer.longitude, c.customer.full_name, e)}
-              onCall={(e) => callCustomer(c.customer.phone_primary, c.customer.full_name, e)}
+              onCall={(e) => callCustomer(c.id, c.customer.phone_primary, c.customer.full_name, e)}
               onWhatsapp={async (e) => { e.stopPropagation(); try { await notifyVisit(c.id); toast.success("Visit notification sent"); } catch { toast.error("Could not send notification"); } }}
               onOpen={() => navigate(`/agent/cases/${c.id}`)}
               distanceM={here ? haversineM(here.lat, here.lon, c.customer.latitude, c.customer.longitude) : null}

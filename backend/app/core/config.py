@@ -171,6 +171,23 @@ class Settings(BaseSettings):
         if v is None or (isinstance(v, str) and (not v.strip() or v.strip().startswith("${"))):
             return False
         return v
+    # 2026-09-24 (hotfix DEMO-LOGIN) — the demo's ONE master login. Read only
+    # by scripts/apply_demo_logins.py at boot; never logged, printed or
+    # defaulted. Unset = nothing changes. See that script for the rules.
+    DEMO_MASTER_PASSWORD: str = ""
+    DEMO_MASTER_ACCOUNTS: str = ""        # three emails, comma-separated: one admin, one manager, one agent
+    # Never touched by the script: the Collections Command Center's service
+    # logins (its TIQCOLLECT_AGENCY_ACCOUNTS), comma-separated emails.
+    DEMO_MASTER_KEEP_ACCOUNTS: str = ""
+    # The second, explicit opt-in to RETIRE every other account's password.
+    # DEMO_MODE cannot be it: .env.example ships DEMO_MODE=true and compose
+    # defaults it on, so a real deployment may well run with it.
+    DEMO_MASTER_DISABLE_OTHERS: str = ""
+    DEMO_EMAIL_DOMAINS: str = "tiqcollect.in"     # accounts outside these are never retired
+    # 2026-09-24 (hotfix PAY-1) — accept the demo auto-confirm's DEMO-UPI-
+    # reference. A flag production never sets: NOT DEMO_MODE, which the live
+    # site runs with. Off => every UPI reference must be a 12-digit UTR.
+    DEMO_UPI_ACCEPT: str = ""
     # The showcase customer (DEMO0003). Swap the phone to your CEO's / manager's
     # number here — no reseed, no rebuild; a backend restart applies it.
     DEMO_CONTACT_NAME: str = "Balraj Singh"
@@ -569,6 +586,23 @@ class Settings(BaseSettings):
     TWILIO_API_KEY_SID: str = ""
     TWILIO_API_KEY_SECRET: str = ""
     TWILIO_TWIML_APP_SID: str = ""
+    # 2026-09-24 (hotfix AU-2) — the PUBLIC origin Twilio calls webhooks on,
+    # e.g. https://fieldops.example.in. X-Twilio-Signature is computed over
+    # that exact URL; behind Caddy the app sees an internal http host, so the
+    # signature can only be checked against this. Unset => the voice webhook
+    # refuses every call (fail closed).
+    PUBLIC_BASE_URL: str = ""
+
+    # 2026-09-24 (hotfix PAY-2) — the UPI payee the collection QR pays. NO
+    # default, deliberately: the QR used to hardcode a personal-looking VPA and
+    # "ABC Bank", so every borrower who scanned it paid whoever owned that VPA.
+    # Unset => the QR is not offered and the agent records the UTR by hand.
+    # Per-bank payees are A14 (brand as data) in the standalone plan.
+    UPI_VPA: str = ""
+    UPI_PAYEE_NAME: str = ""
+    # 2026-09-24 (hotfix BL-5) — the number the borrower's post-visit message
+    # tells them to call. Unset => the message leaves that sentence out.
+    BORROWER_HELPLINE: str = ""
 
     # Borrower payment-verification OTP (see services/otp_service.py)
     OTP_LENGTH: int = 4                       # product decision: 4-digit code

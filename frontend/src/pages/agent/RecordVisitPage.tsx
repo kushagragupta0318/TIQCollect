@@ -72,6 +72,16 @@
 //   camera. Front preview is mirrored; the saved frame is not, because these
 //   are evidence photos and text in shot must stay readable. (3) Retake
 //   reopens on whichever side the agent had chosen.
+// 2026-09-24 (hotfix PAY-1 / PAY-2) - The 2026-07-31 demo aid above was live
+//   in EVERY build: 10 s after the UPI QR appeared the card said "Payment
+//   received" and the UPI transaction-ID requirement was waived, so a UPI
+//   payment could be recorded with no evidence it happened. Now the flip runs
+//   only when the build sets VITE_DEMO_UPI_AUTOCONFIRM="1", and it fills a
+//   DEMO-UPI- reference instead of waiving the field; the server refuses a UPI
+//   payment without a reference (UPI_REFERENCE_REQUIRED). The QR paid a VPA
+//   and "ABC Bank" hardcoded here; the payee now comes from GET
+//   /agent/upi-config (settings UPI_VPA / UPI_PAYEE_NAME, no default), and no
+//   payee means no QR. Rules and tests: upiPayment.ts.
 // ──────────────────────────────────────────────────────────────────────────
 import { useEffect, useRef, useState } from "react";
 import QRCode from "react-qr-code";
@@ -85,7 +95,9 @@ import {
   User, Users, DoorClosed, Smile, Meh, Frown, Home, Car,
 } from "lucide-react";
 import { toast } from "react-hot-toast";
-import { getCaseDetail, recordVisit, collectPayment, setPTP, getPhotoUploadUrl, getCasePhotos, getRecordingUploadUrl, reoptimizeBeat, transcribeAudio, queueVisitTranscription, sendPaymentOtp, verifyPaymentOtp } from "@/api/agent";
+import { getCaseDetail, recordVisit, collectPayment, setPTP, getPhotoUploadUrl, getCasePhotos, getRecordingUploadUrl, reoptimizeBeat, transcribeAudio, queueVisitTranscription, sendPaymentOtp, verifyPaymentOtp, getUpiConfig } from "@/api/agent";
+import { useQuery } from "@tanstack/react-query";
+import { DEMO_UPI_REFERENCE_PREFIX, demoUpiAutoconfirmEnabled, demoUpiReference, paymentReferenceOk, upiQrValue, upiReferenceOk } from "./upiPayment";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import SignaturePad from "@/components/ui/SignaturePad";
@@ -336,6 +348,9 @@ const DOC_CATEGORIES = [
 // "Payment received ✓". Change this one number (in milliseconds) to retime it —
 // e.g. 3000 = 3s, 8000 = 8s.
 const QR_DEMO_DELAY_MS = 10000;
+// Build-time: the demo auto-confirm exists only when VITE_DEMO_UPI_AUTOCONFIRM
+// is exactly "1" (dev compose). Never set by the prod Dockerfile. See upiPayment.ts.
+const DEMO_UPI_AUTOCONFIRM = demoUpiAutoconfirmEnabled(import.meta.env);
 
 // A short, pleasant two-note "success" chime synthesised with the Web Audio API
 // (no sound asset needed). Best-effort — silently no-ops if audio is blocked.
@@ -474,6 +489,8 @@ export default function RecordVisitPage() {
   // static UPI QR has no callback, so the received-moment is simulated on a
   // timer). The payment is still genuinely recorded as VERIFIED via the OTP.
   const [qrPaidDemo, setQrPaidDemo] = useState(false);
+  // The QR payee comes from server settings (hotfix PAY-2); none => no QR.
+  const { data: upiConfig } = useQuery({ queryKey: ["agent", "upi-config"], queryFn: getUpiConfig, staleTime: 10 * 60_000 });
   const [existingPhotos, setExistingPhotos] = useState<Record<string, { viewUrl: string | null; lat: number | null; lon: number | null; capturedAt: string | null }>>({});
 
   // ── Borrower payment-verification OTP state (2026-07-30) ───────────────────
@@ -755,10 +772,14 @@ export default function RecordVisitPage() {
     !sel?.needsPayment ||
     (amountNum > 0 && !amountExceedsRemainingTarget &&
       (form.paymentMode !== "CASH" || form.cashCounted) &&
-      // UPI needs a transaction ref — unless the QR demo has already shown
-      // "Payment received", in which case the payment is treated as confirmed.
-      (form.paymentMode !== "UPI" || !!form.upiRef || qrPaidDemo) &&
-      (form.paymentMode !== "CHEQUE" || (!!form.chequeNumber && !!form.chequeDate && !!form.chequeBank)));
+      // UPI needs its transaction ref (UTR), always. The demo QR used to waive
+      // it after a 10 s timer; the demo now fills a DEMO-UPI- reference
+      // instead (hotfix PAY-1), and the server refuses a UPI payment without one.
+      // One rule for every mode's reference (upiPayment.paymentReferenceOk,
+      // the server's rule): UPI a 12-digit UTR, NEFT/RTGS a bank reference,
+      // cheque its number — plus the cheque's date and bank, page-side only.
+      paymentReferenceOk(form.paymentMode, form, { demo: DEMO_UPI_AUTOCONFIRM }) &&
+      (form.paymentMode !== "CHEQUE" || (!!form.chequeDate && !!form.chequeBank)));
 
   const ptpValid = !sel?.needsPTP || (!!form.ptpAmount && !!form.ptpDate);
   const escalationValid = !sel?.needsEscalation || form.escalationNotes.length >= 10;
@@ -919,16 +940,19 @@ export default function RecordVisitPage() {
   // "Payment received ✓" (chime + toast). Because this resets on open, closing
   // and reopening the QR always shows "Waiting…" again first. (qrPaidDemo is
   // intentionally NOT a dependency, so the flip-to-paid doesn't restart it.)
+  // 2026-09-24 (hotfix PAY-1): demo builds only (DEMO_UPI_AUTOCONFIRM), and it
+  // records a DEMO-UPI- reference rather than waiving the field.
   useEffect(() => {
-    if (form.paymentMode !== "UPI" || !showQR || amountNum <= 0 || amountExceedsRemainingTarget) {
+    if (!DEMO_UPI_AUTOCONFIRM || form.paymentMode !== "UPI" || !showQR || amountNum <= 0 || amountExceedsRemainingTarget) {
       setQrPaidDemo(false);
       return;
     }
     setQrPaidDemo(false);   // reopen always starts on "Waiting…"
     const t = setTimeout(() => {
       setQrPaidDemo(true);
+      setForm((f) => (upiReferenceOk(f.upiRef, { demo: true }) ? f : { ...f, upiRef: demoUpiReference(Date.now()) }));
       playSuccessChime();
-      toast.success(`Payment received · ₹${amountNum.toLocaleString("en-IN")}`);
+      toast.success(`Demo · payment marked received · ₹${amountNum.toLocaleString("en-IN")}`);
     }, QR_DEMO_DELAY_MS);
     return () => clearTimeout(t);
   }, [form.paymentMode, showQR, amountNum, amountExceedsRemainingTarget]);
@@ -1772,6 +1796,7 @@ export default function RecordVisitPage() {
                   {/* UPI */}
                   {form.paymentMode === "UPI" && (
                     <div className="mt-3 space-y-3">
+                      {upiConfig?.available ? (
                       <div className="rounded-xl border border-brand-100 bg-brand-50 overflow-hidden">
                         <button
                           onClick={() => {
@@ -1792,7 +1817,7 @@ export default function RecordVisitPage() {
                             <p className="text-xs text-danger-600 font-medium">Amount cannot exceed the remaining target amount (₹{remainingTargetAmount.toLocaleString("en-IN")}) — QR unavailable</p>
                           </div>
                         )}
-                        {showQR && !amountExceedsRemainingTarget && form.amount && Number(form.amount) > 0 && (
+                        {showQR && !amountExceedsRemainingTarget && form.amount && Number(form.amount) > 0 && upiQrValue(upiConfig, amountNum, "") && (
                           <div className="px-4 pb-4">
                             {qrPaidDemo ? (
                               // Payment received (auto-revealed a few seconds after the QR is shown).
@@ -1808,7 +1833,7 @@ export default function RecordVisitPage() {
                               <div className="bg-white rounded-2xl border border-brand-100 overflow-hidden shadow-sm">
                                 <div className="bg-blue-700 px-4 py-3 flex items-center justify-between">
                                   <div>
-                                    <p className="text-white font-bold text-base tracking-wide">ABC Bank</p>
+                                    <p className="text-white font-bold text-base tracking-wide">{upiConfig?.payee_name}</p>
                                     <p className="text-blue-200 text-xs">UPI Payment</p>
                                   </div>
                                   <div className="bg-white/20 rounded-full px-3 py-1">
@@ -1822,7 +1847,7 @@ export default function RecordVisitPage() {
                                 <div className="p-5 flex flex-col items-center gap-3">
                                   <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-inner">
                                     <QRCode
-                                      value={`upi://pay?pa=8015935790@ptsbi&pn=ABC+Bank&am=${form.amount}&tn=Loan+Recovery+${maskedAcct}&cu=INR`}
+                                      value={upiQrValue(upiConfig, amountNum, `Loan Recovery ${maskedAcct}`) ?? ""}
                                       size={192}
                                       bgColor="#ffffff"
                                       fgColor="#1e3a5f"
@@ -1843,7 +1868,12 @@ export default function RecordVisitPage() {
                           </div>
                         )}
                       </div>
-                      {!qrPaidDemo && (
+                      ) : (
+                        <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                          No UPI QR is set up for collections. Ask the customer to pay by UPI and enter the transaction ID (UTR) from their confirmation.
+                        </p>
+                      )}
+                      {!(qrPaidDemo && form.upiRef.startsWith(DEMO_UPI_REFERENCE_PREFIX)) && (
                         <Input label="UPI Transaction ID *" placeholder="12-digit transaction ID from notification" value={form.upiRef} onChange={(e) => upd({ upiRef: e.target.value })} />
                       )}
                     </div>
@@ -2145,7 +2175,8 @@ export default function RecordVisitPage() {
               {sel?.needsPayment && (!form.amount || amountNum <= 0) && <p>• Enter payment amount</p>}
               {sel?.needsPayment && amountExceedsRemainingTarget && <p>• Payment amount exceeds remaining target amount (max ₹{remainingTargetAmount.toLocaleString("en-IN")})</p>}
               {sel?.needsPayment && form.paymentMode === "CASH" && !form.cashCounted && <p>• Confirm cash counted</p>}
-              {sel?.needsPayment && form.paymentMode === "UPI" && !form.upiRef && !qrPaidDemo && <p>• Enter UPI transaction ID (or show the QR and wait for "Payment received")</p>}
+              {sel?.needsPayment && form.paymentMode === "UPI" && !upiReferenceOk(form.upiRef, { demo: DEMO_UPI_AUTOCONFIRM }) && <p>• Enter the 12-digit UPI transaction ID (UTR) from the payment confirmation</p>}
+              {sel?.needsPayment && ["NEFT", "RTGS"].includes(form.paymentMode) && !form.neftRef.trim() && <p>• Enter the bank reference (UTR) from the transfer confirmation</p>}
               {sel?.needsPayment && form.paymentMode === "CHEQUE" && (!form.chequeNumber || !form.chequeDate || !form.chequeBank) && <p>• Complete cheque details</p>}
               {sel?.needsPayment && paymentValid && !paymentVerified && <p>• Verify the amount with the borrower via OTP (or use the offline option + signature)</p>}
               {sel?.needsPTP && (!form.ptpAmount || !form.ptpDate) && <p>• Complete PTP commitment details</p>}

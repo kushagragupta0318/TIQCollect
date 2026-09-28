@@ -204,8 +204,22 @@ export async function notifyCase(caseId: string, type: "reminder" | "ptp" | "rec
   return data;
 }
 
-export async function getVoiceToken(): Promise<{ token: string }> {
+export async function getVoiceToken(): Promise<{ token: string; ttl_seconds: number }> {
   const { data } = await api.get("/agent/voice/token");
+  return data;
+}
+
+// 2026-09-24 (hotfix PAY-2) — the payee the UPI QR pays, from server settings.
+// `available: false` when unset: the page then offers no QR and the agent
+// records the UTR by hand. Replaces a VPA and bank name hardcoded in the page.
+export interface UpiConfig {
+  available: boolean;
+  vpa: string | null;
+  payee_name: string | null;
+}
+
+export async function getUpiConfig(): Promise<UpiConfig> {
+  const { data } = await api.get<UpiConfig>("/agent/upi-config");
   return data;
 }
 
