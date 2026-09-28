@@ -97,6 +97,10 @@ export interface Agent {
   collection_rate_trend: { month: string; rate_pct: number | null }[];
   /** Change in points between the two most recent complete months. */
   collection_rate_delta_pts: number | null;
+  /** GET /agent/profile only: the issuing agency, and its RBI registration
+   *  when the agency record has one (A14). */
+  agency_name?: string | null;
+  agency_rbi_registration_no?: string | null;
 }
 
 export interface Customer {

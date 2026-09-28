@@ -629,6 +629,8 @@ class ProfileResponse(BaseModel):
     last_known_longitude: Optional[float] = None
     sos_active: bool
     cases_today: int
+    agency_name: Optional[str] = None
+    agency_rbi_registration_no: Optional[str] = None
 
 
 class AvailabilityDay(BaseModel):

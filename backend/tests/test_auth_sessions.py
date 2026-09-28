@@ -364,3 +364,29 @@ def test_rebind_without_demo_mode_refuses_to_start(monkeypatch):
     with pytest.raises(ValueError, match="DEMO_DEVICE_REBIND"):
         _settings_with(monkeypatch, DEMO_DEVICE_REBIND="true", DEMO_MODE="false")
     assert _settings_with(monkeypatch, DEMO_DEVICE_REBIND="true", DEMO_MODE="true").DEMO_DEVICE_REBIND is True
+
+
+# ── A14: the tenant is named from its own record, never a made-up one ──────
+
+def test_me_names_the_callers_agency_and_bank(world):
+    tokens = _login(world, world["mgr"], "laptop-1")
+    body = TestClient(app).get("/api/v1/auth/me",
+                               headers={"Authorization": f"Bearer {tokens['access_token']}"}).json()
+    assert (body["agency_name"], body["bank_name"]) == ("Aravalli Field Services", "Meridian Trust Bank")
+
+
+def test_the_id_card_registration_is_the_agencys_own_or_nothing(world, monkeypatch):
+    from app.models.tenancy import Agency
+    from tests._db import TEST_AGENCY_ID
+    monkeypatch.setattr(settings, "DEMO_DEVICE_REBIND", False)
+    tokens = _login(world, world["agent_user"], DEVICE_A)
+    client = TestClient(app)
+    h = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    body = client.get("/api/v1/agent/profile", headers=h).json()
+    assert body["agency_name"] == "Aravalli Field Services"
+    assert body["agency_rbi_registration_no"] is None            # the record has none: nothing shown
+
+    world["db"].get(Agency, TEST_AGENCY_ID).rbi_registration_no = "DRA/NCR/2031/0417"
+    world["db"].commit()
+    assert client.get("/api/v1/agent/profile", headers=h).json()["agency_rbi_registration_no"] == "DRA/NCR/2031/0417"

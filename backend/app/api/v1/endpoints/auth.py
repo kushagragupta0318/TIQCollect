@@ -35,11 +35,16 @@ async def logout(current_user: CurrentUser, payload: TokenPayload, request: Requ
 
 
 @router.get("/me", summary="Get current authenticated user info")
-async def me(current_user: CurrentUser):
+def me(current_user: CurrentUser, db: DbSession):
+    from app.services.brand import tenant_of
+    tenant = tenant_of(db, user=current_user)
     return {
         "id": current_user.id,
         "email": current_user.email,
         "full_name": current_user.full_name,
         "role": current_user.role.value,
         "is_active": current_user.is_active,
+        # A14: the header names the tenant. None when nothing resolves.
+        "bank_name": tenant.bank_name if tenant else None,
+        "agency_name": tenant.agency_name if tenant else None,
     }
