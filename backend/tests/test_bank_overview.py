@@ -122,3 +122,72 @@ def test_a_bank_user_gets_the_overview(db, cleanup, role):
 def test_agency_roles_are_refused(db, cleanup, role):
     user = _user(db, role, **DEFAULT_TENANT)
     assert _client(db, user).get("/api/v1/bank/overview").status_code == 403
+
+
+# ── C02: the global filter ──────────────────────────────────────────────────
+from datetime import date  # noqa: E402
+
+from app.services.bank.kpi_filter import FilterError, KpiFilter  # noqa: E402
+
+
+@pytest.mark.parametrize("kw", [dict(period="weekly"), dict(period="custom"), dict(start=date(2026, 9, 1)),
+                                dict(period="custom", start=date(2026, 9, 2), end=date(2026, 9, 1)),
+                                dict(product="TRACTOR"), dict(bucket="BUCKET_9"), dict(security="MAYBE")])
+def test_an_invalid_filter_is_refused(kw):
+    with pytest.raises(FilterError):
+        KpiFilter(**kw)
+
+
+@pytest.mark.parametrize("period,window", [
+    ("mtd", (date(2026, 9, 1), date(2026, 9, 22))),
+    ("l30", (date(2026, 8, 24), date(2026, 9, 22))),
+    ("qtd", (date(2026, 7, 1), date(2026, 9, 22))),
+    ("fytd", (date(2026, 4, 1), date(2026, 9, 22))),     # the Indian financial year starts in April
+])
+def test_period_windows_end_on_the_reading(period, window):
+    assert KpiFilter(period=period).window(date(2026, 9, 22)) == window
+    assert KpiFilter(period="fytd").window(date(2027, 2, 10)) == (date(2026, 4, 1), date(2027, 2, 10))
+
+
+def test_each_view_is_filtered_only_by_the_dimensions_it_carries():
+    f = KpiFilter(geo="g", agency="a", product="HOME", bucket="NPA", security="SECURED")
+    clause, params = f.clause("portfolio_daily_scoped")
+    assert {"f_geo", "f_agency", "f_product", "f_bucket", "f_security"} == set(params)
+    assert "dim_region" in clause and "dim_product" in clause
+    clause, params = f.clause("agency_scorecard_monthly_scoped")
+    assert set(params) == {"f_geo", "f_agency"} and "loan_type" not in clause
+    assert f.unsupported(["agency_scorecard_monthly_scoped"]) == {"product", "bucket", "security"}
+    assert KpiFilter(agency="a").unsupported(["collections_daily_scoped"]) == set()
+    assert f.clause("bucket_transitions_monthly_scoped", "t")[0].count("t.") == 4   # alias-qualified
+
+
+def test_every_kpi_declares_views_the_filter_knows():
+    from app.services.bank.kpi_filter import VIEW_DIMENSIONS
+    assert {v for k in K.KPIS for v in k.views} <= set(VIEW_DIMENSIONS)
+
+
+def test_the_route_refuses_a_bad_period_and_another_banks_agency(db, cleanup):
+    import uuid
+    from app.models.tenancy import Agency, Bank
+    other = Bank(id=str(uuid.uuid4()), code="OTHERBK", legal_name="Another Finance Ltd", display_name="Another",
+                 brand={}, status="ACTIVE", is_demo=True)
+    db.add(other)
+    db.flush()
+    foreign = Agency(id=str(uuid.uuid4()), bank_id=other.id, code="AGY-OTHER", legal_name="Other Agency LLP",
+                     contacts=[], status="ACTIVE", is_demo=True)
+    db.add(foreign)
+    db.commit()
+    c = _client(db, _user(db, UserRole.BANK_ADMIN, bank_id=DEFAULT_TENANT["bank_id"]))
+    assert c.get("/api/v1/bank/overview?period=custom").status_code == 422
+    missing = c.get(f"/api/v1/bank/overview?agency={uuid.uuid4()}")
+    theirs = c.get(f"/api/v1/bank/overview?agency={foreign.id}")
+    assert missing.status_code == theirs.status_code == 404 and missing.json() == theirs.json()
+    assert c.get(f"/api/v1/bank/overview?agency={DEFAULT_TENANT['agency_id']}&product=HOME").status_code == 200
+
+
+def test_filter_options_are_the_callers_banks_only(db, cleanup):
+    c = _client(db, _user(db, UserRole.BANK_ANALYST, bank_id=DEFAULT_TENANT["bank_id"]))
+    body = c.get("/api/v1/bank/filters").json()
+    assert [p["value"] for p in body["periods"]] == ["mtd", "l30", "qtd", "fytd", "custom"]
+    assert {a["value"] for a in body["agencies"]} == {DEFAULT_TENANT["agency_id"]}
+    assert len(body["products"]) == 8 and len(body["buckets"]) == 5

@@ -7,19 +7,31 @@ import { useNavigate } from "react-router";
 import api from "@/api/axios";
 import { errorDetail } from "@/lib/apiError";
 import { AnalyticsError, AnalyticsLoading, Panel } from "../components/analytics";
+import { FilterBar } from "../components/FilterBar";
+import { useKpiFilter } from "../components/useKpiFilter";
+import { filterToParams } from "../components/kpiFilter";
 import { ExecutiveHeader, PageRoot } from "../components/PageTemplate";
 import { PulseKpiFlow } from "../components/PulseKpiFlow";
 import { coverage, frameLabel, narrativeCaption, type OverviewResponse } from "./overviewModel";
 
 export function BankOverviewPage() {
   const navigate = useNavigate();
+  const [filter] = useKpiFilter();
+  const params = filterToParams(filter).toString();
   const q = useQuery({
-    queryKey: ["bank", "overview"],
-    queryFn: async () => (await api.get<OverviewResponse>("/bank/overview")).data,
+    queryKey: ["bank", "overview", params],
+    queryFn: async () => (await api.get<OverviewResponse>(`/bank/overview${params ? `?${params}` : ""}`)).data,
   });
 
-  if (q.isLoading) return <AnalyticsLoading label="Loading portfolio…" />;
-  if (q.isError || !q.data) return <AnalyticsError>{errorDetail(q.error, "The overview could not be loaded.")}</AnalyticsError>;
+  if (q.isLoading) return <PageRoot><FilterBar /><AnalyticsLoading label="Loading portfolio…" /></PageRoot>;
+  if (q.isError || !q.data) {
+    return (
+      <PageRoot>
+        <FilterBar />
+        <AnalyticsError>{errorDetail(q.error, "The overview could not be loaded.")}</AnalyticsError>
+      </PageRoot>
+    );
+  }
 
   const ov = q.data;
   const cov = coverage(ov.kpis);
@@ -31,8 +43,10 @@ export function BankOverviewPage() {
         title="Portfolio Overview"
         meta={meta}
         live={cov.complete}
-        scopeNote="The whole book across every agency. Hover a card for how it is computed."
+        scopeNote="The whole book across every agency unless filtered. Hover a card for how it is computed."
       />
+
+      <FilterBar />
 
       <PulseKpiFlow kpis={ov.kpis} rows={ov.rows} frameLabel={frameLabel(ov.as_of)}
                     onSelect={(drill) => navigate(`/bank/analytics?tab=${encodeURIComponent(drill)}`)} />

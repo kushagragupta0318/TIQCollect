@@ -20,6 +20,8 @@ from typing import Callable
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.services.bank.kpi_filter import DIMENSION_LABELS, SENTINEL, KpiFilter
+
 PORTFOLIO = "portfolio_daily_scoped"
 TRANSITIONS = "bucket_transitions_monthly_scoped"
 COLLECTIONS = "collections_daily_scoped"
@@ -61,6 +63,7 @@ class KpiDef:
     sql: str = ""                  # returns one row: value, aux
     sub: Callable[[dict], str] | None = None
     pending: str = ""              # why there is no definition yet (kind == "pending")
+    alias: str = ""                # the table alias the filter clause qualifies (transitions: "t")
 
 
 # Stock KPIs read one date of portfolio_daily_scoped. {cohort} narrows the
@@ -84,7 +87,8 @@ KPIS: tuple[KpiDef, ...] = (
         "accounts.",
         "agencies", "stock", (PORTFOLIO,),
         f"SELECT SUM(placed_exposure) / NULLIF(SUM(delinquent_exposure), 0) AS value, "
-        f"COUNT(DISTINCT agency_id) FILTER (WHERE placed_accounts > 0 AND agency_id IS NOT NULL) AS aux {_P}",
+        f"COUNT(DISTINCT agency_id) FILTER (WHERE placed_accounts > 0 AND agency_id IS NOT NULL "
+        f"AND agency_id <> '{SENTINEL}') AS aux {_P}",
         lambda r: f"{count(r['aux'] or 0)} agencies holding placements"),
     KpiDef(
         "unworked_exposure", "Unworked Exposure", "book", "inr", False,
@@ -114,7 +118,7 @@ KPIS: tuple[KpiDef, ...] = (
            JOIN analytics.dim_portfolio_state s1 ON s1.state = t.from_state
            JOIN analytics.dim_portfolio_state s2 ON s2.state = t.to_state
            WHERE t.bank_id = :bank AND t.month_end = :d AND t.from_state NOT IN ('WRITTEN_OFF', 'RESOLVED')""",
-        lambda r: f"{count(r['aux'] or 0)} pairs excluded (stale or missing)"),
+        lambda r: f"{count(r['aux'] or 0)} pairs excluded (stale or missing)", alias="t"),
     KpiDef(
         "cure_rate", "Cure Rate", "book", "pct", True,
         "Exposure-weighted share of delinquent loans (any state after CURRENT, before WRITTEN_OFF) that "
@@ -126,7 +130,7 @@ KPIS: tuple[KpiDef, ...] = (
            FROM analytics.{TRANSITIONS} t
            WHERE t.bank_id = :bank AND t.month_end = :d
              AND t.from_state NOT IN ('CURRENT', 'WRITTEN_OFF', 'RESOLVED')""",
-        lambda r: f"{count(r['aux'] or 0)} accounts cured"),
+        lambda r: f"{count(r['aux'] or 0)} accounts cured", alias="t"),
     # ── Row 2: what came back, what it cost, how it was done ───────────────
     # Month to date, from the agency scorecard: its money, placement, visit and
     # breach columns sum across rows (43's grain; agent columns sit apart).
@@ -139,7 +143,7 @@ KPIS: tuple[KpiDef, ...] = (
         f"""SELECT CASE WHEN COUNT(*) FILTER (WHERE region_id IS NOT NULL AND collectible_due IS NULL) > 0 THEN NULL
                         ELSE SUM(verified_collections) / NULLIF(SUM(collectible_due), 0) END AS value,
                    SUM(bank_direct_collections) AS aux
-            FROM analytics.{SCORECARD} WHERE bank_id = :bank AND month_start = :m""",
+            FROM analytics.{SCORECARD} WHERE bank_id = :bank AND month_start BETWEEN :m0 AND :m1""",
         lambda r: f"{money(float(r['aux'] or 0))} more paid to the bank directly"),
     KpiDef(
         "resolution_rate", "Resolution Rate", "outcome", "pct", True,
@@ -149,14 +153,14 @@ KPIS: tuple[KpiDef, ...] = (
         f"""SELECT SUM(resolved_placements)
                    / NULLIF(SUM(active_placements_eom) + SUM(resolved_placements) + SUM(recalled_placements), 0) AS value,
                    SUM(resolved_placements) AS aux
-            FROM analytics.{SCORECARD} WHERE bank_id = :bank AND month_start = :m""",
+            FROM analytics.{SCORECARD} WHERE bank_id = :bank AND month_start BETWEEN :m0 AND :m1""",
         lambda r: f"{count(r['aux'] or 0)} placements resolved"),
     KpiDef(
         "ptp_keep_rate", "PTP Keep Rate", "outcome", "pct", True,
         "Promises honoured divided by promises that fell due this month (matured promises only).",
         "recovery", "month", (SCORECARD,),
         f"""SELECT SUM(ptps_honoured)::numeric / NULLIF(SUM(ptps_matured), 0) AS value, SUM(ptps_matured) AS aux
-            FROM analytics.{SCORECARD} WHERE bank_id = :bank AND month_start = :m""",
+            FROM analytics.{SCORECARD} WHERE bank_id = :bank AND month_start BETWEEN :m0 AND :m1""",
         lambda r: f"of {count(r['aux'] or 0)} matured promises"),
     KpiDef(
         "visit_to_pay", "Visit-to-Pay Conversion", "outcome", "pct", True,
@@ -171,7 +175,7 @@ KPIS: tuple[KpiDef, ...] = (
         f"""SELECT 100.0 * (SUM(commission_accrued) + COALESCE(SUM(field_cost), 0))
                    / NULLIF(SUM(verified_collections), 0) AS value,
                    COUNT(*) FILTER (WHERE field_cost IS NOT NULL) AS aux
-            FROM analytics.{SCORECARD} WHERE bank_id = :bank AND month_start = :m""",
+            FROM analytics.{SCORECARD} WHERE bank_id = :bank AND month_start BETWEEN :m0 AND :m1""",
         lambda r: "per ₹100 collected (commission + field cost)" if r.get("aux")
         else "per ₹100 collected — commission only: field cost not costed (no FIELD_VISIT rate yet)"),
     KpiDef(
@@ -182,7 +186,7 @@ KPIS: tuple[KpiDef, ...] = (
         "compliance", "month", (SCORECARD,),
         f"""SELECT 100 - 100.0 * (SUM(breaches_out_of_hours) + SUM(breaches_geofence) + SUM(fraud_confirmed)
                                   + SUM(consent_missing)) / NULLIF(SUM(visits), 0) AS value, SUM(visits) AS aux
-            FROM analytics.{SCORECARD} WHERE bank_id = :bank AND month_start = :m""",
+            FROM analytics.{SCORECARD} WHERE bank_id = :bank AND month_start BETWEEN :m0 AND :m1""",
         lambda r: f"over {count(r['aux'] or 0)} visits"),
 )
 
@@ -264,17 +268,19 @@ class Overview:
     notes: list[str] = field(default_factory=list)
 
 
-def compute_overview(db: Session, bank_id: str, as_of: date | None = None) -> Overview:
+def compute_overview(db: Session, bank_id: str, f: KpiFilter | None = None) -> Overview:
+    f = f or KpiFilter()
     views = available_views(db)
+    as_of = None
     if PORTFOLIO in views:
-        as_of = as_of or latest_reading(db, bank_id)
+        as_of = f.end if f.period == "custom" else latest_reading(db, bank_id)
     ov = Overview(as_of=as_of)
     like_for_like = PORTFOLIO in views and _has_column(db, PORTFOLIO, "is_backfill")
     for k in KPIS:
-        ov.kpis.append(_one(db, k, bank_id, as_of, views, like_for_like))
+        ov.kpis.append(_one(db, k, bank_id, as_of, views, like_for_like, f))
     if as_of is not None:
-        ov.totals = _totals(db, bank_id, as_of, views)
-        ov.notes = _notes(db, bank_id, as_of, like_for_like)
+        ov.totals = _totals(db, bank_id, as_of, views, f)
+        ov.notes = _notes(db, bank_id, as_of, like_for_like, f)
     ov.narrative = narrative(ov.kpis)
     return ov
 
@@ -285,80 +291,113 @@ def _unavailable(k: KpiDef, reason: str) -> dict:
             "available": False, "reason": reason}
 
 
-def _one(db: Session, k: KpiDef, bank: str, as_of: date | None, views: set[str], like_for_like: bool) -> dict:
+def _month_span(lo: date, hi: date) -> tuple[date, date, date, date, int]:
+    """The months the window touches, and the same number of months before them."""
+    m0, m1 = lo.replace(day=1), hi.replace(day=1)
+    span = (m1.year - m0.year) * 12 + m1.month - m0.month + 1
+    pm1 = _month_end_before(m0).replace(day=1)
+    pm0 = pm1
+    for _ in range(span - 1):
+        pm0 = _month_end_before(pm0).replace(day=1)
+    return m0, m1, pm0, pm1, span
+
+
+def _one(db: Session, k: KpiDef, bank: str, as_of: date | None, views: set[str], like_for_like: bool,
+         f: KpiFilter) -> dict:
     if k.kind == "pending":
         return _unavailable(k, f"definition pending — {k.pending}")
     missing = [v for v in k.views if v not in views]
     if missing:
         return _unavailable(k, f"analytics view pending ({', '.join(missing)})")
+    unsupported = f.unsupported(k.views)
+    if unsupported:
+        names = " or ".join(DIMENSION_LABELS[d] for d in sorted(unsupported))
+        return _unavailable(k, f"cannot be filtered by {names} (its view has no such dimension)")
     if as_of is None:
         return _unavailable(k, "no portfolio reading for this bank yet")
+    clause, fp = f.clause(k.views[0], k.alias)
+    base = {"bank": bank, **fp}
     if k.kind == "stock":
+        sql = k.sql + " " + clause                    # still carries {cohort}
         prev_d = _month_end_before(as_of)
-        now = _read(db, k.sql.format(cohort=""), {"bank": bank, "d": as_of})
+        now = _read(db, sql.format(cohort=""), {**base, "d": as_of})
         # The delta compares only rows read at both dates, where the view can say which those are.
         cohort = "AND NOT is_backfill" if like_for_like else ""
-        base_now = _read(db, k.sql.format(cohort=cohort), {"bank": bank, "d": as_of}) if cohort else now
-        prev = _read(db, k.sql.format(cohort=cohort), {"bank": bank, "d": prev_d})
+        base_now = _read(db, sql.format(cohort=cohort), {**base, "d": as_of}) if cohort else now
+        prev = _read(db, sql.format(cohort=cohort), {**base, "d": prev_d})
         against = f"vs {short_date(prev_d)}" + (" (like for like)" if cohort else "")
         trend = _trend(k, base_now.value, prev.value, against) if base_now.value is not None else None
     elif k.kind == "month":
-        m = as_of.replace(day=1)
-        now = _read(db, k.sql, {"bank": bank, "m": m})
-        prev = _read(db, k.sql, {"bank": bank, "m": _month_end_before(as_of).replace(day=1)})
-        trend = _trend(k, now.value, prev.value, "vs last month") if now.value is not None else None
+        sql = k.sql + " " + clause
+        m0, m1, pm0, pm1, span = _month_span(*f.window(as_of))
+        now = _read(db, sql, {**base, "m0": m0, "m1": m1})
+        prev = _read(db, sql, {**base, "m0": pm0, "m1": pm1})
+        label = "vs last month" if span == 1 else f"vs the {span} months before"
+        trend = _trend(k, now.value, prev.value, label) if now.value is not None else None
     else:  # transition: the latest month-end on or before the reading, against the one before
+        sql = k.sql + " " + clause
         me = db.execute(text(f"SELECT MAX(month_end) FROM analytics.{TRANSITIONS} WHERE bank_id = :bank "
                              f"AND month_end <= :d"), {"bank": bank, "d": as_of}).scalar()
         if me is None:
             return _unavailable(k, "no month-end transitions yet")
-        now = _read(db, k.sql, {"bank": bank, "d": me})
-        prev = _read(db, k.sql, {"bank": bank, "d": _month_end_before(me)})
+        now = _read(db, sql, {**base, "d": me})
+        prev = _read(db, sql, {**base, "d": _month_end_before(me)})
         trend = _trend(k, now.value, prev.value, "vs prior month") if now.value is not None else None
     if now.value is None:
-        return _unavailable(k, "no reading on this date")
+        return _unavailable(k, "no reading for this selection")
     trend_text, up, good = trend
-    return {"id": k.id, "label": k.label, "value": _fmt(k.unit, now.value), "sub": k.sub({"aux": now.aux}) if k.sub
-            else "", "trend": trend_text, "trendUp": up, "good": good, "basis": k.basis, "drill": k.drill,
-            "available": True, "reason": None, "raw": now.value}
+    return {"id": k.id, "label": k.label, "value": _fmt(k.unit, now.value),
+            "sub": k.sub({"aux": now.aux}) if k.sub else "", "trend": trend_text, "trendUp": up, "good": good,
+            "basis": k.basis, "drill": k.drill, "available": True, "reason": None, "raw": now.value}
 
 
-def _totals(db: Session, bank: str, as_of: date, views: set[str]) -> list[dict]:
+_TOTAL_QUERIES = (
+    (COLLECTIONS, "SELECT SUM(verified_amount) AS v FROM analytics.{v} WHERE bank_id = :bank "
+                  "AND collection_date BETWEEN :lo AND :hi {c}",
+     (("Verified collections", "v", "money", "payments verified in the period, bank-direct included"),)),
+    (FIELD, "SELECT SUM(visits) AS v, COUNT(DISTINCT agent_id) FILTER (WHERE visits > 0) AS g "
+            "FROM analytics.{v} WHERE bank_id = :bank AND activity_date BETWEEN :lo AND :hi {c}",
+     (("Field visits", "v", "count", "visits recorded in the period"),
+      ("Agents in the field", "g", "count", "agents with at least one visit in the period"))),
+)
+
+
+def _totals(db: Session, bank: str, as_of: date, views: set[str], f: KpiFilter) -> list[dict]:
     out = []
     if PORTFOLIO in views:
+        clause, fp = f.clause(PORTFOLIO)
         r = db.execute(text(f"SELECT SUM(accounts) a, SUM(total_outstanding) o, SUM(placed_accounts) p "
-                            f"FROM analytics.{PORTFOLIO} WHERE bank_id = :bank AND as_of_date = :d"),
-                       {"bank": bank, "d": as_of}).mappings().first()
+                            f"FROM analytics.{PORTFOLIO} WHERE bank_id = :bank AND as_of_date = :d "
+                            + clause),
+                       {"bank": bank, "d": as_of, **fp}).mappings().first()
         if r and r["a"] is not None:
-            out += [{"label": "Accounts in the book", "value": count(r["a"]), "basis": f"loans read on {short_date(as_of)}"},
-                    {"label": "Book outstanding", "value": money(float(r["o"] or 0)), "basis": "total outstanding, all loans"},
-                    {"label": "Placed accounts", "value": count(r["p"] or 0), "basis": "loans placed with an agency"}]
-    lo = as_of.replace(day=1)
-    if COLLECTIONS in views:
-        v = db.execute(text(f"SELECT SUM(verified_amount) FROM analytics.{COLLECTIONS} WHERE bank_id = :bank "
-                            f"AND collection_date BETWEEN :lo AND :hi"), {"bank": bank, "lo": lo, "hi": as_of}).scalar()
-        if v is not None:
-            out.append({"label": "Verified collections (MTD)", "value": money(float(v)),
-                        "basis": "payments verified this month, bank-direct included"})
-    if FIELD in views:
-        r = db.execute(text(f"SELECT SUM(visits) v, COUNT(DISTINCT agent_id) FILTER (WHERE visits > 0) g "
-                            f"FROM analytics.{FIELD} WHERE bank_id = :bank AND activity_date BETWEEN :lo AND :hi"),
-                       {"bank": bank, "lo": lo, "hi": as_of}).mappings().first()
+            out += [{"label": "Accounts", "value": count(r["a"]), "basis": f"loans read on {short_date(as_of)}"},
+                    {"label": "Outstanding", "value": money(float(r["o"] or 0)), "basis": "total outstanding"},
+                    {"label": "Placed accounts", "value": count(r["p"] or 0),
+                     "basis": "loans placed with an agency"}]
+    lo, hi = f.window(as_of)
+    fmt = {"money": lambda v: money(v), "count": lambda v: count(v)}
+    # Collections and field activity carry the agency dimension only.
+    for view, sql, cols in _TOTAL_QUERIES:
+        if view not in views or f.unsupported((view,)):
+            continue
+        clause, fp = f.clause(view)
+        r = db.execute(text(sql.format(v=view, c=clause)), {"bank": bank, "lo": lo, "hi": hi, **fp}).mappings().first()
         if r and r["v"] is not None:
-            out += [{"label": "Field visits (MTD)", "value": count(r["v"]), "basis": "visits recorded this month"},
-                    {"label": "Agents in the field (MTD)", "value": count(r["g"] or 0),
-                     "basis": "agents with at least one visit this month"}]
+            out += [{"label": lab, "value": fmt[kind](float(r[col] or 0)), "basis": basis}
+                    for lab, col, kind, basis in cols]
     return out
 
 
-def _notes(db: Session, bank: str, as_of: date, like_for_like: bool) -> list[str]:
+def _notes(db: Session, bank: str, as_of: date, like_for_like: bool, f: KpiFilter) -> list[str]:
     """Where a reading is a backfill rather than a point-in-time observation, say so."""
     if not like_for_like:
         return ["Some agencies' figures on this date may be a transformed snapshot rather than a point-in-time "
                 "reading; the analytics view does not yet mark which, so month-on-month changes include them."]
+    clause, fp = f.clause(PORTFOLIO)
     r = db.execute(text(f"SELECT SUM(accounts) a, SUM(total_outstanding) o FROM analytics.{PORTFOLIO} "
-                        f"WHERE bank_id = :bank AND as_of_date = :d AND is_backfill"),
-                   {"bank": bank, "d": as_of}).mappings().first()
+                        f"WHERE bank_id = :bank AND as_of_date = :d AND is_backfill " + clause),
+                   {"bank": bank, "d": as_of, **fp}).mappings().first()
     if r and r["a"]:
         return [f"{count(r['a'])} accounts ({money(float(r['o'] or 0))}) on {short_date(as_of)} are a current "
                 f"snapshot with no history before that date; changes are compared like for like without them."]
