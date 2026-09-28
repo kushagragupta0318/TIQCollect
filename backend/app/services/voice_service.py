@@ -114,8 +114,12 @@ def from_our_app(params: dict) -> bool:
     in the same account could otherwise point here with identities of its own.
     (Carried over from d4's hotfix-1 voice_service at the 2026-09-28 merge; the
     rest of this module is the session-bound AU-2 version the owner kept.)"""
-    return (params.get("AccountSid") == settings.TWILIO_ACCOUNT_SID
-            and params.get("ApplicationSid") == settings.TWILIO_TWIML_APP_SID)
+    # Fail closed on its own (audit LOW, 2026-09-28): an unset or "${VAR}" SID
+    # must not match a request that carries the same empty or literal value,
+    # whatever the caller checked first.
+    account, app_sid = settings.TWILIO_ACCOUNT_SID, settings.TWILIO_TWIML_APP_SID
+    return (_real(account) and _real(app_sid)
+            and params.get("AccountSid") == account and params.get("ApplicationSid") == app_sid)
 
 
 def public_url(path: str, query: str = "") -> str | None:
