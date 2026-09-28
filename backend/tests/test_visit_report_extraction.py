@@ -218,8 +218,13 @@ def test_a_misheard_month_gives_no_date_rather_than_next_months(no_llm, said):
 
 
 def test_may_be_is_not_the_month_of_may(no_llm):
-    fields = _by_field(vre.extract("He will pay Rs 4,000 on the 15th, may be earlier.", today=TODAY))
-    assert fields.get("ptp_date") != "2027-05-15" and fields.get("ptp_date") != "2026-05-15"
+    """Read as "15th, May", the date is 15 May 2026 — past, so the validator
+    would reject it and it would never show as a suggestion. Check the
+    rejections too, or the guard could vanish with this test still green."""
+    res = vre.extract("He will pay Rs 4,000 on the 15th, may be earlier.", today=TODAY)
+    candidates = [s.value for s in res.suggestions if s.field == "ptp_date"] + \
+                 [r.value for r in res.rejected if r.field == "ptp_date"]
+    assert not any(str(v).endswith("-05-15") for v in candidates), candidates
 
 
 def test_a_decimal_amount_is_not_a_dotted_date(no_llm):
