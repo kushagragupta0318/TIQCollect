@@ -28,6 +28,10 @@ admin_router = APIRouter(prefix="/admin", tags=["Account administration"])
 
 AccountAdmin = Annotated[User, Depends(require_roles(UserRole.PLATFORM_ADMIN, UserRole.BANK_ADMIN,
                                                      UserRole.AGENCY_ADMIN))]
+# A manager may reset THEIR OWN agents' passwords (password_service.can_manage
+# decides which); invitations and MFA resets stay with the three admin roles.
+CredentialManager = Annotated[User, Depends(require_roles(UserRole.PLATFORM_ADMIN, UserRole.BANK_ADMIN,
+                                                          UserRole.AGENCY_ADMIN, UserRole.AGENCY_MANAGER))]
 _OK = {"message": "Done"}
 
 
@@ -132,7 +136,7 @@ async def revoke_invite(invite_id: UUIDPath, admin: AccountAdmin, request: Reque
 
 @admin_router.post("/users/{user_id}/password-reset",
                    summary="Text a single-use reset link to the user (the admin never sees it)")
-async def admin_password_reset(user_id: UUIDPath, admin: AccountAdmin, request: Request, db: DbSession):
+async def admin_password_reset(user_id: UUIDPath, admin: CredentialManager, request: Request, db: DbSession):
     return password_service.admin_reset(db, admin, user_id, request=request)
 
 

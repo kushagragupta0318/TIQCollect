@@ -58,7 +58,17 @@ def world(monkeypatch):
         "manager": _user(db, "manager", UserRole.AGENCY_MANAGER, agency=TEST_AGENCY_ID, phone="9800000006"),
         "fresh": _user(db, "fresh", UserRole.AGENCY_MANAGER, agency=TEST_AGENCY_ID, phone="9800000007",
                        must_change_password=True),
+        "manager2": _user(db, "manager2", UserRole.AGENCY_MANAGER, agency=TEST_AGENCY_ID, phone="9800000009"),
+        "own_agent": _user(db, "ownagent", UserRole.FIELD_AGENT, agency=TEST_AGENCY_ID, phone="9800000010"),
+        "other_agent": _user(db, "otheragent", UserRole.FIELD_AGENT, agency=TEST_AGENCY_ID, phone="9800000011"),
     }
+    db.flush()
+    from app.models.agent import Agent
+    for key, boss in (("own_agent", "manager"), ("other_agent", "manager2")):
+        db.add(Agent(id=test_id(f"agent:{key}"), user_id=w[key].id, employee_code=f"AFS-{key[:5].upper()}",
+                     id_card_number=f"ID-{key}", bank_id=TEST_BANK_ID, agency_id=TEST_AGENCY_ID,
+                     base_latitude=28.45, base_longitude=77.07, territory="Sector 44, Gurugram",
+                     manager_user_id=w[boss].id))
     db.commit()
     yield w
     db.close()
@@ -191,6 +201,11 @@ def test_an_admin_reset_without_a_public_url_changes_nothing(world, monkeypatch,
     ("bank_admin", "bank_admin", False),       # never yourself
     ("bank_admin", "bank_admin2", False),      # never a fellow bank admin (audit HIGH): a takeover of a peer
     ("platform", "bank_admin", True),          # a bank admin's reset needs the platform admin
+    ("manager", "own_agent", True),            # G02: an agent's OWN manager
+    ("manager2", "own_agent", False),          # another manager in the same agency
+    ("manager", "fresh", False),               # a fellow manager
+    ("manager", "agency_admin", False),        # their admin
+    ("manager", "other_agent", False),         # an agent of the same agency, managed by someone else
 ])
 def test_who_may_reset_whom(world, admin, target, ok):
     if ok:
@@ -344,3 +359,74 @@ def test_a_crash_after_the_change_cannot_lose_its_audit_row(world, monkeypatch):
     password_service.change_password(world["db"], world["manager"], PASSWORD, NEW)
     rows = [r for r in _audits(world["db"], AuditAction.PASSWORD_CHANGED) if r.success]
     assert len(rows) == 1 and rows[0].entity_id == world["manager"].id
+
+
+
+def test_a_manager_resets_their_own_agents_password_through_the_route(world):
+    """G02's "reset login": the route admits AGENCY_MANAGER; the service
+    decides it is their agent; the link goes to the agent's phone."""
+    from fastapi.testclient import TestClient
+    from app.core.database import get_db
+    from app.core.security import create_access_token
+    from app.main import app
+    from app.core.ratelimit import limiter
+    engine = world["db"].get_bind()
+    from sqlalchemy.orm import sessionmaker
+    S = sessionmaker(bind=engine, info={})
+
+    def override():
+        s = S()
+        try:
+            yield s
+        finally:
+            s.close()
+    app.dependency_overrides[get_db] = override
+    was, limiter.enabled = limiter.enabled, False
+    try:
+        c = TestClient(app)
+        hdr = {"Authorization": f"Bearer {create_access_token(world['manager'].id, 'AGENCY_MANAGER', 'dev-device-01')}"}
+        ok = c.post(f"/api/v1/admin/users/{world['own_agent'].id}/password-reset", headers=hdr)
+        assert ok.status_code == 200 and ok.json()["sent"] is True and "token" not in ok.json()
+        assert world["sent"][-1][0] == "+919800000010"
+        other = c.post(f"/api/v1/admin/users/{world['other_agent'].id}/password-reset", headers=hdr)
+        assert other.status_code == 404                               # not theirs reads as not found
+        mfa = c.post(f"/api/v1/admin/users/{world['own_agent'].id}/mfa-reset", headers=hdr)
+        assert mfa.status_code == 403                                 # MFA resets stay with admins
+        inv = c.get("/api/v1/admin/invites", headers=hdr)
+        assert inv.status_code == 403                                 # so do invitations
+    finally:
+        limiter.enabled = was
+        app.dependency_overrides.pop(get_db, None)
+
+
+
+def test_a_new_agents_first_password_link_goes_to_the_agent(world):
+    """G02's create-agent: the account exists with no usable password; its
+    own manager issues the first-password link; it reaches the agent's phone
+    and sets a password; a FIRST_LOGIN token 72 h, audited FIRST_PASSWORD."""
+    agent = world["own_agent"]
+    out = password_service.issue_first_password(world["db"], world["manager"], agent, request=_request())
+    assert set(out) == {"sent", "expires_at"} and out["sent"] is True
+    to, body, kw = world["sent"][-1]
+    assert to == "+919800000010" and "Welcome to TIQCollect" in body and kw["user_id"] == agent.id
+    row = world["db"].query(PasswordResetToken).filter(PasswordResetToken.user_id == agent.id).one()
+    assert row.kind == "FIRST_LOGIN" and row.issued_by == world["manager"].id
+    ttl = password_service.utc(row.expires_at) - password_service.utc(row.created_at)
+    assert timedelta(hours=71, minutes=59) < ttl <= timedelta(hours=72, seconds=5)
+    issued = _audits(world["db"], AuditAction.PASSWORD_RESET_ISSUED)[-1]
+    assert issued.details == {"kind": "FIRST_PASSWORD", "channel": "SMS"}
+    password_service.reset_with_token(world["db"], _texted_token(world), NEW)
+    world["db"].expire_all()
+    assert verify_password(NEW, agent.hashed_password)
+
+
+@pytest.mark.parametrize("admin", ["manager2", "bank_admin", "analyst"])
+def test_only_the_agents_own_manager_or_agency_admin_issues_it(world, admin):
+    with pytest.raises(AppException) as e:
+        password_service.issue_first_password(world["db"], world[admin], world["own_agent"])
+    assert e.value.status_code == 404
+    assert world["db"].query(PasswordResetToken).count() == 0
+
+
+def test_the_agency_admin_may_issue_it_too(world):
+    assert password_service.issue_first_password(world["db"], world["agency_admin"], world["own_agent"])["sent"]

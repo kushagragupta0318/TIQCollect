@@ -48,6 +48,7 @@ from app.models.user import BANK_ROLES, User, UserRole
 from app.services.credentials import new_token, now, require_good_password, utc
 
 ADMIN_RESET_TTL = timedelta(hours=24)
+FIRST_PASSWORD_TTL = timedelta(hours=72)          # a new account's first password, like an invitation
 FIRST_LOGIN_TTL = timedelta(minutes=15)
 SELF_SERVICE_TTL = timedelta(minutes=15)       # after the code is verified
 RESET_OTP_LENGTH = 6
@@ -81,11 +82,25 @@ def reset_password_path(token: str) -> str:
 # ── who may reset whom ──────────────────────────────────────────────────────
 _BANK_ADMIN_MANAGES = frozenset({UserRole.BANK_ANALYST, UserRole.BANK_TECHOPS, UserRole.AGENCY_ADMIN})
 
-def can_manage(admin: User, target: User) -> bool:
+def can_manage(db: Session, admin: User, target: User) -> bool:
     """The one rule for an admin acting on another person's credentials.
-    Never yourself; never across tenants."""
+    Never yourself; never across tenants.
+
+    2026-09-28 (ce's G02 ask): an AGENCY_MANAGER may act on a FIELD_AGENT they
+    manage — the everyday case, an agent who forgot their password and asks
+    their own manager. "The agents a manager manages" is scope.agents_in_scope
+    (43's frozen interface: same agency AND Agent.manager_user_id), not
+    restated here — which is why this takes `db`. Only agents: never another
+    manager, the agency admin, or anyone's MFA (mfa_service.admin_reset stays
+    bank-roles-only)."""
     if admin.id == target.id:
         return False
+    if admin.role == UserRole.AGENCY_MANAGER:
+        if target.role != UserRole.FIELD_AGENT:
+            return False
+        from app.models.agent import Agent
+        from app.services.scope import agents_in_scope
+        return agents_in_scope(db, admin).filter(Agent.user_id == target.id).first() is not None
     if admin.role == UserRole.PLATFORM_ADMIN:
         return target.role == UserRole.BANK_ADMIN
     if admin.role == UserRole.BANK_ADMIN:
@@ -133,28 +148,56 @@ def admin_reset(db: Session, admin: User, target_id: str, *, request: Request | 
     without a second factor. Returns only whether it was sent and when it
     expires."""
     target = db.get(User, target_id)
-    if target is None or not can_manage(admin, target):
+    if target is None or not can_manage(db, admin, target):
         raise AppException(404, ErrorCode.NOT_FOUND, "User not found")
+    return _issue_and_text(
+        db, admin, target, kind="ADMIN_RESET", ttl=ADMIN_RESET_TTL, audit_kind="ADMIN_RESET", revoke=True,
+        text="Your TIQCollect administrator started a password reset. Set a new password within 24 hours: ",
+        request=request)
+
+
+def issue_first_password(db: Session, admin: User, target: User, *, request: Request | None = None) -> dict:
+    """An account created WITHOUT a password — G02's new field agent — gets a
+    single-use link texted to its own phone to choose one (ce's ask,
+    2026-09-28). Same gate as admin_reset (can_manage: an agent's own manager,
+    or their agency admin), same delivery, same {sent, expires_at}. The kind is
+    FIRST_LOGIN, the audit row PASSWORD_RESET_ISSUED with kind FIRST_PASSWORD,
+    and it lives 72 hours like an invitation: a new agent may not open it for
+    a day or two, where a reset should be acted on the same day.
+    The CALLER creates the user with an unusable password
+    (security.disabled_password_hash-style) and commits it first."""
+    if not can_manage(db, admin, target):
+        raise AppException(404, ErrorCode.NOT_FOUND, "User not found")
+    return _issue_and_text(
+        db, admin, target, kind="FIRST_LOGIN", ttl=FIRST_PASSWORD_TTL, audit_kind="FIRST_PASSWORD", revoke=False,
+        text="Welcome to TIQCollect. Choose your password within 72 hours to sign in: ",
+        request=request)
+
+
+def _issue_and_text(db: Session, admin: User, target: User, *, kind: str, ttl: timedelta, audit_kind: str,
+                    revoke: bool, text: str, request: Request | None) -> dict:
+    """Mint a single-use link for `target`, text it to THEIR phone, return
+    only {sent, expires_at}. Refuses (and changes nothing) without
+    PUBLIC_BASE_URL. The audit row lands in the same commit as the token."""
     if not target.is_active:
         raise AppException(409, ErrorCode.CONFLICT, "The account is deactivated.")
     base = (settings.PUBLIC_BASE_URL or "").strip().rstrip("/")
     if not base or base.startswith("${"):
         raise AppException(503, ErrorCode.CHANNEL_UNAVAILABLE,
-                           "Reset links are sent by SMS and need PUBLIC_BASE_URL. Nothing was changed.")
-    token = _issue(db, target, "ADMIN_RESET", ADMIN_RESET_TTL, issued_by=admin.id, request=request)
-    from app.services import auth_service
-    auth_service.revoke_user_sessions(db, target.id, "ADMIN_REVOKED", by=admin.id)
+                           "Password links are sent by SMS and need PUBLIC_BASE_URL. Nothing was changed.")
+    token = _issue(db, target, kind, ttl, issued_by=admin.id, request=request)
+    if revoke:
+        from app.services import auth_service
+        auth_service.revoke_user_sessions(db, target.id, "ADMIN_REVOKED", by=admin.id)
     stage_audit(db, action=AuditAction.PASSWORD_RESET_ISSUED, user_id=admin.id, entity_type="User",
                 entity_id=target.id, ip_address=_client_ip(request),
-                details={"kind": "ADMIN_RESET", "channel": "SMS"})
+                details={"kind": audit_kind, "channel": "SMS"})
     db.commit()
     from app.services.notification_service import NotificationService
     sent = NotificationService.send_sms(
-        "+" + NotificationService.normalize_phone(target.phone),
-        f"Your TIQCollect administrator started a password reset. Set a new password within 24 hours: "
-        f"{base}{reset_password_path(token)}",
+        "+" + NotificationService.normalize_phone(target.phone), f"{text}{base}{reset_password_path(token)}",
         db=db, user_id=target.id)
-    return {"sent": bool(sent), "expires_at": (now() + ADMIN_RESET_TTL).isoformat()}
+    return {"sent": bool(sent), "expires_at": (now() + ttl).isoformat()}
 
 
 def reset_with_token(db: Session, token: str, new_password: str, *, request: Request | None = None) -> None:
