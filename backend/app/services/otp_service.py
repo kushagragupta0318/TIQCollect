@@ -30,6 +30,12 @@
 #       generate_and_send(payment_id=...) → verify flips that Payment to VERIFIED.
 #   Parameters in config.py (4 digits / 5-min TTL / 3 attempts / resend throttle).
 #   Full detail: /changelog.md and prototype_to_product/30.07.md
+# 2026-09-24 — The code is echoed to the agent (`demo_otp`) only under
+#   DEMO_OTP_ECHO. It used to ride on DEMO_MODE, which the public platform
+#   deployment runs with (field-ops-stub/backend/.env: DEMO_MODE=true), so the
+#   agent's own response carried the code the borrower is meant to read out.
+#   The second condition, settings.ENVIRONMENT == "development", read a field
+#   that does not exist (it is APP_ENV) and could never fire; removed.
 # ───────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 
@@ -317,10 +323,10 @@ class OtpService:
             "resend_available_at": (now + timedelta(seconds=settings.OTP_RESEND_THROTTLE_SECONDS)).isoformat(),
             # Whether the code reached the SMS transport. Additive; every
             # existing field is unchanged. False when Twilio is unconfigured
-            # (demo/dev, where demo_otp below carries the code instead).
+            # (demo/dev, where DEMO_OTP_ECHO may carry the code instead).
             "sms_sent": bool(sms_sent),
         }
-        if getattr(settings, "DEMO_MODE", False) or getattr(settings, "ENVIRONMENT", "") == "development":
+        if settings.DEMO_OTP_ECHO:
             ret["demo_otp"] = code
         return ret
 

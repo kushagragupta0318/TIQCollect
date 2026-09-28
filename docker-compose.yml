@@ -173,6 +173,14 @@ services:
       # physically at a seeded Gurugram address. DEMO_MODE re-anchors the demo
       # customers to the agent's live GPS on check-in.
       DEMO_MODE: ${DEMO_MODE:-true}
+      # Local only: shows the borrower OTP in the agent app, since dev sends no
+      # SMS. Never set it on a deployment people outside the team can reach.
+      DEMO_OTP_ECHO: ${DEMO_OTP_ECHO:-true}
+      # Believe X-Forwarded-For only from loopback. The Vite proxy passes a
+      # browser's header through, and :5473/:8400 listen on every interface,
+      # so trusting the compose network would let a LAN device pick its own
+      # rate-limit bucket.
+      FORWARDED_ALLOW_IPS: "127.0.0.1"
       # RBI contact hours are enforced with a real 403. Left open so the app
       # works outside 08:00-19:00 IST; set 8 and 19 for true behaviour.
       CONTACT_HOUR_START: ${CONTACT_HOUR_START:-0}

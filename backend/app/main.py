@@ -11,6 +11,17 @@
 # 2026-09-24 — The SPA catch-all keeps static file serving inside the
 #   static root (_spa_target); mounting moved into _mount_spa so it can be
 #   tested over HTTP. See the note at _spa_target.
+# 2026-09-24 — ProxyHeadersMiddleware with settings.FORWARDED_ALLOW_IPS.
+# The prod container runs plain uvicorn, which believes X-Forwarded-For only
+# from 127.0.0.1, while Caddy reaches it from another container. Every request
+# therefore carried Caddy's address, and the per-client auth limit (10/min)
+# was one bucket shared by every user of the deployment. The default trusts
+# loopback only (fail-safe); the deployment pins the proxy's address.
+# Knock-on: request.client is now the real client, so the login audit row's
+# ip_address and auth_service's device_fingerprint (sha256 of user-agent and
+# IP) change meaning, from "the proxy" to "the client". Device binding is
+# dormant (registered_device_fingerprint is never written), and A09 takes the
+# IP out of device identity.
 import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, status
@@ -20,6 +31,7 @@ from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 import structlog
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from app.core.config import settings
 from app.core.database import engine
@@ -96,6 +108,11 @@ app = FastAPI(
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# The limiter keys on request.client, so the client must be the real one.
+# Takes the rightmost X-Forwarded-For entry that is not a trusted proxy, so a
+# value a client writes into the header itself is never picked up.
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=settings.FORWARDED_ALLOW_IPS)
 
 app.add_middleware(
     CORSMiddleware,

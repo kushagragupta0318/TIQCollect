@@ -381,3 +381,48 @@ def test_verification_path_is_untouched_by_delivery_result(db, fake_redis, monke
         OtpService(db).verify(_agent(), "case-1", res["otp_id"], "0000")
     assert fake_redis.hgetall(OtpService._otp_key(res["otp_id"]))["attempts"] == "1"
     assert OtpService(db).verify(_agent(), "case-1", res["otp_id"], "1234")["verified"] is True
+
+
+# ── Demo echo of the code (2026-09-24) ───────────────────────────────────────
+# The public platform deployment runs DEMO_MODE=true, and the echo used to ride
+# on DEMO_MODE: the agent's own response carried the borrower's code. It now
+# needs DEMO_OTP_ECHO, which no deployment gets by accident.
+
+def test_demo_mode_alone_does_not_hand_the_agent_the_borrowers_code(db, fake_redis, monkeypatch):
+    _seed_case(db)
+    _sms(monkeypatch, False)
+    monkeypatch.setattr(settings, "DEMO_MODE", True)
+    monkeypatch.setattr(settings, "DEMO_OTP_ECHO", False)
+    res = OtpService(db).generate_and_send(_agent(), "case-1", 5000.0)
+    assert "demo_otp" not in res
+    assert res["otp_id"]                      # the OTP itself is still issued
+
+
+def test_the_code_is_echoed_only_when_the_echo_is_switched_on(db, fake_redis, monkeypatch):
+    _seed_case(db)
+    _sms(monkeypatch, False)
+    monkeypatch.setattr(OtpService, "_generate_code", staticmethod(lambda: "2468"))
+    monkeypatch.setattr(settings, "DEMO_MODE", False)
+    monkeypatch.setattr(settings, "DEMO_OTP_ECHO", True)
+    res = OtpService(db).generate_and_send(_agent(), "case-1", 5000.0)
+    assert res["demo_otp"] == "2468"
+
+
+# The echo switch never takes the API down. `docker run --env-file` passes a
+# literal "${DEMO_OTP_ECHO}", and a bool field would refuse it at start-up.
+
+@pytest.mark.parametrize("raw, expected", [
+    (None, False), ("", False), ("   ", False), ("${DEMO_OTP_ECHO}", False),
+    ("false", False), ("true", True), ("1", True),
+])
+def test_the_echo_switch_reads_unset_or_unexpanded_values_as_off(monkeypatch, raw, expected):
+    from app.core.config import Settings
+    for name, value in (("SECRET_KEY", "k" * 32), ("DATABASE_URL", "sqlite://"),
+                        ("MINIO_ACCESS_KEY", "a"), ("MINIO_SECRET_KEY", "b"),
+                        ("COMMAND_CENTRE_API_KEY", "c")):
+        monkeypatch.setenv(name, value)
+    if raw is None:
+        monkeypatch.delenv("DEMO_OTP_ECHO", raising=False)
+    else:
+        monkeypatch.setenv("DEMO_OTP_ECHO", raw)
+    assert Settings(_env_file=None).DEMO_OTP_ECHO is expected
