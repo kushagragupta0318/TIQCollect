@@ -2,7 +2,7 @@
 // `/bank/*` (plan §2.4). It guards the roles, mounts the Command Center shell
 // and registers every page in navigation.ts, so the sidebar and the router
 // cannot list different screens.
-import { Suspense, useCallback } from "react";
+import { Suspense, useCallback, type ComponentType } from "react";
 import { Navigate, Route, Routes, useNavigate } from "react-router";
 import api from "@/api/axios";
 import { useAuthStore } from "@/store/authStore";
@@ -14,7 +14,11 @@ import { BankLayout } from "./layout/BankLayout";
 import { guardRedirect } from "@/lib/roles";
 import { BANK_PORTAL_ROLES, BANK_ROLE_LABELS, isBankPortalRole } from "./layout/bankRoles";
 import { BANK_NAV_ITEMS } from "./layout/navigation";
+import { BankOverviewPage } from "./pages/BankOverviewPage";
 import { BankPlaceholderPage } from "./pages/BankPlaceholderPage";
+
+// Screens that are built; every other nav item renders its placeholder.
+const BUILT_PAGES: Record<string, ComponentType> = { overview: BankOverviewPage };
 
 
 export default function BankApp() {
@@ -44,9 +48,10 @@ export default function BankApp() {
     <Routes>
       <Route element={<BankLayout persona={persona} onSignOut={signOut} />}>
         <Route index element={<Navigate to="overview" replace />} />
-        {BANK_NAV_ITEMS.map((item) => (
-          <Route key={item.path} path={item.path} element={<BankPlaceholderPage item={item} />} />
-        ))}
+        {BANK_NAV_ITEMS.map((item) => {
+          const Page = BUILT_PAGES[item.path];
+          return <Route key={item.path} path={item.path} element={Page ? <Page /> : <BankPlaceholderPage item={item} />} />;
+        })}
         {BankComponentGalleryPage && (
           <Route
             path="_gallery"
