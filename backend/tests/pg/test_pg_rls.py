@@ -27,7 +27,17 @@ _spec.loader.exec_module(RLS)
 B1, B2 = str(uuid.uuid4()), str(uuid.uuid4())
 A1, A2 = str(uuid.uuid4()), str(uuid.uuid4())
 LOAN, CUST = str(uuid.uuid4()), str(uuid.uuid4())
-POLICIED = sorted(RLS._policies())
+_LATER = []
+for _p in sorted(REV.parent.glob("v2_*.py")):
+    if _p.stem > REV.stem:
+        _spec2 = importlib.util.spec_from_file_location(f"rev_{_p.stem}_pg", _p)
+        _m = importlib.util.module_from_spec(_spec2)
+        _spec2.loader.exec_module(_m)
+        _LATER.append(_m)
+LATER_POLICIES = {t: e for m in _LATER for t, e in getattr(m, "RLS_POLICIES", {}).items()}
+LATER_BANK_ONLY = {t for m in _LATER for t in getattr(m, "RLS_BANK_ONLY", ())}
+POLICIED = sorted({**RLS._policies(), **LATER_POLICIES})
+BANK_ONLY = set(RLS.BANK_ONLY) | LATER_BANK_ONLY
 
 
 def _value(col: sa.Column):
@@ -147,8 +157,8 @@ def test_the_bank_sees_its_whole_book(seeded):
 
 def test_its_agency_sees_its_own_rows_and_placed_loans_but_nothing_bank_only(seeded):
     got = _counts(seeded, "tiq_app", _ctx(B1, A1, "AGENCY"))
-    assert {t: n for t, n in got.items() if t not in RLS.BANK_ONLY and n < 1} == {}
-    assert {t: got[t] for t in RLS.BANK_ONLY if got[t]} == {}
+    assert {t: n for t, n in got.items() if t not in BANK_ONLY and n < 1} == {}
+    assert {t: got[t] for t in BANK_ONLY if got[t]} == {}
 
 
 def test_another_agency_of_the_same_bank_sees_only_the_bank_row(seeded):

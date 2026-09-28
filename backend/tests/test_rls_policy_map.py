@@ -15,20 +15,32 @@ from app.models.user import BANK_ROLES, UserRole, tenant_scope
 REV = pathlib.Path(__file__).resolve().parents[1] / "alembic" / "versions" / "v2_0012_rls.py"
 
 
-def _rev():
-    spec = importlib.util.spec_from_file_location("rev_v2_0012", REV)
+def _rev(path=REV):
+    spec = importlib.util.spec_from_file_location(f"rev_{path.stem}", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
 
 
 RLS = _rev()
+# Tables added after v2_0012 carry their own RLS_BANK_ONLY / RLS_POLICIES (v2_0013: cost_rates).
+LATER = [m for m in (_rev(p) for p in sorted(REV.parent.glob("v2_*.py")) if p.stem > REV.stem)
+         if hasattr(m, "RLS_POLICIES")]
 TABLES = {t.fullname: {c.name for c in t.columns} for t in Base.metadata.sorted_tables}
 GROUPS = {
     "AGENCY_OWNED": set(RLS.AGENCY_OWNED), "VIA_PLACEMENT": set(RLS.VIA_PLACEMENT),
-    "VIA_CUSTOMER_LOANS": set(RLS.VIA_CUSTOMER_LOANS), "BANK_ONLY": set(RLS.BANK_ONLY),
+    "VIA_CUSTOMER_LOANS": set(RLS.VIA_CUSTOMER_LOANS),
+    "BANK_ONLY": set(RLS.BANK_ONLY).union(*(set(getattr(m, "RLS_BANK_ONLY", ())) for m in LATER)),
     "SPECIAL": set(RLS.SPECIAL), "NO_RLS": set(RLS.NO_RLS),
 }
+
+
+def test_later_revisions_use_v2_0012_s_templates():
+    bank_only = RLS._policies()[RLS.BANK_ONLY[0]]
+    for m in LATER:
+        assert set(m.RLS_POLICIES) == set(getattr(m, "RLS_BANK_ONLY", ())), m.__name__
+        for table, expr in m.RLS_POLICIES.items():
+            assert expr == bank_only, table
 
 
 def test_every_table_is_classified_exactly_once():

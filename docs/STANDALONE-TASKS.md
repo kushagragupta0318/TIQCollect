@@ -84,7 +84,7 @@ P0 runs alongside P1. P3 and P5 may overlap once P1 is done.
 - [ ] **B10** Lookup tables for free-text domains (`legal_status`, `settlement_status`, decision outcome, objective, leave type). *S*
 - [ ] **B11** Real Alembic v2 baseline (`include_schemas`, version table in `public`); `seed_data.py` stops calling `create_all` — closes known issue 5. *M*
 - [ ] **B12** Partition maintenance task: create next 3 months, detach past retention; replaces the row-delete location sweep. *S*
-- [ ] **B13** `analytics` schema: `dim_*` views, the five `mv_*` materialized views (§4.4), `REFRESH … CONCURRENTLY` task at 20:30. *L*
+- [x] **B13** `analytics` schema: `dim_*` views, the five `mv_*` materialized views (§4.4), `REFRESH … CONCURRENTLY` task at 20:30. *L* B13a `v2_0007`; B13b `v2_0013`: portfolio, transitions, agency scorecard, the five `*_scoped` views, `v_visit_to_pay`, `strategy.cost_rates` (DATA-MODEL-V2 §6.4).
 - [ ] **B14** DB config: API `statement_timeout`, read-only analytics session + replica hook, PgBouncer-safe (`SET LOCAL` only). *S*
 - [ ] **B15** `scripts/migrate_v1_to_v2.py`: today's fixture → v2 (ABC Bank, ABC Collections, manager1 → AGENCY_ADMIN, dates parsed, dpd history back-filled with `is_backfill`). *M*
 - [ ] **B16** Generator: extend the ledger simulator with tenancy, 4 zones / ~14 cities, **latent agency and agent skill**, contact time-of-day, settlement offers, disputes, complaints, injected compliance breaches — and a ground-truth manifest. **Onboards the Appendix C roster with every invented detail** (identity, people, coverage, contract + commission slab, specimen documents in MinIO, DRA register, onboarding audit history, lifecycle mix: 7 active / 1 suspended / 1 onboarding). *L*

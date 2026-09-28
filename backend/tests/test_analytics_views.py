@@ -50,12 +50,18 @@ def test_the_kept_promise_set_is_the_scoring_service_s(mig):
 
 
 def test_the_refresher_refreshes_exactly_the_materialized_views_created(mig):
+    """B13a's two, then B13b's three (v2_0013)."""
     from app.workers.tasks.analytics_refresh import MATERIALIZED_VIEWS
-    assert tuple(MATERIALIZED_VIEWS) == tuple(mig.MATERIALIZED)
+    b_path = PATH.parent / "v2_0013_analytics_b.py"
+    spec = importlib.util.spec_from_file_location("v2_0013", b_path)
+    b = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(b)
+    assert tuple(MATERIALIZED_VIEWS) == tuple(mig.MATERIALIZED) + tuple(b.MATERIALIZED)
     src = PATH.read_text(encoding="utf-8")
     for mv in mig.MATERIALIZED:
         # CONCURRENTLY needs a unique index over plain columns.
         assert f"CREATE UNIQUE INDEX uq_{mv} ON analytics.{mv}" in src
+    assert set(b.UNIQUE) == set(b.MATERIALIZED)
 
 
 def test_every_plain_view_is_security_invoker(mig):
