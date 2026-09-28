@@ -202,9 +202,17 @@ def test_a_january_date_said_in_december_is_next_year(no_llm):
     "15th November", "15 November", "the 15th of November", "15th, November",    # 1.2.0: "15th, November" -> 15 Oct
     "the 15th, November", "November 15", "November 15th", "Nov 15", "Nov. 15",   # 1.2.0: "Nov. 15" -> no date
     "15th Nov", "15-11", "15/11", "15-11-2026",
+    "15 Nov.", "15th Nov.",                                                   # coordinator: day first, trailing dot
 ])
 def test_a_day_and_a_month_are_read_together(no_llm, said):
     assert _by_field(vre.extract(f"He will pay Rs 4,000 on {said}.", today=TODAY))["ptp_date"] == "2026-11-15"
+
+
+def test_a_trailing_dot_on_the_month_does_not_end_the_sentence(no_llm):
+    """"15 Nov. and not before" — the dot after Nov is an abbreviation, so the
+    promise, its amount and its date stay in one sentence."""
+    fields = _by_field(vre.extract("He will pay Rs 4,000 on 15 Nov. and not before.", today=TODAY))
+    assert fields["ptp_date"] == "2026-11-15" and fields["ptp_amount"] == 4000.0
 
 
 @pytest.mark.parametrize("said", ["15th Novmber", "15th Novembr", "the 15th, Novmber", "15th of Nove"])
