@@ -117,6 +117,80 @@ Postgres 16 + Redis 7 that were removed afterwards: **PASS**.
 - `registry.promote` 2.2.0 → 1.1.0 → 2.2.0 worked as uid 10001, and the engine loads.
 - Beat started and wrote `/app/celerybeat-schedule`, owned by `app`.
 
+
+---
+
+## P1 deploy: the v2 data model (after the v1 deploy above, never with it)
+
+This section is for the merge that brings the standalone P1 into TIQCollect-app (candidate
+`g02 @ e41baba`). Do the v1 deploy above first, and let it run.
+
+**The v2 image refuses to start on a v1 database.** The entrypoint probes the schema
+generation. If `public.agents` exists and `workforce.agents` does not, every container (API,
+worker, beat) exits 1 with `REFUSING TO START ... holds the v1 schema`, and nothing is
+changed. There is no in-place upgrade. The live `fieldops` database must be replaced by a v2
+database.
+
+### P1-A. Choose where the v2 data comes from (owner decision)
+
+| Option | What you get | Cost |
+|---|---|---|
+| **Fresh v2 demo book** (recommended for the demo site) | `fixtures/fieldops-demo-v2.dump`: Girivan Finance (the bank), Aravalli Field Services (the agency), three bank users | Visits and payments recorded on the live v1 site since its fixture are not carried over |
+| Transform the live v1 database (`scripts/migrate_v1_to_v2`) | Live v1 history under the v2 roster | Built for the demo book. It **aborts** on any v1 user with no roster mapping, which includes Command Center service logins added by hand. Every password becomes unusable, and every email is renamed to `@aravallifs.test` / `@girivanfinance.test` |
+
+With either option, **the Command Center service logins change.** The v2 roster has no
+`manager1@…`-style accounts. Pick a v2 agency-manager account for each Command Center
+agency, set its password (step B3 above, same one-liner), and rewrite
+`TIQCOLLECT_AGENCY_ACCOUNTS` with the new emails.
+
+### P1-B. Database
+
+1. Keep the v1 database. Create a NEW, empty database for v2 (for example `fieldops_v2`)
+   on the same server.
+2. Point `DATABASE_URL` for `field-ops`, `field-ops-worker` and `field-ops-beat` at it.
+   Rolling back is pointing it back.
+3. Fresh book: on first start the API container restores the v2 fixture in ONE transaction,
+   applies database settings, and runs `alembic upgrade head`. Worker and beat wait up to
+   `DB_WAIT_SECONDS` (default 300) for that.
+4. Transform: run it once, by hand, before starting the API:
+   `V1_DATABASE_URL=<live v1> DATABASE_URL=<empty v2 at head> python -m scripts.migrate_v1_to_v2`.
+5. Every start afterwards runs `scripts.check_migrations`. A database behind the code's
+   head refuses to start and prints the command to run. Migrations are never applied at
+   boot on a populated database.
+
+### P1-C. New and changed settings
+
+| Variable | Set to | Notes |
+|---|---|---|
+| `DATABASE_URL` | the new v2 database | P1-B |
+| `DEMO_MASTER_ACCOUNTS` | three v2 emails, e.g. `ananya.iyer@girivanfinance.test,vikram.malhotra@aravallifs.test,piyush.sharma@aravallifs.test` | the v1 emails no longer exist |
+| `DEMO_MASTER_KEEP_ACCOUNTS` | the new Command Center service-login emails (P1-A) | |
+| `DEMO_EMAIL_DOMAINS` | leave the default (`girivanfinance.test,aravallifs.test`) | `DISABLE_OTHERS` refuses if any account is outside these |
+| `PRODUCT_MODE` | `embedded` (the default) on the platform | `standalone` is for a self-hosted bank portal. Any other value stops start-up |
+| `TOTP_ENC_KEY` | a Fernet key from `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`, kept secret | unset: MFA enrolment is refused (`MFA_NOT_CONFIGURED`). Rotating it forces every enrolled user to re-enrol |
+| `BANK_MFA_REQUIRED` | unset for the demo | `true` blocks every bank user without TOTP, including the demo bank admin |
+| `DEMO_DEVICE_REBIND` | **unset** | it switches device binding off. Start-up is refused without `DEMO_MODE` |
+| `DEMO_NOTIFY_ALLOWLIST` | unset, or the team's own numbers | with `DEMO_MODE`, SMS/WhatsApp go only to `DEMO_CONTACT_PHONE` and these numbers (B22). This is what could later let Twilio be enabled on the demo site |
+| `DB_POOL_SIZE` / `DB_MAX_OVERFLOW` | defaults 5 / 5 | per process. Keep processes × 10 under the server's `max_connections` |
+| `API_STATEMENT_TIMEOUT_MS` / `JOB_STATEMENT_TIMEOUT_MS` | defaults 15 000 / 600 000 | |
+| `ANALYTICS_DATABASE_URL` | unset (the primary is used) | a read replica, if there ever is one |
+| `AGENCY_NAME`, `AGENCY_RBI_REG` | delete | removed from settings, and ignored if left |
+
+Everything in part B of the v1 checklist still applies (OTP echo off, `FORWARDED_ALLOW_IPS`,
+`PUBLIC_BASE_URL`, no Twilio).
+
+### P1-D. Verify
+
+- [ ] The field-ops log shows `restoring fixture ... (one transaction)` or `already
+      initialised (v2)`, and no `REFUSING`.
+- [ ] The worker and beat logs show no `REFUSING`.
+- [ ] The three v2 master accounts log in. The bank admin reaches `/bank`.
+- [ ] The Command Center `/field` pages load with the new service logins.
+- [ ] Every check in part C of the v1 checklist still passes.
+
+**Rollback:** point `DATABASE_URL` back at the v1 database and deploy the previous image.
+The v1 database was never touched.
+
 ---
 
 ## State this assumes
