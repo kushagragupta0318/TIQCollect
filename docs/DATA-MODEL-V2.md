@@ -2952,7 +2952,11 @@ The API reads **only** the `*_scoped` views and `v_*` views, through `dependenci
 | `agency_scorecard_monthly_scoped` | `mv_agency_scorecard_monthly` | See the column notes below |
 | `collections_daily_scoped`, `field_activity_daily_scoped` | the B13a MVs | Unchanged columns |
 
-`v_visit_to_pay` (per visit): a VERIFIED payment on the same case, at or after check-in, within 7 days of the bank's calendar.
+`v_visit_to_pay` (per visit): the VERIFIED payments attributed to it. Each payment goes to the latest visit on its case at or before it, within 7 bank-local **calendar** days; no holiday calendar exists yet (board B13c).
+
+All six API views are `security_barrier` and share one tenant predicate: BANK sees its bank and AGENCY its agency. A field agent (scope AGENT), PLATFORM, or a missing scope or tenant sees nothing.
+
+"Today" is the bank-local `business_date(now())`. `collectible_due` is also NULL when any active placement lacks its opening reading (B13b audit).
 
 **Deviations from the text above, all deliberate.**
 - **The `*_scoped` views are not `security_invoker`.** An invoker view needs the caller to hold `SELECT` on the materialized view beneath it, and `tiq_app` holds none.

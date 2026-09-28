@@ -84,5 +84,6 @@ def test_each_table_gets_the_template_of_its_group():
 
 @pytest.mark.parametrize("role", list(UserRole))
 def test_the_scope_of_every_role(role):
-    want = "PLATFORM" if role == UserRole.PLATFORM_ADMIN else "BANK" if role in BANK_ROLES else "AGENCY"
+    want = ("PLATFORM" if role == UserRole.PLATFORM_ADMIN else "AGENT" if role == UserRole.FIELD_AGENT
+            else "BANK" if role in BANK_ROLES else "AGENCY")
     assert tenant_scope(role) == want

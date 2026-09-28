@@ -114,7 +114,10 @@ def portfolio_state(dpd_bucket: str, loan_status: str, npa_since: date | None, a
         if npa_since is not None and _add_months(npa_since, NPA_DOUBTFUL_AFTER_MONTHS) <= as_of:
             return "NPA_DOUBTFUL"
         return "NPA_SUB"
-    return _STATE_OF_BUCKET[DPDBucket(dpd_bucket)]
+    try:
+        return _STATE_OF_BUCKET[DPDBucket(dpd_bucket)]
+    except (KeyError, ValueError):
+        return "UNKNOWN"             # a data defect, surfaced as itself; not one of the 8 states
 
 
 class LoanStatus(str, enum.Enum):

@@ -92,6 +92,7 @@ P0 runs alongside P1. P3 and P5 may overlap once P1 is done.
 - [ ] **B18** Regenerate `fieldops-demo.dump`; entrypoint checks `workforce.agents`; fixtures README rewritten (states the roster is fictional, lists the realistic logins of Appendix C.5); refresh-token hashes scrubbed. **Done when:** a grep of the fixture and seed finds no "ABC", "Test Bank", "Synthetic Bank", `manager1@` or `agent0` placeholder. *S*
 - [x] **B22** Demo-tenant safety: `is_demo` on banks/agencies; NotificationService suppresses SMS/WhatsApp/email for demo tenants (logged, not sent); a test proves an invented number is never dialled. *S*
 - [ ] **B19** `tests/pg/` suite + Postgres service in CI: partitions, RLS, mv refresh, v1→v2 transform. *M*
+- [ ] **B13c** Bank business-day calendar (weekends, holidays) per bank; then offer business-day windows in `v_visit_to_pay` and SLA measures (B13b audit: today they are calendar days). *S*
 - [ ] **B20** ML adapter on typed columns; the Phase 3 equality harness (78 tests) and PIT tests green throughout. *M*
 - [ ] **B21** Stress profile loaded; baseline query timings recorded in `docs/DATA-MODEL-V2.md`. *S*
 
