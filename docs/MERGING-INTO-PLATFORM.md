@@ -106,8 +106,16 @@ d4's H14.
 - the full entrypoint (fixture restore, alembic, demo_reset);
 - a `registry.promote` round-trip as uid 10001;
 - beat start-up with no `-s`.
-Result: *(pending: tiqcollect-bb's locked run (C) on `d8552ac`; its numbers are added here
-when it finishes)*.
+Result, measured 2026-09-28 on `d8552ac` (the tree merged as `0a4513f`), in a throwaway
+Postgres 16 + Redis 7 that were removed afterwards: **PASS**.
+- Image `tiq-prod-check:lead`: 2,998,469,897 bytes, built in 340 s. `docker compose config` OK.
+- Runs as `uid=10001 user=app`; `/app` is owned by `app`. No tests in the image, and 24
+  artifact files.
+- The entrypoint restored the fixture, ran migrations and captured the demo baseline, and
+  Uvicorn started.
+- `/api/v1/health` returned 200, and `/api/v1/ready` returned 200 with database and Redis both ok.
+- `registry.promote` 2.2.0 → 1.1.0 → 2.2.0 worked as uid 10001, and the engine loads.
+- Beat started and wrote `/app/celerybeat-schedule`, owned by `app`.
 
 ---
 
