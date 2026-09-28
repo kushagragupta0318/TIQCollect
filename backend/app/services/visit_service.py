@@ -54,6 +54,7 @@ from app.services.scope import agent_case_or_404, sync_assignee
 from app.services.ai_report_service import AIReportService
 from app.services.brand import brand_for
 from app.services.notification_service import NotificationService
+from app.models.customer import CUSTOMER_TAG_DECEASED
 
 logger = structlog.get_logger()
 
@@ -363,7 +364,7 @@ class VisitService:
             case.resolved_at = now_utc
             case.resolution_notes = "Customer deceased — do not contact"
             case.customer.do_not_contact = True
-            case.customer.tags = list(set(case.customer.tags or []) | {"DECEASED"})
+            case.customer.tags = list(set(case.customer.tags or []) | {CUSTOMER_TAG_DECEASED})
 
         elif case.status == CaseStatus.ASSIGNED:
             case.status = CaseStatus.IN_PROGRESS

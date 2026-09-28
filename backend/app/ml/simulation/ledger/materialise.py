@@ -68,7 +68,7 @@ from app.ml.simulation.ledger.simulator import Ledger
 from app.models.agent import Agent, AgentSpecialization, AgentStatus, AgentTier
 from app.models.call_log import CallLog, CallOutcome
 from app.models.case import Case, CasePriority, CaseStatus
-from app.models.customer import Customer
+from app.models.customer import CUSTOMER_TAG_DECEASED, Customer
 from app.models.loan import DPDBucket, Loan, LoanStatus, LoanType, dpd_bucket_for
 from app.models.payment import Payment, PaymentMode, PaymentStatus
 from app.models.call_log import BorrowerDisposition
@@ -451,7 +451,7 @@ class Materialiser:
                 if loan is not None:
                     db.query(Customer).filter(
                         Customer.id == loan.customer_id).update(
-                        {"tags": ["DECEASED"]}, synchronize_session=False)
+                        {"tags": [CUSTOMER_TAG_DECEASED]}, synchronize_session=False)
 
         # ── hostility flag as at `day` ──────────────────────────────────────
         # Raised by an event, never lowered — so its value at `day` is "was an
