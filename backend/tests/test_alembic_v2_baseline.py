@@ -145,7 +145,10 @@ class _FakeOp:
         self.ddl.append(("create", a))
 
     def f(self, name):
-        return name
+        # A marker, so the test can tell an op.f()-final name from a plain one:
+        # a plain name gets the naming convention applied a second time on
+        # Postgres (ck_user_sessions_ck_user_sessions_..., found 2026-09-28).
+        return ("FINAL", name)
 
 
 @pytest.mark.parametrize("count", [0, 3])
@@ -163,4 +166,5 @@ def test_v2_0005_downgrade_refuses_by_count_before_touching_the_constraint(monke
     else:
         mod.downgrade()
         assert [k for k, _ in fake.ddl] == ["drop", "create"]
+        assert all(args[0] == ("FINAL", "ck_user_sessions_revoked_reason") for _, args in fake.ddl)
         assert "MFA_CHANGED" not in fake.ddl[1][1][2]

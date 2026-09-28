@@ -36,6 +36,10 @@ SESSION_REVOKE_REASONS = (
 )
 _PREVIOUS = SESSION_REVOKE_REASONS[:-1]          # exactly v2_0002's list
 
+# op.f(): the FINAL name. The metadata's naming convention (ck_%(table)s_%(name)s)
+# is applied to plain names by drop_constraint AND create_check_constraint, which
+# turned this into ck_user_sessions_ck_user_sessions_revoked_reason and failed on
+# Postgres (found by the fieldops_p1 round trip, 2026-09-28; SQLite never sees it).
 _NAME = "ck_user_sessions_revoked_reason"
 
 
@@ -44,7 +48,7 @@ def _check(reasons) -> str:
 
 
 def upgrade() -> None:
-    op.drop_constraint(_NAME, "user_sessions", schema="tenancy", type_="check")
+    op.drop_constraint(op.f(_NAME), "user_sessions", schema="tenancy", type_="check")
     op.create_check_constraint(op.f(_NAME), "user_sessions", _check(SESSION_REVOKE_REASONS), schema="tenancy")
 
 
@@ -56,5 +60,5 @@ def downgrade() -> None:
             f"v2_0005 downgrade refused: {n} user_sessions row(s) carry revoked_reason 'MFA_CHANGED', "
             "which the v2_0004 constraint cannot hold. They are not remapped (that would rewrite why a "
             "session ended); resolve them deliberately, then downgrade.")
-    op.drop_constraint(_NAME, "user_sessions", schema="tenancy", type_="check")
+    op.drop_constraint(op.f(_NAME), "user_sessions", schema="tenancy", type_="check")
     op.create_check_constraint(op.f(_NAME), "user_sessions", _check(_PREVIOUS), schema="tenancy")
