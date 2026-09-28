@@ -105,3 +105,17 @@ def test_v2_0002_leaves_no_use_alter_fk_inline_and_partitions_all_five():
     assert "sa.Enum(" not in body and "sa.JSON()" not in body
     # NO ACTION, not RESTRICT (design §2.8, audit MED 7)
     assert "RESTRICT" not in body
+
+
+def test_the_session_revoke_reasons_check_is_migrated_as_the_model_declares_it():
+    """`alembic check` does not compare CHECK text, so a reason added to
+    models/identity.SESSION_REVOKE_REASONS without a migration would pass it
+    and then fail every INSERT on Postgres. The latest revision that freezes
+    the list must equal the model's tuple, in order."""
+    from app.models.identity import SESSION_REVOKE_REASONS
+    frozen = [m.SESSION_REVOKE_REASONS for m in _chain() if hasattr(m, "SESSION_REVOKE_REASONS")]
+    assert frozen, "no revision freezes the session revoke reasons"
+    assert tuple(frozen[-1]) == tuple(SESSION_REVOKE_REASONS)
+    # ... and the migrated SQL names every one of them.
+    latest = next(m for m in reversed(_chain()) if hasattr(m, "SESSION_REVOKE_REASONS"))
+    assert all(f"'{r}'" in latest._check(latest.SESSION_REVOKE_REASONS) for r in SESSION_REVOKE_REASONS)
