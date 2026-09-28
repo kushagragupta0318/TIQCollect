@@ -5,6 +5,8 @@
 #   docker run --rm -v "$PWD/backend:/app" fieldops-test:latest \
 #     python -m pytest -q -n 4 --dist loadfile --timeout=600
 #
+# tests/pg runs only when TIQ_PG_TEST_URL names a throwaway Postgres 16 server.
+#
 # Rebuild whenever requirements.txt or requirements-dev.txt changes. The prod
 # image (Dockerfile) and the dev image (Dockerfile.dev) are unaffected.
 FROM python:3.12-slim
@@ -16,8 +18,17 @@ ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1 \
 # far more threads than the machine has cores.
 ENV OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 
-# libgomp1: ortools. libpq-dev/gcc: psycopg2 build.
-RUN apt-get update && apt-get install -y --no-install-recommends libpq-dev gcc libgomp1 \
+# libgomp1: ortools. libpq-dev/gcc: psycopg2 build. postgresql-client-16 comes
+# from the PostgreSQL apt repo, to match the server: tests/pg restores the demo
+# fixture with pg_restore | psql and skips without them.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      libpq-dev gcc libgomp1 ca-certificates curl \
+    && install -d /usr/share/postgresql-common/pgdg \
+    && curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+         https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(. /etc/os-release && echo "$VERSION_CODENAME")-pgdg main" \
+         > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update && apt-get install -y --no-install-recommends postgresql-client-16 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backend/requirements.txt backend/requirements-dev.txt ./
