@@ -228,6 +228,12 @@ def _spa_target(full_path: str, static_dir: str) -> str | None:
         return None                  # a symlink that leaves static/
     if full_path and os.path.isfile(candidate):
         return candidate
+    # 2026-09-24 (I01) — a MISSING *.js is an honest 404, not index.html: a
+    # stale client asking for an old hashed chunk after a deploy, or a service
+    # worker polling a rolled-back /sw.js, must read "gone", not get a page of
+    # HTML it tries to run as a script. A real .js file is served above.
+    if full_path.lower().endswith(".js"):
+        return None
     return os.path.join(root, "index.html")
 
 
@@ -244,7 +250,8 @@ def _mount_spa(app: FastAPI, static_dir: str) -> None:
 
     @app.get("/{full_path:path}")
     def spa(full_path: str):
-        """Serve a real file when one exists, otherwise index.html.
+        """Serve a real file when one exists, otherwise index.html — except a
+        missing *.js path, which is an honest 404 (see _spa_target above).
 
         The fallback is what makes client-side routes like /agent/cases work on
         a hard refresh or a pasted link — the server has no such route, so

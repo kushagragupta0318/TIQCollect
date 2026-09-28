@@ -24,6 +24,16 @@ python-multipart==0.0.19
 minio==7.2.11
 openai==1.57.4
 httpx==0.28.1
+# LLM_PROVIDER=anthropic (core/llm.py, 2026-09-24). The four lines under it are
+# anthropic's own transitive dependencies, pinned exactly: anthropic 1.8.0
+# declares httpx2<3,>=2.0.0 and docstring-parser; httpx2 2.13.1 declares
+# httpcore2==2.13.1 and truststore>=0.10 (read from both wheels' METADATA).
+# httpx2 is a separate package from httpx and does not replace it.
+anthropic==1.8.0
+httpx2==2.13.1
+httpcore2==2.13.1
+truststore==0.10.4
+docstring-parser==0.18.0
 faker==33.1.0
 pandas==2.2.3
 numpy==2.2.0
