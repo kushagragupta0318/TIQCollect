@@ -195,7 +195,9 @@ def _enforce_device_binding(db: Session, user: User, device_id: str, request: Re
         reason = "Device mismatch"
     if bound is not None:
         if not settings.DEMO_DEVICE_REBIND:
-            _log(db, AuditAction.DEVICE_MISMATCH, user.id, request, success=False, failure_reason=reason)
+            user_id = user.id
+            db.rollback()   # _log commits: the caller's staged rows must not land with a refusal
+            _log(db, AuditAction.DEVICE_MISMATCH, user_id, request, success=False, failure_reason=reason)
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                                 detail="Device not authorized. Contact your manager.")
         bound.is_bound = False
