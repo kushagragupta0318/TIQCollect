@@ -118,6 +118,32 @@ V1_STAFF = {
 }
 MASTER_ACCOUNTS = (f"ananya.iyer@{BANK_DOMAIN}", f"vikram.malhotra@{AGENCY_DOMAIN}",
                    f"piyush.sharma@{AGENCY_DOMAIN}")
+
+# Aravalli's workforce (B16). GENDER IS ROSTER DATA, stated per person by the
+# roster's author — never derived from a name, anywhere (coordinator,
+# 2026-09-28). v1 recorded no gender at all (ALLOC-G: 926 decisions BLOCKED on
+# "needs a female agent"); these are the 18 v1 agents, by their v1 names.
+ARAVALLI_V1_AGENT_GENDER = {
+    "Rajesh Kumar Yadav": "MALE", "Mohammed Zafar Khan": "MALE", "Karan Rawat Singh": "MALE",
+    "Deepak Narayan Joshi": "MALE", "Devraj Anand Kapoor": "MALE", "Pankaj Kumar Sinha": "MALE",
+    "Anil Kumar Mishra": "MALE", "Arjun Singh Chauhan": "MALE", "Rohit Anand Saxena": "MALE",
+    "Rahul Dev Pandey": "MALE", "Sunil Kumar Sharma": "MALE", "Akash Ratan Verma": "MALE",
+    "Mohan Lal Nair": "MALE", "Sanjay Mohan Gupta": "MALE", "Nitesh Gupta Agarwal": "MALE",
+    "Suresh Chand Tiwari": "MALE", "Vivek Prasad Dubey": "MALE", "Piyush Sharma": "MALE",
+}
+# Three women who joined Aravalli in September 2026 (coordinator, option (b)):
+# NEW agents with no history, so the v1 book stays exact while the next plan
+# has a female agent for the cases that require one. The 926 historical
+# BLOCKED decisions stay as recorded.
+# (name, gender, joined_on, city, locality index, manager, employee code, id card, phone)
+ARAVALLI_NEW_AGENTS = (
+    ("Shreya Chaudhary", "FEMALE", date(2026, 9, 8), "GURUGRAM", 0, "Vikram Malhotra", "EMP0101", "TIQID00101",
+     "9810460301"),
+    ("Pooja Rawat", "FEMALE", date(2026, 9, 14), "DELHI", 1, "Sunita Kapoor", "EMP0102", "TIQID00102",
+     "9810460302"),
+    ("Kiran Bhatia", "FEMALE", date(2026, 9, 15), "NOIDA", 1, "Vikram Malhotra", "EMP0103", "TIQID00103",
+     "9810460303"),
+)
 CONTRACT = dict(id=new_id("contract", "ARAVALLI-2025"), bank_id=BANK["id"], agency_id=AGENCY["id"],
                 contract_no="GFL/AGY/2025/0017", start_date=date(2025, 11, 3), end_date=date(2027, 11, 2),
                 status="ACTIVE", max_placed_cases=2500, max_agents=25, sla_first_visit_days=5,
@@ -373,7 +399,9 @@ def _slab(c, b1, b2, b3, npa) -> dict:
 
 ARAVALLI = AgencyRoster(
     key="ARAVALLI", bank_key="GIRIVAN", row=AGENCY, domain=AGENCY_DOMAIN, zone="NORTH",
-    serves=("GURUGRAM", "DELHI", "NOIDA"), n_agents=18, onboarded=date(2025, 11, 3), contract=CONTRACT,
+    # 18 v1 agents + the 3 who joined in September 2026 (ARAVALLI_NEW_AGENTS).
+    serves=("GURUGRAM", "DELHI", "NOIDA"), n_agents=18 + len(ARAVALLI_NEW_AGENTS), onboarded=date(2025, 11, 3),
+    contract=CONTRACT,
     commission=COMMISSION, agency_region="NCR", managers=("Vikram Malhotra", "Sunita Kapoor"))
 
 SARTHAK = AgencyRoster(

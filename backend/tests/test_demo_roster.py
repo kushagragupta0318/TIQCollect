@@ -39,7 +39,9 @@ def test_appendix_c2_lifecycle_and_workforce():
     assert Counter(a.row["status"] for a in girivan) == {"ACTIVE": 7, "SUSPENDED": 1, "PENDING": 1}
     assert r.AWADH.row["status"] == "SUSPENDED" and r.AWADH.row["suspended_at"].date().isoformat() == "2026-09-02"
     assert r.HOOGHLY.n_agents == 0 and len(r.HOOGHLY.missing_docs) == 2 and r.HOOGHLY.invite_sent is not None
-    assert sum(a.n_agents for a in girivan) == 154 and r.ALMORA.n_agents == 8
+    # Appendix C.2's 154, plus the three women who joined Aravalli in 2026-09
+    # (coordinator, ALLOC-G option (b)).
+    assert sum(a.n_agents for a in girivan) == 154 + 3 and r.ALMORA.n_agents == 8
     assert r.ALMORA.bank_key == "KUMAON" and r.ALMORA.bank_id == r.KUMAON_BANK["id"]
     assert r.SAHYADRI.expiring_docs == {"INSURANCE": 21}
     assert all(s in AGENCY_STATUSES for s in (a.row["status"] for a in r.AGENCIES))
@@ -116,6 +118,17 @@ def test_documents_are_the_c3_list_and_valid_doc_types():
     assert len(r.AGENCY_DOCUMENTS) == 7
     assert set(r.HOOGHLY.missing_docs) <= {d for d, _, _ in r.AGENCY_DOCUMENTS}
     assert r.SPECIMEN_FOOTER == "Specimen — fictional demo document"
+
+
+def test_aravalli_gender_is_explicit_roster_data():
+    """Gender is stated per person, never derived from a name (coordinator,
+    2026-09-28). The 18 v1 agents are listed by their v1 names; the three
+    who joined in September are women with no history."""
+    assert len(r.ARAVALLI_V1_AGENT_GENDER) == 18
+    assert set(r.ARAVALLI_V1_AGENT_GENDER.values()) <= {"MALE", "FEMALE"}
+    assert [g for _n, g, *_x in r.ARAVALLI_NEW_AGENTS] == ["FEMALE"] * 3
+    assert all(j.year == 2026 and j.month == 9 and j <= r.ANCHOR_DATE for _n, _g, j, *_x in r.ARAVALLI_NEW_AGENTS)
+    assert r.ARAVALLI.n_agents == 21
 
 
 def test_name_pools_include_women_everywhere():
