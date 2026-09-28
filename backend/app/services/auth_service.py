@@ -214,6 +214,9 @@ def login(db: Session, email: str, password: str, device_id: str, request: Reque
     # 2026-09-28 (A08, A07; d4) — after the password, before any session.
     # The second factor comes FIRST: a stolen password alone must not reach
     # the forced-change ticket below, or it could take over an MFA account.
+    # MFA_REQUIRED is only reachable with the right password, so it does
+    # confirm the password to whoever holds it — standard for TOTP, and this
+    # is the same route, under the same AUTH_LIMIT, as every other attempt.
     from app.services import mfa_service, password_service
     verdict = mfa_service.check_login_code(db, user, totp_code)
     if verdict != "ok":
@@ -287,6 +290,17 @@ def quick_login(db: Session, token: str, request: Request) -> dict:
         _log(db, AuditAction.LOGIN_FAILED, user.id, request, success=False,
              failure_reason="Quick-login refused for a field agent")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Field agents sign in on their own device")
+    # 2026-09-28 (A07/A08, d4; 43's review HIGH) — a link proves nothing but
+    # possession of the link. An account that owes a second factor (enrolled,
+    # or BANK_MFA_REQUIRED) or a forced password change signs in through
+    # /auth/login only. Refused BEFORE the jti is recorded, so the link is not
+    # burned; one message for all three, so it says nothing about which.
+    from app.services import mfa_service
+    if user.must_change_password or mfa_service.second_step_owed(user):
+        _log(db, AuditAction.LOGIN_FAILED, user.id, request, success=False,
+             failure_reason="Quick-login refused: account needs password sign-in")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="Sign in with your password and authenticator")
 
     exp = payload.get("exp")
     db.add(UsedQuickLoginToken(
@@ -336,6 +350,16 @@ def refresh_tokens(db: Session, refresh_token: str, request: Request) -> dict:
     now = datetime.now(timezone.utc)
     if session.user_id != user.id or session.revoked_at is not None or _utc(session.expires_at) <= now:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired")
+    # 2026-09-28 (A07/A08, d4; coordinator) — a refresh must not outlive a
+    # step the account now owes: a forced password change set after this
+    # session opened, or a second factor BANK_MFA_REQUIRED now demands. The
+    # session is not revoked (the person may be at the keyboard); it simply
+    # cannot be extended, so the next token needs /auth/login.
+    from app.services import mfa_service
+    if user.must_change_password or (mfa_service.required_for(user) and not user.totp_enabled):
+        _log(db, AuditAction.TOKEN_REFRESH, user.id, request, entity_id=session.id, success=False,
+             failure_reason="Refresh refused: account needs password sign-in")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Sign in again to continue")
 
     device_id = session.device_id
     new_access = create_access_token(user.id, user.role.value, device_id, sid=session.id,

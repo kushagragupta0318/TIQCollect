@@ -133,15 +133,20 @@ def _claim_step(db: Session, user: User, code: str) -> bool:
     return False
 
 
-def confirm_enrollment(db: Session, user: User, code: str, *, request: Request | None = None) -> None:
+def confirm_enrollment(db: Session, user: User, code: str, *, request: Request | None = None,
+                       keep_sid: str | None = None) -> None:
+    """Turn the factor on. Every OTHER session was opened without it, so it
+    ends (MFA_CHANGED); the one enrolling (keep_sid) stays."""
     if user.totp_enabled:
         raise AppException(409, ErrorCode.CONFLICT, "Two-factor sign-in is already on.")
     if not user.totp_secret or not _claim_step(db, user, code):
         raise AppException(400, ErrorCode.MFA_INVALID, "That code is not right. Check the time on your phone.")
     user.totp_enabled = True
+    from app.services import auth_service
+    ended = auth_service.revoke_user_sessions(db, user.id, "MFA_CHANGED", except_sid=keep_sid)
     db.commit()
     write_audit(db, action=AuditAction.MFA_ENABLED, user_id=user.id, entity_type="User", entity_id=user.id,
-                ip_address=_client_ip(request))
+                ip_address=_client_ip(request), details={"other_sessions_ended": ended})
 
 
 def disable(db: Session, user: User, code: str, *, request: Request | None = None) -> None:
@@ -187,6 +192,13 @@ def check_login_code(db: Session, user: User, code: str | None) -> str:
     if not code:
         return "missing"
     return "ok" if _claim_step(db, user, code) else "invalid"
+
+
+def second_step_owed(user: User) -> bool:
+    """True when a sign-in must go through /auth/login to prove more than a
+    link: an enrolled second factor, or one BANK_MFA_REQUIRED demands. No side
+    effects (enrollment_gate mints a ticket; this only answers)."""
+    return user.totp_enabled or required_for(user)
 
 
 def enrollment_gate(db: Session, user: User) -> dict | None:

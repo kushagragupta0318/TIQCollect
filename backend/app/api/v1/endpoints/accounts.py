@@ -96,9 +96,10 @@ async def mfa_setup(current_user: CurrentUser, db: DbSession):
 
 
 @router.post("/mfa/confirm", summary="Confirm TOTP enrollment with a code")
-async def mfa_confirm(body: MfaCode, current_user: CurrentUser, request: Request, db: DbSession):
-    mfa_service.confirm_enrollment(db, current_user, body.code, request=request)
-    return {"message": "Two-factor sign-in is on."}
+async def mfa_confirm(body: MfaCode, current_user: CurrentUser, payload: TokenPayload, request: Request,
+                      db: DbSession):
+    mfa_service.confirm_enrollment(db, current_user, body.code, request=request, keep_sid=payload.get("sid"))
+    return {"message": "Two-factor sign-in is on. Your other devices have been signed out."}
 
 
 @router.post("/mfa/disable", summary="Turn TOTP off (needs a current code)")

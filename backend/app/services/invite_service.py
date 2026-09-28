@@ -290,8 +290,11 @@ def accept_invite(db: Session, token: str, password: str, device_id: str, reques
     (db.query(UserInvite).filter(UserInvite.id == inv.id)
      .update({UserInvite.accepted_user_id: user.id}, synchronize_session=False))
     # D03 (P2) hooks here for purpose AGENCY_MASTER_LOGIN: activate the agency.
-    # A bank user under BANK_MFA_REQUIRED gets the enrollment ticket, not a
-    # session, exactly as at login.
+    # A SESSION IS MINTED HERE (43's review, 2026-09-28: every minting site
+    # states its MFA decision). The account was created a moment ago, so it
+    # cannot be enrolled or owe a forced change: the only gate that can apply
+    # is BANK_MFA_REQUIRED, and a bank user under it gets the enrollment
+    # ticket, not a session, exactly as at login.
     from app.services import mfa_service
     gate = mfa_service.enrollment_gate(db, user)
     if gate is not None:
