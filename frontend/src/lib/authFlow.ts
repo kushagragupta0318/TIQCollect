@@ -18,6 +18,7 @@ const PUBLIC_AUTH_PATHS = [
   "/auth/refresh",
   "/auth/invites/",
   "/auth/password/forgot",
+  "/auth/password/forgot/verify",
   "/auth/password/reset",
   "/auth/mfa/enroll/",
 ];
@@ -84,9 +85,13 @@ export function passwordProblem(password: string, email?: string | null): string
   return null;
 }
 
-/** Read `?token=` once and drop it from the address bar, so it does not sit in history. */
-export function takeTokenFromUrl(search: string, replace: (url: string) => void, pathname: string): string | null {
-  const token = new URLSearchParams(search).get("token");
-  if (token) replace(pathname);
-  return token;
+/**
+ * The token a credential page works with: from router state (handed over by
+ * login or the forgot flow — never in the URL) or from `?token=` (a link an
+ * admin or an SMS delivered). Pure: the page strips the query afterwards.
+ */
+export function tokenFrom(search: string, state: unknown): string | null {
+  const fromState = (state as { token?: unknown } | null)?.token;
+  if (typeof fromState === "string" && fromState) return fromState;
+  return new URLSearchParams(search).get("token");
 }
