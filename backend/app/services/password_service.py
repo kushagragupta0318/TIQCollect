@@ -187,11 +187,18 @@ def issue_first_password(db: Session, admin: User, target: User, *, request: Req
 
 
 def never_had_a_password(db: Session, user: User) -> bool:
-    """True for an account created without one: never signed in, never had a
-    session, never set a password. (The hotfix's unusable-hash marker reaches
-    p1 at the next rebase; until then these three facts are the evidence, and
-    any one of them missing means the account is established.)"""
+    """True for an account created WITHOUT a usable password (the coordinator's
+    wording, audit of 12c3232): its hash is the unusable marker
+    (security.disabled_password_hash) or it is flagged must_change_password,
+    AND it has never signed in, never had a session and never set a password.
+    A seeded account with a usable password it has simply not used yet is
+    established: resetting it is admin_reset's job.
+    (Until 3498391 brought the marker into p1, only the last three facts were
+    checked.)"""
+    from app.core.security import is_disabled_password_hash
     from app.models.identity import UserSession
+    if not (is_disabled_password_hash(user.hashed_password) or user.must_change_password):
+        return False
     if user.last_login_at is not None or user.password_changed_at is not None:
         return False
     return db.query(UserSession.id).filter(UserSession.user_id == user.id).first() is None

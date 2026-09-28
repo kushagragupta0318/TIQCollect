@@ -61,10 +61,14 @@ def world(monkeypatch):
         "manager2": _user(db, "manager2", UserRole.AGENCY_MANAGER, agency=TEST_AGENCY_ID, phone="9800000009"),
         "own_agent": _user(db, "ownagent", UserRole.FIELD_AGENT, agency=TEST_AGENCY_ID, phone="9800000010"),
         "other_agent": _user(db, "otheragent", UserRole.FIELD_AGENT, agency=TEST_AGENCY_ID, phone="9800000011"),
+        # Created the way G02 creates an agent: no usable password, never signed in.
+        "new_agent": _user(db, "newagent", UserRole.FIELD_AGENT, agency=TEST_AGENCY_ID, phone="9800000012"),
     }
+    from app.core.security import disabled_password_hash
+    w["new_agent"].hashed_password = disabled_password_hash()
     db.flush()
     from app.models.agent import Agent
-    for key, boss in (("own_agent", "manager"), ("other_agent", "manager2")):
+    for key, boss in (("own_agent", "manager"), ("other_agent", "manager2"), ("new_agent", "manager")):
         db.add(Agent(id=test_id(f"agent:{key}"), user_id=w[key].id, employee_code=f"AFS-{key[:5].upper()}",
                      id_card_number=f"ID-{key}", bank_id=TEST_BANK_ID, agency_id=TEST_AGENCY_ID,
                      base_latitude=28.45, base_longitude=77.07, territory="Sector 44, Gurugram",
@@ -404,11 +408,11 @@ def test_a_new_agents_first_password_link_goes_to_the_agent(world):
     """G02's create-agent: the account exists with no usable password; its
     own manager issues the first-password link; it reaches the agent's phone
     and sets a password; a FIRST_LOGIN token 72 h, audited FIRST_PASSWORD."""
-    agent = world["own_agent"]
+    agent = world["new_agent"]
     out = password_service.issue_first_password(world["db"], world["manager"], agent, request=_request())
     assert set(out) == {"sent", "expires_at"} and out["sent"] is True
     to, body, kw = world["sent"][-1]
-    assert to == "+919800000010" and "Welcome to TIQCollect" in body and kw["user_id"] == agent.id
+    assert to == "+919800000012" and "Welcome to TIQCollect" in body and kw["user_id"] == agent.id
     row = world["db"].query(PasswordResetToken).filter(PasswordResetToken.user_id == agent.id).one()
     assert row.kind == "FIRST_LOGIN" and row.issued_by == world["manager"].id
     ttl = password_service.utc(row.expires_at) - password_service.utc(row.created_at)
@@ -423,13 +427,13 @@ def test_a_new_agents_first_password_link_goes_to_the_agent(world):
 @pytest.mark.parametrize("admin", ["manager2", "bank_admin", "analyst"])
 def test_only_the_agents_own_manager_or_agency_admin_issues_it(world, admin):
     with pytest.raises(AppException) as e:
-        password_service.issue_first_password(world["db"], world[admin], world["own_agent"])
+        password_service.issue_first_password(world["db"], world[admin], world["new_agent"])
     assert e.value.status_code == 404
     assert world["db"].query(PasswordResetToken).count() == 0
 
 
 def test_the_agency_admin_may_issue_it_too(world):
-    assert password_service.issue_first_password(world["db"], world["agency_admin"], world["own_agent"])["sent"]
+    assert password_service.issue_first_password(world["db"], world["agency_admin"], world["new_agent"])["sent"]
 
 
 
@@ -450,10 +454,10 @@ def test_a_first_password_cannot_target_an_established_agent(world):
 
 @pytest.mark.parametrize("fact", ["last_login_at", "password_changed_at"])
 def test_either_fact_of_an_established_account_refuses_a_first_password(world, fact):
-    setattr(world["own_agent"], fact, password_service.now())
+    setattr(world["new_agent"], fact, password_service.now())       # the marker alone is not enough
     world["db"].commit()
     with pytest.raises(AppException) as e:
-        password_service.issue_first_password(world["db"], world["manager"], world["own_agent"])
+        password_service.issue_first_password(world["db"], world["manager"], world["new_agent"])
     assert e.value.status_code == 409
 
 
@@ -522,3 +526,27 @@ def test_the_reset_route_is_rate_limited(world):
         limiter.reset()
         limiter.enabled = was
         app.dependency_overrides.pop(get_db, None)
+
+
+
+def test_a_usable_password_never_used_is_still_an_established_account(world):
+    """A seeded agent with a working password who has not signed in yet is not
+    "created without a password": a first-password link would bypass the
+    reset path. Refused; admin_reset is the call."""
+    with pytest.raises(AppException) as e:
+        password_service.issue_first_password(world["db"], world["manager"], world["own_agent"])
+    assert e.value.status_code == 409
+
+
+def test_must_change_password_counts_as_never_having_one(world):
+    agent = world["own_agent"]
+    agent.must_change_password = True
+    world["db"].commit()
+    assert password_service.issue_first_password(world["db"], world["manager"], agent)["sent"]
+
+
+def test_flag_on_is_explicit_true():
+    from app.core.security import explicit_true
+    from app.services.credentials import flag_on
+    for v in ("true", "TRUE", " True ", "", "false", "1", "${X}", None, True, False):
+        assert flag_on(v) is explicit_true(v)
