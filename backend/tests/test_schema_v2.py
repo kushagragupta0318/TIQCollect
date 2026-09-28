@@ -246,47 +246,54 @@ def test_moving_a_row_onto_another_agencys_parent_is_refused_on_update(session):
 def test_listener_resolves_a_large_flush_in_one_query_per_parent_class(session):
     """Coordinator audit item 1. The first listener scanned session.new per
     child and issued a SELECT per parent: 8,000 new visits took 36.9 s against
-    1.0 s with the tenant given explicitly. Pinned two ways — by the number of
-    parent SELECTs (the property), and by a wall-clock ceiling generous enough
-    for a loaded CI box (the symptom)."""
+    1.0 s with the tenant given explicitly. Pinned by COUNTING: the parent
+    SELECTs must not grow with the flush (50 visits and 5,000 cost the same),
+    and no parent table is read twice. A wall-clock ratio failed two full runs
+    on a loaded machine (2026-09-28), so it only runs with TIQ_TIMING_ASSERTS=1."""
+    import os
     import time
     from sqlalchemy import event
 
     mgr, au, agent, cust, loan, case = _graph(session)
     case_id, agent_id = case.id, agent.id
     session.commit()
-    session.expunge_all()          # parents must come from the database, not the identity map
-    visits = [_visit(case_id, agent_id) for _ in range(5000)]
-    session.add_all(visits)
-
-    selects = []
-
-    def _count(conn, cursor, statement, *a):  # noqa: ARG001
-        if statement.lstrip().upper().startswith("SELECT"):
-            selects.append(statement)
-
     engine = session.get_bind()
-    event.listen(engine, "before_cursor_execute", _count)
-    try:
+
+    def flush_counting(n: int) -> tuple[list[str], float, list]:
+        session.expunge_all()      # parents must come from the database, not the identity map
+        visits = [_visit(case_id, agent_id) for _ in range(n)]
+        session.add_all(visits)
+        selects = []
+
+        def _count(conn, cursor, statement, *a):  # noqa: ARG001
+            if statement.lstrip().upper().startswith("SELECT"):
+                selects.append(statement)
+
+        event.listen(engine, "before_cursor_execute", _count)
+        try:
+            t0 = time.perf_counter()
+            session.flush()
+            elapsed = time.perf_counter() - t0
+        finally:
+            event.remove(engine, "before_cursor_execute", _count)
+        return selects, elapsed, visits
+
+    small, _, _ = flush_counting(50)
+    large, elapsed, visits = flush_counting(5000)
+    assert all(v.agency_id == TEST_AGENCY_ID for v in visits)
+    assert len(large) == len(small), (len(small), len(large), large[:5])
+    # One IN query per parent class (Case, Agent): no parent table is read twice.
+    for parent in ("cases", "agents"):
+        assert sum(f" {parent}" in q or f".{parent}" in q for q in large) <= 1, (parent, large)
+    assert len(large) <= 4, large[:5]
+
+    if os.environ.get("TIQ_TIMING_ASSERTS") == "1":
+        explicit = [_visit(case_id, agent_id, bank_id=TEST_BANK_ID, agency_id=TEST_AGENCY_ID) for _ in range(5000)]
+        session.add_all(explicit)
         t0 = time.perf_counter()
         session.flush()
-        elapsed = time.perf_counter() - t0
-    finally:
-        event.remove(engine, "before_cursor_execute", _count)
-    assert all(v.agency_id == TEST_AGENCY_ID for v in visits)
-    # One IN query for Case, one for Agent — never one per visit.
-    assert len(selects) <= 4, selects[:5]
-
-    # The symptom, measured against the same flush with the tenant GIVEN, in
-    # the same process: the regression this guards was 36.9 s against 1.0 s
-    # (37x). A fixed ceiling (it was `< 2.0`) measured the machine as much as
-    # the listener: 0.87 s alone, 2.30 s beside two other test containers.
-    explicit = [_visit(case_id, agent_id, bank_id=TEST_BANK_ID, agency_id=TEST_AGENCY_ID) for _ in range(5000)]
-    session.add_all(explicit)
-    t0 = time.perf_counter()
-    session.flush()
-    baseline = time.perf_counter() - t0
-    assert elapsed < max(2.0, 2.5 * baseline), f"inferred {elapsed:.2f}s vs explicit {baseline:.2f}s"
+        baseline = time.perf_counter() - t0
+        assert elapsed < max(2.0, 2.5 * baseline), f"inferred {elapsed:.2f}s vs explicit {baseline:.2f}s"
 
 
 def test_mappers_configure_without_a_single_sqlalchemy_warning():
