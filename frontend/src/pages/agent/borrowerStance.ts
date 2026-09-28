@@ -72,3 +72,22 @@ export function nextStance(state: StanceState, event: StanceEvent): StanceState 
   if (implied) return { stance: implied, source: event.kind };
   return state.source === event.kind ? NO_STANCE : state;
 }
+
+/**
+ * The stance after a form patch that may set the outcome and/or the reason at
+ * once — H14's "Fill the form from your notes" applies suggestions as one
+ * patch. Applying a suggested outcome is the agent's tap on it, so it
+ * pre-selects exactly as choosing it from the list does; outcome first, then
+ * reason, the order the page asks for them. (2026-09-28: found at the rebase
+ * of H14 onto ML-1 — the panel wrote the outcome through plain `upd`, so an
+ * accepted "RTP" left the stance empty and a stale pre-selection standing.)
+ */
+export function stanceAfterPatch(
+  state: StanceState,
+  patch: { outcome?: string | null; defaultReason?: string | null },
+): StanceState {
+  let s = state;
+  if ("outcome" in patch) s = nextStance(s, { kind: "outcome", value: patch.outcome ?? null });
+  if ("defaultReason" in patch) s = nextStance(s, { kind: "reason", value: patch.defaultReason ?? null });
+  return s;
+}

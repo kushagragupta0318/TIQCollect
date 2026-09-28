@@ -112,7 +112,7 @@ import { toast } from "react-hot-toast";
 import { getCaseDetail, recordVisit, collectPayment, setPTP, getPhotoUploadUrl, getCasePhotos, getRecordingUploadUrl, reoptimizeBeat, transcribeAudio, queueVisitTranscription, sendPaymentOtp, verifyPaymentOtp, getUpiConfig } from "@/api/agent";
 import { useQuery } from "@tanstack/react-query";
 import { DEMO_UPI_REFERENCE_PREFIX, demoUpiAutoconfirmEnabled, demoUpiReference, paymentReferenceOk, upiQrValue, upiReferenceOk } from "./upiPayment";
-import { STANCE_OPTIONS, nextStance, type BorrowerStance, type StanceEvent, type StanceState } from "./borrowerStance";
+import { STANCE_OPTIONS, nextStance, stanceAfterPatch, type BorrowerStance, type StanceEvent, type StanceState } from "./borrowerStance";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import SignaturePad from "@/components/ui/SignaturePad";
@@ -562,6 +562,11 @@ export default function RecordVisitPage() {
 
   const upd = (patch: Partial<FormState>) => setForm((f) => ({ ...f, ...patch }));
   /** Apply a field change and the stance it implies, in one update (ML-1). */
+  /** H14's suggestions arrive as one patch; the stance follows it as it follows a tap. */
+  const applyExtracted = (patch: Partial<FormState>) => setForm((f) => {
+    const s = stanceAfterPatch({ stance: f.borrowerStance, source: f.stanceSource }, patch);
+    return { ...f, ...patch, borrowerStance: s.stance, stanceSource: s.source };
+  });
   const updWithStance = (patch: Partial<FormState>, event: StanceEvent) => setForm((f) => {
     const s = nextStance({ stance: f.borrowerStance, source: f.stanceSource }, event);
     return { ...f, ...patch, borrowerStance: s.stance, stanceSource: s.source };
@@ -2190,7 +2195,7 @@ export default function RecordVisitPage() {
                 form={{ outcome: form.outcome, defaultReason: form.defaultReason, ptpAmount: form.ptpAmount, ptpDate: form.ptpDate }}
                 outcomes={BORROWER_OUTCOMES}
                 reasons={DEFAULT_REASONS}
-                onApply={upd}
+                onApply={applyExtracted}
               />}
 
               {/* Signature */}
