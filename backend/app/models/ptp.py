@@ -25,6 +25,15 @@ class PTPStatus(str, enum.Enum):
 PTP_STATUS_SQL = SAEnum(PTPStatus, name="ptp_status_enum", schema=PUBLIC, metadata=Base.metadata)
 
 
+def promise_is_for_money(amount) -> bool:
+    """The product's rule for a promise: it is for some money. The ONE
+    definition of what ck_ptps_committed_positive enforces, rounded first to
+    the column's 2 decimal places as NUMERIC(14,2) stores it (0.004 is stored
+    as 0.00 and refused). The ledger simulator's panel and materialiser both
+    filter through this (2026-09-28), so a promise the product cannot hold is
+    in neither."""
+    return round(float(amount), 2) > 0
+
 class PTP(Base, UUIDPrimaryKey, TimestampMixin):
     """Promise to Pay — customer's commitment to pay by a specific date."""
     __tablename__ = "ptps"
@@ -64,7 +73,7 @@ class PTP(Base, UUIDPrimaryKey, TimestampMixin):
         ForeignKeyConstraint(["case_id", "agency_id"], ["collections.cases.id", "collections.cases.agency_id"]),
         ForeignKeyConstraint(["visit_id", "case_id"], ["collections.visits.id", "collections.visits.case_id"]),
         ForeignKeyConstraint(["agent_id", "agency_id"], ["workforce.agents.id", "workforce.agents.agency_id"]),
-        CheckConstraint("committed_amount > 0", name="committed_positive"),
+        CheckConstraint("committed_amount > 0", name="committed_positive"),   # == promise_is_for_money
         Index("ix_ptp_committed_date", "agency_id", "committed_date", "status"),
         Index("ix_ptp_agent", "agent_id", "status"),
         Index(None, "case_id", "created_at"),
