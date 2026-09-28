@@ -273,19 +273,29 @@ def test_verify_correct_deferred_promotes_payment(db, fake_redis):
 @pytest.mark.parametrize("mode", [PaymentMode.UPI, PaymentMode.NEFT, PaymentMode.CHEQUE])
 def test_verify_deferred_refuses_a_payment_without_its_reference(db, fake_redis, mode):
     """Hotfix PAY-1 (2026-09-24): a PENDING row written before the server
-    required references must not become VERIFIED by a borrower OTP."""
+    required references must not become VERIFIED by a borrower OTP.
+
+    2026-09-28: converted to the v2 harness — this test still built the
+    Payment with v1 literal ids ('case1', 'agent1', 'pay1') and no loan_id,
+    while every other test in this file had already moved to test_id() and
+    the FK-enforced schema. `payments.loan_id` is NOT NULL in v2 and is
+    filled by the tenancy listener from `case_id` on flush, which needs a
+    real case row to resolve against — hence test_id("case-1") /
+    test_id("agent-1") (the case _seed_case already created) and
+    test_id("pay-1") / test_id("otp-1") for this row's own ids.
+    """
     _seed_case(db)
     db.add(Payment(
-        id="pay-1", case_id="case-1", agent_id="agent-1", amount=5000.0,
+        id=test_id("pay-1"), case_id=test_id("case-1"), agent_id=test_id("agent-1"), amount=5000.0,
         mode=mode, receipt_number="TIQ-2026-FEEDBEEF",
         payment_date=datetime.now(timezone.utc), status=PaymentStatus.PENDING_VERIFICATION,
     ))
     db.commit()
-    _put_otp(fake_redis, "otp-1", code="1234", payment_id="pay-1")
+    _put_otp(fake_redis, test_id("otp-1"), code="1234", payment_id=test_id("pay-1"))
     with pytest.raises(AppException) as e:
-        OtpService(db).verify(_agent(), test_id("case-1"), "otp-1", "1234")
+        OtpService(db).verify(_agent(), test_id("case-1"), test_id("otp-1"), "1234")
     assert e.value.status_code == 422
-    assert db.query(Payment).filter_by(id="pay-1").one().status == PaymentStatus.PENDING_VERIFICATION
+    assert db.query(Payment).filter_by(id=test_id("pay-1")).one().status == PaymentStatus.PENDING_VERIFICATION
 
 
 # ── consume_for_payment ───────────────────────────────────────────────────────

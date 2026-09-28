@@ -173,12 +173,18 @@ def resolve_destination(db: Session, *, from_param: str | None, case_id: str | N
     expires = session.expires_at if session is not None else None
     if expires is not None and expires.tzinfo is None:
         expires = expires.replace(tzinfo=timezone.utc)
+    # user_id reaches the audit row only when it is PROVEN to exist (a
+    # matching session row, or a loaded user): an identity naming an unknown
+    # user would otherwise violate audit_logs' user FK, and write_audit would
+    # roll the refusal's row back silently (found converting the hotfix tests
+    # at the 2026-09-28 merge).
     if (session is None or session.user_id != user_id or session.revoked_at is not None
             or expires is None or expires <= now):
-        raise VoiceRefused(SESSION_ENDED, user_id=user_id)
+        known = user_id if session is not None and session.user_id == user_id else None
+        raise VoiceRefused(SESSION_ENDED, user_id=known)
     user = db.get(User, user_id)
     if user is None or not user.is_active or user.role != UserRole.FIELD_AGENT:
-        raise VoiceRefused(SESSION_ENDED, user_id=user_id)
+        raise VoiceRefused(SESSION_ENDED, user_id=user_id if user is not None else None)
 
     cid = parse_uuid(case_id)
     agent = db.query(Agent).filter(Agent.user_id == user_id).first()
