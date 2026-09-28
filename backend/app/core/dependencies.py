@@ -3,9 +3,9 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
-from app.core.database import get_db
+from app.core.database import apply_tenant_context, get_db
 from app.core.security import decode_token
-from app.models.user import User, UserRole
+from app.models.user import User, UserRole, tenant_scope
 from app.core.audit import write_audit
 from app.models.audit_log import AuditAction
 
@@ -51,10 +51,33 @@ def get_current_user(
         session = db.get(UserSession, sid)
         if session is None or session.user_id != user.id or session.revoked_at is not None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session ended")
+    # A13: every authenticated request's transactions carry its tenant (RLS step
+    # 1). The same row and rule RequestContext reads, so the two cannot differ.
+    _bind_principal(db, user)
     return user
 
 
+def _bind_principal(db: Session, user: User) -> None:
+    apply_tenant_context(db, bank_id=user.bank_id, agency_id=user.agency_id,
+                         scope=tenant_scope(user.role), user_id=user.id)
+
+
 CurrentUser = Annotated[User, Depends(get_current_user)]
+
+
+def get_tenant_analytics_db(current_user: CurrentUser):
+    """B13b: the read-only analytics session, bound to the caller's tenant. The
+    analytics.*_scoped views filter on that tenant; unbound, they return nothing."""
+    from app.core.database import AnalyticsSession
+    db = AnalyticsSession()
+    try:
+        _bind_principal(db, current_user)
+        yield db
+    finally:
+        db.close()
+
+
+AnalyticsDb = Annotated[Session, Depends(get_tenant_analytics_db)]
 
 
 def require_roles(*roles: UserRole):

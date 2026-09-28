@@ -19,7 +19,9 @@ from app.workers.celery_app import celery_app
 logger = structlog.get_logger()
 
 # Refresh order (design §6.2). Part A of B13; part B appends its views here.
-MATERIALIZED_VIEWS = ("mv_collections_daily", "mv_field_activity_daily")
+# B13a (v2_0007) then B13b (v2_0013); each is built from base tables, so order cannot corrupt one.
+MATERIALIZED_VIEWS = ("mv_collections_daily", "mv_field_activity_daily",
+                      "mv_portfolio_daily", "mv_bucket_transitions_monthly", "mv_agency_scorecard_monthly")
 _LOCK_KEY = 0x7419_6A13          # one advisory-lock key for the refresher
 _WAIT_SECONDS, _POLL_SECONDS = 30 * 60, 60
 

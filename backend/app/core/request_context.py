@@ -41,7 +41,7 @@ from fastapi import Depends
 
 from app.core.dependencies import CurrentUser, TokenPayload
 from app.core.permissions import role_capabilities
-from app.models.user import UserRole
+from app.models.user import UserRole, tenant_scope
 
 
 @dataclass(frozen=True)
@@ -58,6 +58,11 @@ class RequestContext:
         a capability rather than be gated by one (e.g. "show this field only
         if the caller could also edit it")."""
         return capability in self.perms
+
+    @property
+    def scope(self) -> str:
+        """PLATFORM / BANK / AGENCY: the RLS scope this request's transactions carry."""
+        return tenant_scope(self.role)
 
 
 def get_request_context(current_user: CurrentUser, payload: TokenPayload) -> RequestContext:
