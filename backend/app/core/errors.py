@@ -30,6 +30,19 @@ class ErrorCode(str, Enum):
     # the client has a documented fallback. Distinct from INTERNAL_ERROR so the
     # frontend can switch to polling instead of showing a failure.
     SERVICE_UNAVAILABLE = "SERVICE_UNAVAILABLE"
+    # P1 A06-A08 (d4) — accounts. A token that is unknown, expired, used or
+    # revoked is one code, so the answer reveals nothing about which.
+    INVITE_INVALID = "INVITE_INVALID"
+    INVITE_NOT_ALLOWED = "INVITE_NOT_ALLOWED"
+    CHANNEL_UNAVAILABLE = "CHANNEL_UNAVAILABLE"
+    PASSWORD_POLICY = "PASSWORD_POLICY"
+    PASSWORD_INCORRECT = "PASSWORD_INCORRECT"
+    RESET_INVALID = "RESET_INVALID"
+    MFA_REQUIRED = "MFA_REQUIRED"
+    MFA_INVALID = "MFA_INVALID"
+    MFA_NOT_ALLOWED = "MFA_NOT_ALLOWED"
+    MFA_NOT_CONFIGURED = "MFA_NOT_CONFIGURED"
+    MFA_ENROLLMENT_REQUIRED = "MFA_ENROLLMENT_REQUIRED"
 
 
 class AppException(HTTPException):

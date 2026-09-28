@@ -541,6 +541,19 @@ class Settings(BaseSettings):
     OTP_RESEND_THROTTLE_SECONDS: int = 30     # min gap between two sends for the same collection
     OTP_MAX_SENDS: int = 4                    # 1 initial send + up to 3 resends per collection
 
+    # ── Accounts: invites, passwords, MFA (P1 A06-A08, d4) ─────────────────
+    # The Fernet key TOTP secrets are encrypted under
+    # (`python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`).
+    # UNSET, or an unresolved ${VAR} => MFA enrollment is refused
+    # (MFA_NOT_CONFIGURED): a secret is never stored in plaintext. Rotating it
+    # invalidates every enrolled secret, so enrolled users re-enroll.
+    TOTP_ENC_KEY: str = ""
+    # "true" (any case) makes TOTP mandatory for bank roles: a bank user
+    # without it cannot sign in until enrolled. Read as a string, like every
+    # demo switch, so a literal ${VAR} reads as OFF instead of failing boot.
+    # Default off, so the demo master login keeps working.
+    BANK_MFA_REQUIRED: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:
