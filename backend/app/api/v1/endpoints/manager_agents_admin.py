@@ -42,6 +42,14 @@
 #   same bucket for the same reason — creating agents in a loop must not be
 #   a free way past the limit reset-login is under. suspend/reactivate send
 #   no SMS and touch no credential, so they are not in this scope.
+#
+#   2026-09-28 (later still) — edit. PATCH, not PUT: every field optional,
+#   omitted means unchanged. No SMS, no credential, no rate limit, same as
+#   suspend/reactivate. Unlike them, a no-op edit (nothing actually
+#   differs from the current row) is not an error — it returns
+#   {"changed": []} rather than a 409, because unlike "suspend an already-
+#   suspended agent" there is nothing conflicting about submitting a form
+#   with no changes on it.
 # ────────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 
@@ -57,7 +65,9 @@ from app.core.ratelimit import AUTH_LIMIT, limiter
 from app.models.agent import AgentSpecialization
 from app.models.user import User
 from app.services import password_service
-from app.services.agent_management_service import create_agent, reactivate_agent, reset_agent_login, suspend_agent
+from app.services.agent_management_service import (
+    create_agent, edit_agent, reactivate_agent, reset_agent_login, suspend_agent,
+)
 
 router = APIRouter(prefix="/manager", tags=["manager-agents-admin"])
 
@@ -118,6 +128,39 @@ async def create_agent_route(
         activation = {"sent": False, "error": exc.detail}
     result["activation"] = activation
     return result
+
+
+class EditAgentRequest(BaseModel):
+    """Every field optional (edit_agent.py's own docstring): omitted means
+    "leave unchanged", never "clear it". email, employee_code and
+    id_card_number are deliberately absent — see edit_agent's docstring for
+    why each is out of scope here."""
+    full_name: str | None = None
+    phone: str | None = None
+    territory: str | None = None
+    base_latitude: float | None = None
+    base_longitude: float | None = None
+    territory_region_id: UUIDStr | None = None
+    gender: str | None = None
+    specialization: AgentSpecialization | None = None
+    vehicle_type: str | None = None
+    max_cases_per_day: int | None = Field(default=None, ge=1, le=50)
+    languages_spoken: list[str] | None = Field(default=None, max_length=10)
+
+
+@router.patch("/agents/{agent_id}")
+def edit_agent_route(
+    agent_id: UUIDPath, body: EditAgentRequest, request: Request, db: DbSession,
+    current_user: User = require_perm("agents.manage"),
+):
+    return edit_agent(
+        db, current_user, agent_id, full_name=body.full_name, phone=body.phone, territory=body.territory,
+        base_latitude=body.base_latitude, base_longitude=body.base_longitude,
+        territory_region_id=body.territory_region_id, gender=body.gender,
+        specialization=body.specialization, vehicle_type=body.vehicle_type,
+        max_cases_per_day=body.max_cases_per_day, languages_spoken=body.languages_spoken,
+        request=request,
+    )
 
 
 class SuspendAgentRequest(BaseModel):

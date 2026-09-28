@@ -111,6 +111,44 @@ def _validate_base_location(lat: float, lon: float, territory_region_id: str | N
                            f"The base location is outside {region.name}'s coverage area.")
 
 
+def _validate_gender(gender: str | None) -> None:
+    if gender is not None and gender.strip().upper() not in AGENT_GENDER_VALUES:
+        # Matches Agent's own CHECK constraint (ck_agents_gender) — Postgres
+        # enforces it, SQLite does not, same shape of gap as the length caps
+        # elsewhere in this file.
+        raise AppException(422, ErrorCode.VALIDATION_ERROR, "That gender value is not recognised.")
+
+
+def _validate_vehicle_type(vehicle_type: str | None) -> None:
+    if vehicle_type is not None and vehicle_type.strip().upper() not in VEHICLE_TYPES:
+        raise AppException(422, ErrorCode.VALIDATION_ERROR, "That vehicle type is not recognised.")
+
+
+def _validate_max_cases_per_day(value: int | None) -> None:
+    if value is not None and not (_MAX_CASES_PER_DAY_RANGE[0] <= value <= _MAX_CASES_PER_DAY_RANGE[1]):
+        raise AppException(422, ErrorCode.VALIDATION_ERROR,
+                           f"Cases per day must be between {_MAX_CASES_PER_DAY_RANGE[0]} "
+                           f"and {_MAX_CASES_PER_DAY_RANGE[1]}.")
+
+
+def _validate_languages_spoken(languages_spoken: list[str] | None) -> None:
+    if not languages_spoken:
+        return
+    if len(languages_spoken) > _MAX_LANGUAGES:
+        raise AppException(422, ErrorCode.VALIDATION_ERROR, f"Enter up to {_MAX_LANGUAGES} languages.")
+    if any(not isinstance(lang, str) or not lang.strip() or len(lang) > _MAX_LANGUAGE_LENGTH
+          for lang in languages_spoken):
+        raise AppException(422, ErrorCode.VALIDATION_ERROR,
+                           f"Each language must be text of up to {_MAX_LANGUAGE_LENGTH} characters.")
+
+
+def _validate_territory(territory: str) -> str:
+    territory = (territory or "").strip()
+    if not territory or len(territory) > 100:   # Agent.territory: String(100)
+        raise AppException(422, ErrorCode.VALIDATION_ERROR, "Enter the agent's territory (up to 100 characters).")
+    return territory
+
+
 def create_agent(
     db: Session, manager: User, *,
     full_name: str, email: str, phone: str, employee_code: str, id_card_number: str,
@@ -147,29 +185,11 @@ def create_agent(
     phone = _normalise_phone(phone)
     employee_code = _validate_employee_code(employee_code)
     id_card_number = _validate_id_card_number(id_card_number)
-    territory = (territory or "").strip()
-    if not territory or len(territory) > 100:   # Agent.territory: String(100)
-        raise AppException(422, ErrorCode.VALIDATION_ERROR, "Enter the agent's territory (up to 100 characters).")
-    if gender is not None and gender.strip().upper() not in AGENT_GENDER_VALUES:
-        # Matches Agent's own CHECK constraint (ck_agents_gender) — Postgres
-        # enforces it, SQLite does not, same shape of gap as the length caps
-        # above.
-        raise AppException(422, ErrorCode.VALIDATION_ERROR, "That gender value is not recognised.")
-    if vehicle_type is not None and vehicle_type.strip().upper() not in VEHICLE_TYPES:
-        raise AppException(422, ErrorCode.VALIDATION_ERROR, "That vehicle type is not recognised.")
-    if max_cases_per_day is not None and not (
-        _MAX_CASES_PER_DAY_RANGE[0] <= max_cases_per_day <= _MAX_CASES_PER_DAY_RANGE[1]
-    ):
-        raise AppException(422, ErrorCode.VALIDATION_ERROR,
-                           f"Cases per day must be between {_MAX_CASES_PER_DAY_RANGE[0]} "
-                           f"and {_MAX_CASES_PER_DAY_RANGE[1]}.")
-    if languages_spoken:
-        if len(languages_spoken) > _MAX_LANGUAGES:
-            raise AppException(422, ErrorCode.VALIDATION_ERROR, f"Enter up to {_MAX_LANGUAGES} languages.")
-        if any(not isinstance(lang, str) or not lang.strip() or len(lang) > _MAX_LANGUAGE_LENGTH
-              for lang in languages_spoken):
-            raise AppException(422, ErrorCode.VALIDATION_ERROR,
-                               f"Each language must be text of up to {_MAX_LANGUAGE_LENGTH} characters.")
+    territory = _validate_territory(territory)
+    _validate_gender(gender)
+    _validate_vehicle_type(vehicle_type)
+    _validate_max_cases_per_day(max_cases_per_day)
+    _validate_languages_spoken(languages_spoken)
     _validate_base_location(base_latitude, base_longitude, territory_region_id, manager, db)
 
     # Global, not agency-scoped, ON PURPOSE: one login per identity across
@@ -239,6 +259,127 @@ def _agent_in_scope_or_404(db: Session, manager: User, agent_id: str) -> Agent:
     if agent is None:
         raise AppException(404, ErrorCode.NOT_FOUND, "Not found")
     return agent
+
+
+def edit_agent(
+    db: Session, manager: User, agent_id: str, *,
+    full_name: str | None = None, phone: str | None = None, territory: str | None = None,
+    base_latitude: float | None = None, base_longitude: float | None = None,
+    territory_region_id: str | None = None, gender: str | None = None,
+    specialization: AgentSpecialization | None = None, vehicle_type: str | None = None,
+    max_cases_per_day: int | None = None, languages_spoken: list[str] | None = None,
+    request: Request | None = None,
+) -> dict:
+    """A partial update: every field is optional, and one left out (None)
+    keeps its current value rather than being cleared — there is no way to
+    blank out an agent's gender or territory_region_id through this call,
+    which matches a pre-filled edit form always sending the field it wants
+    changed, not "unset this".
+
+    Deliberately narrower than create_agent's field set: email,
+    employee_code, id_card_number and the agency/bank/manager binding are
+    NOT editable here. employee_code/id_card_number are identity documents
+    (re-issuing one is a different, rarer action than a day-to-day edit);
+    email is the account's login identity, changing it wants its own
+    verification step this endpoint does not have; manager reassignment
+    ("transfer manager") is G01's, not G02's.
+
+    base_latitude and base_longitude must both be given together or not at
+    all — validating one against the region's coverage polygon while
+    silently keeping the other's old value would check a point that is not
+    actually the agent's new base."""
+    agent = _agent_in_scope_or_404(db, manager, agent_id)
+    agent_user = db.get(User, agent.user_id)
+
+    changes: dict[str, tuple] = {}   # field -> (old, new), for the audit row
+
+    if full_name is not None:
+        full_name = full_name.strip()
+        if not full_name or len(full_name) > 200:
+            raise AppException(422, ErrorCode.VALIDATION_ERROR,
+                               "Enter the agent's full name (up to 200 characters).")
+        if full_name != agent_user.full_name:
+            changes["full_name"] = (agent_user.full_name, full_name)
+            agent_user.full_name = full_name
+
+    if phone is not None:
+        phone = _normalise_phone(phone)
+        if phone != agent_user.phone:
+            if db.query(User.id).filter(User.phone == phone, User.id != agent_user.id).first():
+                raise AppException(409, ErrorCode.CONFLICT, _CONFLICT_MESSAGE)
+            changes["phone"] = (agent_user.phone, phone)
+            agent_user.phone = phone
+
+    if territory is not None:
+        territory = _validate_territory(territory)
+        if territory != agent.territory:
+            changes["territory"] = (agent.territory, territory)
+            agent.territory = territory
+
+    if gender is not None:
+        _validate_gender(gender)
+        gender = gender.strip().upper()
+        if gender != agent.gender:
+            changes["gender"] = (agent.gender, gender)
+            agent.gender = gender
+
+    if vehicle_type is not None:
+        _validate_vehicle_type(vehicle_type)
+        vehicle_type = vehicle_type.strip().upper()
+        if vehicle_type != agent.vehicle_type:
+            changes["vehicle_type"] = (agent.vehicle_type, vehicle_type)
+            agent.vehicle_type = vehicle_type
+
+    if specialization is not None and specialization != agent.specialization:
+        changes["specialization"] = (agent.specialization.value, specialization.value)
+        agent.specialization = specialization
+
+    if max_cases_per_day is not None:
+        _validate_max_cases_per_day(max_cases_per_day)
+        if max_cases_per_day != agent.max_cases_per_day:
+            changes["max_cases_per_day"] = (agent.max_cases_per_day, max_cases_per_day)
+            agent.max_cases_per_day = max_cases_per_day
+
+    if languages_spoken is not None:
+        _validate_languages_spoken(languages_spoken)
+        if languages_spoken != agent.languages_spoken:
+            changes["languages_spoken"] = (agent.languages_spoken, languages_spoken)
+            agent.languages_spoken = languages_spoken
+
+    if base_latitude is not None or base_longitude is not None:
+        if base_latitude is None or base_longitude is None:
+            raise AppException(422, ErrorCode.VALIDATION_ERROR,
+                               "Give both a latitude and a longitude for the new base location.")
+        new_region_id = territory_region_id if territory_region_id is not None else agent.territory_region_id
+        _validate_base_location(base_latitude, base_longitude, new_region_id, manager, db)
+        if base_latitude != agent.base_latitude or base_longitude != agent.base_longitude:
+            changes["base_location"] = ((agent.base_latitude, agent.base_longitude), (base_latitude, base_longitude))
+            agent.base_latitude = base_latitude
+            agent.base_longitude = base_longitude
+
+    if territory_region_id is not None and territory_region_id != agent.territory_region_id:
+        # Re-validated even when the location itself did not change in this
+        # call — a manager moving the agent to a new region without also
+        # moving the pin must still pass that region's coverage check
+        # against the EXISTING base location.
+        if base_latitude is None and base_longitude is None:
+            _validate_base_location(agent.base_latitude, agent.base_longitude, territory_region_id, manager, db)
+        changes["territory_region_id"] = (agent.territory_region_id, territory_region_id)
+        agent.territory_region_id = territory_region_id
+
+    if not changes:
+        return {"agent_id": agent.id, "changed": []}
+
+    try:
+        stage_audit(db, action=AuditAction.AGENT_UPDATED, user_id=manager.id, entity_type="Agent",
+                   entity_id=agent.id, ip_address=_client_ip(request),
+                   details={"changed": {k: {"from": v[0], "to": v[1]} for k, v in changes.items()}})
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise AppException(409, ErrorCode.CONFLICT, _CONFLICT_MESSAGE)
+
+    return {"agent_id": agent.id, "changed": sorted(changes.keys())}
 
 
 def suspend_agent(db: Session, manager: User, agent_id: str, *, reason: str,
