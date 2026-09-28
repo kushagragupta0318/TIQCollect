@@ -30,10 +30,11 @@ from app.models.customer import Customer, RiskCategory
 from app.models.loan import DPDBucket, Loan, LoanStatus, LoanType
 from app.models.payment import Payment, PaymentMode, PaymentStatus
 from app.models.ptp import PTP, PTPStatus
+from app.models.tenancy import Agency
 from app.models.user import User, UserRole
 from app.models.visit import PersonMet, Visit, VisitOutcome
 from app.services.planner_service import PlannerService, get_target_plan_date
-from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
+from tests._db import TEST_BANK_ID, create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
 test_engine = make_engine()
 TestingSessionLocal = make_session_factory(autocommit=False, autoflush=False, bind=test_engine)
@@ -269,6 +270,39 @@ def test_planner_hard_gates_and_allocation(db_session, test_data):
         assert b.status == BeatStatus.PLANNED
         assert b.beat_date == tomorrow
         assert b.total_cases >= 1
+
+
+def test_planner_pool_is_scoped_to_the_managers_own_agency(db_session, test_data):
+    """A04 (standalone plan, coordinator audit 2026-09-28): the unassigned
+    half of the candidate-case query used to carry no tenant filter at all,
+    so an unassigned case belonging to a DIFFERENT agency's book would enter
+    every manager's nightly plan and could be handed to their agent. Reuses
+    test_planner_hard_gates_and_allocation's exact fixture and its exact
+    expected counts (2 allocated, 1 blocked) — a case belonging to another
+    agency, added here, must change NEITHER."""
+    other_agency_id = test_id("agency:planner-scope-other")
+    db_session.add(Agency(id=other_agency_id, bank_id=TEST_BANK_ID, code="AGENCY-OTHER-A04",
+                          legal_name="Nilgiri Field Recovery LLP", trade_name="Nilgiri Field Recovery",
+                          status="ACTIVE", contacts=[], is_demo=True))
+    db_session.flush()
+    other_case = Case(
+        id=str(uuid.uuid4()), case_number="CASE-OTHER-AGENCY", customer_id=test_data["case1"].customer_id,
+        loan_id=test_data["case1"].loan_id, agent_id=None, agency_id=other_agency_id,
+        status=CaseStatus.UNASSIGNED, priority=CasePriority.HIGH, target_amount=60000, collected_amount=0,
+    )
+    db_session.add(other_case)
+    db_session.commit()
+
+    planner = PlannerService(db_session, manager_user_id=test_data["manager"].id)
+    tomorrow = date.today() + timedelta(days=1)
+    run = planner.plan_next_day(plan_date=tomorrow, strategy="SMART")
+
+    assert run.total_cases_allocated == 2   # unchanged: case1, case2 — NOT case_other
+    assert run.total_cases_blocked == 1     # unchanged: case3 (DNC)
+    decided_case_ids = {d.case_id for d in run.decisions}
+    assert other_case.id not in decided_case_ids
+    db_session.refresh(other_case)
+    assert other_case.agent_id is None      # never claimed by an out-of-agency agent
 
 
 def test_planner_rollback(db_session, test_data):
@@ -796,8 +830,13 @@ def test_one_managers_failure_does_not_abort_the_others(monkeypatch):
 
     class _Q:
         def filter(self, *a, **k): return self
-        def all(self): return [type("U", (), {"id": i, "email": f"{i}@t.io"})()
-                               for i in ("m1", "m2", "m3")]
+        def all(self):
+            # A04: two agencies (m1/m2 in one, m3 in another), so this also
+            # exercises the agency-then-manager grouping — m2's failure must
+            # not touch m3's agency any more than it touched m1's.
+            agency_of = {"m1": "agA", "m2": "agA", "m3": "agB"}
+            return [type("U", (), {"id": i, "email": f"{i}@t.io", "agency_id": agency_of[i]})()
+                   for i in ("m1", "m2", "m3")]
 
     class _DB:
         def query(self, *a, **k): return _Q()

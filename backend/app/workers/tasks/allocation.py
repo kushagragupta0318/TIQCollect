@@ -65,31 +65,53 @@ def run_nightly_allocation(self, strategy: str = "SMART", plan_date_str: str | N
             logger.error("nightly_allocation.managers_unavailable", error=str(exc))
             raise self.retry(exc=exc, countdown=300)
 
+        # A04 (standalone plan) — group by agency and plan each agency's
+        # managers together, rather than one flat list spanning every
+        # agency (and every bank) in the deployment. PlannerService itself
+        # now binds its candidate pool to the manager's own agency_id
+        # (services/planner_service.py), so this loop shape is not what
+        # closes the cross-tenant leak — it makes the tenant boundary a
+        # structural property of WHO gets planned together, rather than
+        # something that only lived inside one query deep in the service,
+        # so a future change to this task (a per-agency lock, a per-agency
+        # summary, a partial retry) inherits the boundary instead of having
+        # to remember it. A manager with no agency_id (should not occur for
+        # AGENCY_MANAGER/AGENCY_ADMIN — enforced by ck_users_role_scope) is
+        # grouped under its own `None` bucket so it is still visible in the
+        # log rather than silently dropped by a `.get` default.
+        by_agency: dict[str | None, list[User]] = {}
         for manager in managers:
-            try:
-                run = PlannerService(db, manager_user_id=manager.id).plan_next_day(
-                    plan_date=target_date,
-                    strategy=strategy,
-                    force_replan=True,
-                )
-                results[manager.email] = {
-                    "run_id": run.id,
-                    "allocated": run.total_cases_allocated,
-                    "deferred": run.total_cases_deferred,
-                    "blocked": run.total_cases_blocked,
-                    "agents_planned": run.total_agents_planned,
-                    "expected_recovery_total": run.expected_recovery_total,
-                }
-            except Exception as exc:
-                failures[manager.email] = f"{type(exc).__name__}: {exc}"
-                logger.error("nightly_allocation.manager_failed",
-                             manager=manager.email, target_date=str(target_date),
-                             error=str(exc), exc_info=True)
-                _record_failure(db, AllocationRun, AllocationRunStatus,
-                                manager, target_date, strategy, exc)
+            by_agency.setdefault(manager.agency_id, []).append(manager)
+
+        for agency_id, agency_managers in by_agency.items():
+            logger.info("nightly_allocation.agency_start", agency_id=agency_id,
+                       target_date=str(target_date), managers=len(agency_managers))
+            for manager in agency_managers:
+                try:
+                    run = PlannerService(db, manager_user_id=manager.id).plan_next_day(
+                        plan_date=target_date,
+                        strategy=strategy,
+                        force_replan=True,
+                    )
+                    results[manager.email] = {
+                        "run_id": run.id,
+                        "allocated": run.total_cases_allocated,
+                        "deferred": run.total_cases_deferred,
+                        "blocked": run.total_cases_blocked,
+                        "agents_planned": run.total_agents_planned,
+                        "expected_recovery_total": run.expected_recovery_total,
+                    }
+                except Exception as exc:
+                    failures[manager.email] = f"{type(exc).__name__}: {exc}"
+                    logger.error("nightly_allocation.manager_failed",
+                                 manager=manager.email, agency_id=agency_id,
+                                 target_date=str(target_date),
+                                 error=str(exc), exc_info=True)
+                    _record_failure(db, AllocationRun, AllocationRunStatus,
+                                    manager, target_date, strategy, exc)
 
         logger.info("nightly_allocation.complete", target_date=str(target_date),
-                    planned=len(results), failed=len(failures),
+                    agencies=len(by_agency), planned=len(results), failed=len(failures),
                     results=results, failures=failures)
         # Reported, never raised. Every failure is already a row, and retrying
         # the whole task would replan the managers that succeeded — force_replan

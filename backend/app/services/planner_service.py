@@ -33,6 +33,7 @@ from app.models.customer import Customer
 from app.models.loan import Loan, LoanType
 from app.models.payment import Payment, PaymentStatus
 from app.models.ptp import PTP, PTPStatus
+from app.models.user import User
 from app.models.visit import Visit, VisitOutcome
 from app.services.visit_priority_service import score_cases as score_cases_priority
 
@@ -288,11 +289,26 @@ class PlannerService:
             raise ValueError(f"Cannot replan: {len(active_or_done)} beat(s) on {target_date} are already IN_PROGRESS or COMPLETED.")
 
         # 3. Load Candidate Case Pool Scoped to Manager's Team
-        # Unassigned cases + cases assigned to this manager's agents
+        # Unassigned cases + cases assigned to this manager's agents.
+        #
+        # A04 (standalone plan, coordinator audit 2026-09-28) — the UNASSIGNED
+        # half of this filter had no tenant bound at all: `Case.agent_id.in_
+        # (agent_ids)` is safe by construction (agent_id/agency_id is a
+        # composite FK into agents, so an assigned case's agency already
+        # matches its agent's), but `Case.agent_id.is_(None)` matched every
+        # unplaced case in the WHOLE DATABASE — any bank, any agency. Every
+        # manager's nightly plan was drawing from every other agency's
+        # unassigned pool too, and the allocator could hand a borrower who
+        # belongs to one agency's book to another agency's agent. Closed by
+        # binding the pool to this manager's own agency_id, which is what
+        # `ix_cases_unassigned_pool (agency_id, status, ...)` was already
+        # indexed for.
+        manager_agency_id = self.db.query(User.agency_id).filter(User.id == self.manager_user_id).scalar()
         candidate_cases = self.db.query(Case).options(
             joinedload(Case.customer),
             joinedload(Case.loan),
         ).filter(
+            Case.agency_id == manager_agency_id,
             or_(
                 Case.agent_id.in_(agent_ids),
                 Case.agent_id.is_(None),
@@ -300,7 +316,7 @@ class PlannerService:
             Case.status.notin_(list(RESOLVED_STATUSES)),
             Case.status != CaseStatus.PAID,
             Case.collected_amount < Case.target_amount,
-        ).all()
+        ).all() if manager_agency_id is not None else []
 
         # ── Who is workable TOMORROW ─────────────────────────────────────────
         # 2026-09-02 — the filter above used to end with
@@ -755,7 +771,13 @@ class PlannerService:
             stamp = date.today()
             stale = [
                 c for c in self.db.query(Case)
-                .filter(Case.allocation_date == stamp).all()
+                # A04: same tenant bound as the candidate pool above — this
+                # scan used to have none, so another agency's case stamped
+                # with today's date could be picked up here and, if it
+                # happened to carry a Visit already, have its allocation_date
+                # silently rewritten by a plan run that has nothing to do
+                # with it.
+                .filter(Case.allocation_date == stamp, Case.agency_id == manager_agency_id).all()
                 if c.id not in allocated_ids
             ]
             if stale:
