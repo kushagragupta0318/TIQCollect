@@ -985,8 +985,16 @@ def _complete_one(name, provider, model, api_key, prompt, *, purpose, system, wa
             # The model answered but not in the shape we asked for. A
             # weaker model drifting on a strict JSON contract lands here,
             # which is exactly what we want visible rather than swallowed.
+            #
+            # 2026-09-28 — this used to log preview=text[:120]: the model's raw
+            # output, which can echo borrower PII straight out of the prompt
+            # (name, phone, address, amounts) into the log line. Only the
+            # length and a hash go out now — enough to tell two failures
+            # apart, or to grep for one exact string offline, without ever
+            # putting the borrower's data itself into the log stream.
             logger.warning("llm.bad_response", purpose=purpose, provider=provider,
-                           model=model, error=str(exc), preview=text[:120])
+                           model=model, error=str(exc), text_length=len(text),
+                           text_sha256=hashlib.sha256(text.encode(errors="surrogatepass")).hexdigest()[:16])
             return fail(BAD_RESPONSE, "Model did not return valid JSON", text=text,
                         stop_reason=stop)
         data = parsed if isinstance(parsed, dict) else {"value": parsed}

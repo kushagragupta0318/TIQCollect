@@ -15,6 +15,7 @@
 # it. They now WRAP the SDK constructors — production's own kwargs reach the
 # real SDK, only the transport is swapped — and the 9 -> 3 retry measurement
 # is an executable test. The last section pins each audit finding.
+import hashlib
 import json
 from types import SimpleNamespace as NS
 
@@ -194,6 +195,29 @@ def test_anthropic_json_mode_non_json_is_bad_response(monkeypatch):
     _anthropic(monkeypatch, _amsg([_text("sure, here you go")]))
     r = llm.complete("p", purpose="x", json_mode=True)
     assert r.status == llm.BAD_RESPONSE and r.text == "sure, here you go"
+
+
+def test_bad_response_log_never_carries_the_models_raw_output(monkeypatch):
+    """2026-09-28 — the model's own text can echo borrower PII straight out of
+    the prompt (name, phone, address, amount). llm.bad_response used to log
+    preview=text[:120]; it now logs only a length and a hash, so a PII-like
+    string in the reply can never reach the log stream. The RESULT still
+    carries the full text (callers need it); only the LOG record is redacted."""
+    rec = _Rec()
+    monkeypatch.setattr(llm, "logger", rec)
+    pii_text = "Call Ramesh Kumar on 9876543210, flat 4B MG Road, owes Rs 42,000"
+    _anthropic(monkeypatch, _amsg([_text(pii_text)]))
+    r = llm.complete("p", purpose="x", json_mode=True)
+    assert r.status == llm.BAD_RESPONSE and r.text == pii_text     # the result is unredacted
+
+    bad_response_logs = [kw for level, event, kw in rec.events if event == "llm.bad_response"]
+    assert bad_response_logs, "llm.bad_response was not logged"
+    dumped = json.dumps(bad_response_logs)
+    assert "Ramesh" not in dumped and "9876543210" not in dumped and "MG Road" not in dumped
+    assert "preview" not in bad_response_logs[0]
+    assert bad_response_logs[0]["text_length"] == len(pii_text)
+    assert bad_response_logs[0]["text_sha256"] == hashlib.sha256(
+        pii_text.encode(errors="surrogatepass")).hexdigest()[:16]
 
 
 def test_json_schema_uses_structured_outputs_on_anthropic(monkeypatch):
