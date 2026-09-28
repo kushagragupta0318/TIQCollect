@@ -28,7 +28,7 @@
 import os
 from functools import lru_cache
 from typing import List
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -173,9 +173,9 @@ class Settings(BaseSettings):
     # its own switch: a public deployment running DEMO_MODE must not get it too.
     DEMO_OTP_ECHO: bool = False
 
-    @field_validator("DEMO_OTP_ECHO", mode="before")
+    @field_validator("DEMO_OTP_ECHO", "DEMO_DEVICE_REBIND", mode="before")
     @classmethod
-    def _unset_echo_is_off(cls, v):
+    def _unset_demo_switch_is_off(cls, v):
         # Empty, or a literal "${DEMO_OTP_ECHO}" (`docker run --env-file` does not
         # interpolate), means "not set". That is off, not a start-up failure.
         if v is None or (isinstance(v, str) and (not v.strip() or v.strip().startswith("${"))):
@@ -215,11 +215,20 @@ class Settings(BaseSettings):
     # explicitly where a demo needs it:
     #   DEMO_DEVICE_REBIND — an agent logging in from a new device re-binds
     #     (recorded as DEVICE_MISMATCH success=True) instead of being refused.
+    #     This switches device binding OFF, A09b's secret included: anyone
+    #     with the password re-binds. Refused at start-up without DEMO_MODE.
     #   DEMO_OTP_ECHO — the borrower's payment OTP is returned to the AGENT
     #     in the API response (`demo_otp`), i.e. the second factor is shown
     #     to the person it exists to check.
     DEMO_DEVICE_REBIND: bool = False
-    DEMO_OTP_ECHO: bool = False
+
+    @model_validator(mode="after")
+    def _device_rebind_needs_demo_mode(self):
+        # A09b audit: a deployment must not lose device binding to one stray flag.
+        if self.DEMO_DEVICE_REBIND and not self.DEMO_MODE:
+            raise ValueError("DEMO_DEVICE_REBIND=true switches device binding off and needs "
+                             "DEMO_MODE=true as well; unset it on a real deployment.")
+        return self
     # customer_ref of that showcase customer. Also what _sync_demo_contact()
     # renames on startup, so the name/phone and the anchoring agree by
     # construction instead of by two copies of the same literal.

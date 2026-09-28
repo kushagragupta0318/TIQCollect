@@ -182,9 +182,11 @@ services:
       # core/config.py, so a deployment gets them only by setting them.
       #   DEMO_DEVICE_REBIND: the simulator and a laptop browser log in as the
       #     same agent; a new device re-binds (audited) instead of 403.
+      #     Defaults to DEMO_MODE: the API refuses to start with it on and
+      #     DEMO_MODE off, because it switches device binding off.
       #   DEMO_OTP_ECHO: with no SMS transport configured, the borrower's OTP
       #     is shown to the agent so a payment can be verified in a demo.
-      DEMO_DEVICE_REBIND: ${DEMO_DEVICE_REBIND:-true}
+      DEMO_DEVICE_REBIND: ${DEMO_DEVICE_REBIND:-${DEMO_MODE:-true}}
       DEMO_OTP_ECHO: ${DEMO_OTP_ECHO:-true}
       # Believe X-Forwarded-For only from loopback. The Vite proxy passes a
       # browser's header through, and :5473/:8400 listen on every interface,

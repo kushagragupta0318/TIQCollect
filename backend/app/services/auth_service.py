@@ -136,16 +136,17 @@ def _secret_matches(presented: str | None, stored_sha256: str | None) -> bool:
 
 
 def _enforce_device_binding(db: Session, user: User, device_id: str, request: Request,
-                            device_secret: str | None = None) -> str | None:
+                            device_secret: str | None = None) -> tuple[str, str] | None:
     """A09. First login binds; a different device is refused (or, with
     DEMO_DEVICE_REBIND on, re-bound with a record of it).
 
-    A09b (2026-09-28): the device_id is client-chosen, so anyone who learnt
-    it could present it. Binding now ISSUES a secret (returned here, once, for
-    the login response); a later login from the bound device must present
-    it, and a missing or wrong one is a device mismatch like any other. A
-    device bound before A09b (no hash) gets its secret on its next login.
-    The client's IP is never part of the identity (owner's decision)."""
+    A09b: the device_id is client-chosen, so binding ISSUES a secret and a
+    later login must present it. Returns (secret, agent_device id) when this
+    call bound a device, else None. A binding with no secret hash never
+    matches (v2_0010 released the pre-A09b ones): the secret is never handed
+    to whoever presents the device_id first. The client's IP is never part of
+    the identity (owner's decision). The app keeps the secret in localStorage,
+    accepted as the refresh token's exposure (coordinator, A09b audit)."""
     if user.role != UserRole.FIELD_AGENT:
         return None
     agent = db.query(Agent).filter(Agent.user_id == user.id).first()
@@ -156,14 +157,11 @@ def _enforce_device_binding(db: Session, user: User, device_id: str, request: Re
     bound = (db.query(AgentDevice)
              .filter(AgentDevice.agent_id == agent.id, AgentDevice.is_bound.is_(True)).first())
     if bound is not None and bound.device_fingerprint == fp:
-        if bound.device_secret_sha256 is None:            # bound before A09b: issue it now
-            secret, bound.device_secret_sha256 = _new_device_secret()
-            bound.last_seen_at = now
-            return secret
         if _secret_matches(device_secret, bound.device_secret_sha256):
             bound.last_seen_at = now
             return None
-        reason = "Device secret missing or wrong"
+        reason = ("Device bound without a secret" if bound.device_secret_sha256 is None
+                  else "Device secret missing or wrong")
     else:
         reason = "Device mismatch"
     if bound is not None:
@@ -181,7 +179,7 @@ def _enforce_device_binding(db: Session, user: User, device_id: str, request: Re
     device = (db.query(AgentDevice)
               .filter(AgentDevice.agent_id == agent.id, AgentDevice.device_fingerprint == fp).first())
     if device is None:
-        device = AgentDevice(agent_id=agent.id, device_fingerprint=fp, first_seen_at=now,
+        device = AgentDevice(id=str(uuid.uuid4()), agent_id=agent.id, device_fingerprint=fp, first_seen_at=now,
                              user_agent=(request.headers.get("user-agent") or "")[:500] or None)
         db.add(device)
     secret, device.device_secret_sha256 = _new_device_secret()
@@ -189,7 +187,7 @@ def _enforce_device_binding(db: Session, user: User, device_id: str, request: Re
     device.bound_at = now
     device.unbound_at = None
     device.last_seen_at = now
-    return secret
+    return secret, device.id
 
 
 def _login_response(user: User, tokens: dict) -> dict:
@@ -226,7 +224,7 @@ def login(db: Session, email: str, password: str, device_id: str, request: Reque
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account deactivated")
 
-    issued_secret = _enforce_device_binding(db, user, device_id, request, device_secret)
+    bound_now = _enforce_device_binding(db, user, device_id, request, device_secret)
 
     # Reset failed attempts
     user.failed_login_attempts = 0
@@ -247,10 +245,14 @@ def login(db: Session, email: str, password: str, device_id: str, request: Reque
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                             detail="Device not authorized. Contact your manager.")
 
+    if bound_now:
+        # After the commit, so a bind that lost the race is never recorded as made.
+        _log(db, AuditAction.DEVICE_BOUND, user.id, request, entity_id=bound_now[1],
+             details={"agent_device_id": bound_now[1]})
     _log(db, AuditAction.LOGIN, user.id, request)
     response = _login_response(user, tokens)
-    if issued_secret:
-        response["device_secret"] = issued_secret   # once; the app stores it
+    if bound_now:
+        response["device_secret"] = bound_now[0]   # once; the app stores it
     return response
 
 

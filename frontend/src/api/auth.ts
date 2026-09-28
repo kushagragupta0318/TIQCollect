@@ -6,7 +6,8 @@ import { slotKey } from "@/lib/sessionSlot";
 // device, and a later login from that device must present it (the device id
 // alone is client-chosen, so anyone who learnt it could replay it). Kept per
 // session slot, like the device id, so the simulator's agent and manager
-// sessions in one tab each keep their own.
+// sessions in one tab each keep their own. localStorage is readable by any
+// script on the origin; accepted (A09b audit) as the refresh token's exposure.
 const DEVICE_SECRET_KEY = slotKey("tiq_device_secret");
 
 export function readDeviceSecret(): string | undefined {
