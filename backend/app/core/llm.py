@@ -988,13 +988,26 @@ def _complete_one(name, provider, model, api_key, prompt, *, purpose, system, wa
             #
             # 2026-09-28 — this used to log preview=text[:120]: the model's raw
             # output, which can echo borrower PII straight out of the prompt
-            # (name, phone, address, amounts) into the log line. Only the
-            # length and a hash go out now — enough to tell two failures
-            # apart, or to grep for one exact string offline, without ever
-            # putting the borrower's data itself into the log stream.
+            # (name, phone, address, amounts) into the log line. text_length
+            # and a hash go out instead of the text itself.
+            #
+            # error=str(exc) had the same problem one layer down: `exc` is
+            # whatever json.loads(raw) raised, always a json.JSONDecodeError
+            # today, whose message is positional only (line/column/char) and
+            # never embeds the document — but the except clause catches the
+            # wider (ValueError, TypeError), and a future change to this
+            # branch (a pydantic validator, say) could raise something whose
+            # str() DOES embed its input, and str(exc) would carry it into the
+            # log unnoticed. error_type is logged for every exception; the
+            # message itself only when the type is provably safe.
+            error_detail: dict[str, Any] = {"error_type": type(exc).__name__}
+            if isinstance(exc, json.JSONDecodeError):
+                error_detail.update(error_msg=exc.msg, error_line=exc.lineno,
+                                    error_col=exc.colno)
             logger.warning("llm.bad_response", purpose=purpose, provider=provider,
-                           model=model, error=str(exc), text_length=len(text),
-                           text_sha256=hashlib.sha256(text.encode(errors="surrogatepass")).hexdigest()[:16])
+                           model=model, text_length=len(text),
+                           text_sha256=hashlib.sha256(text.encode(errors="surrogatepass")).hexdigest()[:16],
+                           **error_detail)
             return fail(BAD_RESPONSE, "Model did not return valid JSON", text=text,
                         stop_reason=stop)
         data = parsed if isinstance(parsed, dict) else {"value": parsed}

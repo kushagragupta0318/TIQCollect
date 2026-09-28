@@ -218,6 +218,47 @@ def test_bad_response_log_never_carries_the_models_raw_output(monkeypatch):
     assert bad_response_logs[0]["text_length"] == len(pii_text)
     assert bad_response_logs[0]["text_sha256"] == hashlib.sha256(
         pii_text.encode(errors="surrogatepass")).hexdigest()[:16]
+    # error=str(exc) is gone: json.JSONDecodeError.msg is a fixed short phrase
+    # ("Expecting value") that never embeds the document, so it is safe to log.
+    assert "error" not in bad_response_logs[0]
+    assert bad_response_logs[0]["error_type"] == "JSONDecodeError"
+    assert bad_response_logs[0]["error_msg"] == "Expecting value"
+
+
+def test_bad_response_log_survives_an_exception_whose_str_embeds_its_input(monkeypatch):
+    """The except clause here is (ValueError, TypeError) — broader than just
+    json.JSONDecodeError. A pydantic-style ValidationError is also a
+    ValueError, and ITS str() does embed the offending value
+    (`input_value=<...>`). Only the error_type may be logged for anything
+    that is not the one type known to be safe."""
+
+    class _LeakyValidationError(ValueError):
+        """Shaped like pydantic's ValidationError: str() echoes the input."""
+
+        def __init__(self, bad_input: str):
+            self.bad_input = bad_input
+
+        def __str__(self) -> str:
+            return (f"1 validation error for Model\n  value is not a valid dict "
+                    f"[type=dict_type, input_value={self.bad_input!r}, input_type=str]")
+
+    rec = _Rec()
+    monkeypatch.setattr(llm, "logger", rec)
+    pii_text = "Call Ramesh Kumar on 9876543210, flat 4B MG Road, owes Rs 42,000"
+    monkeypatch.setattr(llm.json, "loads", lambda _raw: (_ for _ in ()).throw(
+        _LeakyValidationError(pii_text)))
+    _anthropic(monkeypatch, _amsg([_text(pii_text)]))
+    r = llm.complete("p", purpose="x", json_mode=True, cache_ttl=0)
+    assert r.status == llm.BAD_RESPONSE and r.text == pii_text     # the result is unredacted
+
+    bad_response_logs = [kw for level, event, kw in rec.events if event == "llm.bad_response"]
+    assert bad_response_logs, "llm.bad_response was not logged"
+    dumped = json.dumps(bad_response_logs)
+    assert "Ramesh" not in dumped and "9876543210" not in dumped and "MG Road" not in dumped
+    assert "input_value" not in dumped                              # str(exc) never went out
+    assert "error" not in bad_response_logs[0]
+    assert bad_response_logs[0]["error_type"] == "_LeakyValidationError"
+    assert "error_msg" not in bad_response_logs[0]                  # not the safe type — no message at all
 
 
 def test_json_schema_uses_structured_outputs_on_anthropic(monkeypatch):
