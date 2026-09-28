@@ -197,12 +197,15 @@ def never_had_a_password(db: Session, user: User) -> bool:
     return db.query(UserSession.id).filter(UserSession.user_id == user.id).first() is None
 
 
-def _claim_cooldown(target_id: str) -> bool:
-    """One credential link per target per RESET_COOLDOWN_SECONDS (coordinator's
-    audit MED of 12c3232): every manager can reach the route now, and each
-    call costs an SMS and ends the target's sessions. SET NX in the OTP store
-    (Redis, or the in-process fallback), so it holds across requests."""
-    return bool(_store().set(_COOLDOWN_PREFIX + target_id, "1", nx=True, ex=RESET_COOLDOWN_SECONDS))
+def claim_cooldown(target_id: str, kind: str = "link") -> bool:
+    """One admin credential action of `kind` per target per
+    RESET_COOLDOWN_SECONDS (coordinator's audit MED of 12c3232): each call
+    costs an SMS or ends the target's sessions. SET NX in the OTP store
+    (Redis, or the in-process fallback), so it holds across requests. Kinds
+    are separate buckets — "link" (a password link) and "mfa" (clearing a
+    factor) — so a lost-phone MFA reset does not block the password link the
+    same person may need next, or the other way round."""
+    return bool(_store().set(f"{_COOLDOWN_PREFIX}{kind}:{target_id}", "1", nx=True, ex=RESET_COOLDOWN_SECONDS))
 
 
 def _issue_and_text(db: Session, admin: User, target: User, *, kind: str, ttl: timedelta, audit_kind: str,
@@ -216,7 +219,7 @@ def _issue_and_text(db: Session, admin: User, target: User, *, kind: str, ttl: t
     if not base or base.startswith("${"):
         raise AppException(503, ErrorCode.CHANNEL_UNAVAILABLE,
                            "Password links are sent by SMS and need PUBLIC_BASE_URL. Nothing was changed.")
-    if not _claim_cooldown(target.id):
+    if not claim_cooldown(target.id, "link"):
         raise AppException(429, ErrorCode.RATE_LIMITED,
                            "A link was sent to this person in the last 10 minutes. Ask them to check their phone.")
     token = _issue(db, target, kind, ttl, issued_by=admin.id, request=request)

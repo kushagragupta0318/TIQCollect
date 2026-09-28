@@ -168,9 +168,14 @@ def admin_reset(db: Session, admin: User, target: User, *, request: Request | No
     Who may: password_service.can_manage — the ONE rule for acting on another
     person's credentials — so a bank admin never clears a fellow bank admin's
     factor (coordinator's audit HIGH); only the platform admin does."""
-    from app.services.password_service import can_manage
+    from app.services.password_service import can_manage, claim_cooldown
     if target.role not in BANK_ROLES or not can_manage(db, admin, target):
         raise AppException(404, ErrorCode.NOT_FOUND, "User not found")
+    # One per person per 10 minutes (coordinator, from bb's limiter check):
+    # clearing a second factor is as sensitive as sending a password link.
+    if not claim_cooldown(target.id, "mfa"):
+        raise AppException(429, ErrorCode.RATE_LIMITED,
+                           "This person's two-factor sign-in was reset in the last 10 minutes.")
     _clear(target)
     from app.services import auth_service
     auth_service.revoke_user_sessions(db, target.id, "ADMIN_REVOKED", by=admin.id)

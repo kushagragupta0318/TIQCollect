@@ -308,3 +308,58 @@ def test_finishing_enrollment_from_a_ticket_is_a_login(world, monkeypatch):
                                "laptop-device-1", _request())
     row = world["db"].query(AuditLog).filter(AuditLog.action == AuditAction.LOGIN).one()
     assert row.user_id == world["analyst"].id and row.details == {"method": "mfa_enrollment"}
+
+
+
+def test_an_mfa_reset_is_one_per_person_per_ten_minutes(world):
+    _enroll(world, world["analyst"])
+    mfa_service.admin_reset(world["db"], world["bank_admin"], world["analyst"])
+    _enroll(world, world["analyst"])                      # they re-enrol at once...
+    with pytest.raises(AppException) as e:                # ...and a second clear inside 10 min is refused
+        mfa_service.admin_reset(world["db"], world["bank_admin"], world["analyst"])
+    assert e.value.status_code == 429 and e.value.code == ErrorCode.RATE_LIMITED
+    assert world["analyst"].totp_enabled is True
+    mfa_service.admin_reset(world["db"], world["bank_admin"], world["techops"])     # someone else: fine
+
+
+def test_the_mfa_and_password_cooldowns_are_separate_buckets(world):
+    from app.services import password_service
+    assert password_service.claim_cooldown(world["analyst"].id, "mfa")
+    assert password_service.claim_cooldown(world["analyst"].id, "link")
+    assert not password_service.claim_cooldown(world["analyst"].id, "mfa")
+
+
+def test_the_mfa_reset_route_shares_the_per_caller_limit(world):
+    """The 11th admin credential action inside a minute is refused by the
+    limiter, whichever of the two routes and whichever targets."""
+    import uuid
+    from fastapi.testclient import TestClient
+    from sqlalchemy.orm import sessionmaker
+    from app.core.database import get_db
+    from app.core.ratelimit import AUTH_LIMIT, limiter
+    from app.core.security import create_access_token
+    from app.main import app
+    S = sessionmaker(bind=world["db"].get_bind(), info={})
+
+    def override():
+        s = S()
+        try:
+            yield s
+        finally:
+            s.close()
+    app.dependency_overrides[get_db] = override
+    was, limiter.enabled = limiter.enabled, True
+    limiter.reset()
+    try:
+        c = TestClient(app)
+        hdr = {"Authorization": f"Bearer {create_access_token(world['bank_admin'].id, 'BANK_ADMIN', 'dev-device-01')}"}
+        n = int(str(AUTH_LIMIT).split("/")[0])
+        codes = []
+        for i in range(n + 1):
+            route = "mfa-reset" if i % 2 else "password-reset"
+            codes.append(c.post(f"/api/v1/admin/users/{uuid.uuid4()}/{route}", headers=hdr).status_code)
+        assert codes[:n] == [404] * n and codes[n] == 429
+    finally:
+        limiter.reset()
+        limiter.enabled = was
+        app.dependency_overrides.pop(get_db, None)
