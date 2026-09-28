@@ -25,14 +25,14 @@
 + its User row) on behalf of the manager who owns them."""
 from __future__ import annotations
 
-import re
 import secrets
+from datetime import datetime, timezone
 
 from fastapi import Request
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.audit import stage_audit
+from app.core.audit import stage_audit, write_audit
 from app.core.errors import AppException, ErrorCode
 from app.core.geo import point_in_geojson_polygon
 from app.core.security import hash_password
@@ -41,6 +41,7 @@ from app.models.audit_log import AuditAction
 from app.models.tenancy import Region
 from app.models.user import User, UserRole
 from app.services.invite_service import _normalise_email, _normalise_phone
+from app.services.scope import agents_in_scope
 
 _LAT_RANGE = (-90.0, 90.0)
 _LON_RANGE = (-180.0, 180.0)
@@ -185,3 +186,81 @@ def create_agent(
         "full_name": user.full_name, "email": user.email, "phone": user.phone,
         "territory": agent.territory, "status": agent.status.value,
     }
+
+
+def _agent_in_scope_or_404(db: Session, manager: User, agent_id: str) -> Agent:
+    """The uniform 404 (scope.py convention): an agent of another agency, or
+    another manager's agent under the SAME agency (agents_in_scope for
+    AGENCY_MANAGER is manager_user_id-bound, not agency-wide — see its own
+    docstring), reads identically to an id that does not exist at all."""
+    agent = agents_in_scope(db, manager).filter(Agent.id == agent_id).first()
+    if agent is None:
+        raise AppException(404, ErrorCode.NOT_FOUND, "Not found")
+    return agent
+
+
+def suspend_agent(db: Session, manager: User, agent_id: str, *, reason: str,
+                  request: Request | None = None) -> dict:
+    """Suspends the agent and ends every session they currently hold — a
+    suspended agent must not keep working from a tab that is already open.
+    "ADMIN_REVOKED" is the closest fit in the fixed session-revoke-reason
+    vocabulary (identity.SESSION_REVOKE_REASONS, DB CHECK-constrained,
+    migrated separately) — adding a dedicated AGENT_SUSPENDED reason is a
+    schema change and goes to 43 first if it's ever wanted."""
+    agent = _agent_in_scope_or_404(db, manager, agent_id)
+    reason = (reason or "").strip()
+    if not reason:
+        raise AppException(422, ErrorCode.VALIDATION_ERROR, "Enter a reason for the suspension.")
+    if agent.status == AgentStatus.SUSPENDED:
+        raise AppException(409, ErrorCode.CONFLICT, "This agent is already suspended.")
+
+    from app.services.auth_service import revoke_user_sessions
+
+    previous_status = agent.status
+    agent.status = AgentStatus.SUSPENDED
+    agent.suspended_at = datetime.now(timezone.utc)
+    agent.suspended_reason = reason
+    revoke_user_sessions(db, agent.user_id, "ADMIN_REVOKED", by=manager.id)
+    db.commit()
+    write_audit(db, action=AuditAction.AGENT_STATUS_CHANGED, user_id=manager.id, entity_type="Agent",
+               entity_id=agent.id, ip_address=_client_ip(request),
+               details={"event": "AGENT_SUSPENDED", "reason": reason,
+                        "from_status": previous_status.value, "to_status": AgentStatus.SUSPENDED.value})
+    return {"agent_id": agent.id, "status": agent.status.value, "suspended_reason": agent.suspended_reason}
+
+
+def reactivate_agent(db: Session, manager: User, agent_id: str, *, request: Request | None = None) -> dict:
+    """Reactivation always lands on OFF_DUTY, never back on whatever the
+    agent was doing before the suspension — they must check in again, the
+    same as any agent who has not started their day yet. Nothing about the
+    account's credentials changes here; if the agent also needs a fresh
+    login, that is the separate reset-login action."""
+    agent = _agent_in_scope_or_404(db, manager, agent_id)
+    if agent.status != AgentStatus.SUSPENDED:
+        raise AppException(409, ErrorCode.CONFLICT, "This agent is not suspended.")
+
+    agent.status = AgentStatus.OFF_DUTY
+    agent.suspended_at = None
+    agent.suspended_reason = None
+    db.commit()
+    write_audit(db, action=AuditAction.AGENT_STATUS_CHANGED, user_id=manager.id, entity_type="Agent",
+               entity_id=agent.id, ip_address=_client_ip(request),
+               details={"event": "AGENT_REACTIVATED", "from_status": AgentStatus.SUSPENDED.value,
+                        "to_status": AgentStatus.OFF_DUTY.value})
+    return {"agent_id": agent.id, "status": agent.status.value}
+
+
+def reset_agent_login(db: Session, manager: User, agent_id: str, *,
+                      request: Request | None = None) -> dict:
+    """"Reset Login": end the agent's current sessions and text them a fresh
+    set-password link — password_service.admin_reset, not
+    issue_first_password. The two look alike (same {sent, expires_at}, same
+    can_manage gate, same "nobody but the agent ever sees a password") but
+    issue_first_password is for a brand-new account and now 409s on
+    anything else (coordinator's audit of 12c3232: a "first" password on an
+    ESTABLISHED account would spend its open tokens and leave its sessions
+    running — that is a reset). An agent who has ever signed in reaches
+    this action, so admin_reset is the one that fits."""
+    agent = _agent_in_scope_or_404(db, manager, agent_id)
+    from app.services import password_service
+    return password_service.admin_reset(db, manager, agent.user_id, request=request)
