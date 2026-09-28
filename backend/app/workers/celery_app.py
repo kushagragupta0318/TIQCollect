@@ -26,6 +26,7 @@ celery_app = Celery(
         "app.workers.tasks.beat_reconciliation",
         "app.workers.tasks.model_outcomes",
         "app.workers.tasks.model_retraining",
+        "app.workers.tasks.partition_maintenance",
     ],
 )
 
@@ -102,6 +103,13 @@ celery_app.conf.update(
         "model-outcome-labelling": {
             "task": "app.workers.tasks.model_outcomes.attach_model_outcomes",
             "schedule": crontab(hour=19, minute=15),
+        },
+        # 01:30 — partition maintenance (B12, core/partitions.py): pre-create
+        # month partitions, report DEFAULT rows, apply DECIDED retention. Before
+        # the 02:00 reconciliation, which reads yesterday's trail.
+        "partition-maintenance": {
+            "task": "app.workers.tasks.partition_maintenance.maintain_partitions",
+            "schedule": crontab(hour=1, minute=30),
         },
         # Reconcile yesterday's beats — planned route against the GPS trail and
         # the visit timestamps that actually happened. At 2 AM, after the trail
