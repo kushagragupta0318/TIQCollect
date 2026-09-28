@@ -49,6 +49,7 @@ from app.services.credentials import new_token, now, require_good_password, utc
 
 ADMIN_RESET_TTL = timedelta(hours=24)
 FIRST_PASSWORD_TTL = timedelta(hours=72)          # a new account's first password, like an invitation
+RESET_COOLDOWN_SECONDS = 600                      # one admin-sent link per person per 10 minutes
 FIRST_LOGIN_TTL = timedelta(minutes=15)
 SELF_SERVICE_TTL = timedelta(minutes=15)       # after the code is verified
 RESET_OTP_LENGTH = 6
@@ -57,6 +58,7 @@ RESET_OTP_MAX_ATTEMPTS = 5
 RESET_REQUESTS_PER_HOUR = 3
 _OTP_PREFIX = "pwreset:"
 _COUNT_PREFIX = "pwreset_count:"
+_COOLDOWN_PREFIX = "pwreset_admin_cooldown:"
 
 _INVALID_LINK = "This reset link is not valid. It may have expired or already been used."
 _BAD_CODE = "That code is not right, or it has expired. Request a new one."
@@ -98,9 +100,13 @@ def can_manage(db: Session, admin: User, target: User) -> bool:
     if admin.role == UserRole.AGENCY_MANAGER:
         if target.role != UserRole.FIELD_AGENT:
             return False
-        from app.models.agent import Agent
+        from app.models.agent import Agent, AgentStatus
         from app.services.scope import agents_in_scope
-        return agents_in_scope(db, admin).filter(Agent.user_id == target.id).first() is not None
+        # Not a SUSPENDED agent (coordinator's audit LOW of 12c3232): their
+        # User can still be active, and a reset would hand them a way back in.
+        return (agents_in_scope(db, admin)
+                .filter(Agent.user_id == target.id, Agent.status != AgentStatus.SUSPENDED)
+                .first() is not None)
     if admin.role == UserRole.PLATFORM_ADMIN:
         return target.role == UserRole.BANK_ADMIN
     if admin.role == UserRole.BANK_ADMIN:
@@ -168,10 +174,35 @@ def issue_first_password(db: Session, admin: User, target: User, *, request: Req
     (security.disabled_password_hash-style) and commits it first."""
     if not can_manage(db, admin, target):
         raise AppException(404, ErrorCode.NOT_FOUND, "User not found")
+    if not never_had_a_password(db, target):
+        # An ESTABLISHED account (coordinator's audit MED of 12c3232): a
+        # "first" password would spend its open tokens and leave its sessions
+        # running. That is a reset, and admin_reset is the call for it.
+        raise AppException(409, ErrorCode.CONFLICT,
+                           "This account already has a password. Use \"reset login\" instead.")
     return _issue_and_text(
         db, admin, target, kind="FIRST_LOGIN", ttl=FIRST_PASSWORD_TTL, audit_kind="FIRST_PASSWORD", revoke=False,
         text="Welcome to TIQCollect. Choose your password within 72 hours to sign in: ",
         request=request)
+
+
+def never_had_a_password(db: Session, user: User) -> bool:
+    """True for an account created without one: never signed in, never had a
+    session, never set a password. (The hotfix's unusable-hash marker reaches
+    p1 at the next rebase; until then these three facts are the evidence, and
+    any one of them missing means the account is established.)"""
+    from app.models.identity import UserSession
+    if user.last_login_at is not None or user.password_changed_at is not None:
+        return False
+    return db.query(UserSession.id).filter(UserSession.user_id == user.id).first() is None
+
+
+def _claim_cooldown(target_id: str) -> bool:
+    """One credential link per target per RESET_COOLDOWN_SECONDS (coordinator's
+    audit MED of 12c3232): every manager can reach the route now, and each
+    call costs an SMS and ends the target's sessions. SET NX in the OTP store
+    (Redis, or the in-process fallback), so it holds across requests."""
+    return bool(_store().set(_COOLDOWN_PREFIX + target_id, "1", nx=True, ex=RESET_COOLDOWN_SECONDS))
 
 
 def _issue_and_text(db: Session, admin: User, target: User, *, kind: str, ttl: timedelta, audit_kind: str,
@@ -185,6 +216,9 @@ def _issue_and_text(db: Session, admin: User, target: User, *, kind: str, ttl: t
     if not base or base.startswith("${"):
         raise AppException(503, ErrorCode.CHANNEL_UNAVAILABLE,
                            "Password links are sent by SMS and need PUBLIC_BASE_URL. Nothing was changed.")
+    if not _claim_cooldown(target.id):
+        raise AppException(429, ErrorCode.RATE_LIMITED,
+                           "A link was sent to this person in the last 10 minutes. Ask them to check their phone.")
     token = _issue(db, target, kind, ttl, issued_by=admin.id, request=request)
     if revoke:
         from app.services import auth_service
