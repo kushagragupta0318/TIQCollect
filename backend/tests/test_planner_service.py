@@ -30,10 +30,11 @@ from app.models.customer import Customer, RiskCategory
 from app.models.loan import DPDBucket, Loan, LoanStatus, LoanType
 from app.models.payment import Payment, PaymentMode, PaymentStatus
 from app.models.ptp import PTP, PTPStatus
+from app.models.tenancy import Agency
 from app.models.user import User, UserRole
 from app.models.visit import PersonMet, Visit, VisitOutcome
 from app.services.planner_service import PlannerService, get_target_plan_date
-from tests._db import create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
+from tests._db import TEST_BANK_ID, create_schema, drop_schema, make_engine, make_session_factory, test_id  # noqa: F401
 
 test_engine = make_engine()
 TestingSessionLocal = make_session_factory(autocommit=False, autoflush=False, bind=test_engine)
@@ -269,6 +270,96 @@ def test_planner_hard_gates_and_allocation(db_session, test_data):
         assert b.status == BeatStatus.PLANNED
         assert b.beat_date == tomorrow
         assert b.total_cases >= 1
+
+
+def test_planner_pool_is_scoped_to_the_managers_own_agency(db_session, test_data):
+    """A04 (standalone plan, coordinator audit 2026-09-28): the unassigned
+    half of the candidate-case query used to carry no tenant filter at all,
+    so an unassigned case belonging to a DIFFERENT agency's book would enter
+    every manager's nightly plan and could be handed to their agent. Reuses
+    test_planner_hard_gates_and_allocation's exact fixture and its exact
+    expected counts (2 allocated, 1 blocked) — a case belonging to another
+    agency, added here, must change NEITHER."""
+    other_agency_id = test_id("agency:planner-scope-other")
+    db_session.add(Agency(id=other_agency_id, bank_id=TEST_BANK_ID, code="AGENCY-OTHER-A04",
+                          legal_name="Nilgiri Field Recovery LLP", trade_name="Nilgiri Field Recovery",
+                          status="ACTIVE", contacts=[], is_demo=True))
+    db_session.flush()
+    other_case = Case(
+        id=str(uuid.uuid4()), case_number="CASE-OTHER-AGENCY", customer_id=test_data["case1"].customer_id,
+        loan_id=test_data["case1"].loan_id, agent_id=None, agency_id=other_agency_id,
+        status=CaseStatus.UNASSIGNED, priority=CasePriority.HIGH, target_amount=60000, collected_amount=0,
+    )
+    db_session.add(other_case)
+    db_session.commit()
+
+    planner = PlannerService(db_session, manager_user_id=test_data["manager"].id)
+    tomorrow = date.today() + timedelta(days=1)
+    run = planner.plan_next_day(plan_date=tomorrow, strategy="SMART")
+
+    assert run.total_cases_allocated == 2   # unchanged: case1, case2 — NOT case_other
+    assert run.total_cases_blocked == 1     # unchanged: case3 (DNC)
+    decided_case_ids = {d.case_id for d in run.decisions}
+    assert other_case.id not in decided_case_ids
+    db_session.refresh(other_case)
+    assert other_case.agent_id is None      # never claimed by an out-of-agency agent
+
+
+def test_a_manager_whose_agency_is_suspended_is_not_planned(db_session, test_data, monkeypatch):
+    """MED, coordinator audit on c041835: the nightly task selected managers
+    by role + is_active only, with no Agency join — a manager whose agency
+    had been SUSPENDED (offboarded, contract lapsed, under review) was still
+    planned every night regardless. test_data's own manager sits under the
+    default ACTIVE test agency and must still be planned; a second manager
+    under a SUSPENDED agency must not be attempted at all — not planned, not
+    recorded as a failure either, simply excluded from the query."""
+    from app.workers.tasks import allocation as mod
+
+    suspended_agency_id = test_id("agency:suspended-a04")
+    db_session.add(Agency(id=suspended_agency_id, bank_id=TEST_BANK_ID, code="AGENCY-SUSPENDED",
+                          legal_name="Kumaon Debt Solutions Pvt. Ltd.", trade_name="Kumaon Debt Solutions",
+                          status="SUSPENDED", contacts=[], is_demo=True))
+    db_session.flush()
+    suspended_mgr = User(
+        id=str(uuid.uuid4()), email="suspended_mgr@tiqcollect.in", phone="9800009999",
+        full_name="Manager Of A Suspended Agency", hashed_password="hash", role=UserRole.AGENCY_MANAGER,
+        agency_id=suspended_agency_id, is_active=True, is_verified=True,
+    )
+    db_session.add(suspended_mgr)
+    db_session.commit()
+
+    monkeypatch.setattr("app.core.database.SessionLocal", lambda: db_session)
+    monkeypatch.setattr(db_session, "close", lambda: None)   # the fixture owns closing it
+
+    out = mod.run_nightly_allocation.__wrapped__(
+        strategy="SMART", plan_date_str=str(date.today() + timedelta(days=1)))
+
+    assert test_data["manager"].email in out["planned"]
+    assert suspended_mgr.email not in out["planned"]
+    assert suspended_mgr.email not in out["failed"]
+
+
+def test_a_manager_with_no_resolvable_agency_raises_without_touching_a_beat(db_session, test_data):
+    """LOW, coordinator audit on c041835: manager_agency_id is resolved by
+    looking up the manager's own User row; a manager_user_id that names
+    nobody (a stale reference — the realistic shape this branch actually
+    takes, since a live AGENCY_MANAGER/AGENCY_ADMIN row can't carry a NULL
+    agency_id past ck_users_role_scope) makes that lookup return None the
+    same way an explicit NULL would. This must raise immediately — before
+    the plan lock, before any Beat query — not fall through to the
+    "no active agents" branch's zero-run AllocationRun row, which describes
+    a different, legitimate state (a real manager with nobody to plan for
+    today), not a manager who could not be resolved at all."""
+    ghost_manager_id = str(uuid.uuid4())
+    planner = PlannerService(db_session, manager_user_id=ghost_manager_id)
+    tomorrow = date.today() + timedelta(days=1)
+
+    with pytest.raises(ValueError, match="no agency_id"):
+        planner.plan_next_day(plan_date=tomorrow, strategy="SMART")
+
+    assert db_session.query(AllocationRun).filter(
+        AllocationRun.manager_user_id == ghost_manager_id).count() == 0
+    assert db_session.query(Beat).count() == 0
 
 
 def test_planner_rollback(db_session, test_data):
@@ -795,9 +886,15 @@ def test_one_managers_failure_does_not_abort_the_others(monkeypatch):
                         lambda *a, **k: failed.append(a[3].id))
 
     class _Q:
+        def join(self, *a, **k): return self
         def filter(self, *a, **k): return self
-        def all(self): return [type("U", (), {"id": i, "email": f"{i}@t.io"})()
-                               for i in ("m1", "m2", "m3")]
+        def all(self):
+            # A04: two agencies (m1/m2 in one, m3 in another), so this also
+            # exercises the agency-then-manager grouping — m2's failure must
+            # not touch m3's agency any more than it touched m1's.
+            agency_of = {"m1": "agA", "m2": "agA", "m3": "agB"}
+            return [type("U", (), {"id": i, "email": f"{i}@t.io", "agency_id": agency_of[i]})()
+                   for i in ("m1", "m2", "m3")]
 
     class _DB:
         def query(self, *a, **k): return _Q()
