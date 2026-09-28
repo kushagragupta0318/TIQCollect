@@ -147,6 +147,7 @@ async def admin_password_reset(user_id: UUIDPath, admin: CredentialManager, requ
 
 
 @admin_router.post("/users/{user_id}/mfa-reset", summary="Clear a bank user's TOTP (lost phone)")
+@limiter.shared_limit(AUTH_LIMIT, scope="admin-credential-links")   # the same bucket as password links
 async def admin_mfa_reset(user_id: UUIDPath, admin: AccountAdmin, request: Request, db: DbSession):
     target = db.get(User, user_id)
     if target is None:
