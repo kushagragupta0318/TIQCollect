@@ -332,3 +332,15 @@ def test_a_changed_password_and_its_audit_row_land_together(world, monkeypatch):
     assert [r for r in _audits(world["db"], AuditAction.PASSWORD_CHANGED) if r.success] == []
     world["db"].expire_all()
     assert verify_password(PASSWORD, world["manager"].hashed_password)
+
+
+def test_a_crash_after_the_change_cannot_lose_its_audit_row(world, monkeypatch):
+    """The other half, and the one that tells staging from writing after the
+    commit: if anything writing audit rows AFTER the business commit dies (the
+    process is killed), a staged row is already in. Written-after, it is lost."""
+    def dead(*a, **k):
+        raise RuntimeError("process killed after the business commit")
+    monkeypatch.setattr(password_service, "write_audit", dead)
+    password_service.change_password(world["db"], world["manager"], PASSWORD, NEW)
+    rows = [r for r in _audits(world["db"], AuditAction.PASSWORD_CHANGED) if r.success]
+    assert len(rows) == 1 and rows[0].entity_id == world["manager"].id
