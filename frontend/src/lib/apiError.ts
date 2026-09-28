@@ -41,7 +41,13 @@ export function errorDetail(err: unknown, fallback: string): string {
   return typeof detail === "string" && detail.trim() ? detail : fallback;
 }
 
-/** The typed `ErrorCode` the backend attaches, when it attached one. */
+/**
+ * The typed `ErrorCode` the backend attaches, when it attached one.
+ *
+ * 2026-09-28 (P1 A11, d4) — restored. Wave 1's dead-code sweep (4aa7aa2)
+ * removed it when nothing called it; the login page now branches on
+ * MFA_REQUIRED / MFA_INVALID, which only the code tells apart (both are 401).
+ */
 export function errorCode(err: unknown): string | undefined {
   const code = body(err)?.code;
   return typeof code === "string" ? code : undefined;

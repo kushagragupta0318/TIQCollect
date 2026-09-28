@@ -19,16 +19,13 @@ declared pair and nowhere else.
 from __future__ import annotations
 
 import itertools
-import sys
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 from sklearn.ensemble import HistGradientBoostingClassifier
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts" / "research" / "recovery_risk_obs"))
-from gam_common import interaction_cst_for, remap_index, remapped_order  # noqa: E402
+from app.ml.pipeline.gam import interaction_cst_for, remap_index, remapped_order
 
 COLS = ["num_a", "cat_x", "num_b", "cat_y"]
 CATS = {"cat_x", "cat_y"}
@@ -71,7 +68,7 @@ def _tree_feature_groups(m) -> set[tuple[int, ...]]:
 
 def test_sklearn_still_reorders_categoricals_to_the_front(data):
     """The premise of the helper. If this fails, sklearn changed and
-    gam_common must be revisited — not the callers."""
+    app/ml/pipeline/gam.py must be revisited — not the callers."""
     df, y = data
     m = _fit(df, y, None)
     assert list(m.is_categorical_) == [c in CATS for c in COLS], "mask read wrongly"

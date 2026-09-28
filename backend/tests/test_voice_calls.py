@@ -113,7 +113,10 @@ def world(monkeypatch):
 
 def _call(world, *, case_id, sign=True, url=PUBLIC + PATH, extra=None):
     params = {"From": f"client:{voice_service.identity_for(world['user'].id, world['sid'])}",
-              "CaseId": case_id, "PhoneTo": ELSEWHERE, "CallSid": "CA" + "3" * 32}
+              "CaseId": case_id, "PhoneTo": ELSEWHERE, "CallSid": "CA" + "3" * 32,
+              # From OUR account and OUR TwiML app (from_our_app, d4's hotfix-1
+              # check, merged 2026-09-28).
+              "AccountSid": settings.TWILIO_ACCOUNT_SID, "ApplicationSid": settings.TWILIO_TWIML_APP_SID}
     params.update(extra or {})
     headers = {}
     if sign:
@@ -127,10 +130,20 @@ def _refusals(world):
             .filter(AuditLog.action == AuditAction.VOICE_CALL_REFUSED).all()]
 
 
-def test_an_unsigned_request_is_refused_and_audited(world):
+def test_an_unsigned_request_is_refused_and_not_audited(world):
+    """2026-09-28 (merge of d4's hotfix-1 hardening): an UNSIGNED request is
+    refused and LOGGED, not audited. Anyone can POST here, and one audit row
+    per junk request would let an anonymous caller fill the audit table.
+    Signed requests from our app are audited (the tests below)."""
     r = _call(world, case_id=world["mine"], sign=False)
     assert r.status_code == 403
-    assert _refusals(world) == [voice_service.BAD_SIGNATURE]
+    assert _refusals(world) == []
+
+
+def test_a_signed_request_from_another_twiml_app_is_refused_and_audited(world):
+    r = _call(world, case_id=world["mine"], extra={"ApplicationSid": "AP" + "9" * 32})
+    assert r.status_code == 200 and "This call cannot be placed" in r.text
+    assert _refusals(world) == [voice_service.NOT_OUR_APP]
 
 
 def test_a_signature_over_the_wrong_url_is_refused(world):
@@ -217,3 +230,20 @@ def test_the_token_is_refused_while_voice_is_not_fully_configured(world, monkeyp
     r = TestClient(app).get("/api/v1/agent/voice/token",
                             headers={"Authorization": f"Bearer {world['tokens']['access_token']}"})
     assert r.status_code == 503
+
+
+@pytest.mark.parametrize("who", ["unknown_user", "unknown_session"])
+def test_a_refusal_never_names_a_user_it_has_not_proven_exists(world, who):
+    """A well-formed identity naming an unknown user (or an unknown session)
+    used to be refused WITH that user id, so its VOICE_CALL_REFUSED row broke
+    audit_logs' user FK and write_audit rolled it back silently — the refusal
+    left no trace. The id is now carried only when a session row or a loaded
+    user proves it (found at the 2026-09-28 merge)."""
+    import uuid as _uuid
+    ghost = str(_uuid.uuid4())
+    user_id = ghost if who == "unknown_user" else world["user"].id
+    frm = "client:" + voice_service.identity_for(user_id, str(_uuid.uuid4()))
+    with pytest.raises(voice_service.VoiceRefused) as exc:
+        voice_service.resolve_destination(world["db"], from_param=frm, case_id=world["mine"])
+    assert exc.value.reason == voice_service.SESSION_ENDED
+    assert exc.value.user_id is None

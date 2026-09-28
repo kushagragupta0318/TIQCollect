@@ -3,9 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- 2026-09-24 (I01) — home-screen install. The manifest link is injected
+         by vite-plugin-pwa at build time (options in src/lib/pwaConfig.ts);
+         iOS ignores the manifest's icons and title, so it gets its own:
+         an opaque 180px icon (iOS paints transparency black) and a title. -->
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon-180x180.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="TIQCollect" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <!-- Matches the blue of the TransOrg mark in favicon.svg (#2568B0), not the
          app's brand-900 (#1e3a8a) it used to carry. Tints the Android Chrome

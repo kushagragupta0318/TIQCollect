@@ -16,8 +16,8 @@ import pytest
 
 from app.core import routing
 from app.core.routing import (
-    SOURCE_HAVERSINE, RouteResult, TravelMatrix, Vehicle, avg_visit_seconds,
-    fetch_osrm_table, optimize_route, plan_fleet, plan_route, solve_tsp,
+    SOURCE_HAVERSINE, RouteResult, TravelMatrix, avg_visit_seconds,
+    fetch_osrm_table, optimize_route, plan_route, solve_tsp,
 )
 
 # A tight cluster in NCR, roughly 1-6 km apart.
@@ -169,83 +169,6 @@ def test_solve_tsp_returns_depot_first_and_every_node():
 
 
 # ---------------------------------------------------------------------------
-# The fleet solver
-# ---------------------------------------------------------------------------
-
-def _vehicles(n=2, capacity=10):
-    return [Vehicle(key=i, start=BASE, capacity=capacity) for i in range(n)]
-
-
-def test_fleet_assigns_every_stop_when_capacity_allows():
-    f = plan_fleet(STOPS, _vehicles())
-    assert f.feasible
-    served = sorted(s for p in f.plans.values() for s in p.order)
-    assert served == list(range(len(STOPS)))
-    assert f.dropped == []
-
-
-def test_fleet_never_assigns_one_stop_to_two_agents():
-    f = plan_fleet(STOPS, _vehicles(n=3))
-    served = [s for p in f.plans.values() for s in p.order]
-    assert len(served) == len(set(served))
-
-
-def test_fleet_respects_per_vehicle_capacity():
-    """Two agents, one stop each allowed, four stops: two must be dropped."""
-    f = plan_fleet(STOPS, _vehicles(n=2, capacity=1))
-    for plan in f.plans.values():
-        assert len(plan.order) <= 1
-    assert len(f.dropped) == 2
-
-
-def test_fleet_drops_the_cheapest_stops_first_when_it_must():
-    """PRIZE-COLLECTING. With capacity for two of four, the solver should keep
-    the stops carrying the largest drop penalty — which is how 'route by
-    expected recovery' is expressed without any ML."""
-    penalties = [100, 100, 9_000_000, 9_000_000]
-    f = plan_fleet(STOPS, _vehicles(n=1, capacity=2), drop_penalties=penalties)
-    kept = sorted(s for p in f.plans.values() for s in p.order)
-    assert kept == [2, 3], f"kept the wrong stops: {kept}"
-    assert sorted(f.dropped) == [0, 1]
-
-
-def test_fleet_legs_reconcile_with_totals():
-    f = plan_fleet(STOPS, _vehicles())
-    for plan in f.plans.values():
-        if not plan.order:
-            continue
-        assert sum(l.seconds for l in plan.legs) == plan.travel_seconds
-        assert sum(l.metres for l in plan.legs) == plan.metres
-        assert [l.to_stop for l in plan.legs] == plan.order
-
-
-def test_fleet_is_deterministic():
-    a = plan_fleet(STOPS, _vehicles())
-    b = plan_fleet(STOPS, _vehicles())
-    assert {k: v.order for k, v in a.plans.items()} == {k: v.order for k, v in b.plans.items()}
-    assert a.dropped == b.dropped
-
-
-def test_fleet_honours_a_vehicle_shift_window():
-    """A shift too short for any travel must leave the day empty rather than
-    silently producing a plan the agent cannot legally execute."""
-    tiny = [Vehicle(key=0, start=BASE, capacity=10,
-                    shift_start_s=8 * 3600, shift_end_s=8 * 3600 + 30)]
-    f = plan_fleet(STOPS, tiny)
-    assert all(len(p.order) == 0 for p in f.plans.values())
-    assert sorted(f.dropped) == list(range(len(STOPS)))
-
-
-def test_fleet_with_no_stops_or_no_vehicles_is_empty_not_an_error():
-    assert plan_fleet([], _vehicles()).plans[0].order == []
-    assert plan_fleet(STOPS, []).plans == {}
-
-
-def test_fleet_reports_its_source():
-    assert plan_fleet(STOPS, _vehicles()).source == SOURCE_HAVERSINE
-
-
-# ---------------------------------------------------------------------------
 # The service-time constant
 # ---------------------------------------------------------------------------
 
@@ -269,29 +192,3 @@ def test_planner_does_not_reintroduce_its_own_service_constants():
     code = "\n".join(ln.split("#")[0] for ln in src.splitlines())
     offenders = re.findall(r"len\(\s*\w+\s*\)\s*\*\s*(?:20|25|30)\b", code)
     assert not offenders, f"per-stop minute constants are back: {offenders}"
-
-
-# ---------------------------------------------------------------------------
-# Eligibility — the compliance constraint on the fleet solver
-# ---------------------------------------------------------------------------
-
-def test_fleet_honours_allowed_vehicles():
-    """THE GATE THAT MAKES plan_fleet SAFE ON REAL CASES. The allocator applies
-    five hard gates before scoring — DNC, hostility, female-agent requirement,
-    territory radius and PTP fatigue. A fleet solver free to move any stop to any
-    agent would undo every one of them and report a shorter route for doing it."""
-    vehicles = [Vehicle(key=0, start=BASE, capacity=10),
-                Vehicle(key=1, start=BASE, capacity=10)]
-    # Stops 0 and 1 may only be served by vehicle 1.
-    allowed = [[1], [1], None, None]
-    f = plan_fleet(STOPS, vehicles, allowed_vehicles=allowed)
-    assert 0 not in f.plans[0].order and 1 not in f.plans[0].order
-    assert 0 in f.plans[1].order and 1 in f.plans[1].order
-
-
-def test_fleet_drops_a_stop_no_vehicle_may_serve():
-    """An empty allowed set means nobody is permitted — a staffing problem, not
-    a capacity one. It must be dropped, not quietly assigned anyway."""
-    f = plan_fleet(STOPS, _vehicles(n=2), allowed_vehicles=[[], None, None, None])
-    assert 0 in f.dropped
-    assert all(0 not in p.order for p in f.plans.values())

@@ -1,5 +1,5 @@
 import { clsx } from "clsx";
-import type { DPDBucket, AgentTier, CaseStatus, RiskCategory, RecoveryPotential, VisitPriority } from "@/types";
+import type { DPDBucket, AgentTier, CaseStatus, RecoveryPotential, VisitPriority } from "@/types";
 
 interface BadgeProps {
   children: React.ReactNode;
@@ -101,16 +101,5 @@ export function CaseStatusBadge({ status, ptpDueToday }: { status: CaseStatus; p
     return <Badge variant="red">PTP Due</Badge>;
   }
   const { label, variant } = map[status];
-  return <Badge variant={variant}>{label}</Badge>;
-}
-
-export function RiskBadge({ risk }: { risk: RiskCategory }) {
-  const map: Record<RiskCategory, { label: string; variant: BadgeProps["variant"] }> = {
-    LOW: { label: "Low Risk", variant: "green" },
-    MEDIUM: { label: "Med Risk", variant: "yellow" },
-    HIGH: { label: "High Risk", variant: "orange" },
-    CRITICAL: { label: "Critical", variant: "red" },
-  };
-  const { label, variant } = map[risk];
   return <Badge variant={variant}>{label}</Badge>;
 }

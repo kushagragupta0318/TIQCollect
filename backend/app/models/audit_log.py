@@ -63,6 +63,8 @@ class AuditAction(str, enum.Enum):
     PLACEMENT_CREATED = "PLACEMENT_CREATED"
     PLACEMENT_RECALLED = "PLACEMENT_RECALLED"
     USER_DEACTIVATED = "USER_DEACTIVATED"
+    # v2_0006 (2026-09-28): an agent's fields edited without a status change (G02, ce)
+    AGENT_UPDATED = "AGENT_UPDATED"
 
 
 class AuditLog(Base, UUIDPrimaryKey):

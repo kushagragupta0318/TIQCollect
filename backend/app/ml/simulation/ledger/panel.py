@@ -70,6 +70,7 @@ import pandas as pd
 
 from app.ml.simulation.ledger import billing
 from app.ml.simulation.ledger.config import LedgerConfig
+from app.ml.simulation.ledger.product_rules import product_promises
 from app.ml.simulation.ledger.simulator import HARDSHIP_REASONS, Ledger
 from app.models.loan import dpd_bucket_for
 
@@ -128,8 +129,10 @@ def build_panel(ledger: Ledger, cfg: LedgerConfig | None = None) -> pd.DataFrame
     cyc = cfg.cycle_days
     loans = ledger.loans.set_index("loan_id")
     borrowers = ledger.borrowers.set_index("borrower_id")
+    # 2026-09-28: promises go through the product's rule (product_rules), the
+    # same filter the materialiser applies — see that module.
     pays, visits, ptps, pulls = (ledger.payments, ledger.visits,
-                                 ledger.ptps, ledger.bureau_pulls)
+                                 product_promises(ledger.ptps), ledger.bureau_pulls)
     calls = getattr(ledger, "calls", pd.DataFrame())
     flags = getattr(ledger, "flags", pd.DataFrame())
 

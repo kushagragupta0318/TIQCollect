@@ -1,5 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { geo, geoAvailable } from "@/lib/deviceLocation";
+import { haversineM } from "@/lib/geo";
+import { shouldGeocode, type GeocodeAnchor } from "@/lib/geocodeGate";
 
 /**
  * Live GPS location + human-readable address for the field-agent view.
@@ -27,17 +29,6 @@ export interface LiveLocation {
   coords: { lat: number; lon: number } | null;
 }
 
-// Metres between two points — only re-geocode after the agent actually moves,
-// so we don't hammer the geocoder on every tiny GPS jitter.
-function metresBetween(aLat: number, aLon: number, bLat: number, bLon: number): number {
-  const R = 6_371_000;
-  const dLat = ((bLat - aLat) * Math.PI) / 180;
-  const dLon = ((bLon - aLon) * Math.PI) / 180;
-  const s =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos((aLat * Math.PI) / 180) * Math.cos((bLat * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
-  return 2 * R * Math.atan2(Math.sqrt(s), Math.sqrt(1 - s));
-}
 
 async function reverseGeocode(lat: number, lon: number): Promise<string> {
   // zoom=18 + addressdetails=1 => building/street-level detail.
@@ -103,9 +94,6 @@ async function reverseGeocode(lat: number, lon: number): Promise<string> {
  */
 const COORD_STABLE_M = 15;
 
-/** Re-geocode only after this much movement. Nominatim asks for <= 1 req/sec. */
-const GEOCODE_MOVE_M = 40;
-
 /**
  * One watcher for the whole app.
  *
@@ -161,7 +149,7 @@ let watchId: number | undefined;
 let subscriberCount = 0;
 let stopTimer: ReturnType<typeof setTimeout> | undefined;
 
-let lastGeocoded: { lat: number; lon: number } | null = null;
+let lastGeocoded: GeocodeAnchor | null = null;
 let hasAddress = false;
 let geocodeInFlight = false;
 
@@ -198,23 +186,23 @@ async function onPos(p: GeolocationPosition) {
   // same spot moves less than COORD_STABLE_M, and without this the publish is
   // skipped and the line stays on "Locating…" until a geocode happens to
   // finish. Recovering from a non-ready state is not a movement question.
-  if (!cur || metresBetween(cur.lat, cur.lon, lat, lon) >= COORD_STABLE_M
+  if (!cur || haversineM(cur.lat, cur.lon, lat, lon) >= COORD_STABLE_M
       || snapshot.status === "error" || snapshot.status === "locating") {
     publish({ ...snapshot, status: hasAddress ? "ready" : snapshot.status, coords: { lat, lon } });
   }
 
-  if (lastGeocoded && metresBetween(lastGeocoded.lat, lastGeocoded.lon, lat, lon) < GEOCODE_MOVE_M && hasAddress) return;
+  if (hasAddress && !shouldGeocode(lastGeocoded, lat, lon, Date.now())) return;
   if (geocodeInFlight) return;
 
   geocodeInFlight = true;
   try {
     const address = await reverseGeocode(lat, lon);
-    lastGeocoded = { lat, lon };
+    lastGeocoded = { lat, lon, at: Date.now() };
     hasAddress = true;
     publish({ ...snapshot, status: "ready", address });
   } catch {
     // Keep coords visible even if the geocoder is unreachable.
-    lastGeocoded = { lat, lon };
+    lastGeocoded = { lat, lon, at: Date.now() };
     hasAddress = true;
     publish({ ...snapshot, status: "ready", address: `${lat.toFixed(4)}, ${lon.toFixed(4)}` });
   } finally {
@@ -289,7 +277,7 @@ function subscribe(listener: () => void): () => void {
  * TIMEOUT indoors it may not deliver again for a while); a re-request of
  * permission after the agent has turned GPS back on in settings, which a
  * "denied" watcher never retries; and a re-geocode, which otherwise waits for
- * GEOCODE_MOVE_M of movement. The fresh fix is also pushed to `fixListeners`,
+ * the gate in lib/geocodeGate.ts (1 km and 10 min). The fresh fix is also pushed to `fixListeners`,
  * so the trail (locationReporter) sees it like any other.
  *
  * Resolves true when a fix arrived, false when it did not — the caller shows

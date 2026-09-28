@@ -64,11 +64,12 @@ from sqlalchemy.orm import Session
 
 from app.ml.simulation.ledger import billing
 from app.ml.simulation.ledger.config import LedgerConfig
+from app.ml.simulation.ledger.product_rules import product_promises
 from app.ml.simulation.ledger.simulator import Ledger
 from app.models.agent import Agent, AgentSpecialization, AgentStatus, AgentTier
 from app.models.call_log import CallLog, CallOutcome
 from app.models.case import Case, CasePriority, CaseStatus
-from app.models.customer import Customer
+from app.models.customer import CUSTOMER_TAG_DECEASED, Customer
 from app.models.loan import DPDBucket, Loan, LoanStatus, LoanType, dpd_bucket_for
 from app.models.payment import Payment, PaymentMode, PaymentStatus
 from app.models.call_log import BorrowerDisposition
@@ -323,7 +324,7 @@ class Materialiser:
                         and int(getattr(k, "verbal_due_day", -1)) >= 0 else None),
                     borrower_disposition=cdisp,
                 ))
-        for t in led.ptps.itertuples():
+        for t in product_promises(led.ptps).itertuples():   # the product's rule, as panel.py
             if t.loan_id not in keep:
                 continue
             row = PTP(id=self.db_id("ptp", t.ptp_id), case_id=self.case(t.loan_id),
@@ -374,7 +375,8 @@ class Materialiser:
                 {"status": PAYMENT_STATUS[st]}, synchronize_session=False)
 
         # ── PTP status as at `day` ──────────────────────────────────────────
-        ptps = led.ptps[led.ptps.loan_id.isin(keep)]
+        ptps = product_promises(led.ptps)
+        ptps = ptps[ptps.loan_id.isin(keep)]
         for t in ptps.itertuples():
             resolved = t.resolved_day is not None and 0 <= t.resolved_day < day
             st = PTP_STATUS[t.resolved_status] if resolved else PTPStatus.ACTIVE
@@ -451,7 +453,7 @@ class Materialiser:
                 if loan is not None:
                     db.query(Customer).filter(
                         Customer.id == loan.customer_id).update(
-                        {"tags": ["DECEASED"]}, synchronize_session=False)
+                        {"tags": [CUSTOMER_TAG_DECEASED]}, synchronize_session=False)
 
         # ── hostility flag as at `day` ──────────────────────────────────────
         # Raised by an event, never lowered — so its value at `day` is "was an

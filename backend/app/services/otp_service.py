@@ -30,6 +30,12 @@
 #       generate_and_send(payment_id=...) → verify flips that Payment to VERIFIED.
 #   Parameters in config.py (4 digits / 5-min TTL / 3 attempts / resend throttle).
 #   Full detail: /changelog.md and prototype_to_product/30.07.md
+# 2026-09-24 — The code is echoed to the agent (`demo_otp`) only under
+#   DEMO_OTP_ECHO. It used to ride on DEMO_MODE, which the public platform
+#   deployment runs with (field-ops-stub/backend/.env: DEMO_MODE=true), so the
+#   agent's own response carried the code the borrower is meant to read out.
+#   The second condition, settings.ENVIRONMENT == "development", read a field
+#   that does not exist (it is APP_ENV) and could never fire; removed.
 # ───────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 
@@ -317,7 +323,7 @@ class OtpService:
             "resend_available_at": (now + timedelta(seconds=settings.OTP_RESEND_THROTTLE_SECONDS)).isoformat(),
             # Whether the code reached the SMS transport. Additive; every
             # existing field is unchanged. False when Twilio is unconfigured
-            # (demo/dev, where demo_otp below carries the code instead).
+            # (demo/dev, where DEMO_OTP_ECHO may carry the code instead).
             "sms_sent": bool(sms_sent),
         }
         # 2026-09-24 (audit MED 7): its own flag, not DEMO_MODE and not an
@@ -381,8 +387,19 @@ class OtpService:
         if payment_id:
             # Deferred flow: promote the already-created pending payment now, and
             # consume the OTP (single-use) — nothing left to collect afterwards.
+            # Bound to THIS case (A03 re-audit MED 2), as well as PAY-1's evidence check below.
             payment = (self.db.query(Payment)
                        .filter(Payment.id == payment_id, Payment.case_id == case.id).first())
+            # 2026-09-24 (hotfix PAY-1) — never promote a payment that lacks the
+            # evidence its mode needs: rows written before the server required
+            # references could otherwise become VERIFIED by a borrower OTP.
+            if payment and payment.status != PaymentStatus.VERIFIED:
+                from app.services.payment_service import payment_reference_problem
+                problem = payment_reference_problem(
+                    payment.mode, upi_reference=payment.upi_reference,
+                    bank_reference=payment.bank_reference, cheque_number=payment.cheque_number)
+                if problem:
+                    raise AppException(422, problem[0], problem[1] + " It cannot be verified without one.")
             if payment and payment.status != PaymentStatus.VERIFIED:
                 payment.status = PaymentStatus.VERIFIED
                 payment.verified_at = datetime.now(timezone.utc)

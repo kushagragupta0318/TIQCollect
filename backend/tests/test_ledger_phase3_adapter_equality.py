@@ -392,3 +392,28 @@ def test_missing_values_are_missing_on_both_sides(matched):
                 feats["days_since_last_payment"] is None, (lid, feats.get(
                     "days_since_last_payment"))
     assert seen > 0, "no never-paid accounts in the sample to check"
+
+
+# ── The product rule both sides share (coordinator decision (a), 2026-09-28) ──
+
+def test_a_zero_promise_is_in_neither_the_panel_nor_the_database():
+    """The simulator promises min(overdue, ...), which is 0 with nothing
+    overdue; v2's CHECK refuses that row. The panel and the materialiser both
+    drop it through ONE predicate (models/ptp.promise_is_for_money), so the
+    harness compares one world. Rounded as NUMERIC(14,2) stores it."""
+    import pandas as pd
+    from app.ml.simulation.ledger.product_rules import product_promises
+    from app.models.ptp import promise_is_for_money
+
+    assert [promise_is_for_money(a) for a in (0, 0.0, 0.004, 0.005, 0.01, 5000)] == \
+        [False, False, False, True, True, True]
+    frame = pd.DataFrame({"ptp_id": [1, 2, 3], "committed_amount": [0.0, 0.004, 1200.0]})
+    assert list(product_promises(frame).ptp_id) == [3]
+    assert product_promises(frame.iloc[0:0]).empty
+
+
+def test_panel_and_materialiser_import_the_same_filter():
+    """One definition: a second copy of the rule would let the two sides drift."""
+    from app.ml.simulation.ledger import materialise, panel, product_rules
+    assert panel.product_promises is product_rules.product_promises
+    assert materialise.product_promises is product_rules.product_promises

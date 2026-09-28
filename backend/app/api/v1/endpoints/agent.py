@@ -96,6 +96,18 @@
 #   also gained an optional verification_id (handled entirely in
 #   PaymentService). See otp_service.py, prototype_to_product/30.07.md,
 #   /changelog.md.
+# 2026-09-24 — live-site hotfix. AU-2: GET /voice/token and POST
+#   /voice/outbound rebuilt over services/voice_service.py. The webhook was
+#   unauthenticated, ignored X-Twilio-Signature and dialled the client's
+#   `PhoneTo`; it now requires a signature over PUBLIC_BASE_URL + path (fail
+#   closed when unset), dials only the borrower of a case ASSIGNED to the
+#   caller, and ignores any client number. The token needs real credentials
+#   and lives 5 minutes; its errors no longer echo SDK text. PAY-2: new GET
+#   /upi-config serves the QR payee from settings (none => no QR).
+# 2026-09-24 — H14: POST /cases/{case_id}/visit-extraction, a thin delegate
+#   to services/visit_report_extraction.py — a voice-note transcript becomes
+#   SUGGESTED form values the agent confirms; it writes nothing. case_id is
+#   checked as a UUID at the boundary (404, never a Postgres DataError).
 # ───────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 
@@ -130,6 +142,8 @@ from app.services.notification_service import NotificationService
 from app.services.media_service import MediaService
 from app.services.payment_service import PaymentService
 from app.services.otp_service import OtpService
+from app.services import visit_report_extraction
+from app.schemas.visit_extraction import VisitExtractionRequest, VisitExtractionResponse
 from app.schemas.agent import (
     AvailabilityCalendarResponse,
     BeatResponse,
@@ -473,11 +487,9 @@ class PaymentLinkRequest(BaseModel):
 
 @router.post("/cases/{case_id}/payment-link", response_model=PaymentLinkResponse)
 def create_payment_link(case_id: UUIDPath, req: PaymentLinkRequest, current_user: AgentOnly, db: DbSession):
-    # 2026-09-24 (A03): this route checked NO access at all — any agent could
-    # mint a UPI QR for any case id in the database.
+    # 2026-09-24 (hotfix PL-1): scoped to the caller's own case — see the service.
     agent = _get_agent_or_404(current_user, db)
-    case = _get_accessible_case_or_404(db, agent, case_id)
-    return PaymentService(db).create_payment_link(case.id, req.amount)
+    return PaymentService(db).create_payment_link(agent, case_id, req.amount)
 
 
 def _get_accessible_case_or_404(db: DbSession, agent: Agent, case_id: str) -> Case:
@@ -708,6 +720,9 @@ def log_call(case_id: UUIDPath, req: LogCallRequest, current_user: AgentOnly, db
 
     agent = _get_agent_or_404(current_user, db)
     case = _get_accessible_case_or_404(db, agent, case_id)
+    # ML-1: a stance only on an answered call — nobody said anything otherwise.
+    from app.services.borrower_stance import check_call_stance
+    check_call_stance(req.borrower_disposition, outcome=req.outcome)
 
     log = CallLog(
         case_id=case_id,
@@ -727,6 +742,7 @@ def log_call(case_id: UUIDPath, req: LogCallRequest, current_user: AgentOnly, db
         payment_intent_signalled=req.payment_intent_signalled,
         verbal_payment_date=req.verbal_payment_date,
         ai_intel_summary=req.ai_intel_summary,
+        borrower_disposition=req.borrower_disposition,
     )
     db.add(log)
     db.commit()
@@ -839,6 +855,40 @@ def transcribe_audio(current_user: AgentOnly, db: DbSession, audio: UploadFile =
         raise HTTPException(status_code=502, detail="Transcription failed") from exc
 
     return {"text": text}
+
+
+# ---------------------------------------------------------------------------
+# POST /agent/cases/{case_id}/visit-extraction  — 2026-09-24, H14
+# Voice note transcript → SUGGESTED form values (outcome, who was met, reason,
+# PTP amount and date) for the agent to confirm. Writes nothing. Logic and
+# every validation rule: services/visit_report_extraction.py.
+# ---------------------------------------------------------------------------
+
+@router.post("/cases/{case_id}/visit-extraction", response_model=VisitExtractionResponse)
+def extract_visit_fields(case_id: str, body: VisitExtractionRequest, current_user: AgentOnly, db: DbSession):
+    # TODO(A02): take RequestContext once it exists. Scoped STRICTLY: the case
+    # must be assigned to the caller (visit_report_extraction.own_case), the
+    # rule media_service, otp_service and the voice webhook use. (Until the
+    # audit of 5d70298 this used _get_accessible_case_or_404, the looser helper
+    # A03 is replacing, which also admits a teammate's or an unassigned case;
+    # and before a4c834b's audit its comment claimed that helper was "the same
+    # case-access check every other agent case route uses" — false.)
+    # TODO(B02): at the rebase onto standalone-p1, type case_id as
+    # app.core.ids.UUIDPath and delete this check (43's AST tripwire fails on a
+    # bare str *_id). Ids become native UUIDs, and on Postgres a malformed one
+    # would be a DataError (a 500); the body here is the unknown-case 404's, so
+    # the swap changes no behaviour.
+    try:
+        uuid.UUID(case_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Case not found")
+    agent = _get_agent_or_404(current_user, db)
+    case = visit_report_extraction.own_case(db, agent.id, case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="Case not found")
+    # The same figure PaymentService.set_ptp clamps a promise to.
+    remaining = max(0.0, (case.target_amount or 0.0) - (case.collected_amount or 0.0))
+    return visit_report_extraction.extract(body.transcript, remaining_amount=remaining).as_dict()
 
 
 # ---------------------------------------------------------------------------
@@ -1066,14 +1116,25 @@ def _twiml(body) -> FastAPIResponse:
 @router.post("/voice/outbound")
 async def voice_outbound(request: Request, db: DbSession):
     """Twilio's webhook for a browser call. Honoured only with a valid
-    X-Twilio-Signature, for a CASE the live session's agent is assigned; the
-    number dialled is resolved here, never taken from the request."""
+    X-Twilio-Signature, from our account and TwiML app, for a CASE the live
+    session's agent may act on (services/scope); the number dialled is
+    resolved here, never taken from the request (a client `PhoneTo` is
+    ignored)."""
     from app.core.audit import write_audit
     from app.models.audit_log import AuditAction
     from app.services import voice_service as voice
 
-    form = await request.form()
-    params = {k: v for k, v in form.multi_items()}
+    try:
+        form = await request.form()
+        params = {k: v for k, v in form.multi_items()}
+    except Exception:  # noqa: BLE001 — a body the parser cannot read is not Twilio's
+        params = None
+    client_ip = request.client.host if request.client else None
+    if params is None:
+        # Logged, not audited: anyone can POST here, and an audit row per junk
+        # request would let them fill the audit table (audit of 4dcd9dc).
+        logger.warning("voice.outbound_refused", reason=voice.BAD_SIGNATURE, detail="unparseable body", ip=client_ip)
+        raise HTTPException(status_code=403, detail="Forbidden")
     try:
         from twilio.twiml.voice_response import Dial, VoiceResponse
     except ImportError:
@@ -1082,13 +1143,15 @@ async def voice_outbound(request: Request, db: DbSession):
 
     url = voice.public_url(request.url.path, request.url.query)
     if not voice.voice_configured() or not voice.signature_ok(url, params, request.headers.get("X-Twilio-Signature")):
-        write_audit(db, action=AuditAction.VOICE_CALL_REFUSED, user_id=None, entity_type="voice_call",
-                    success=False, failure_reason=voice.BAD_SIGNATURE if url else voice.NOT_CONFIGURED,
-                    ip_address=request.client.host if request.client else None)
+        reason = voice.BAD_SIGNATURE if voice.voice_configured() else voice.NOT_CONFIGURED
+        # Logged, not audited — see above. Signed requests are audited below.
+        logger.warning("voice.outbound_refused", reason=reason, ip=client_ip)
         raise HTTPException(status_code=403, detail="Forbidden")
 
     resp = VoiceResponse()
     try:
+        if not voice.from_our_app(params):          # d4 hotfix-1: our account AND our TwiML app
+            raise voice.VoiceRefused(voice.NOT_OUR_APP)
         dest = voice.resolve_destination(db, from_param=params.get("From"), case_id=params.get("CaseId"))
     except voice.VoiceRefused as refused:
         write_audit(db, action=AuditAction.VOICE_CALL_REFUSED, user_id=refused.user_id, entity_type="case",
@@ -1097,11 +1160,27 @@ async def voice_outbound(request: Request, db: DbSession):
         return _twiml(resp)
 
     write_audit(db, action=AuditAction.VOICE_CALL_PLACED, user_id=dest.user_id, entity_type="case",
-                entity_id=dest.case_id, details={"to_last4": dest.e164[-4:]})
+                entity_id=dest.case_id)   # the case, never the number (not even its last 4)
     dial = Dial(caller_id=settings.TWILIO_PHONE_NUMBER)
     dial.number(dest.e164)
     resp.append(dial)
     return _twiml(resp)
+
+
+# ---------------------------------------------------------------------------
+# GET /agent/upi-config — 2026-09-24 (hotfix PAY-2)
+# The payee the collection QR pays, from settings. None when unset: the page
+# then offers no QR and the agent records the UTR by hand. The QR used to
+# hardcode a VPA and "ABC Bank" in the frontend bundle.
+# ---------------------------------------------------------------------------
+
+@router.get("/upi-config")
+def get_upi_config(current_user: AgentOnly):
+    from app.services.voice_service import _real
+    vpa, name = (settings.UPI_VPA or "").strip(), (settings.UPI_PAYEE_NAME or "").strip()
+    if not (_real(vpa) and _real(name)):
+        return {"available": False, "vpa": None, "payee_name": None}
+    return {"available": True, "vpa": vpa, "payee_name": name}
 
 
 # ─── Leave requests (2026-09-21) ─────────────────────────────────────────────

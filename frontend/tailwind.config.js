@@ -1,6 +1,10 @@
 /** @type {import('tailwindcss').Config} */
 export default {
-  content: ["./index.html", "./src/**/*.{js,ts,jsx,tsx}"],
+  // src/bank has its own scoped build (tailwind.bank.config.js via
+  // src/bank/bank.css). Excluding it here keeps this bundle byte-identical to
+  // what it was before the bank portal existed — bank class strings would
+  // otherwise add TIQCollect-themed copies of CC's classes to it (spec §7.2.4).
+  content: ["./index.html", "./src/**/*.{js,ts,jsx,tsx}", "!./src/bank/**"],
   theme: {
     container: {
       center: true,

@@ -48,16 +48,28 @@ from app.models.audit_log import AuditAction, AuditLog
 from app.core.audit import write_audit
 from app.models.agent import Agent
 from app.models.case import Case, CaseStatus, EscalationReason
+from app.models.customer import CUSTOMER_TAG_DECEASED
 from app.models.visit import Visit, VisitOutcome
 from app.schemas.agent import RecordVisitRequest
 from app.services.scope import agent_case_or_404, sync_assignee
 from app.services.ai_report_service import AIReportService
 from app.services.brand import brand_for
+from app.services.borrower_stance import check_visit_stance
 from app.services.notification_service import NotificationService
 
 logger = structlog.get_logger()
 
 _PAYMENT_OUTCOMES = {VisitOutcome.PAID_FULL, VisitOutcome.PART_PAID, VisitOutcome.PART_PAID_PTP}
+# 2026-09-24 (hotfix BL-5 / D10) — outcomes after which the borrower is sent
+# NOTHING: a deceased borrower's phone is the family's, and a disputed debt is
+# not one to remind anybody of. Hostile and do-not-contact borrowers are
+# excluded by their own flags (_should_send_visit_notice).
+_NO_VISIT_NOTICE_OUTCOMES = frozenset({VisitOutcome.DECEASED, VisitOutcome.DISPUTE})
+# The tag a DECEASED visit leaves on the customer (and outcomes.py censors on).
+DECEASED_TAG = CUSTOMER_TAG_DECEASED      # the hotfix's name, now an alias of the one definition
+# A case escalated for one of these is a disputed debt: no later visit to it
+# sends the borrower a notice either (coordinator re-audit of bb4371a).
+_DISPUTE_ESCALATIONS = frozenset({EscalationReason.DISPUTED_AMOUNT, EscalationReason.PROPERTY_DISPUTE})
 # A flaky connection can make an agent's app retry the same submit. Anything
 # for the same case/agent/outcome within this window is treated as the same
 # physical check-in, not a second real visit.
@@ -101,6 +113,10 @@ class VisitService:
 
         if case.customer.do_not_contact:
             raise HTTPException(status_code=403, detail="Customer is marked Do Not Contact")
+
+        # ML-1: a stance is the borrower's, so only a visit that met them may
+        # carry one. Before anything is written.
+        check_visit_stance(req.borrower_disposition, customer_met=req.customer_met, person_met=req.person_met)
 
         now_utc = datetime.now(timezone.utc)
 
@@ -185,6 +201,7 @@ class VisitService:
             person_met=req.person_met,
             default_reason=req.default_reason,
             not_met_reason=req.not_met_reason,
+            borrower_disposition=req.borrower_disposition,
             notes=req.notes,
             consent_given=req.consent_given,
             signature_key=req.signature_key,
@@ -261,7 +278,7 @@ class VisitService:
 
         # Send visit completion message for non-payment outcomes (payment
         # outcomes are handled by collect_payment)
-        if req.outcome not in _PAYMENT_OUTCOMES and case.customer and case.customer.phone_primary:
+        if self._should_send_visit_notice(req.outcome, case.customer, case):
             self._notify_visit_completed(agent, case, now_utc)
 
         return self._to_response(visit)
@@ -363,31 +380,54 @@ class VisitService:
             case.resolved_at = now_utc
             case.resolution_notes = "Customer deceased — do not contact"
             case.customer.do_not_contact = True
-            case.customer.tags = list(set(case.customer.tags or []) | {"DECEASED"})
+            case.customer.tags = list(set(case.customer.tags or []) | {CUSTOMER_TAG_DECEASED})
 
         elif case.status == CaseStatus.ASSIGNED:
             case.status = CaseStatus.IN_PROGRESS
 
+    @staticmethod
+    def _should_send_visit_notice(outcome, customer, case=None) -> bool:
+        """Payment outcomes get a receipt from collect_payment instead; the
+        outcomes in _NO_VISIT_NOTICE_OUTCOMES, hostile and do-not-contact
+        borrowers, and a borrower with no number get nothing.
+
+        The history counts, not only this visit's outcome (coordinator
+        re-audit of bb4371a): a later REVISIT or not-met visit to a borrower
+        already tagged DECEASED, or on a case escalated as a dispute, sends
+        nothing either."""
+        if outcome in _PAYMENT_OUTCOMES or outcome in _NO_VISIT_NOTICE_OUTCOMES:
+            return False
+        if customer is None or not customer.phone_primary:
+            return False
+        if customer.is_hostile or customer.do_not_contact or DECEASED_TAG in (customer.tags or []):
+            return False
+        if case is not None and case.is_escalated and case.escalation_reason in _DISPUTE_ESCALATIONS:
+            return False
+        return True
+
     def _notify_visit_completed(self, agent: Agent, case: Case, now_utc: datetime) -> None:
-        """Best-effort SMS/WhatsApp telling the customer a visit happened with no payment collected."""
-        loan = case.loan
-        masked_acct = "XXXX" + loan.loan_account_number[-4:] if loan else "XXXXXXXX"
-        outstanding = case.target_amount - case.collected_amount
-        visit_date = now_utc.strftime("%d %b %Y")
-        bn = brand_for(self.db, case=case).bank_name
+        """Best-effort SMS/WhatsApp telling the borrower a visit happened.
+
+        2026-09-24 (hotfix BL-5 / D10) — NEUTRAL. It used to carry the masked
+        loan number, the agent's name, "No payment collected" and the
+        outstanding amount. A phone is often shared or read by someone else, so
+        a message about a debt must not say how much or on what; it now says a
+        representative visited about the account, and where to call. The text
+        is NotificationService.visit_notice_text — one definition.
+        """
+        # Fail closed on the lender's name (coordinator re-audit of bb4371a): a
+        # blank one or an unresolved ${VAR} sends nothing, rather than a
+        # message about "your lender" from a number the borrower cannot place.
+        # 2026-09-28 (merge into standalone-p1): on v2 the lender is the case's
+        # TENANT (services/brand), not the free-text Loan.bank_name; an
+        # unresolved tenant is the same refusal. The send goes through the
+        # tenant-gated send_twilio, so a demo tenant's borrower is never texted.
+        from app.services.brand import tenant_of
+        tenant = tenant_of(self.db, case=case)
+        lender = ((tenant.bank_name if tenant else None) or "").strip()
+        if not lender or lender.startswith("${"):
+            logger.warning("visit.notice_skipped", case_id=case.id, reason="no lender name")
+            return
+        text = NotificationService.visit_notice_text(lender)
         e164 = "+" + NotificationService.normalize_phone(case.customer.phone_primary)
-        sms_body = (
-            f"Dear {case.customer.full_name}, {bn}'s field agent {agent.user.full_name} "
-            f"completed a visit on {visit_date} for loan {masked_acct}. "
-            f"No payment collected. Outstanding: Rs.{outstanding:,.0f}. - {bn}"
-        )
-        wa_body = (
-            f"*Visit Completed – {bn}*\n\n"
-            f"Dear {case.customer.full_name},\n\n"
-            f"Agent *{agent.user.full_name}* visited on {visit_date}.\n"
-            f"Loan Account: {masked_acct}\n"
-            f"Outstanding: Rs.{outstanding:,.0f}\n"
-            f"Payment: none collected.\n\n"
-            f"Please contact us to resolve your dues.\n– {bn}"
-        )
-        NotificationService.send_twilio(e164, sms_body, wa_body, db=self.db, case_id=case.id)
+        NotificationService.send_twilio(e164, text, text, db=self.db, case_id=case.id)

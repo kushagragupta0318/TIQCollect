@@ -8,6 +8,7 @@ import AgentLayout from "@/components/layout/AgentLayout";
 import ManagerLayout from "@/components/layout/ManagerLayout";
 
 import { useAuthStore } from "@/store/authStore";
+import { AGENT_ROLES, MANAGER_ROLES, homeFor } from "@/lib/roles";
 
 // Route-level code-splitting: separate heavy bundles (RecordVisit, Analytics, Maps)
 const LandingPage = lazy(() => import("@/pages/LandingPage"));
@@ -44,6 +45,11 @@ const SIMULATOR_ENABLED =
   import.meta.env.DEV || import.meta.env.VITE_ENABLE_SIMULATOR === "1";
 const SimulatorPage = lazy(() => import("@/pages/simulator/SimulatorPage"));
 
+// Bank portal (standalone plan §2.4–2.5, tasks UI02–UI05). One lazy module
+// owns the whole /bank/* tree — its role guard, the Command Center shell and
+// the scoped bank.css — so none of it is in the agency or agent bundles.
+const BankApp = lazy(() => import("@/bank/BankApp"));
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: { staleTime: 30_000, retry: 1 },
@@ -64,8 +70,7 @@ function PageLoader() {
 function RootRedirect() {
   const { isAuthenticated, user } = useAuthStore();
   if (!isAuthenticated || !user) return <LandingPage />;
-  if (user.role === "FIELD_AGENT") return <Navigate to="/agent/home" replace />;
-  return <Navigate to="/manager/overview" replace />;
+  return <Navigate to={homeFor(user.role)} replace />;
 }
 
 /**
@@ -122,7 +127,7 @@ export default function App() {
             <Route
               path="/agent/visit/:caseId"
               element={
-                <ProtectedRoute allowedRoles={["FIELD_AGENT"]}>
+                <ProtectedRoute allowedRoles={AGENT_ROLES}>
                   <div className="relative mx-auto flex min-h-svh max-w-md flex-col overflow-x-clip bg-background md:max-w-none">
                     <RecordVisitPage />
                   </div>
@@ -134,7 +139,7 @@ export default function App() {
             <Route
               path="/agent"
               element={
-                <ProtectedRoute allowedRoles={["FIELD_AGENT"]}>
+                <ProtectedRoute allowedRoles={AGENT_ROLES}>
                   <AgentLayout />
                 </ProtectedRoute>
               }
@@ -151,7 +156,7 @@ export default function App() {
             <Route
               path="/manager"
               element={
-                <ProtectedRoute allowedRoles={["AGENCY_MANAGER", "AGENCY_ADMIN"]}>
+                <ProtectedRoute allowedRoles={MANAGER_ROLES}>
                   <ManagerLayout />
                 </ProtectedRoute>
               }
@@ -165,6 +170,10 @@ export default function App() {
               <Route path="analytics" element={<ManagerAnalyticsPage />} />
               <Route path="compliance" element={<ManagerCompliancePage />} />
             </Route>
+
+            {/* Bank portal — roles BANK_ADMIN / BANK_ANALYST / BANK_TECHOPS /
+                PLATFORM_ADMIN, guarded inside BankApp. */}
+            <Route path="/bank/*" element={<BankApp />} />
 
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

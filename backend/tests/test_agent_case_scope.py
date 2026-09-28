@@ -136,7 +136,8 @@ def test_a_refused_out_of_hours_visit_does_not_take_the_case_over(w, monkeypatch
     from app.models.visit import VisitOutcome
     from app.services import visit_service
     monkeypatch.setattr(visit_service, "is_within_contact_hours", lambda now=None: False)
-    req = NS(outcome=VisitOutcome.NOT_AVAILABLE, check_in_latitude=28.49, check_in_longitude=77.09)
+    req = NS(outcome=VisitOutcome.NOT_AVAILABLE, check_in_latitude=28.49, check_in_longitude=77.09,
+             borrower_disposition=None, customer_met=False, person_met=None)   # stance fields (v1 main ML-1)
     with pytest.raises(HTTPException) as exc:
         visit_service.VisitService(w["db"]).record_visit(w["agent"], w["cases"]["handover"], req)
     assert exc.value.status_code == 403

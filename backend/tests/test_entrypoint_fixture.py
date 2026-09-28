@@ -334,3 +334,90 @@ def test_a_bad_db_wait_is_defaulted_or_capped_not_an_instant_refusal(tmp_path, v
     assert f"waiting up to {expect_wait}s" in proc.stdout
     assert f"after {expect_wait}s" in proc.stdout
     assert _starts(calls).count("psql") == 1 + expect_wait // 5
+# ── 2026-09-24 (hotfix DEMO-LOGIN, merged from v1 main 2026-09-28 onto the v2
+#    generation harness: seeded -> generation "v2", unseeded -> "empty" with a v2
+#    fixture; v1's committed-fixture test stays out until B18, see the docstring) — the master login on every boot ──────────
+_SECRET = "correct-horse-battery-staple-2026"
+
+
+@pytest.mark.parametrize("seeded", [True, False])
+def test_the_master_login_is_applied_on_every_boot_when_set(tmp_path, seeded):
+    proc, calls = _run(tmp_path, generation="v2" if seeded else "empty", fixture="v2",
+                       env={"DEMO_MASTER_PASSWORD": _SECRET})
+    assert proc.returncode == 0, proc.stderr
+    assert "python -m scripts.apply_demo_logins" in calls
+    # after any restore or seed, never before it
+    idx = calls.index("python -m scripts.apply_demo_logins")
+    assert all(i < idx for i, c in enumerate(calls) if c.startswith(("pg_restore", "alembic")) or "seed_data" in c)
+
+
+def test_the_master_login_is_not_touched_when_unset(tmp_path):
+    proc, calls = _run(tmp_path, generation="v2", fixture="v2", env={"DEMO_MASTER_PASSWORD": ""})
+    assert proc.returncode == 0, proc.stderr
+    assert not any("apply_demo_logins" in c for c in calls)
+
+
+def test_the_password_never_appears_on_a_command_line(tmp_path):
+    proc, calls = _run(tmp_path, generation="v2", fixture="v2", env={"DEMO_MASTER_PASSWORD": _SECRET})
+    assert not any(_SECRET in c for c in calls)
+    assert _SECRET not in proc.stdout and _SECRET not in proc.stderr
+
+
+@pytest.mark.parametrize("rc,says,never", [
+    (0, "demo master login applied", "NOT applied"),
+    (1, "demo master login NOT applied", "login applied"),
+    (3, "demo master login not configured", "login applied"),
+])
+def test_the_entrypoint_reports_what_the_step_did_and_still_starts(tmp_path, rc, says, never):
+    """Exit 1 is a refusal (short password, DEMO_MODE off, wrong accounts),
+    exit 3 "not configured". Neither may read as "applied" (audit of 4dcd9dc:
+    a run that changed nothing printed "applied"), and neither stops the
+    container."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    log = tmp_path / "calls.log"
+    for name in ("pg_isready", "pg_restore", "alembic"):
+        _stub(bindir, name)
+    _stub(bindir, "psql", "echo v2")          # an initialised v2 database
+    _stub(bindir, "python", f'case "$*" in *apply_demo_logins*) exit {rc};; esac')
+    e = {**os.environ, "PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}", "STUB_LOG": str(log),
+         "DATABASE_URL": "postgresql+psycopg2://u:p@db:5432/fieldops", "RUN_SEED": "true",
+         "DEMO_MASTER_PASSWORD": _SECRET}
+    proc = subprocess.run([BASH, str(ENTRYPOINT), "echo", "api-started"], env=e, capture_output=True,
+                          text=True, cwd=tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    assert "api-started" in proc.stdout and says in proc.stdout
+    assert never not in proc.stdout
+
+
+def _boot(tmp_path, command: list[str], env: dict) -> tuple[subprocess.CompletedProcess, list[str]]:
+    """Boot the entrypoint with a real service command (the api's uvicorn, the
+    worker's celery), against a database that is already seeded."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    log = tmp_path / "calls.log"
+    for name in ("pg_isready", "pg_restore", "alembic", "python", "uvicorn", "celery"):
+        _stub(bindir, name)
+    _stub(bindir, "psql", "echo v2")          # an initialised v2 database
+    e = {**os.environ, "PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}", "STUB_LOG": str(log),
+         "DATABASE_URL": "postgresql+psycopg2://u:p@db:5432/fieldops", **env}
+    proc = subprocess.run([BASH, str(ENTRYPOINT), *command], env=e, capture_output=True, text=True, cwd=tmp_path)
+    return proc, (log.read_text().splitlines() if log.exists() else [])
+
+
+def test_the_api_applies_the_master_login_on_restart_even_without_run_seed(tmp_path):
+    """The dev compose runs the api with RUN_SEED=false — only the one-shot seed
+    container has it true. Inside the RUN_SEED gate the step ran once, at first
+    bring-up, and never on the restart that deploys it (review of 4dcd9dc)."""
+    proc, calls = _boot(tmp_path, ["uvicorn", "app.main:app"],
+                        {"RUN_SEED": "false", "DEMO_MASTER_PASSWORD": _SECRET})
+    assert proc.returncode == 0, proc.stderr
+    assert "python -m scripts.apply_demo_logins" in calls
+    assert calls[-1].startswith("uvicorn"), "the API still starts, after the step"
+
+
+def test_celery_never_runs_the_master_login(tmp_path):
+    proc, calls = _boot(tmp_path, ["celery", "-A", "app.workers.celery_app", "worker"],
+                        {"RUN_SEED": "false", "DEMO_MASTER_PASSWORD": _SECRET})
+    assert proc.returncode == 0, proc.stderr
+    assert not any("apply_demo_logins" in c for c in calls)
