@@ -8,6 +8,9 @@
 # It hangs off the app directly rather than off api_router because the
 # integration contract fixes its paths at /api/field-ops/*, outside our
 # /api/v1 namespace. See api/v1/endpoints/field_ops.py for the mapping.
+# 2026-09-24 — The SPA catch-all keeps static file serving inside the
+#   static root (_spa_target); mounting moved into _mount_spa so it can be
+#   tested over HTTP. See the note at _spa_target.
 import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, status
@@ -172,13 +175,55 @@ app.include_router(field_ops.router)
 # entry — the browser only ever talks to one host.
 _STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
 
-if os.path.isdir(_STATIC_DIR):
+
+def _within(path: str, root: str) -> bool:
+    return path == root or path.startswith(root + os.sep)
+
+
+# 2026-09-24 — static file serving could read outside the static root. The
+# requested path is now checked on its face (no NUL byte, not absolute, still
+# under static/ after normpath) and then resolved with realpath, which also
+# follows symlinks; anything that does not land inside static/ answers the
+# normal 404. The api/ and ws/ refusal is unchanged.
+def _spa_target(full_path: str, static_dir: str) -> str | None:
+    """What the SPA catch-all should serve for `full_path`, or None for a 404."""
+    # Never let an unmatched API path fall through to index.html: a caller
+    # would get 200 and a page of HTML instead of an honest 404.
+    if full_path.startswith(("api/", "ws/")):
+        return None
+    # Refused before the filesystem is touched: a NUL byte (realpath raises on
+    # it), an absolute path (os.path.join would drop the root), and a path
+    # that leaves static/ on its face. splitdrive only ever finds a drive on
+    # Windows; on Linux the lexical normpath check below is what catches a
+    # drive-looking path.
+    if "\x00" in full_path or os.path.isabs(full_path) or os.path.splitdrive(full_path)[0]:
+        return None
+    # Both realpath calls sit inside one guard: anything the filesystem layer
+    # cannot resolve is a 404, never a 500.
+    try:
+        root = os.path.realpath(static_dir)
+        if not _within(os.path.normpath(os.path.join(root, full_path)), root):
+            return None
+        candidate = os.path.realpath(os.path.join(root, full_path))
+    except (ValueError, OSError):
+        return None
+    if not _within(candidate, root):
+        return None                  # a symlink that leaves static/
+    if full_path and os.path.isfile(candidate):
+        return candidate
+    return os.path.join(root, "index.html")
+
+
+def _mount_spa(app: FastAPI, static_dir: str) -> None:
+    """Serve the built SPA from `static_dir`: /assets as static files, every
+    other unmatched path through _spa_target. A function so a test can mount
+    it on a fresh app over a temporary directory and go through HTTP."""
     from fastapi.responses import FileResponse
     from fastapi.staticfiles import StaticFiles
 
-    _assets = os.path.join(_STATIC_DIR, "assets")
-    if os.path.isdir(_assets):
-        app.mount("/assets", StaticFiles(directory=_assets), name="assets")
+    assets = os.path.join(static_dir, "assets")
+    if os.path.isdir(assets):
+        app.mount("/assets", StaticFiles(directory=assets), name="assets")
 
     @app.get("/{full_path:path}")
     def spa(full_path: str):
@@ -188,11 +233,11 @@ if os.path.isdir(_STATIC_DIR):
         a hard refresh or a pasted link — the server has no such route, so
         without it every deep link would 404.
         """
-        # Never let an unmatched API path fall through to index.html: a caller
-        # would get 200 and a page of HTML instead of an honest 404.
-        if full_path.startswith(("api/", "ws/")):
+        target = _spa_target(full_path, static_dir)
+        if target is None:
             raise HTTPException(status_code=404, detail="Not Found")
-        candidate = os.path.join(_STATIC_DIR, full_path)
-        if full_path and os.path.isfile(candidate):
-            return FileResponse(candidate)
-        return FileResponse(os.path.join(_STATIC_DIR, "index.html"))
+        return FileResponse(target)
+
+
+if os.path.isdir(_STATIC_DIR):
+    _mount_spa(app, _STATIC_DIR)
