@@ -55,10 +55,11 @@ docker compose --profile routing up -d    # plus self-hosted OSRM (needs a map e
 
 - **`backend/.env` is optional.** The compose file sets everything the app needs to start. It
   was written for the platform, and its `${VAR}` references resolve there, not here.
-- **An empty database is filled from `backend/fixtures/fieldops-demo.dump`,** the committed demo
-  book. `docker-entrypoint.sh` restores it and then runs `alembic upgrade head`. With
-  `SEED_FROM_FIXTURE=false` the destructive `scripts/seed_data.py` runs instead. Provenance and
-  the refresh recipe are in `backend/fixtures/README.md`.
+- **An empty database is filled from `backend/fixtures/fieldops-demo-v2.dump`,** the committed
+  v2 demo book. `docker-entrypoint.sh` restores it in one transaction and then runs
+  `alembic upgrade head`; a v1 database or a v1 dump is refused. `fieldops-demo.dump` is the v1
+  book, kept only as the input of `scripts/migrate_v1_to_v2`. Provenance and the refresh recipe
+  are in `backend/fixtures/README.md`.
 - **Two Docker setups; keep both working.**
   - Dev: `docker-compose.yml` + `Dockerfile.dev`, hot reload over bind mounts.
   - Prod: `Dockerfile`, one non-root container serving the built SPA and the API, built by the

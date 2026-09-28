@@ -315,7 +315,7 @@ services:
 
   # ─── One-shot: schema + demo data ─────────────────────────────────────────
   # Since 2026-09-22 the entrypoint fills an empty database from the committed
-  # backend/fixtures/fieldops-demo.dump (the real demo book) and only falls back
+  # backend/fixtures/fieldops-demo-v2.dump (the v2 demo book) and only falls back
   # to scripts/seed_data.py when the fixture is absent or SEED_FROM_FIXTURE=false.
   # Separate from the API because the seed is destructive — it drops every table
   # and every enum in the public schema, then rebuilds. The entrypoint runs

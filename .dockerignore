@@ -27,6 +27,8 @@ data/incoming/
 backend/tests/
 # Unread CSV copy of the demo dump; fieldops-demo.dump itself IS needed.
 backend/fixtures/tables/
+# The v1 book: input to scripts/migrate_v1_to_v2 only. The v2 entrypoint refuses it.
+backend/fixtures/fieldops-demo.dump
 backend/docs/
 # Model artifacts: serving loads only the pipeline and calibrator (*.joblib),
 # metadata.json and the champion pointer. The development evidence (EDA plots,

@@ -1,12 +1,12 @@
-# The v2 PREVIEW stack — a second, separate stack beside the v1 dev stack.
+# A second v2 stack, beside the main dev stack (which is itself v2 since P1).
 #
 #   cp v2preview.env.example v2preview.env      # then set DEMO_MASTER_PASSWORD (16+ chars)
 #   docker compose -p tiq-v2 -f docker-compose.yml -f docker-compose.v2preview.yml up -d --build
 #   open http://localhost:5474                    (API http://localhost:8401/docs)
 #   docker compose -p tiq-v2 -f docker-compose.yml -f docker-compose.v2preview.yml down   # keeps its data
 #
-# Run it from a checkout of standalone-p1 (the v2 data model). It never touches
-# the v1 dev stack: its own project name (so its own volumes and network), its
+# Use it for a clean v2 book next to your working one. It never touches the
+# main dev stack: its own project name (so its own volumes and network), its
 # own container names, image tag and host ports. On the first start its seed
 # container restores backend/fixtures/fieldops-demo-v2.dump (B15) into its own
 # empty database; the master login below is applied on every API boot.

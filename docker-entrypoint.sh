@@ -24,7 +24,8 @@
 #   pg_dump/pg_restore that lived in one person's temp directory. That is the
 #   fix, made repeatable: the same dump is committed as
 #   backend/fixtures/fieldops-demo.dump (see fixtures/README.md for provenance
-#   and how to refresh it) and restored here.
+#   and how to refresh it) and restored here. Since the v2 data model the
+#   restored fixture is fieldops-demo-v2.dump; the v1 dump is refused (below).
 #
 #   Three properties worth keeping:
 #     * The fixture is restored and then `alembic upgrade head` runs, because
