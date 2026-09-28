@@ -28,6 +28,7 @@ from app.models.planning import PlacementDecision, PlacementRun
 from app.models.model_candidate import CandidateState, ModelCandidate
 from app.models.model_prediction import ModelPrediction
 from app.models.leave_request import LeaveRequest, LeaveStatus, LeaveType
+from app.models.analytics import MvRefreshLog
 # Registers the before_flush tenant filler (one definition of §2.5).
 from app.models import tenancy_listener  # noqa: F401,E402
 
@@ -57,7 +58,7 @@ __all__ = [
     "AllocationDecision", "AllocationOutcome",
     "AllocationSetting", "AllocationObjective",
     "PlacementRun", "PlacementDecision",
-    "ModelCandidate",
+    "ModelCandidate", "MvRefreshLog",
     "CandidateState",
     "ModelPrediction",
     "LeaveRequest", "LeaveStatus", "LeaveType",

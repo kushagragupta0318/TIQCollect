@@ -72,6 +72,23 @@ class Settings(BaseSettings):
     # Database
     DATABASE_URL: str
 
+    # 2026-09-28 (B14) — connection budget and time limits (docs/RESTRUCTURE-PLAN.md).
+    # Pool: each process held 20 + 40; four API workers and two Celery children
+    # could open 360 connections against Postgres' max_connections = 100. 5 + 5
+    # per process, and PgBouncer in front for anything larger.
+    DB_POOL_SIZE: int = 5
+    DB_MAX_OVERFLOW: int = 5
+    # Statement timeouts, applied with SET LOCAL at the start of every
+    # transaction (PgBouncer-safe: a session-level SET leaks or vanishes under
+    # transaction pooling). The API's is short, a request never needs more; the
+    # Celery workers' is long (allocation, ingest, retraining), set on worker start.
+    API_STATEMENT_TIMEOUT_MS: int = 15_000
+    JOB_STATEMENT_TIMEOUT_MS: int = 600_000
+    # The analytics read path (C*/D* bank screens). Unset = the primary; set it
+    # to a read replica when there is one. Every analytics transaction is
+    # READ ONLY either way.
+    ANALYTICS_DATABASE_URL: str = ""
+
     # Redis
     REDIS_URL: str = "redis://localhost:16379/0"
     CELERY_BROKER_URL: str = "redis://localhost:16379/1"

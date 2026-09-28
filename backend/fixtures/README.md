@@ -50,6 +50,14 @@ through `/auth/login` (200) and load `/auth/me`, `/manager/agents` (15) and
 `DEMO_EMAIL_DOMAINS` defaults to `girivanfinance.test,aravallifs.test` and the
 fixture's user count (24) is the cap for `DEMO_MASTER_DISABLE_OTHERS`.
 
+### Running it: the v2 preview stack (beside the v1 dev stack)
+
+From a checkout of `standalone-p1`: `cp v2preview.env.example v2preview.env`, set `DEMO_MASTER_PASSWORD` in it (16+ characters; the file is gitignored), then
+`docker compose -p tiq-v2 -f docker-compose.yml -f docker-compose.v2preview.yml up -d --build`.
+Open http://localhost:5474 (API :8401, Postgres :15433) and sign in as one of the three accounts above.
+Its own project, containers, image tag, ports and volumes: the v1 stack (:5473 / :8400) is untouched.
+Stop with the same command and `down`; add `-v` to throw its database away and restore the fixture afresh.
+
 ### Rebuilding it
 
 ```bash

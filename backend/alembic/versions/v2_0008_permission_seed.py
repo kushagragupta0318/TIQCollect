@@ -1,0 +1,267 @@
+"""Seed the capability registry: tenancy.permissions + tenancy.role_permissions (A01, design §5).
+
+The rows are the capability registry of ce's A01 (app/core/permissions.py,
+p1-ce 5552419, audited CLOSED), rendered here as FROZEN LITERALS, the same
+discipline v2_0001 applies to enums. A migration must not change what it
+inserts when the registry later changes. A new or changed capability is a
+new revision, and tests/test_permission_seed.py fails the moment these
+literals and the registry disagree (it runs wherever app.core.permissions
+exists, i.e. once A01 is merged into this branch).
+
+One deliberate difference from 5552419: `service.field_ops.read` is left
+out. The field_ops router was removed at the v1-main merge; ce's g02 drops the
+capability too. The code set equals g02's registry exactly (74 capabilities,
+138 grants).
+
+INSERT ... ON CONFLICT DO NOTHING: idempotent, never updates or deletes an
+existing row (the same semantics as ce's seed_permission_tables). Downgrade
+deletes exactly these rows, grants first.
+
+Revision ID: v2_0008
+Revises: v2_0007
+Create Date: 2026-09-28
+"""
+import sqlalchemy as sa
+from alembic import op
+
+revision = "v2_0008"
+down_revision = "v2_0007"
+branch_labels = None
+depends_on = None
+
+PERMISSIONS = (
+    # (code, category, description, requires_second_person, is_sensitive)
+    ('agency.audit.read', 'agency', 'the agency-scoped audit trail', False, False),
+    ('agency.contract.manage', 'agency', 'create or renew contracts, terms and coverage', False, True),
+    ('agency.documents.verify', 'agency', 'verify or reject agency documents', False, False),
+    ('agency.offboard', 'agency', 'offboard (recall and archive)', True, True),
+    ('agency.onboard', 'agency', 'create a draft agency, send the master-login invite', False, True),
+    ('agency.profile.read', 'agency', "own agency's contract, commission and SLA (plan §10)", False, False),
+    ('agency.read', 'agency', 'directory, scorecards, agency drill (read-only)', False, False),
+    ('agency.suspend', 'agency', 'suspend or reactivate an agency', False, True),
+    ('agency.update', 'agency', 'edit agency identity and contacts', False, False),
+    ('agency.users.manage', 'agency', 'create and manage agency managers', False, True),
+    ('agents.import', 'agents', 'bulk CSV import', False, True),
+    ('agents.manage', 'agents', 'create, edit, suspend, reset password or device, transfer manager', False, True),
+    ('ai_actions.approve', 'ai_actions', 'decide approval-queue items', False, True),
+    ('ai_agents.manage', 'ai_agents', 'create agents, versions, prompts, tools', False, True),
+    ('ai_agents.read', 'ai_agents', 'agent studio, read-only', False, False),
+    ('ai_agents.run', 'ai_agents', 'run agents and use the test console', False, False),
+    ('alerts.manage', 'alerts', 'edit alert thresholds', False, False),
+    ('allocation.plan', 'allocation', 'plan, re-plan, simulate', False, False),
+    ('allocation.rollback', 'allocation', 'roll back a run', False, True),
+    ('allocation.settings', 'allocation', 'allocation policy', False, False),
+    ('analytics.agency.read', 'analytics', 'the manager analytics pages', False, False),
+    ('bank.audit.read', 'bank', 'the bank-wide audit trail', False, False),
+    ('bank.regions.manage', 'bank', 'edit the region hierarchy and branches', False, False),
+    ('bank.settings.manage', 'bank', 'bank profile, brand, timezone', False, True),
+    ('bank.users.manage', 'bank', 'invite, deactivate and change the role of bank users; reset their passwords', False, True),
+    ('bank.users.sessions.revoke', 'bank', "revoke another user's sessions", False, True),
+    ('bank_feed.upload', 'bank_feed', 'submit a feed file (a person or a SERVICE account)', False, True),
+    ('cases.assign', 'cases', 'reassign cases', False, False),
+    ('cases.read', 'cases', 'cases in scope', False, False),
+    ('cc.drill.accounts', 'cc', 'account-level drill, including PII', False, True),
+    ('cc.read', 'cc', 'Command Center KPIs, tabs and alerts', False, False),
+    ('copilot.use', 'copilot', 'chat with the portfolio or field copilot', False, False),
+    ('data_quality.read', 'data_quality', 'feed data-quality results', False, False),
+    ('data_quality.release', 'data_quality', 'release quarantined feed rows', False, True),
+    ('disputes.manage', 'disputes', 'work disputes and complaints', False, False),
+    ('escalations.manage', 'escalations', 'acknowledge or resolve escalations', False, False),
+    ('field.call.log', 'field', 'log calls', False, False),
+    ('field.cases.read', 'field', 'own worklist', False, False),
+    ('field.leave.request', 'field', 'request leave', False, False),
+    ('field.location.report', 'field', 'location pings and check-in', False, False),
+    ('field.payment.collect', 'field', 'collect payments (OTP)', False, False),
+    ('field.ptp.manage', 'field', 'set or reschedule PTPs', False, False),
+    ('field.sos', 'field', 'raise SOS', False, False),
+    ('field.visit.record', 'field', 'record visits and evidence', False, False),
+    ('fraud.review', 'fraud', 'confirm or dismiss anomaly findings', False, False),
+    ('leave.approve', 'leave', 'approve, reject, revoke or mark leave', False, False),
+    ('llm_usage.read', 'llm_usage', 'LLM usage and cost', False, False),
+    ('ml.approve', 'ml', 'approve a candidate', True, True),
+    ('ml.promote', 'ml', 'promote a candidate (rewrites champion.txt)', True, True),
+    ('ml.read', 'ml', 'MLOps console', False, False),
+    ('ml.retrain', 'ml', 'start a retrain job', False, True),
+    ('payments.verify', 'payments', 'verify or reject payments', False, True),
+    ('placement.manual', 'placement', 'place loans by hand', False, True),
+    ('placement.read', 'placement', 'placements received or made', False, False),
+    ('placement.recall', 'placement', 'recall placements', False, True),
+    ('placement.run', 'placement', 'run or apply the placement engine', False, True),
+    ('platform.bank_admins.invite', 'platform', "invite a bank's first BANK_ADMIN", False, True),
+    ('platform.banks.manage', 'platform', 'create or suspend banks', False, True),
+    ('platform.simulator.use', 'platform', '/simulator outside DEMO_MODE (plan §11.1)', False, False),
+    ('platform.support.read', 'platform', 'audited read-only support access to a bank (Q20)', False, True),
+    ('reports.download', 'reports', 'download a pack (writes DATA_EXPORT)', False, True),
+    ('reports.generate', 'reports', 'generate a board or MIS pack', False, False),
+    ('reports.schedule', 'reports', 'schedule packs and set recipients', False, False),
+    ('self.mfa.manage', 'self', 'enrol or reset own TOTP', False, True),
+    ('self.password.change', 'self', 'change own password', False, True),
+    ('self.profile', 'self', 'read and edit own profile', False, False),
+    ('self.sessions.manage', 'self', 'list and revoke own sessions', False, False),
+    ('service.manager_api.read', 'service', "read-only /api/v1/manager/* for Command Center — DECLARED, NOT WIRED: manager.py's 48 routes still check ManagerOnly only (known issue 6, no manager_service.py to add a SERVICE+tenant-scope branch to). A SERVICE login reaches this capability in isolation (test_product_mode.py) but cannot yet reach a live manager.py route with it, so the TIQCOLLECT_AGENCY_ACCOUNTS replacement (plan §2.1) is not complete. Flagged 2026-09-28 (coordinator audit MED 1); wiring individual routes is follow-up work, not delivered here", False, False),
+    ('settlements.approve', 'settlements', 'approve a settlement (bank side)', False, True),
+    ('settlements.propose', 'settlements', 'propose a settlement', False, False),
+    ('strategy.approve', 'strategy', 'approve a simulation memo', False, True),
+    ('strategy.forecast', 'strategy', 'forecasts', False, False),
+    ('strategy.simulate', 'strategy', 'Monte Carlo and scenario runs', False, False),
+    ('team.read', 'team', "the manager view: own team's agents and cases", False, False),
+)
+ROLE_GRANTS = (
+    ('AGENCY_ADMIN', 'agency.audit.read'),
+    ('AGENCY_ADMIN', 'agency.profile.read'),
+    ('AGENCY_ADMIN', 'agency.users.manage'),
+    ('AGENCY_ADMIN', 'agents.import'),
+    ('AGENCY_ADMIN', 'agents.manage'),
+    ('AGENCY_ADMIN', 'allocation.plan'),
+    ('AGENCY_ADMIN', 'allocation.rollback'),
+    ('AGENCY_ADMIN', 'allocation.settings'),
+    ('AGENCY_ADMIN', 'analytics.agency.read'),
+    ('AGENCY_ADMIN', 'cases.assign'),
+    ('AGENCY_ADMIN', 'cases.read'),
+    ('AGENCY_ADMIN', 'copilot.use'),
+    ('AGENCY_ADMIN', 'disputes.manage'),
+    ('AGENCY_ADMIN', 'escalations.manage'),
+    ('AGENCY_ADMIN', 'fraud.review'),
+    ('AGENCY_ADMIN', 'leave.approve'),
+    ('AGENCY_ADMIN', 'payments.verify'),
+    ('AGENCY_ADMIN', 'placement.read'),
+    ('AGENCY_ADMIN', 'self.mfa.manage'),
+    ('AGENCY_ADMIN', 'self.password.change'),
+    ('AGENCY_ADMIN', 'self.profile'),
+    ('AGENCY_ADMIN', 'self.sessions.manage'),
+    ('AGENCY_ADMIN', 'settlements.propose'),
+    ('AGENCY_ADMIN', 'team.read'),
+    ('AGENCY_MANAGER', 'agents.manage'),
+    ('AGENCY_MANAGER', 'allocation.plan'),
+    ('AGENCY_MANAGER', 'allocation.rollback'),
+    ('AGENCY_MANAGER', 'allocation.settings'),
+    ('AGENCY_MANAGER', 'analytics.agency.read'),
+    ('AGENCY_MANAGER', 'cases.assign'),
+    ('AGENCY_MANAGER', 'cases.read'),
+    ('AGENCY_MANAGER', 'copilot.use'),
+    ('AGENCY_MANAGER', 'disputes.manage'),
+    ('AGENCY_MANAGER', 'escalations.manage'),
+    ('AGENCY_MANAGER', 'fraud.review'),
+    ('AGENCY_MANAGER', 'leave.approve'),
+    ('AGENCY_MANAGER', 'payments.verify'),
+    ('AGENCY_MANAGER', 'placement.read'),
+    ('AGENCY_MANAGER', 'self.mfa.manage'),
+    ('AGENCY_MANAGER', 'self.password.change'),
+    ('AGENCY_MANAGER', 'self.profile'),
+    ('AGENCY_MANAGER', 'self.sessions.manage'),
+    ('AGENCY_MANAGER', 'settlements.propose'),
+    ('AGENCY_MANAGER', 'team.read'),
+    ('BANK_ADMIN', 'agency.contract.manage'),
+    ('BANK_ADMIN', 'agency.documents.verify'),
+    ('BANK_ADMIN', 'agency.offboard'),
+    ('BANK_ADMIN', 'agency.onboard'),
+    ('BANK_ADMIN', 'agency.read'),
+    ('BANK_ADMIN', 'agency.suspend'),
+    ('BANK_ADMIN', 'agency.update'),
+    ('BANK_ADMIN', 'ai_actions.approve'),
+    ('BANK_ADMIN', 'ai_agents.read'),
+    ('BANK_ADMIN', 'alerts.manage'),
+    ('BANK_ADMIN', 'bank.audit.read'),
+    ('BANK_ADMIN', 'bank.regions.manage'),
+    ('BANK_ADMIN', 'bank.settings.manage'),
+    ('BANK_ADMIN', 'bank.users.manage'),
+    ('BANK_ADMIN', 'bank.users.sessions.revoke'),
+    ('BANK_ADMIN', 'bank_feed.upload'),
+    ('BANK_ADMIN', 'cc.drill.accounts'),
+    ('BANK_ADMIN', 'cc.read'),
+    ('BANK_ADMIN', 'copilot.use'),
+    ('BANK_ADMIN', 'data_quality.read'),
+    ('BANK_ADMIN', 'llm_usage.read'),
+    ('BANK_ADMIN', 'ml.read'),
+    ('BANK_ADMIN', 'placement.manual'),
+    ('BANK_ADMIN', 'placement.read'),
+    ('BANK_ADMIN', 'placement.recall'),
+    ('BANK_ADMIN', 'placement.run'),
+    ('BANK_ADMIN', 'platform.simulator.use'),
+    ('BANK_ADMIN', 'reports.download'),
+    ('BANK_ADMIN', 'reports.generate'),
+    ('BANK_ADMIN', 'reports.schedule'),
+    ('BANK_ADMIN', 'self.mfa.manage'),
+    ('BANK_ADMIN', 'self.password.change'),
+    ('BANK_ADMIN', 'self.profile'),
+    ('BANK_ADMIN', 'self.sessions.manage'),
+    ('BANK_ADMIN', 'settlements.approve'),
+    ('BANK_ADMIN', 'strategy.approve'),
+    ('BANK_ADMIN', 'strategy.forecast'),
+    ('BANK_ADMIN', 'strategy.simulate'),
+    ('BANK_ANALYST', 'agency.read'),
+    ('BANK_ANALYST', 'cc.drill.accounts'),
+    ('BANK_ANALYST', 'cc.read'),
+    ('BANK_ANALYST', 'copilot.use'),
+    ('BANK_ANALYST', 'placement.read'),
+    ('BANK_ANALYST', 'reports.download'),
+    ('BANK_ANALYST', 'reports.generate'),
+    ('BANK_ANALYST', 'self.mfa.manage'),
+    ('BANK_ANALYST', 'self.password.change'),
+    ('BANK_ANALYST', 'self.profile'),
+    ('BANK_ANALYST', 'self.sessions.manage'),
+    ('BANK_ANALYST', 'strategy.forecast'),
+    ('BANK_ANALYST', 'strategy.simulate'),
+    ('BANK_TECHOPS', 'agency.read'),
+    ('BANK_TECHOPS', 'ai_agents.manage'),
+    ('BANK_TECHOPS', 'ai_agents.read'),
+    ('BANK_TECHOPS', 'ai_agents.run'),
+    ('BANK_TECHOPS', 'bank.audit.read'),
+    ('BANK_TECHOPS', 'bank_feed.upload'),
+    ('BANK_TECHOPS', 'cc.read'),
+    ('BANK_TECHOPS', 'copilot.use'),
+    ('BANK_TECHOPS', 'data_quality.read'),
+    ('BANK_TECHOPS', 'data_quality.release'),
+    ('BANK_TECHOPS', 'llm_usage.read'),
+    ('BANK_TECHOPS', 'ml.approve'),
+    ('BANK_TECHOPS', 'ml.promote'),
+    ('BANK_TECHOPS', 'ml.read'),
+    ('BANK_TECHOPS', 'ml.retrain'),
+    ('BANK_TECHOPS', 'platform.simulator.use'),
+    ('BANK_TECHOPS', 'self.mfa.manage'),
+    ('BANK_TECHOPS', 'self.password.change'),
+    ('BANK_TECHOPS', 'self.profile'),
+    ('BANK_TECHOPS', 'self.sessions.manage'),
+    ('FIELD_AGENT', 'copilot.use'),
+    ('FIELD_AGENT', 'field.call.log'),
+    ('FIELD_AGENT', 'field.cases.read'),
+    ('FIELD_AGENT', 'field.leave.request'),
+    ('FIELD_AGENT', 'field.location.report'),
+    ('FIELD_AGENT', 'field.payment.collect'),
+    ('FIELD_AGENT', 'field.ptp.manage'),
+    ('FIELD_AGENT', 'field.sos'),
+    ('FIELD_AGENT', 'field.visit.record'),
+    ('FIELD_AGENT', 'self.mfa.manage'),
+    ('FIELD_AGENT', 'self.password.change'),
+    ('FIELD_AGENT', 'self.profile'),
+    ('FIELD_AGENT', 'self.sessions.manage'),
+    ('PLATFORM_ADMIN', 'platform.bank_admins.invite'),
+    ('PLATFORM_ADMIN', 'platform.banks.manage'),
+    ('PLATFORM_ADMIN', 'platform.simulator.use'),
+    ('PLATFORM_ADMIN', 'platform.support.read'),
+    ('PLATFORM_ADMIN', 'self.mfa.manage'),
+    ('PLATFORM_ADMIN', 'self.password.change'),
+    ('PLATFORM_ADMIN', 'self.profile'),
+    ('PLATFORM_ADMIN', 'self.sessions.manage'),
+    ('SERVICE', 'bank_feed.upload'),
+    ('SERVICE', 'service.manager_api.read'),
+)
+
+
+def upgrade() -> None:
+    perms = sa.table("permissions", sa.column("code"), sa.column("category"), sa.column("description"),
+                     sa.column("requires_second_person"), sa.column("is_sensitive"), schema="tenancy")
+    grants = sa.table("role_permissions", sa.column("role"), sa.column("permission_code"), schema="tenancy")
+    from sqlalchemy.dialects.postgresql import insert
+    op.get_bind().execute(insert(perms).values([
+        dict(code=c, category=cat, description=d, requires_second_person=sp, is_sensitive=s)
+        for c, cat, d, sp, s in PERMISSIONS]).on_conflict_do_nothing())
+    op.get_bind().execute(insert(grants).values([
+        dict(role=r, permission_code=c) for r, c in ROLE_GRANTS]).on_conflict_do_nothing())
+
+
+def downgrade() -> None:
+    bind = op.get_bind()
+    codes = [c for c, *_ in PERMISSIONS]
+    bind.execute(sa.text("DELETE FROM tenancy.role_permissions WHERE permission_code = ANY(:c)"), {"c": codes})
+    bind.execute(sa.text("DELETE FROM tenancy.permissions WHERE code = ANY(:c)"), {"c": codes})

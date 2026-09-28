@@ -144,7 +144,12 @@ def test_a_promise_resolved_after_as_of_is_not_counted_as_kept(world):
     the day after is future information, and the live schema — which stores only
     a PTP's current status — cannot express the distinction at all."""
     ledger, panel = world
-    ptps = ledger.ptps
+    # 2026-09-28: the panel counts only promises the PRODUCT can hold (a
+    # promise is for money: ledger/product_rules.product_promises, the same
+    # filter the materialiser applies). The expectation reads through it too,
+    # or it would count the simulator's zero-amount promises the panel drops.
+    from app.ml.simulation.ledger.product_rules import product_promises
+    ptps = product_promises(ledger.ptps)
     if not len(ptps):
         pytest.skip("no promises generated")
     for m in (3, 5):

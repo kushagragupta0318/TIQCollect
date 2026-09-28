@@ -38,27 +38,69 @@ NAMING_CONVENTION = {
     "ck": "ck_%(table_name)s_%(constraint_name)s",
 }
 
+# 2026-09-28 (B14): the pool comes from settings (5 + 5 per process, was
+# 20 + 40: six processes could open 360 connections against max_connections
+# 100), and every transaction starts with SET LOCAL statement_timeout. Nothing
+# is SET at session level any more: under PgBouncer transaction pooling a
+# session SET leaks to the next client or silently vanishes. (A connect-time
+# `SET timezone='UTC'` was here for v1; v2 carries timezone on the database,
+# v2_0001, and this branch refuses a v1 database at boot.)
 engine = create_engine(
     settings.DATABASE_URL,
     poolclass=QueuePool,
-    pool_size=20,
-    max_overflow=40,
+    pool_size=settings.DB_POOL_SIZE,
+    max_overflow=settings.DB_MAX_OVERFLOW,
     pool_pre_ping=True,
     pool_recycle=3600,
     echo=settings.DEBUG,
 )
 
+# The API's timeout until a Celery worker switches this process to the jobs'.
+_statement_timeout_ms = settings.API_STATEMENT_TIMEOUT_MS
 
-@event.listens_for(engine, "connect")
-def set_pg_session_defaults(dbapi_conn, _):
-    # Kept for the v1 database, which has no database-level timezone setting.
-    # v2 databases carry `timezone` and `search_path` themselves (v2_0001 sets
-    # both with ALTER DATABASE); this SET is then a harmless repeat.
-    with dbapi_conn.cursor() as cur:
-        cur.execute("SET timezone='UTC'")
+
+def use_job_statement_timeout() -> None:
+    """Called once when a Celery worker process starts (celery_app): nightly
+    jobs legitimately run for minutes; a request never should."""
+    global _statement_timeout_ms
+    _statement_timeout_ms = settings.JOB_STATEMENT_TIMEOUT_MS
+
+
+def statement_timeout_ms() -> int:
+    return _statement_timeout_ms
+
+
+def _on_begin_postgres(conn, *, read_only: bool = False) -> None:
+    if conn.dialect.name != "postgresql":
+        return                       # the SQLite suite has no such settings
+    conn.exec_driver_sql(f"SET LOCAL statement_timeout = {int(_statement_timeout_ms)}")
+    if read_only:
+        conn.exec_driver_sql("SET LOCAL transaction_read_only = on")
+
+
+@event.listens_for(engine, "begin")
+def _begin(conn):
+    _on_begin_postgres(conn)
 
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+# The analytics read path (B14): a replica when ANALYTICS_DATABASE_URL is set,
+# else the primary; every transaction on it is READ ONLY, so a bank screen can
+# never write, whatever its code does. A small pool of its own.
+analytics_engine = create_engine(
+    settings.ANALYTICS_DATABASE_URL or settings.DATABASE_URL,
+    poolclass=QueuePool, pool_size=2, max_overflow=3, pool_pre_ping=True, pool_recycle=3600,
+    echo=settings.DEBUG,
+)
+
+
+@event.listens_for(analytics_engine, "begin")
+def _begin_analytics(conn):
+    _on_begin_postgres(conn, read_only=True)
+
+
+AnalyticsSession = sessionmaker(autocommit=False, autoflush=False, bind=analytics_engine)
 
 
 class Base(DeclarativeBase):
@@ -67,6 +109,15 @@ class Base(DeclarativeBase):
 
 def get_db() -> Generator[Session, None, None]:
     db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+def get_analytics_db() -> Generator[Session, None, None]:
+    """The read-only analytics session (B14). Writes on it fail at Postgres."""
+    db = AnalyticsSession()
     try:
         yield db
     finally:
