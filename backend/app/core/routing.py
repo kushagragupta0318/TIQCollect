@@ -211,6 +211,8 @@ def fetch_osrm_table(coords: Sequence[tuple[float, float]]) -> TravelMatrix:
     n = len(coords)
     if n == 0:
         return TravelMatrix([], [], SOURCE_HAVERSINE)
+    if not _OSRM_BASE:                       # routing not configured: straight-line, no call
+        return _haversine_table(coords)
 
     coord_str = ";".join(f"{lon},{lat}" for lat, lon in coords)
     url = (f"{_OSRM_BASE}/table/v1/driving/{coord_str}"
@@ -267,24 +269,25 @@ def fetch_osrm_route(coords: Sequence[tuple[float, float]]) -> tuple[str | None,
     coord_str = ";".join(f"{lon},{lat}" for lat, lon in coords)
     url = (f"{_OSRM_BASE}/route/v1/driving/{coord_str}"
            f"?overview=full&geometries=polyline&steps=false")
-    try:
-        resp = httpx.get(url, timeout=_OSRM_TIMEOUT)
-        if resp.status_code == 200:
-            data = resp.json()
-            if data.get("code") == "Ok" and data.get("routes"):
-                route = data["routes"][0]
-                legs = [
-                    RouteLeg(from_stop=i - 1 if i > 0 else None, to_stop=i,
-                             seconds=int(leg.get("duration", 0)),
-                             metres=int(leg.get("distance", 0)))
-                    for i, leg in enumerate(route.get("legs", []))
-                ]
-                return route.get("geometry"), legs, SOURCE_OSRM
-            logger.warning("osrm.route.bad_code code=%s", data.get("code"))
-        else:
-            logger.warning("osrm.route.http_error status=%s", resp.status_code)
-    except Exception as exc:
-        logger.warning("osrm.route.failed error=%s", exc)
+    if _OSRM_BASE:                           # routing not configured: straight-line, no call
+        try:
+            resp = httpx.get(url, timeout=_OSRM_TIMEOUT)
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("code") == "Ok" and data.get("routes"):
+                    route = data["routes"][0]
+                    legs = [
+                        RouteLeg(from_stop=i - 1 if i > 0 else None, to_stop=i,
+                                 seconds=int(leg.get("duration", 0)),
+                                 metres=int(leg.get("distance", 0)))
+                        for i, leg in enumerate(route.get("legs", []))
+                    ]
+                    return route.get("geometry"), legs, SOURCE_OSRM
+                logger.warning("osrm.route.bad_code code=%s", data.get("code"))
+            else:
+                logger.warning("osrm.route.http_error status=%s", resp.status_code)
+        except Exception as exc:
+            logger.warning("osrm.route.failed error=%s", exc)
 
     legs = []
     for i in range(1, len(coords)):

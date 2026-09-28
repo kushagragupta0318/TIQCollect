@@ -4,21 +4,38 @@
 	email {$ACME_EMAIL}
 }
 
-# The app: the built SPA and /api/v1, one upstream.
-{$APP_DOMAIN} {
-	encode zstd gzip
+(security_headers) {
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
 		Referrer-Policy "strict-origin-when-cross-origin"
+		# Report-only until the SPA has been checked against it (maps tiles, the
+		# voice SDK, the files domain); then switch to Content-Security-Policy.
+		Content-Security-Policy-Report-Only "default-src 'self'; img-src 'self' data: blob: https:; media-src 'self' blob: https:; connect-src 'self' https: wss:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 		-Server
+	}
+}
+
+# The app: the built SPA and /api/v1, one upstream.
+{$APP_DOMAIN} {
+	import security_headers
+	encode zstd gzip
+	# Visit media never passes through here (pre-signed URLs go to FILES_DOMAIN);
+	# the largest body is a voice note to /agent/transcribe-audio.
+	request_body {
+		max_size 20MB
 	}
 	reverse_proxy api:8300
 }
 
 # Visit media: the browser PUTs and GETs pre-signed MinIO URLs here. The Host
 # header is passed through unchanged (Caddy's default), which the signature needs.
+# A pre-signed PUT carries no size limit of its own, so this is the only cap.
 {$FILES_DOMAIN} {
+	import security_headers
+	@admin path /minio/*
+	respond @admin 403
 	request_body {
 		max_size 200MB
 	}

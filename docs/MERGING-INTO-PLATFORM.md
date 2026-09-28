@@ -175,7 +175,7 @@ from the environment:
 | `DEMO_MASTER_ACCOUNTS` | three v2 emails, e.g. `ananya.iyer@girivanfinance.test,vikram.malhotra@aravallifs.test,piyush.sharma@aravallifs.test` | the v1 emails no longer exist |
 | `DEMO_MASTER_KEEP_ACCOUNTS` | the new Command Center service-login emails (P1-A) | |
 | `DEMO_EMAIL_DOMAINS` | leave the default (`girivanfinance.test,aravallifs.test`) | `DISABLE_OTHERS` refuses if any account is outside these |
-| `PRODUCT_MODE` | `embedded` (the default) on the platform | `standalone` is for a self-hosted bank portal. Any other value stops start-up |
+| `PRODUCT_MODE` | *(removed 2026-09-28, ADR 0009; ignored if set)* | it was read nowhere |
 | `TOTP_ENC_KEY` | a Fernet key from `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`, kept secret | unset: MFA enrolment is refused (`MFA_NOT_CONFIGURED`). Rotating it forces every enrolled user to re-enrol |
 | `BANK_MFA_REQUIRED` | unset for the demo | `true` blocks every bank user without TOTP, including the demo bank admin |
 | `DEMO_DEVICE_REBIND` | **unset** | it switches device binding off. Start-up is refused without `DEMO_MODE` |

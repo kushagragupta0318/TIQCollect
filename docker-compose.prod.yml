@@ -19,6 +19,7 @@ x-app: &app
   environment: &app-env
     APP_ENV: production
     DEBUG: "false"
+    SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY}
     DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-tiq}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-tiq}
     REDIS_URL: redis://redis:6379/0
     CELERY_BROKER_URL: redis://redis:6379/1
@@ -43,8 +44,8 @@ x-app: &app
       condition: service_healthy
     redis:
       condition: service_healthy
-    minio:
-      condition: service_started
+    minio-init:
+      condition: service_completed_successfully
 
 services:
   postgres:
@@ -79,8 +80,10 @@ services:
       retries: 20
 
   minio:
-    # Pin MINIO_TAG to a release you have tested; latest moves under you.
-    image: minio/minio:${MINIO_TAG:-latest}
+    # minio/minio is no longer pullable from Docker Hub or quay.io (checked
+    # 2026-09-28): see docs/DEPLOY.md, State today. MINIO_IMAGE names the image
+    # you have; pin it to a release you have tested.
+    image: ${MINIO_IMAGE:-minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e}
     restart: unless-stopped
     command: server /data
     environment:
@@ -89,6 +92,30 @@ services:
     volumes:
       - miniodata:/data
     networks: [tiq]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  # One-shot: the bucket exists and is private (no anonymous access), every start.
+  minio-init:
+    image: ${MINIO_IMAGE:-minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e}
+    restart: "no"
+    entrypoint: ["sh", "-c"]
+    command:
+      - >-
+        mc alias set tiq http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" >/dev/null &&
+        mc mb --ignore-existing tiq/$${BUCKET} &&
+        mc anonymous set none tiq/$${BUCKET}
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      BUCKET: ${MINIO_BUCKET_DOCUMENTS:-tiq-documents}
+    networks: [tiq]
+    depends_on:
+      minio:
+        condition: service_healthy
 
   # Builds or restores the database on first start (the only container with
   # RUN_SEED=true), then serves the API. Worker and beat wait for it.
@@ -102,7 +129,7 @@ services:
       # invented demo book instead: a demo host only, never real borrowers.
       SEED_FROM_FIXTURE: ${SEED_FROM_FIXTURE:-false}
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8300/api/v1/health', timeout=5)"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8300/api/v1/ready', timeout=5)"]
       interval: 15s
       timeout: 10s
       retries: 5

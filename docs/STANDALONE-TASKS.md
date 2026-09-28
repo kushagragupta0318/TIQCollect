@@ -112,7 +112,7 @@ P0 runs alongside P1. P3 and P5 may overlap once P1 is done.
 - [x] **A13** Postgres RLS on tenant tables + `BYPASSRLS` job role — only after A12 is green. *M* Step 1 (`v2_0012_rls`, branch `a13-rls`): policies enabled and proven as `tiq_app`, not enforced for the API (DATA-MODEL-V2 §8.6).
 - [ ] **A13b** **OWNER-gated.** Enforce RLS: API and workers log in as `tiq_app` / `tiq_jobs` (`JOBS_DATABASE_URL`), SECURITY DEFINER pre-auth lookups, tenant on the analytics session, MV refresh ownership, then `FORCE`. Plan: DATA-MODEL-V2 §8.6 step 2. Prerequisites from the Opus audit: system/NULL-bank audit rows via SECURITY DEFINER or tiq_jobs (pg test); tenant on the analytics session and workers as tiq_jobs; token-table SELECTs behind SECURITY DEFINER. *M*
 - [ ] **A14** Brand as data: "ABC Bank" in SMS/WhatsApp/receipts/UPI QR (7 files), "Agency Manager" header, RBI reg. no. on the ID card. Also the hardcoded Gurugram coordinates used when GPS fails at check-in (`AgentHomePage`) and visit submit (`RecordVisitPage`) — carried over from P0-02. *S*
-- [ ] **A15** `PRODUCT_MODE = standalone | embedded`; `/api/field-ops` contract preserved; `SERVICE` role accounts replace manager-password service logins. *S*
+- [ ] **A15** ~~`PRODUCT_MODE = standalone | embedded`; `/api/field-ops` contract preserved;~~ `SERVICE` role accounts replace manager-password service logins. *S* *(2026-09-28: `/api/field-ops` deleted (D4); `PRODUCT_MODE` removed, ADR 0009. The SERVICE role is kept, unwired.)*
 - [ ] **A16** New audit actions wired through `write_audit` (invites, sessions, agency lifecycle, placements). *S*
 
 ---

@@ -22,7 +22,7 @@ Files: [`docker-compose.prod.yml`](../docker-compose.prod.yml),
 > | **No load test** (B21) | Worker counts and pool sizes are estimates, not measurements | STANDALONE-TASKS B21, RESTRUCTURE-PLAN step 1.7 |
 > | **No offline field app** | An agent cannot record a visit without signal | PILOT-PLAN (offline outbox) |
 > | **No SMS provider with DLT registration** | Borrower OTPs, receipts and the post-visit message need an Indian DLT-registered sender. Twilio stays unset | PILOT-PLAN N06 / ECONOMICS §0 |
-> | **No first-admin command** | An empty (non-demo) database has no users, and nothing creates the first bank admin | to be built: a one-off `scripts/` command |
+> | **The MinIO image cannot be pulled** | `minio/minio` is refused by Docker Hub and quay.io (checked 2026-09-28). A host with no cached copy cannot start the stack as written | an owner decision: a self-built MinIO image, another S3-compatible store, or a managed S3. `MINIO_IMAGE` names whichever image is used |
 > | **Road routing is straight-line** unless you self-host OSRM | Travel-time estimates are straight-line estimates | [Routing](#routing) below |
 >
 > A demo host with the invented demo book is fine today: see [Demo host](#demo-host).
@@ -44,6 +44,8 @@ Files: [`docker-compose.prod.yml`](../docker-compose.prod.yml),
 - **Caddy is the only published service** (ports 80 and 443). It has a fixed address, and
   `FORWARDED_ALLOW_IPS` names exactly that address. The API therefore believes
   `X-Forwarded-For` from Caddy alone, and the login rate limit is per real client.
+- **Headers.** Caddy adds HSTS, `X-Frame-Options: DENY`, `nosniff` and a report-only
+  Content-Security-Policy. Switch the CSP to enforcing once the app has run clean under it.
 - **Two public names.** `APP_DOMAIN` serves the app. `FILES_DOMAIN` serves visit photos and
   recordings through pre-signed MinIO URLs: the browser talks to MinIO directly, and the
   signature binds the host name.
@@ -76,7 +78,8 @@ chmod 600 deploy/.env.prod
 
 Fill in `deploy/.env.prod`:
 - every value under **REQUIRED**;
-- the choices you need: LLM keys, `UPI_VPA`, `OSRM_BASE_URL`;
+- the choices you need: LLM keys, `UPI_VPA`, `OSRM_BASE_URL`, and `MINIO_IMAGE` (see State
+  today);
 - leave every **Demo only** line commented.
 
 The file itself says how to generate each secret.
@@ -92,7 +95,19 @@ $C logs -f api               # wait for "[entrypoint] empty database — creatin
   `upgrade head`) and sets the database's `search_path` and timezone. It also creates the
   `tiq_app` and `tiq_jobs` roles, because the Postgres user from the image may create roles.
   It loads **no data**. `SEED_FROM_FIXTURE` is `false` in the production compose file.
-- **Then** the worker and beat start, and Caddy gets certificates.
+- **Then** the worker and beat start, and Caddy gets certificates. A one-shot `minio-init`
+  container creates the media bucket and makes sure nothing in it is public.
+
+**Create the first bank and its admin.** There are no users yet. This prints a single-use link,
+once, valid for 72 hours, with which the admin chooses their own password. No password is
+chosen, printed or logged. The command refuses if the bank already has an admin.
+
+```bash
+$C exec api python -m scripts.create_first_admin --bank-code <CODE>     --bank-name "<legal name>" --bank-display "<short name>"     --email <admin email> --name "<full name>" --phone <10-digit mobile>
+```
+
+Hand the link to the admin over a channel you trust. From there the admin invites everyone
+else from the app.
 
 Verify, from outside the host:
 
@@ -105,6 +120,9 @@ Verify, from outside the host:
 - [ ] An OTP send response carries **no `demo_otp`** field.
 - [ ] `$C logs worker beat` shows no `REFUSING` and no `PermissionError`.
 - [ ] `$C exec api python -m scripts.check_migrations` exits 0.
+- [ ] `curl -s -o /dev/null -w '%{http_code}' https://$FILES_DOMAIN/tiq-documents/` returns
+      **403**: the bucket does not list to anonymous callers.
+- [ ] The first admin's link opens the set-password page, and the admin can sign in.
 
 ## 4. The database
 
@@ -125,8 +143,9 @@ Verify, from outside the host:
   $C run --rm --entrypoint alembic api upgrade head
   ```
 - **Connection budget.** Each process holds up to `DB_POOL_SIZE + DB_MAX_OVERFLOW` (5 + 5)
-  connections. Keep (API workers + Celery worker processes + 1 beat) × 10 under Postgres'
-  `max_connections` (100 by default). Past about 8 processes, put PgBouncer in front,
+  connections, plus 2 + 3 for the analytics read pool, which uses the primary unless
+  `ANALYTICS_DATABASE_URL` names a replica. That is 15 per process. Keep (API workers + Celery
+  worker processes + 1 beat) × 15 under Postgres' `max_connections` (100 by default). Past about 6 processes, put PgBouncer in front,
   in transaction mode. Statement timeouts are `SET LOCAL` per transaction, which PgBouncer
   tolerates.
 - **Migrations never run at boot on a populated database.** Every container checks the
@@ -205,8 +224,8 @@ docker rm -f tiq-restore-test
 ## 8. Operations
 
 - **Health.**
-  - `/api/v1/health`: the process is alive. The container healthcheck uses it.
-  - `/api/v1/ready`: dependencies. It returns 503 when Postgres or Redis is down.
+  - `/api/v1/health`: the process is alive.
+  - `/api/v1/ready`: dependencies. The container healthcheck uses it. It returns 503 when Postgres or Redis is down.
     `rate_limit_storage` reads `memory-fallback` while Redis is unreachable; limits still
     apply, per process.
 - **Logs.** `$C logs <service>`. The app logs JSON through structlog. Two things are worth an
@@ -236,8 +255,9 @@ docker rm -f tiq-restore-test
 - **For road distances,** run OSRM on a maps VM from an India extract and set
   `OSRM_BASE_URL=http://<maps-vm>:5000`. The four commands that build an extract are in the
   `osrm` block of `docker-compose.yml`.
-- **Never use `router.project-osrm.org`,** the code's default. It is a public demo server and
-  would receive every borrower's coordinates.
+- **Never use `router.project-osrm.org`.** It is a public demo server and would receive every
+  borrower's coordinates. It was the code's default until 2026-09-28. The default is now empty:
+  straight-line estimates, and no call made at all.
 
 ## Demo host
 

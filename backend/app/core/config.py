@@ -121,9 +121,10 @@ class Settings(BaseSettings):
     # Google Maps
     GOOGLE_MAPS_API_KEY: str = ""
 
-    # OSRM routing — public demo server by default; point this at a self-hosted
-    # OSRM instance (or paid provider) in production via .env, no code change needed.
-    OSRM_BASE_URL: str = "http://router.project-osrm.org"
+    # OSRM routing: a self-hosted instance, e.g. http://osrm:5000. Empty (the
+    # default, owner 2026-09-28) = straight-line estimates. Never the public demo
+    # server: it would receive every borrower's coordinates.
+    OSRM_BASE_URL: str = ""
 
     # Estimated time an agent spends actually doing a visit (verifying identity,
     # discussing payment, filling the visit form) — added to travel time when
@@ -234,6 +235,17 @@ class Settings(BaseSettings):
         if self.DEMO_DEVICE_REBIND and not self.DEMO_MODE:
             raise ValueError("DEMO_DEVICE_REBIND=true switches device binding off and needs "
                              "DEMO_MODE=true as well; unset it on a real deployment.")
+        return self
+
+    @model_validator(mode="after")
+    def _production_secrets(self):
+        # Refuse to start rather than run with a guessable JWT key, or with MFA
+        # mandatory and no key to store a TOTP secret under (nobody could enrol).
+        if self.APP_ENV.strip().lower() == "production" and len(self.SECRET_KEY.strip()) < 32:
+            raise ValueError("SECRET_KEY must be at least 32 characters when APP_ENV=production.")
+        key = self.TOTP_ENC_KEY.strip()
+        if self.BANK_MFA_REQUIRED.strip().lower() == "true" and (not key or key.startswith("${")):
+            raise ValueError("BANK_MFA_REQUIRED=true needs TOTP_ENC_KEY; without it no bank user can enrol.")
         return self
     # customer_ref of that showcase customer. Also what _sync_demo_contact()
     # renames on startup, so the name/phone and the anchoring agree by

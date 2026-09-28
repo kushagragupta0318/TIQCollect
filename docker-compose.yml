@@ -69,9 +69,10 @@ services:
   # ─── OSRM (road routing over OpenStreetMap) ───────────────────────────────
   # OPT-IN. Start it with:  docker compose --profile routing up -d
   #
-  # WHY IT IS HERE. settings.OSRM_BASE_URL defaults to router.project-osrm.org,
-  # the PUBLIC DEMO SERVER: rate-limited, no SLA, and its usage policy rules out
-  # production traffic. The nightly planner fires one (stops+1)^2 table call per
+  # WHY IT IS HERE. settings.OSRM_BASE_URL is empty by default (straight-line
+  # estimates); until 2026-09-28 it was router.project-osrm.org, the PUBLIC DEMO
+  # SERVER: rate-limited, no SLA, it received borrower coordinates, and its usage
+  # policy rules out production traffic. The nightly planner fires one (stops+1)^2 table call per
   # agent against it at 20:00, and core/routing falls back to straight-line
   # Haversine whenever it is refused — which is how every beat ETA came to be
   # crow-flies without anyone noticing.
