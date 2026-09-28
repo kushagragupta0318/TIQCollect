@@ -19,6 +19,13 @@
 #     re-bind is recorded instead of refused. The manager's "reset device
 #     binding" action (G01) unbinds.
 #   - Tokens carry bank_id / agency_id (the request context, A02) and sid.
+# 2026-09-28 (P1 A07 / A08 / A16, d4 — a shared-file edit announced to 43).
+#   login() takes an optional totp_code and gains three branches after the
+#   password and active checks, before any session: an enrolled user's code
+#   (MFA_REQUIRED / MFA_INVALID, the latter counted toward the lockout), then
+#   must_change_password (a FIRST_LOGIN ticket instead of a session), then the
+#   BANK_MFA_REQUIRED enrollment ticket. revoke_user_sessions writes one
+#   SESSION_REVOKED row per call. Frozen signatures are unchanged.
 # ───────────────────────────────────────────────────────────────────────────
 from datetime import datetime, timedelta, timezone
 from sqlalchemy.exc import IntegrityError
@@ -26,6 +33,7 @@ from sqlalchemy.orm import Session
 from fastapi import HTTPException, status, Request
 
 from app.core.config import settings
+from app.core.errors import AppException, ErrorCode
 from app.models.agent import Agent, AgentDevice
 from app.models.identity import UserSession
 from app.models.user import User, UserRole
@@ -116,8 +124,18 @@ def revoke_user_sessions(db: Session, user_id: str, reason: str, *, by: str | No
     q = db.query(UserSession).filter(UserSession.user_id == user_id, UserSession.revoked_at.is_(None))
     if except_sid:
         q = q.filter(UserSession.id != except_sid)
-    return q.update({UserSession.revoked_at: datetime.now(timezone.utc), UserSession.revoked_reason: reason,
-                     UserSession.revoked_by: by}, synchronize_session=False)
+    count = q.update({UserSession.revoked_at: datetime.now(timezone.utc), UserSession.revoked_reason: reason,
+                      UserSession.revoked_by: by}, synchronize_session=False)
+    if count:
+        # 2026-09-28 (A16, d4) — ONE SESSION_REVOKED row per call, however
+        # many sessions it ended (43's ask: a mass revoke is one row). Added to
+        # the caller's transaction rather than through write_audit, which
+        # commits on its own: this function's contract is "caller commits",
+        # and the row must land exactly when the revocation does.
+        db.add(AuditLog(id=str(uuid.uuid4()), created_at=datetime.now(timezone.utc), user_id=by or user_id,
+                        action=AuditAction.SESSION_REVOKED, entity_type="User", entity_id=user_id,
+                        details={"reason": reason, "count": count, "kept_sid": except_sid}, success=True))
+    return count
 
 
 def _enforce_device_binding(db: Session, user: User, device_id: str, request: Request) -> None:
@@ -169,7 +187,8 @@ def _login_response(user: User, tokens: dict) -> dict:
     }
 
 
-def login(db: Session, email: str, password: str, device_id: str, request: Request) -> dict:
+def login(db: Session, email: str, password: str, device_id: str, request: Request, *,
+          totp_code: str | None = None) -> dict:
     user: User | None = db.query(User).filter(User.email == email).first()
 
     if not user:
@@ -191,6 +210,27 @@ def login(db: Session, email: str, password: str, device_id: str, request: Reque
 
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account deactivated")
+
+    # 2026-09-28 (A08, A07; d4) — after the password, before any session.
+    # The second factor comes FIRST: a stolen password alone must not reach
+    # the forced-change ticket below, or it could take over an MFA account.
+    from app.services import mfa_service, password_service
+    verdict = mfa_service.check_login_code(db, user, totp_code)
+    if verdict != "ok":
+        if verdict == "invalid":
+            user.failed_login_attempts += 1
+            if user.failed_login_attempts >= MAX_FAILED_ATTEMPTS:
+                user.locked_until = datetime.now(timezone.utc) + timedelta(minutes=LOCKOUT_MINUTES)
+            db.commit()
+            _log(db, AuditAction.MFA_FAILED, user.id, request, success=False, failure_reason="Wrong TOTP code")
+            raise AppException(401, ErrorCode.MFA_INVALID, "That code is not right.")
+        raise AppException(401, ErrorCode.MFA_REQUIRED, "Enter the 6-digit code from your authenticator app.")
+    if user.must_change_password:
+        # No session: a single-use ticket to set a new password (FIRST_LOGIN).
+        return password_service.first_login_ticket(db, user, request)
+    gate = mfa_service.enrollment_gate(db, user)
+    if gate is not None:
+        return gate
 
     _enforce_device_binding(db, user, device_id, request)
 

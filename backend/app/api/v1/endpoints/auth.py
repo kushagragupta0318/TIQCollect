@@ -1,16 +1,19 @@
 from fastapi import APIRouter, Request
 from app.core.dependencies import DbSession, CurrentUser, TokenPayload
 from app.core.ratelimit import AUTH_LIMIT, limiter
-from app.schemas.auth import LoginRequest, LoginResponse, QuickLoginRequest, RefreshRequest, TokenResponse, MessageResponse
+from app.schemas.auth import LoginRequest, LoginResponse, NextStepResponse, QuickLoginRequest, RefreshRequest, TokenResponse, MessageResponse
 from app.services import auth_service
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
-@router.post("/login", response_model=LoginResponse, summary="Login — returns JWT access + refresh tokens")
+@router.post("/login", response_model=LoginResponse | NextStepResponse,
+             summary="Login — returns JWT access + refresh tokens, or the step still owed")
 @limiter.limit(AUTH_LIMIT)
 async def login(body: LoginRequest, request: Request, db: DbSession):
-    return auth_service.login(db, body.email, body.password, body.device_id, request)
+    # 2026-09-28 (A07/A08, d4): totp_code for enrolled users; a NextStepResponse
+    # (CHANGE_PASSWORD / ENROLL_MFA) when the password was right but no session opens.
+    return auth_service.login(db, body.email, body.password, body.device_id, request, totp_code=body.totp_code)
 
 
 # collection_dashboard: lets the multi-agency dashboard deep-link into a manager's session

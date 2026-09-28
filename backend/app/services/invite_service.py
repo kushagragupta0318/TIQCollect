@@ -79,9 +79,11 @@ def _normalise_email(email: str) -> str:
 
 def _normalise_phone(phone: str) -> str:
     digits = re.sub(r"\D", "", phone or "")
+    if len(digits) == 12 and digits.startswith("91"):
+        digits = digits[2:]              # the book stores Indian numbers as 10 digits
     if not 10 <= len(digits) <= 15:
         raise AppException(422, ErrorCode.VALIDATION_ERROR, "Enter a phone number of 10 to 15 digits.")
-    return digits[-15:]
+    return digits
 
 
 def status_of(inv: UserInvite) -> str:
@@ -288,8 +290,10 @@ def accept_invite(db: Session, token: str, password: str, device_id: str, reques
     (db.query(UserInvite).filter(UserInvite.id == inv.id)
      .update({UserInvite.accepted_user_id: user.id}, synchronize_session=False))
     # D03 (P2) hooks here for purpose AGENCY_MASTER_LOGIN: activate the agency.
+    # A bank user under BANK_MFA_REQUIRED gets the enrollment ticket, not a
+    # session, exactly as at login.
     from app.services import mfa_service
-    gate = mfa_service.login_gate(db, user, request=request, code=None, allow_enrollment_ticket=True)
+    gate = mfa_service.enrollment_gate(db, user)
     if gate is not None:
         db.commit()
         _audit_accept(db, inv, user, request)
