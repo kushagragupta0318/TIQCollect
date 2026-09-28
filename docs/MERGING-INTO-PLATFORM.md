@@ -1,5 +1,11 @@
 # Merging this repo back into the Collections platform
 
+> **HISTORICAL since 2026-09-28.** TIQCollect is a standalone product (ADR 0009); nothing is
+> merged into the Collections repo any more. Deploy with [DEPLOY.md](DEPLOY.md). This file is
+> kept as the record of how the platform copy was fed, and for the `fieldops.transorg.ai` host
+> for as long as it runs. Its Command Center parts (`TIQCOLLECT_AGENCY_ACCOUNTS`, the
+> service-login rotation, CC entries in `DEMO_MASTER_KEEP_ACCOUNTS`) apply to that host only.
+
 This repo was extracted from the `Collections` monorepo (`field-ops-stub/`) on
 2026-08-17 with `git subtree split`. Work continues in both places, so the two
 copies drift. This is how to fold this repo's work back into the platform.

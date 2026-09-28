@@ -177,6 +177,9 @@ Bank ─┬─ Region hierarchy (Zone → Region → State → City/Branch)
 
 ### 2.3 Deployment modes
 
+**Superseded 2026-09-28 by ADR 0009:** TIQCollect is standalone only, and `PRODUCT_MODE` was
+removed (it was never read). The original text follows.
+
 `PRODUCT_MODE = standalone | embedded`.
 
 - **Standalone** turns on the bank portal.

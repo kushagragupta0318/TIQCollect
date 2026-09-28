@@ -15,7 +15,7 @@ Status: **proposal, 2026-09-24**, for the owner's approval.
 ```
  browser / phone (one SPA: /agent · /manager · /bank)
         │ HTTPS
-   reverse proxy (Caddy on the platform) ── sets X-Forwarded-For
+   reverse proxy (Caddy, docs/DEPLOY.md) ── sets X-Forwarded-For
         │
    api  (FastAPI, N uvicorn workers, stateless) ──── SSE /events/stream
         │         │           │            │
@@ -149,7 +149,7 @@ src/
 | Pure | `domain/`, `ml/` maths, `frontend/src/lib` | fast, no I/O |
 | Service | use cases on the shared test engine (`tests/_db.py`, B02) | SQLite |
 | Postgres | partitions, RLS, materialised views, migrations | `tests/pg/` (B19) |
-| API contract | every route's `response_model`, plus snapshot tests for the 11 routes the Command Center consumes | TestClient |
+| API contract | every route's `response_model` | TestClient |
 | Frontend | pure modules, then component tests for each page's key states | vitest + testing-library |
 | Journey | login → visit → payment → manager sees it | Playwright (`frontend/e2e`) |
 
