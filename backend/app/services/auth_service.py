@@ -19,6 +19,10 @@
 #     re-bind is recorded instead of refused. The manager's "reset device
 #     binding" action (G01) unbinds.
 #   - Tokens carry bank_id / agency_id (the request context, A02) and sid.
+# 2026-09-28 (A02) — every access token now also carries `perms`: the issuing
+#   role's capabilities at mint time (core/permissions.role_capabilities). See
+#   create_access_token's own docstring for why this is computed HERE, not
+#   inside security.py, and why require_perm never trusts it back.
 # ───────────────────────────────────────────────────────────────────────────
 from datetime import datetime, timedelta, timezone
 from sqlalchemy.exc import IntegrityError
@@ -26,6 +30,7 @@ from sqlalchemy.orm import Session
 from fastapi import HTTPException, status, Request
 
 from app.core.config import settings
+from app.core.permissions import role_capabilities
 from app.models.agent import Agent, AgentDevice
 from app.models.identity import UserSession
 from app.models.user import User, UserRole
@@ -87,7 +92,8 @@ def _open_session(db: Session, user: User, device_id: str, request: Request) -> 
         expires_at=datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
     )
     access = create_access_token(user.id, user.role.value, device_id, sid=session.id,
-                                 bank_id=user.bank_id, agency_id=user.agency_id)
+                                 bank_id=user.bank_id, agency_id=user.agency_id,
+                                 perms=sorted(role_capabilities(user.role)))
     refresh = create_refresh_token(user.id, device_id, sid=session.id)
     session.refresh_token_sha256 = token_sha256(refresh)
     session.refresh_jti = decode_token(refresh)["jti"]

@@ -42,11 +42,25 @@ def _make_token(subject: str, token_type: str, expires_delta: timedelta, extra: 
 
 
 def create_access_token(user_id: str, role: str, device_id: str, *, sid: str | None = None,
-                        bank_id: str | None = None, agency_id: str | None = None) -> str:
+                        bank_id: str | None = None, agency_id: str | None = None,
+                        perms: list[str] | None = None) -> str:
     """2026-09-24 (A02/A05): `sid` names the user_sessions row the token was
     issued under (revoking it stops the token at once); `bank_id` / `agency_id`
-    are the tenant the request context is built from. All three are optional
-    so tokens minted directly (tests, service accounts) keep their shape."""
+    are the tenant the request context is built from. All optional so tokens
+    minted directly (tests, service accounts) keep their shape.
+
+    2026-09-28 (A02) — `perms`: the issuing role's capabilities (core/
+    permissions.role_capabilities), computed by the CALLER, never by this
+    function — security.py is authentication, not authorisation, and must not
+    import the capability registry to stay that way. This is an EXPORT of
+    server truth for a client to render UI from (the frontend can read its
+    own token without a round trip); it is never re-imported as authority.
+    `require_perm` (core/permissions.py) re-derives from `role` against the
+    registry on every request and never trusts this claim — a token minted
+    before a permission change ships must not go on granting the old set for
+    up to its full 15-minute life, silently, on the SERVER side. A caller
+    that omits `perms` gets no claim at all, not an empty list, so "nobody
+    computed this" stays distinguishable from "this role holds nothing"."""
     extra: dict[str, Any] = {"role": role, "device_id": device_id}
     if sid:
         extra["sid"] = sid
@@ -54,6 +68,8 @@ def create_access_token(user_id: str, role: str, device_id: str, *, sid: str | N
         extra["bank_id"] = bank_id
     if agency_id:
         extra["agency_id"] = agency_id
+    if perms is not None:
+        extra["perms"] = perms
     return _make_token(
         subject=user_id,
         token_type="access",
