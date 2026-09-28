@@ -140,8 +140,11 @@ database.
 
 With either option, **the Command Center service logins change.** The v2 roster has no
 `manager1@…`-style accounts. Pick a v2 agency-manager account for each Command Center
-agency, set its password (step B3 above, same one-liner), and rewrite
-`TIQCOLLECT_AGENCY_ACCOUNTS` with the new emails.
+agency, set its password, and rewrite `TIQCOLLECT_AGENCY_ACCOUNTS` with the new emails.
+The B3 one-liner does **not** work on v2, because `users.hashed_refresh_token` is gone and
+sessions are rows in `user_sessions`. Use this version instead; the password again comes only
+from the environment:
+`NEW_PW='…' docker compose exec -e NEW_PW -e EMAIL=<email> field-ops python -c "import os;from app.core.database import SessionLocal;from app.core.security import hash_password;from app.models.user import User;from app.services.auth_service import revoke_user_sessions;db=SessionLocal();u=db.query(User).filter(User.email==os.environ['EMAIL']).one();u.hashed_password=hash_password(os.environ['NEW_PW']);revoke_user_sessions(db,str(u.id),'ADMIN_REVOKED');db.commit();print('ok')"`
 
 ### P1-B. Database
 
