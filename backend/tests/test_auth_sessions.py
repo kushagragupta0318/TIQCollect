@@ -70,8 +70,8 @@ def world():
         db.close()
 
 
-def _login(w, user, device=DEVICE_A):
-    return auth_service.login(w["db"], user.email, PASSWORD, device, _request())
+def _login(w, user, device=DEVICE_A, secret=None):
+    return auth_service.login(w["db"], user.email, PASSWORD, device, _request(), device_secret=secret)
 
 
 def _audits(db, action):
@@ -149,10 +149,65 @@ def test_logout_ends_the_session_and_its_access_token_at_once(world):
 # ── A09: device binding ─────────────────────────────────────────────────────
 
 def test_the_first_agent_login_binds_the_device_and_the_same_device_is_welcome(world):
-    _login(world, world["agent_user"], DEVICE_A)
-    _login(world, world["agent_user"], DEVICE_A)
+    first = _login(world, world["agent_user"], DEVICE_A)
+    # A09b: the same device is welcome WITH the secret the first login issued.
+    again = _login(world, world["agent_user"], DEVICE_A, secret=first["device_secret"])
+    assert "device_secret" not in again                   # nothing new to issue
     bound = world["db"].query(AgentDevice).filter(AgentDevice.is_bound.is_(True)).all()
     assert len(bound) == 1
+
+
+# ── A09b: a server-issued device secret (2026-09-28) ────────────────────────
+import hashlib  # noqa: E402
+
+
+def test_binding_issues_a_secret_and_stores_only_its_hash(world):
+    out = _login(world, world["agent_user"], DEVICE_A)
+    secret = out["device_secret"]
+    assert len(secret) >= 40
+    dev = world["db"].query(AgentDevice).filter(AgentDevice.is_bound.is_(True)).one()
+    assert dev.device_secret_sha256 == hashlib.sha256(secret.encode()).hexdigest()
+    assert secret not in (dev.device_fingerprint, dev.device_secret_sha256)
+
+
+@pytest.mark.parametrize("presented", [None, "", "not-the-secret"])
+def test_the_bound_device_id_without_its_secret_is_refused_and_recorded(world, monkeypatch, presented):
+    """The device_id is client-chosen: learning it must not be enough."""
+    monkeypatch.setattr(settings, "DEMO_DEVICE_REBIND", False)
+    _login(world, world["agent_user"], DEVICE_A)
+    with pytest.raises(HTTPException) as exc:
+        _login(world, world["agent_user"], DEVICE_A, secret=presented)
+    assert exc.value.status_code == 403
+    rows = _audits(world["db"], AuditAction.DEVICE_MISMATCH)
+    assert rows and rows[-1].failure_reason == "Device secret missing or wrong"
+
+
+def test_a_device_bound_before_a09b_gets_its_secret_on_the_next_login_then_needs_it(world, monkeypatch):
+    monkeypatch.setattr(settings, "DEMO_DEVICE_REBIND", False)
+    _login(world, world["agent_user"], DEVICE_A)
+    dev = world["db"].query(AgentDevice).filter(AgentDevice.is_bound.is_(True)).one()
+    dev.device_secret_sha256 = None                        # as every pre-A09b binding is
+    world["db"].commit()
+    upgraded = _login(world, world["agent_user"], DEVICE_A)
+    assert upgraded["device_secret"]
+    with pytest.raises(HTTPException):
+        _login(world, world["agent_user"], DEVICE_A)       # from now on the secret is required
+    _login(world, world["agent_user"], DEVICE_A, secret=upgraded["device_secret"])
+
+
+def test_demo_rebind_replaces_a_lost_secret_with_a_new_one(world, monkeypatch):
+    monkeypatch.setattr(settings, "DEMO_DEVICE_REBIND", True)
+    first = _login(world, world["agent_user"], DEVICE_A)
+    again = _login(world, world["agent_user"], DEVICE_A)   # the app lost its secret
+    assert again["device_secret"] and again["device_secret"] != first["device_secret"]
+    with pytest.raises(HTTPException):
+        monkeypatch.setattr(settings, "DEMO_DEVICE_REBIND", False)
+        _login(world, world["agent_user"], DEVICE_A, secret=first["device_secret"])   # the old one is dead
+
+
+def test_other_roles_are_never_issued_a_device_secret(world):
+    out = _login(world, world["mgr"], DEVICE_A)
+    assert "device_secret" not in out
 
 
 def test_a_different_device_is_refused_and_recorded(world, monkeypatch):

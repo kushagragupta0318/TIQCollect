@@ -15,6 +15,8 @@ export interface LoginResponse {
   role: UserRole;
   user_id: string;
   full_name: string;
+  /** A09b: issued once, when the server binds this device (field agents). */
+  device_secret?: string;
 }
 
 export type DPDBucket = "CURRENT" | "BUCKET_1" | "BUCKET_2" | "BUCKET_3" | "NPA";

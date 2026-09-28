@@ -10,7 +10,8 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 @router.post("/login", response_model=LoginResponse, summary="Login — returns JWT access + refresh tokens")
 @limiter.limit(AUTH_LIMIT)
 async def login(body: LoginRequest, request: Request, db: DbSession):
-    return auth_service.login(db, body.email, body.password, body.device_id, request)
+    return auth_service.login(db, body.email, body.password, body.device_id, request,
+                              device_secret=body.device_secret)
 
 
 # collection_dashboard: lets the multi-agency dashboard deep-link into a manager's session
