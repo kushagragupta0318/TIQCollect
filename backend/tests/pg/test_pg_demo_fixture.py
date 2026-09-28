@@ -239,3 +239,40 @@ def test_no_other_secret_like_value_is_in_the_fixture(db):
               if one(db, f'select count(*) from "{s}"."{t}" where "{c}" is not null') > 0}
     assert filled <= ALLOWED_FILLED, f"secret-like columns with values: {sorted(filled - ALLOWED_FILLED)}"
     assert one(db, "select count(*) from tenancy.users where must_change_password or totp_enabled") == 0
+
+
+# ── loan_dpd_history coverage (P3: the bank Overview reads it) ──────────────
+def test_no_loan_is_disbursed_after_the_anchor(db):
+    from app.demo.roster import ANCHOR_DATE
+    assert one(db, "select count(*) from lending.loans where disbursement_date > :d", d=ANCHOR_DATE) == 0
+
+
+def test_every_loan_has_a_reading_at_the_anchor_and_aravalli_says_it_is_a_backfill(db):
+    from app.demo.roster import AGENCY, ANCHOR_DATE
+    assert one(db, "select count(*) from lending.loans l where not exists (select 1 from lending.loan_dpd_history h "
+                   "where h.loan_id = l.id and h.as_of_date = :d)", d=ANCHOR_DATE) == 0
+    # Aravalli's (B15's) loans: one row, the anchor, flagged as not observed point-in-time.
+    # B15's book is the loans with no LEDGER reading: exactly the 1,478 transformed ones.
+    got = rows(db, "select h.source, h.is_backfill, h.observed_pit, count(*), count(distinct h.as_of_date) "
+                   "from lending.loan_dpd_history h where not exists (select 1 from lending.loan_dpd_history g "
+                   "where g.loan_id = h.loan_id and g.source = 'LEDGER') group by 1, 2, 3")
+    assert got == [("TRANSFORM_CURRENT", True, False, 1478, 1)]
+    assert one(db, "select count(*) from lending.loan_dpd_history where source = 'TRANSFORM_CURRENT'") == 1478
+    assert one(db, "select count(*) from lending.loan_dpd_history where source = 'TRANSFORM_CURRENT' "
+                   "and agency_id is not null and agency_id <> :a", a=AGENCY["id"]) == 0
+
+
+def test_month_end_rows_are_calendar_month_ends_only(db):
+    assert one(db, "select count(*) from lending.loan_dpd_history where is_month_end "
+                   "and as_of_date <> (date_trunc('month', as_of_date) + interval '1 month - 1 day')::date") == 0
+    assert one(db, "select count(distinct as_of_date) from lending.loan_dpd_history "
+                   "where as_of_date between '2026-09-01' and '2026-09-22' and source = 'LEDGER'") == 22
+
+
+def test_instalments_are_inside_the_stated_window(db):
+    from app.demo.books import INSTALMENT_WINDOW
+    lo, hi = INSTALMENT_WINDOW
+    assert one(db, "select count(*) from lending.loan_instalments where due_date < :lo or due_date > :hi",
+               lo=lo, hi=hi) == 0
+    readme = (BACKEND / "fixtures" / "README.md").read_text(encoding="utf-8")
+    assert f"{lo.isoformat()}" in readme and f"{hi.isoformat()}" in readme

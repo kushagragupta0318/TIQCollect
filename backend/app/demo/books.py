@@ -55,6 +55,28 @@ UTC = timezone.utc
 SIM_EVENT_DECEASED = "DECEASED"
 
 
+#: The fixture keeps a loan's schedule only for instalments due within six
+#: months of the anchor, either side (coordinator, 2026-09-28: the full
+#: schedules were the largest table in a dump capped at 60 MB). A missing
+#: instalment OUTSIDE this window is not an absent debt; readers must not
+#: treat it as one (backend/fixtures/README.md).
+INSTALMENT_WINDOW = (date(2026, 3, 22), date(2027, 3, 22))
+
+
+def history_dates(start: date) -> list[date]:
+    """loan_dpd_history dates for a generated book: every calendar month-end
+    from the book's start, every day of the anchor's month up to the anchor
+    (the analytics MV is daily in the current month), and the anchor itself."""
+    out, d = set(), start
+    while d <= R.ANCHOR_DATE:
+        if (d + timedelta(days=1)).day == 1:
+            out.add(d)
+        if (d.year, d.month) == (R.ANCHOR_DATE.year, R.ANCHOR_DATE.month):
+            out.add(d)
+        d += timedelta(days=1)
+    return sorted(out)
+
+
 class DemoLedgerSimulator(LedgerSimulator):
     """The ledger with an agency's latent skill. Same draws, same order, as
     LedgerSimulator._make_agents — only the normal's mean and spread differ —
@@ -146,7 +168,11 @@ def generate_book(conn: Connection, w: AgencyWorld, *, slots_per_agent: float, s
         return R.new_id(kind, f"{a.key}:{key}")
 
     # ── placement: the first weekly scan on which the loan is past due ──────
-    loans = led.loans.copy()
+    # The ledger runs past the anchor; a loan that originates after it is not
+    # in the book yet. `origination_day` is the ledger's ONE origination fact
+    # (the materialiser's too); `opened_day` is the slot's last registration,
+    # which put 653 loans' disbursement after the anchor in the first build.
+    loans = led.loans[led.loans.origination_day < end_day].copy()
     keep = set(loans.loan_id)
     authorised = {lt for lt in a.products}
     placed_on: dict[str, int] = {}
@@ -275,7 +301,7 @@ def generate_book(conn: Connection, w: AgencyWorld, *, slots_per_agent: float, s
         dpd = int(s.dpd)
         status = {"WRITTEN_OFF": "WRITTEN_OFF", "SETTLED": "SETTLED", "CLOSED": "CLOSED"}.get(
             ev[0] if ev else "", "NPA" if dpd > 90 else "ACTIVE")
-        opened = start + timedelta(days=int(r.opened_day))
+        opened = start + timedelta(days=int(r.origination_day))
         lp = s.last_payment_day
         loan_rows.append(dict(
             id=lid("loan", r.loan_id), bank_id=bank_id, customer_id=cust,
@@ -581,34 +607,39 @@ def generate_book(conn: Connection, w: AgencyWorld, *, slots_per_agent: float, s
     truth.counts["disputes"] = sum(1 for d in dispute_rows if d["kind"] == "DISPUTE")
     truth.counts["complaints"] = sum(1 for d in dispute_rows if d["kind"] == "COMPLAINT")
 
-    # ── schedules and month-end DPD history ─────────────────────────────────
+    # ── schedules (windowed) and DPD history for EVERY loan ─────────────────
+    lo_d, hi_d = INSTALMENT_WINDOW
     inst_rows = [dict(bank_id=bank_id, loan_id=lid("loan", r.loan_id), instalment_no=int(r.installment_no),
                       due_date=r.due_date, amount_due=round(float(r.amount), 2), source="LEDGER",
                       id=R.new_id("instalment", f"{a.key}:{r.loan_id}:{int(r.installment_no)}"))
-                 for r in inst.itertuples()]
+                 for r in inst.itertuples() if lo_d <= r.due_date <= hi_d]
+    region_of_city_name = {city_names[c]: rid for c, rid in w.region_by_city.items()}
+    region_of_loan = {r.loan_id: region_of_city_name.get(cust_rows[cust_idx[lid("customer", r.borrower_id)]]["city"])
+                      for r in loans.itertuples()}
+    opened_day = dict(zip(loans.loan_id, loans.origination_day.astype(int)))
     hist_rows = []
-    month_ends = sorted({(start + timedelta(days=x)).replace(day=1) - timedelta(days=1)
-                         for x in range(31, end_day + 1)} | {R.ANCHOR_DATE})
-    for me in month_ends:
-        day = (me - start).days + 1
-        if day <= 0:
-            continue
-        on = [k for k, d0 in placed_on.items() if d0 < day]
+    for d in history_dates(start):
+        day = (d - start).days + 1                 # the state at the END of d
+        on = [k for k in loans.loan_id if opened_day[k] < day]
         if not on:
             continue
         st = loan_state_at(led, cfg, day, set(on))
         for k in on:
             s = st.loc[k]
             dpd = int(s.dpd)
-            city = [c for c in w.region_by_city
-                    if cust_rows[cust_idx[case_rows[case_idx[case_of[k]]]["customer_id"]]]["city"] == city_names[c]]
+            ev = life_status.get(k)
+            ended = ev is not None and ev[1] < day
+            placed = k in placed_on and placed_on[k] < day and not (ended and ev[1] >= placed_on[k])
+            status = ({"WRITTEN_OFF": "WRITTEN_OFF", "SETTLED": "SETTLED", "CLOSED": "CLOSED"}.get(ev[0])
+                      if ended else None) or ("NPA" if dpd > 90 else "ACTIVE")
             hist_rows.append(dict(
-                loan_id=lid("loan", k), as_of_date=me, bank_id=bank_id, dpd=dpd,
-                dpd_bucket=dpd_bucket_for(dpd).value, overdue_amount=round(float(s.overdue), 2),
+                loan_id=lid("loan", k), as_of_date=d, bank_id=bank_id, dpd=dpd,
+                dpd_bucket=dpd_bucket_for(dpd).value, loan_status=status, overdue_amount=round(float(s.overdue), 2),
                 total_outstanding=round(float(s.total), 2), outstanding_principal=round(float(s.principal), 2),
                 penal_charges=round(float(s.penal), 2), npa_flag=dpd > 90, loan_type=ltype[k],
-                region_id=(w.region_by_city[city[0]] if city else None), agency_id=agency_id,
-                placement_id=lid("placement", k), is_month_end=(me != R.ANCHOR_DATE or me.day == 30),
+                region_id=region_of_loan[k], agency_id=(agency_id if placed else None),
+                placement_id=(lid("placement", k) if placed else None),
+                is_month_end=(d + timedelta(days=1)).day == 1,
                 source="LEDGER", is_backfill=False, observed_pit=True))
 
     # ── write ───────────────────────────────────────────────────────────────
