@@ -116,35 +116,43 @@ def _if_role(role: str, sql: str) -> str:
             f"THEN EXECUTE '{body}'; END IF; END $$;")
 
 
-def _grants() -> list[str]:
+def _grant_specs() -> list[tuple[str, str, str]]:
+    """(role, privileges, object): what the upgrade grants and the downgrade revokes, the same list."""
     domain = sorted(_policies())
     schemas = sorted({t.split(".")[0] for t in (*domain, *NO_RLS)} | {"analytics"})
     out = []
     for role in (APP_ROLE, JOBS_ROLE):
         for s in schemas:
-            out.append(_if_role(role, f"GRANT USAGE ON SCHEMA {s} TO {role}"))
+            out.append((role, "USAGE", f"SCHEMA {s}"))
         for t in domain:
-            if t == "audit.audit_logs":           # append-only for both: no UPDATE / DELETE / TRUNCATE
-                out.append(_if_role(role, f"GRANT SELECT, INSERT ON {t} TO {role}"))
-            else:
-                out.append(_if_role(role, f"GRANT SELECT, INSERT, UPDATE, DELETE ON {t} TO {role}"))
+            # audit.audit_logs is append-only for both: no UPDATE / DELETE / TRUNCATE.
+            out.append((role, "SELECT, INSERT" if t == "audit.audit_logs" else "SELECT, INSERT, UPDATE, DELETE", t))
         for t in NO_RLS:
-            out.append(_if_role(role, f"GRANT SELECT ON {t} TO {role}"))
+            out.append((role, "SELECT", t))
     # Pre-auth token tables are written by the API; the jobs need nothing more than to read them.
     for t in ("tenancy.password_reset_tokens", "tenancy.used_quick_login_tokens"):
-        out.append(_if_role(APP_ROLE, f"GRANT INSERT, UPDATE, DELETE ON {t} TO {APP_ROLE}"))
+        out.append((APP_ROLE, "INSERT, UPDATE, DELETE", t))
     # Analytics: the API reads the security_invoker views; the materialized views carry no policy.
     for v in ("dim_date", "dim_region", "dim_agency", "dim_agent", "dim_product", "dim_bucket",
               "v_case_360", "v_today_field_activity"):
-        out.append(_if_role(APP_ROLE, f"GRANT SELECT ON analytics.{v} TO {APP_ROLE}"))
-        out.append(_if_role(JOBS_ROLE, f"GRANT SELECT ON analytics.{v} TO {JOBS_ROLE}"))
+        out.append((APP_ROLE, "SELECT", f"analytics.{v}"))
+        out.append((JOBS_ROLE, "SELECT", f"analytics.{v}"))
     for mv in ("mv_collections_daily", "mv_field_activity_daily"):
-        out.append(_if_role(JOBS_ROLE, f"GRANT SELECT ON analytics.{mv} TO {JOBS_ROLE}"))
-    out.append(_if_role(JOBS_ROLE, f"GRANT INSERT, UPDATE ON analytics.mv_refresh_log TO {JOBS_ROLE}"))
+        out.append((JOBS_ROLE, "SELECT", f"analytics.{mv}"))
+    out.append((JOBS_ROLE, "INSERT, UPDATE", "analytics.mv_refresh_log"))
     for fn in ("current_bank_id", "current_agency_id", "current_scope"):
         for role in (APP_ROLE, JOBS_ROLE):
-            out.append(_if_role(role, f"GRANT EXECUTE ON FUNCTION tenancy.{fn}() TO {role}"))
+            out.append((role, "EXECUTE", f"FUNCTION tenancy.{fn}()"))
     return out
+
+
+def _grants() -> list[str]:
+    return [_if_role(r, f"GRANT {priv} ON {obj} TO {r}") for r, priv, obj in _grant_specs()]
+
+
+def _revokes() -> list[str]:
+    """Exactly what _grants() gave, in reverse; never a whole schema (another revision may grant there)."""
+    return [_if_role(r, f"REVOKE {priv} ON {obj} FROM {r}") for r, priv, obj in reversed(_grant_specs())]
 
 
 ROLES = f"""
@@ -180,12 +188,8 @@ def downgrade() -> None:
     for table in _policies():
         op.execute(f"DROP POLICY IF EXISTS p_tenant ON {table}")
         op.execute(f"ALTER TABLE {table} DISABLE ROW LEVEL SECURITY")
-    for role in (APP_ROLE, JOBS_ROLE):
-        for s in sorted({t.split(".")[0] for t in (*_policies(), *NO_RLS)} | {"analytics"}):
-            op.execute(_if_role(role, f"REVOKE ALL ON ALL TABLES IN SCHEMA {s} FROM {role}"))
-            op.execute(_if_role(role, f"REVOKE USAGE ON SCHEMA {s} FROM {role}"))
-        for fn in ("current_bank_id", "current_agency_id", "current_scope"):
-            op.execute(_if_role(role, f"REVOKE ALL ON FUNCTION tenancy.{fn}() FROM {role}"))
+    for stmt in _revokes():
+        op.execute(stmt)
     op.execute("DROP FUNCTION IF EXISTS tenancy.current_scope()")
     op.execute("DROP FUNCTION IF EXISTS tenancy.current_agency_id()")
     op.execute("DROP FUNCTION IF EXISTS tenancy.current_bank_id()")
