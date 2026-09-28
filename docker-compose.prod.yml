@@ -1,0 +1,156 @@
+# Production stack for a standalone TIQCollect host. Guide: docs/DEPLOY.md.
+#
+#   cp deploy/.env.prod.example deploy/.env.prod     # fill in; never commit the copy
+#   docker compose -f docker-compose.prod.yml --env-file deploy/.env.prod build
+#   docker compose -f docker-compose.prod.yml --env-file deploy/.env.prod up -d
+#
+# One image (./Dockerfile) runs the API, the Celery worker and beat. Caddy is
+# the only service with published ports: it terminates TLS for the app domain
+# and for the file domain the browser uploads visit media to. Postgres, Redis and
+# MinIO listen on the private network only.
+#
+# Caddy has a fixed address so FORWARDED_ALLOW_IPS can name exactly it: the API
+# believes X-Forwarded-For from that one peer and nobody else.
+
+x-app: &app
+  image: tiqcollect:${TIQ_VERSION:-local}
+  restart: unless-stopped
+  env_file: deploy/.env.prod
+  environment: &app-env
+    APP_ENV: production
+    DEBUG: "false"
+    DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-tiq}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-tiq}
+    REDIS_URL: redis://redis:6379/0
+    CELERY_BROKER_URL: redis://redis:6379/1
+    CELERY_RESULT_BACKEND: redis://redis:6379/2
+    MINIO_ENDPOINT: minio:9000
+    MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER}
+    MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+    MINIO_SECURE: "false"
+    MINIO_PUBLIC_ENDPOINT: ${FILES_DOMAIN:?set FILES_DOMAIN}
+    MINIO_PUBLIC_SECURE: "true"
+    ALLOWED_ORIGINS: https://${APP_DOMAIN:?set APP_DOMAIN}
+    PUBLIC_BASE_URL: https://${APP_DOMAIN}
+    FORWARDED_ALLOW_IPS: 172.30.0.10
+    # Road routing. Empty = straight-line estimates (route_source "haversine").
+    # Never leave the code's default, the PUBLIC demo server: it would receive
+    # every borrower's coordinates. Self-host OSRM (docs/DEPLOY.md) and name it.
+    OSRM_BASE_URL: ${OSRM_BASE_URL:-}
+    RUN_SEED: "false"
+  networks: [tiq]
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    minio:
+      condition: service_started
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-tiq}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-tiq}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./backups:/backups
+    networks: [tiq]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tiq} -d ${POSTGRES_DB:-tiq}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # Append-only: OTPs, rate-limit counts and the Celery queue survive a restart.
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy noeviction
+    volumes:
+      - redisdata:/data
+    networks: [tiq]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  minio:
+    # Pin MINIO_TAG to a release you have tested; latest moves under you.
+    image: minio/minio:${MINIO_TAG:-latest}
+    restart: unless-stopped
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+    volumes:
+      - miniodata:/data
+    networks: [tiq]
+
+  # Builds or restores the database on first start (the only container with
+  # RUN_SEED=true), then serves the API. Worker and beat wait for it.
+  api:
+    <<: *app
+    build: .                # one build; worker and beat run the same image
+    environment:
+      <<: *app-env
+      RUN_SEED: "true"
+      # An empty database gets the v2 schema and NO data. "true" restores the
+      # invented demo book instead: a demo host only, never real borrowers.
+      SEED_FROM_FIXTURE: ${SEED_FROM_FIXTURE:-false}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8300/api/v1/health', timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  worker:
+    <<: *app
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=${WORKER_CONCURRENCY:-2}
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # Exactly one beat, or every scheduled task runs twice.
+  beat:
+    <<: *app
+    command: celery -A app.workers.celery_app beat --loglevel=info
+    depends_on:
+      api:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?set APP_DOMAIN}
+      FILES_DOMAIN: ${FILES_DOMAIN:?set FILES_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+    networks:
+      tiq:
+        ipv4_address: 172.30.0.10
+    depends_on:
+      api:
+        condition: service_healthy
+
+networks:
+  tiq:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:
+  caddydata:

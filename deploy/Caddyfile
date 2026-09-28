@@ -1,0 +1,26 @@
+# TLS and the one proxy in front of TIQCollect (docs/DEPLOY.md).
+# Certificates come from Let's Encrypt for both names; they must resolve here.
+{
+	email {$ACME_EMAIL}
+}
+
+# The app: the built SPA and /api/v1, one upstream.
+{$APP_DOMAIN} {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+	reverse_proxy api:8300
+}
+
+# Visit media: the browser PUTs and GETs pre-signed MinIO URLs here. The Host
+# header is passed through unchanged (Caddy's default), which the signature needs.
+{$FILES_DOMAIN} {
+	request_body {
+		max_size 200MB
+	}
+	reverse_proxy minio:9000
+}

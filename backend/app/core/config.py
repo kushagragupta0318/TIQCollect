@@ -24,20 +24,14 @@
 #   Case.priority on an existing case and turning that on is new behaviour,
 #   not a like-for-like swap. Wiring the nightly task must not be what makes
 #   either of them live.
-# 2026-09-28 (A15) — Added PRODUCT_MODE (standalone plan §2.3): "standalone"
-#   turns on the bank portal; "embedded" is today's behaviour — this repo
-#   serving Command Center at /api/v1/manager/* and /api/field-ops/*, and
-#   nothing else new. Default is "embedded": the deployed system (CLAUDE.md's
-#   provenance section) is embedded in the Collections platform today, so a
-#   fresh checkout with no override must keep behaving exactly as it does now
-#   rather than silently exposing a bank portal nobody asked for. A standalone
-#   deployment sets it explicitly. Rejects anything else at STARTUP (fail
-#   loud, not "silently read as embedded" — a typo'd env var must not make a
-#   standalone deployment quietly serve as embedded, or vice versa).
+# 2026-09-28 — PRODUCT_MODE (added the same day, A15) was REMOVED: nothing
+#   read it, so it switched nothing, and TIQCollect is standalone with no
+#   embedded mode left (docs/adr/0009). An old env file that still sets it is
+#   ignored (extra="ignore").
 # ───────────────────────────────────────────────────────────────────────────
 import os
 from functools import lru_cache
-from typing import List, Literal
+from typing import List
 
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -59,10 +53,6 @@ class Settings(BaseSettings):
     APP_NAME: str = "TIQCollect"
     APP_ENV: str = "development"
     DEBUG: bool = False
-    # standalone plan §2.3 — see the 2026-09-28 CHANGELOG entry above. Literal
-    # rather than a plain str + hand-rolled check: pydantic itself refuses any
-    # other value at startup, before a single request is served.
-    PRODUCT_MODE: Literal["standalone", "embedded"] = "embedded"
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15

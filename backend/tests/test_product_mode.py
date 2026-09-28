@@ -1,8 +1,8 @@
 # ─── CHANGELOG (standalone plan) ─────────────────────────────────────────────
 # New file, 2026-09-28 (A15). Covers:
-#   - PRODUCT_MODE (core/config.py): default, and that anything else is
-#     refused at startup rather than silently read as one mode or the other,
-#     including the literal string an unresolved `${VAR}` arrives as.
+#   - PRODUCT_MODE: its four validation tests were removed with the setting
+#     on 2026-09-28 (docs/adr/0009). The file keeps its name because the
+#     permission seed (v2_0008, frozen) cites it for the SERVICE role tests.
 #   - the field-ops preservation claim originally here (a live mount check
 #     plus a structural PRODUCT_MODE-conditional tripwire) is WITHDRAWN,
 #     2026-09-28: /api/field-ops/* is now actually deleted — lead-structure's
@@ -34,7 +34,6 @@ from __future__ import annotations
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from pydantic import ValidationError
 
 from app.core.dependencies import ManagerOnly, get_current_user
 from app.core.database import get_db
@@ -43,50 +42,6 @@ from app.core.security import verify_password
 from app.models.user import User, UserRole
 from app.services import auth_service
 from tests._db import DEFAULT_TENANT, create_schema, make_engine, make_session_factory
-
-
-# ── PRODUCT_MODE ─────────────────────────────────────────────────────────────
-def test_default_product_mode_is_embedded_todays_behaviour():
-    """A fresh checkout with no override must behave exactly as the deployed
-    system does today (CLAUDE.md's provenance section) — no surprise bank
-    portal from an unset env var."""
-    from app.core.config import Settings
-    assert Settings.model_fields["PRODUCT_MODE"].default == "embedded"
-
-
-_REQUIRED_SETTINGS = dict(
-    SECRET_KEY="x", DATABASE_URL="sqlite://", MINIO_ACCESS_KEY="x",
-    MINIO_SECRET_KEY="x", COMMAND_CENTRE_API_KEY="x",
-)
-
-
-def test_an_invalid_product_mode_is_refused_at_startup():
-    """Every OTHER required setting is supplied, so the only thing that can
-    make this raise is PRODUCT_MODE itself — a broad `pytest.raises` here
-    would pass just as well if PRODUCT_MODE validation were deleted entirely,
-    because the fixture's other required fields would still be missing from
-    a bare construction; this pins the field, not just "something failed"."""
-    from app.core.config import Settings
-    with pytest.raises(ValidationError) as exc:
-        Settings(**_REQUIRED_SETTINGS, PRODUCT_MODE="production")
-    assert any(e["loc"] == ("PRODUCT_MODE",) for e in exc.value.errors())
-
-
-def test_standalone_is_accepted():
-    from app.core.config import Settings
-    s = Settings(**_REQUIRED_SETTINGS, PRODUCT_MODE="standalone")
-    assert s.PRODUCT_MODE == "standalone"
-
-
-def test_an_unresolved_docker_var_literal_is_refused_not_silently_a_mode():
-    """CLAUDE.md's own known failure mode for backend/.env: an unresolved
-    `${VAR}` reference arrives as the literal string, not empty and not unset.
-    PRODUCT_MODE must reject it the same way it rejects any other garbage
-    value rather than quietly matching neither Literal arm."""
-    from app.core.config import Settings
-    with pytest.raises(ValidationError) as exc:
-        Settings(**_REQUIRED_SETTINGS, PRODUCT_MODE="${PRODUCT_MODE}")
-    assert any(e["loc"] == ("PRODUCT_MODE",) for e in exc.value.errors())
 
 
 # ── SERVICE role accounts ────────────────────────────────────────────────────
