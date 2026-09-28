@@ -178,3 +178,12 @@ def get_agency_route(agency_id: UUIDPath, db: DbSession, current_user: User = re
 def list_agencies_route(db: DbSession, status: str | None = None,
                         current_user: User = require_perm("agency.read")):
     return agency_service.list_agencies(db, current_user, status=status)
+
+
+@router.get("/regions")
+def list_regions_route(db: DbSession, current_user: User = require_perm("agency.contract.manage")):
+    """The Coverage step's checklist source. Gated the same as the route
+    that consumes the ids it returns (coverage-contract), not agency.read —
+    reading the region hierarchy is closer to "who may set coverage" than
+    "who may see an agency's onboarding progress"."""
+    return agency_service.list_regions(db, current_user)

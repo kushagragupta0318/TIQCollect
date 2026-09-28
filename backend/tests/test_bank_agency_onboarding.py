@@ -501,3 +501,25 @@ def test_http_get_agency_is_scoped_to_the_bank_admins_own_bank(w):
     agency_id = created.json()["agency_id"]
     r = client.get(f"/api/v1/bank/agencies/{agency_id}", headers=_h(w["other_bank_admin"]))
     assert r.status_code == 404
+
+
+# ── regions (coverage step source) ───────────────────────────────────────────
+def test_list_regions_returns_only_the_principals_bank(w):
+    db, bank_admin, other = w["db"], w["bank_admin"], w["other_bank_admin"]
+    result = agency_service.list_regions(db, bank_admin)
+    assert len(result) == 1
+    assert result[0]["region_id"] == w["region"].id
+    assert agency_service.list_regions(db, other) == []
+
+
+def test_list_regions_is_empty_for_a_non_bank_principal(w):
+    db, field_agent = w["db"], w["field_agent"]
+    assert agency_service.list_regions(db, field_agent) == []
+
+
+def test_http_list_regions(w):
+    client = TestClient(app)
+    r = client.get("/api/v1/bank/regions", headers=_h(w["bank_admin"]))
+    assert r.status_code == 200, r.text
+    assert len(r.json()) == 1
+    assert r.json()[0]["code"] == "GGN"

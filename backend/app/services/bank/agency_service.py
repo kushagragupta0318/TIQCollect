@@ -433,6 +433,26 @@ def list_agencies(db: Session, principal: User, *, status: str | None = None) ->
     return [_agency_dict(a) for a in q.order_by(Agency.created_at.desc()).all()]
 
 
+def list_regions(db: Session, principal: User) -> list[dict]:
+    """The bank's region hierarchy, for the Coverage step's checklist.
+    Read-only here — editing it is K01 (Admin > Regions), not this wizard.
+    Bank-scoped like agencies_in_scope's BANK_* branch; a non-bank principal
+    (an agency role) gets an empty list rather than a 403, since nothing in
+    the wizard calls this except a bank user already gated by
+    agency.contract.manage on the route that consumes the ids."""
+    if not principal.bank_id or principal.role not in (
+        UserRole.BANK_ADMIN, UserRole.BANK_ANALYST, UserRole.BANK_TECHOPS, UserRole.PLATFORM_ADMIN,
+    ):
+        return []
+    regions = (db.query(Region).filter(Region.bank_id == principal.bank_id, Region.is_active.is_(True))
+              .order_by(Region.path).all())
+    return [
+        {"region_id": r.id, "parent_id": r.parent_id, "level": r.level, "code": r.code, "name": r.name,
+         "path": r.path, "latitude": r.latitude, "longitude": r.longitude}
+        for r in regions
+    ]
+
+
 def _agency_dict(agency: Agency) -> dict:
     return {
         "agency_id": agency.id, "code": agency.code, "legal_name": agency.legal_name,
