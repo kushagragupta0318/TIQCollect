@@ -131,7 +131,7 @@ class VisitService:
                                  on_day=capture.day if capture.late else None)
 
         if case.customer.do_not_contact:
-            raise HTTPException(status_code=403, detail="Customer is marked Do Not Contact")
+            raise AppException(403, ErrorCode.DO_NOT_CONTACT, "Customer is marked Do Not Contact")
 
         # ML-1: a stance is the borrower's, so only a visit that met them may
         # carry one. Before anything is written.

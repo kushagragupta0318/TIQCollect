@@ -59,6 +59,10 @@ class ErrorCode(str, Enum):
     CAPTURE_TOO_OLD = "CAPTURE_TOO_OLD"
     CAPTURE_DEVICE_MISMATCH = "CAPTURE_DEVICE_MISMATCH"
     CAPTURE_OUT_OF_ORDER = "CAPTURE_OUT_OF_ORDER"
+    # A visit to a Do-Not-Contact borrower. Judged against today's list, also
+    # for a replayed visit (coordinator, ADR 0011 decision 5); the code lets the
+    # outbox explain that to the agent. The 403 and its detail are unchanged.
+    DO_NOT_CONTACT = "DO_NOT_CONTACT"
 
 
 class AppException(HTTPException):
