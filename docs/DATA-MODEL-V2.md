@@ -127,7 +127,13 @@ DEFERRED are not built and are tracked as tasks.
   `DEVICE_RESET`, each with a write site.
 - **Placement quarantine reasons** (`bank_feed_rows.dq_errors[].reason`):
   `NO_AGENCY`, `AGENCY_NOT_ACTIVE`, `NO_CONTRACT_IN_FORCE`, `NOT_AUTHORISED`,
-  `CONTRACT_FULL`, `PLACED_ELSEWHERE`, `UNKNOWN_BRANCH`.
+  `CONTRACT_FULL`, `PLACED_ELSEWHERE`, `UNKNOWN_BRANCH`, `NOT_COVERED`.
+  `NOT_COVERED` is the coverage gate (coordinator ruling Q1, 2026-09-29).
+  - The loan's branch region `path` must match, by path SEGMENT, one of the `agency_regions` rows of the contract in force.
+    A covered region covers itself and its subtree: `NORTH.HR` covers `NORTH.HR.GGN`, and never `NORTH.HRX`.
+  - Paths are dot-joined in the data (`demo/world.py`); the `regions.path` model comment shows `/a/b/`. `path_covers` accepts both.
+  - The gate applies to FEED, MANUAL and ENGINE placements alike.
+  - It fails closed: a contract with no coverage rows covers nothing, and a loan whose branch has no region is never covered.
 - **`strategy.simulation_runs` carries the engine's honesty fields** (E02,
   engine `mc-1.1.0`): `calibrated_by_backtest BOOLEAN`, `synthetic_inputs
   BOOLEAN`, `synthetic_warning TEXT NULL` (`SYNTHETIC: …` / `UNCALIBRATED: …`),
@@ -1382,7 +1388,7 @@ period; the agency's cases hang off the placement.
 | agency_id | UUID | — | | `(agency_id, bank_id)→agencies` RESTRICT | |
 | loan_id | UUID | — | | `(loan_id, bank_id)→loans` RESTRICT | |
 | contract_id | UUID | — | | `(contract_id, agency_id)→agency_contracts` RESTRICT | |
-| placement_run_id | UUID | N | | planning.placement_runs RESTRICT | NULL for a manual placement |
+| placement_run_id | UUID | N | | planning.placement_runs RESTRICT | Every MANUAL and ENGINE placement links to its run: a manual batch is a `placement_runs` row with strategy `MANUAL_BATCH` and status `APPLIED`, with one `placement_decisions` row per loan carrying `gate_results`, as the engine does (Q2, 2026-09-29). It read "NULL for a manual placement" until then |
 | source | VARCHAR(12) | — | | | CHECK `MANUAL`/`ENGINE`/`RE_PLACEMENT`/`TRANSFORM` |
 | status | VARCHAR(12) | — | `'ACTIVE'` | | CHECK `ACTIVE`/`RECALLED`/`RETURNED`/`EXPIRED`/`RESOLVED`/`TRANSFERRED` |
 | placed_on | DATE | — | | | |
@@ -2952,7 +2958,11 @@ The API reads **only** the `*_scoped` views and `v_*` views, through `dependenci
 | `agency_scorecard_monthly_scoped` | `mv_agency_scorecard_monthly` | See the column notes below |
 | `collections_daily_scoped`, `field_activity_daily_scoped` | the B13a MVs | Unchanged columns |
 
-`v_visit_to_pay` (per visit): a VERIFIED payment on the same case, at or after check-in, within 7 days of the bank's calendar.
+`v_visit_to_pay` (per visit): the VERIFIED payments attributed to it. Each payment goes to the latest visit on its case at or before it, within 7 bank-local **calendar** days; no holiday calendar exists yet (board B13c).
+
+All six API views are `security_barrier` and share one tenant predicate: BANK sees its bank and AGENCY its agency. A field agent (scope AGENT), PLATFORM, or a missing scope or tenant sees nothing.
+
+"Today" is the bank-local `business_date(now())`. `collectible_due` is also NULL when any active placement lacks its opening reading (B13b audit).
 
 **Deviations from the text above, all deliberate.**
 - **The `*_scoped` views are not `security_invoker`.** An invoker view needs the caller to hold `SELECT` on the materialized view beneath it, and `tiq_app` holds none.
@@ -3232,6 +3242,19 @@ safer than giving the API a bypass role.
    A platform tenant directory would need its own `SECURITY DEFINER` function, which is an owner decision.
 7. Every authenticated transaction now makes one extra round trip (`set_config` ×4 in one `SELECT`).
    It is cheap, but it has not been measured on `stress`.
+
+**Step-2 prerequisites from the Opus audit of A13 (2026-09-28).** These must be done before `FORCE`.
+- **(MED) System audit rows.** `audit_logs`' `WITH CHECK` refuses a pre-auth or NULL-bank row (a failed login, a system `PTP_UPDATED`) from `tiq_app`, and `write_audit` swallows the refusal.
+  Route those rows through a `SECURITY DEFINER` insert function or `tiq_jobs`, and add a `tests/pg` test that a pre-auth `LOGIN_FAILED` still lands.
+- **(MED) Sessions without a tenant.** The analytics session (`get_analytics_db`) and every Celery task have no tenant context.
+  Apply the context to the analytics session (B13b does this for the API's analytics reads), and run the workers as `tiq_jobs`.
+- **(LOW) Token lookups.** `SELECT` on `password_reset_tokens` and `used_quick_login_tokens` moves behind `SECURITY DEFINER`, like the other pre-auth lookups.
+
+**Tables with no policy, justified.** The drift test lists each of these as `NO_RLS` on purpose.
+- `planning.allocation_outcomes` and `planning.placement_outcomes` are lookups: code, label, sort order, flags.
+  They hold no tenant data. The FKs from the tenant tables point at them, never the other way.
+- `ml.model_candidates` is deployment-wide: there is one champion for every tenant (ADR 0007), and it carries no bank or agency.
+  Who may read it is a permission question (F12, `ml.*` capabilities), not a tenancy one. Its only tenant-adjacent columns are the approver and promoter user ids.
 
 ---
 

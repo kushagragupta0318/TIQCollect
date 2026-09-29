@@ -23,7 +23,7 @@ from datetime import date, datetime
 
 from sqlalchemy import text as text  # noqa: F401
 from sqlalchemy import (
-    Boolean, CheckConstraint, Date, DateTime, Enum as SAEnum, Float, ForeignKeyConstraint, Index, Integer,
+    BigInteger, Boolean, CheckConstraint, Date, DateTime, Enum as SAEnum, Float, ForeignKeyConstraint, Index, Integer,
     SmallInteger, String, Text, UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -250,6 +250,10 @@ class AgentDevice(Base, UUIDPrimaryKey, TimestampMixin):
     unbind_reason: Mapped[str | None] = mapped_column(String(100))
     first_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # v2_0015 (P7 offline outbox): the last accepted outbox item from this device, for the
+    # per-device monotonic check on replay. The server writes both on each accepted item.
+    last_outbox_seq: Mapped[int | None] = mapped_column(BigInteger)
+    last_outbox_captured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (
         UniqueConstraint("agent_id", "device_fingerprint"),

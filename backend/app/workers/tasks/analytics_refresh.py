@@ -3,7 +3,8 @@
 #   (design §6.2): 20:30 IST, after the 19:30 ingest, 19:45 scoring and 20:00
 #   allocation. It WAITS (up to 30 min) for the business date's allocation
 #   runs to leave RUNNING rather than trusting the clock; one refresher at a
-#   time (a transaction-level advisory lock); each view is refreshed
+#   time (a SESSION-level advisory lock, released in `finally`; it said
+#   "transaction-level" until the B13b audit); each view is refreshed
 #   CONCURRENTLY and committed separately, with a row in
 #   analytics.mv_refresh_log.
 # ────────────────────────────────────────────────────────────────────────────
@@ -34,11 +35,15 @@ def _allocation_running(conn) -> bool:
 def refresh_all(engine, *, wait_seconds: int = _WAIT_SECONDS, poll_seconds: int = _POLL_SECONDS) -> dict:
     waited = 0
     with engine.connect() as conn:
-        while _allocation_running(conn) and waited < wait_seconds:
+        while (running := _allocation_running(conn)) and waited < wait_seconds:
             conn.rollback()
             time.sleep(poll_seconds)
             waited += poll_seconds
-    result = {"refreshed": [], "failed": [], "skipped": None, "waited_seconds": waited}
+    if running:
+        # The wait ran out: the views may describe a half-written plan. Proceed, but say so.
+        logger.warning("analytics.refresh_under_running_allocation", waited_seconds=waited)
+    result = {"refreshed": [], "failed": [], "skipped": None, "waited_seconds": waited,
+              "allocation_still_running": running}
     with engine.connect() as conn:
         got = conn.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": _LOCK_KEY}).scalar()
         conn.commit()

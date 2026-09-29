@@ -90,8 +90,9 @@ P0 runs alongside P1. P3 and P5 may overlap once P1 is done.
 - [ ] **B16** Generator: extend the ledger simulator with tenancy, 4 zones / ~14 cities, **latent agency and agent skill**, contact time-of-day, settlement offers, disputes, complaints, injected compliance breaches — and a ground-truth manifest. **Onboards the Appendix C roster with every invented detail** (identity, people, coverage, contract + commission slab, specimen documents in MinIO, DRA register, onboarding audit history, lifecycle mix: 7 active / 1 suspended / 1 onboarding). *L*
 - [ ] **B17** `materialise.py` writes v2; profiles `dev` / `demo` / `stress` (§4.7). *M* · deps B16
 - [ ] **B18** Regenerate `fieldops-demo.dump`; entrypoint checks `workforce.agents`; fixtures README rewritten (states the roster is fictional, lists the realistic logins of Appendix C.5); refresh-token hashes scrubbed. **Done when:** a grep of the fixture and seed finds no "ABC", "Test Bank", "Synthetic Bank", `manager1@` or `agent0` placeholder. *S*
-- [ ] **B22** Demo-tenant safety: `is_demo` on banks/agencies; NotificationService suppresses SMS/WhatsApp/email for demo tenants (logged, not sent); a test proves an invented number is never dialled. *S*
+- [x] **B22** Demo-tenant safety: `is_demo` on banks/agencies; NotificationService suppresses SMS/WhatsApp/email for demo tenants (logged, not sent); a test proves an invented number is never dialled. *S*
 - [ ] **B19** `tests/pg/` suite + Postgres service in CI: partitions, RLS, mv refresh, v1→v2 transform. *M*
+- [ ] **B13c** Bank business-day calendar (weekends, holidays) per bank; then offer business-day windows in `v_visit_to_pay` and SLA measures (B13b audit: today they are calendar days). *S*
 - [ ] **B20** ML adapter on typed columns; the Phase 3 equality harness (78 tests) and PIT tests green throughout. *M*
 - [ ] **B21** Stress profile loaded; baseline query timings recorded in `docs/DATA-MODEL-V2.md`. *S*
 
@@ -110,8 +111,8 @@ P0 runs alongside P1. P3 and P5 may overlap once P1 is done.
 - [ ] **A11** Frontend auth pages: clean login, set-password (invite), change-password, forgot-password; role-based home incl. `/bank`. *M*
 - [ ] **A12** Cross-tenant behavioural test: 2 banks × 2 agencies, every GET as every principal, no foreign row. *M*
 - [x] **A13** Postgres RLS on tenant tables + `BYPASSRLS` job role — only after A12 is green. *M* Step 1 (`v2_0012_rls`, branch `a13-rls`): policies enabled and proven as `tiq_app`, not enforced for the API (DATA-MODEL-V2 §8.6).
-- [ ] **A13b** **OWNER-gated.** Enforce RLS: API and workers log in as `tiq_app` / `tiq_jobs` (`JOBS_DATABASE_URL`), SECURITY DEFINER pre-auth lookups, tenant on the analytics session, MV refresh ownership, then `FORCE`. Plan: DATA-MODEL-V2 §8.6 step 2. *M*
-- [ ] **A14** Brand as data: "ABC Bank" in SMS/WhatsApp/receipts/UPI QR (7 files), "Agency Manager" header, RBI reg. no. on the ID card. Also the hardcoded Gurugram coordinates used when GPS fails at check-in (`AgentHomePage`) and visit submit (`RecordVisitPage`) — carried over from P0-02. *S*
+- [ ] **A13b** **OWNER-gated.** Enforce RLS: API and workers log in as `tiq_app` / `tiq_jobs` (`JOBS_DATABASE_URL`), SECURITY DEFINER pre-auth lookups, tenant on the analytics session, MV refresh ownership, then `FORCE`. Plan: DATA-MODEL-V2 §8.6 step 2. Prerequisites from the Opus audit: system/NULL-bank audit rows via SECURITY DEFINER or tiq_jobs (pg test); tenant on the analytics session and workers as tiq_jobs; token-table SELECTs behind SECURITY DEFINER. *M*
+- [x] **A14** Brand as data: "ABC Bank" in SMS/WhatsApp/receipts/UPI QR (7 files), "Agency Manager" header, RBI reg. no. on the ID card. Also the hardcoded Gurugram coordinates used when GPS fails at check-in (`AgentHomePage`) and visit submit (`RecordVisitPage`) — carried over from P0-02. *S*
 - [ ] **A15** `PRODUCT_MODE = standalone | embedded`; `/api/field-ops` contract preserved; `SERVICE` role accounts replace manager-password service logins. *S*
 - [ ] **A16** New audit actions wired through `write_audit` (invites, sessions, agency lifecycle, placements). *S*
 

@@ -234,3 +234,19 @@ def test_a_session_carries_its_tenant_into_every_transaction_and_no_further(rls_
         other.close()
     finally:
         eng.dispose()
+
+
+def test_the_downgrade_leaves_the_roles_no_table_privilege_and_upgrades_again(rls_url):
+    from alembic import command
+    eng = create_engine(rls_url)
+    try:
+        run_alembic(rls_url, command.downgrade, "v2_0011")
+        with eng.connect() as conn:
+            left = conn.execute(text(
+                "SELECT grantee, table_schema, table_name FROM information_schema.role_table_grants "
+                "WHERE grantee IN ('tiq_app', 'tiq_jobs')")).all()
+            policies = conn.execute(text("SELECT count(*) FROM pg_policies WHERE policyname = 'p_tenant'")).scalar()
+        assert left == [] and policies == 0
+    finally:
+        run_alembic(rls_url, command.upgrade, "head")
+        eng.dispose()

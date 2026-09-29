@@ -2,6 +2,7 @@
 diff, the enums, the database-level settings and the permission seed."""
 from __future__ import annotations
 
+import pytest
 from sqlalchemy import Enum, create_engine, text
 
 from tests.pg.conftest import drop_database, new_database, run_alembic
@@ -91,3 +92,47 @@ def test_v2_0010_releases_only_the_bindings_that_have_no_secret():
         assert rows[new].is_bound is True and rows[new].unbind_reason is None
     finally:
         drop_database(url)
+
+
+def test_a_second_row_for_the_same_stored_document_is_refused(pg_engine):
+    """v2_0014 (D02): the backstop for two concurrent confirms of one upload."""
+    import uuid
+    import pytest
+    import sqlalchemy as sa
+    from app.core.database import Base
+    from app.models.tenancy import DOC_STATUSES, DOC_TYPES, SCAN_STATUSES
+    from tests.pg.test_pg_partitions import _row
+    docs = Base.metadata.tables["tenancy.agency_documents"]
+    key = f"agency-docs/{uuid.uuid4()}.pdf"
+    valid = {"doc_type": DOC_TYPES[0], "status": DOC_STATUSES[0], "scan_status": SCAN_STATUSES[0]}
+    with pg_engine.connect() as conn:
+        with conn.begin():
+            conn.execute(text("SET LOCAL session_replication_role = replica"))    # parents not under test
+            conn.execute(docs.insert().values(**_row(docs, storage_key=key, **valid)))
+        with pytest.raises(sa.exc.IntegrityError, match="uq_agency_documents_storage_key"):
+            with conn.begin():
+                conn.execute(text("SET LOCAL session_replication_role = replica"))
+                conn.execute(docs.insert().values(**_row(docs, storage_key=key, **valid)))
+
+
+@pytest.mark.parametrize("table", ["collections.visits", "collections.call_logs", "collections.ptps"])
+def test_a_replayed_submission_is_refused_and_a_missing_key_never_is(pg_engine, table):
+    """v2_0015 (P7 offline outbox): (agent_id, client_submission_id) is unique where the key is set."""
+    import uuid
+    import sqlalchemy as sa
+    from app.core.database import Base
+    from tests.pg.test_pg_partitions import _row
+    t = Base.metadata.tables[table]
+    agent, key = str(uuid.uuid4()), str(uuid.uuid4())
+
+    def insert(conn, csid):
+        conn.execute(text("SET LOCAL session_replication_role = replica"))      # parents not under test
+        conn.execute(t.insert().values(**_row(t, agent_id=agent, client_submission_id=csid)))
+
+    with pg_engine.connect() as conn:
+        for csid in (key, None, None):
+            with conn.begin():
+                insert(conn, csid)
+        with pytest.raises(sa.exc.IntegrityError, match=f"uq_{t.name}_agent_id_client_submission_id"):
+            with conn.begin():
+                insert(conn, key)
