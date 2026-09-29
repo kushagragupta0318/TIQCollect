@@ -177,6 +177,23 @@ def create_agent_verify_token(agent_id: str, days_valid: int = 365) -> str:
     )
 
 
+def create_agency_doc_upload_token(key: str, *, bank_id: str, agency_id: str, doc_type: str,
+                                   minutes_valid: int = 20) -> str:
+    """Binds a presigned document-upload key to the (bank, agency, doc_type)
+    it was issued for. agency_service.confirm_document decodes this and
+    requires an EXACT match on all four claims before trusting anything MinIO
+    reports about the object — a key-prefix check alone (the original
+    implementation) does not stop the same object being confirmed twice, or
+    into the wrong agency/doc_type, because prefix matching is not identity.
+    20 minutes: 15 for the presigned PUT itself, 5 of margin for confirm."""
+    return _make_token(
+        subject=key,
+        token_type="agency_doc_upload",
+        expires_delta=timedelta(minutes=minutes_valid),
+        extra={"bank_id": bank_id, "agency_id": agency_id, "doc_type": doc_type},
+    )
+
+
 def decode_token(token: str) -> dict[str, Any]:
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
