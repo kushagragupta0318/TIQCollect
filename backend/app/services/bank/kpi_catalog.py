@@ -85,14 +85,15 @@ KPIS: tuple[KpiDef, ...] = (
         lambda r: f"{pct(r['aux'])} of the book" if r.get("aux") is not None else "share of book not available"),
     KpiDef(
         "placed_share", "Placed with Agencies", "book", "pct", True,
-        "Exposure placed with an agency divided by delinquent exposure, at the reading date. Placed exposure "
-        "can include loans that have since cured, so this can exceed 100%. Sub-line: agencies holding placed "
-        "accounts.",
+        "Delinquent exposure that is placed with an agency, divided by all delinquent exposure, at the "
+        "reading date (a placed loan that has since cured is not counted). Sub-line: agencies holding "
+        "placed accounts.",
         "agencies", "stock", (PORTFOLIO,),
-        f"SELECT SUM(placed_exposure) / NULLIF(SUM(delinquent_exposure), 0) AS value, "
+        f"SELECT SUM(placed_exposure) FILTER (WHERE dpd_bucket <> 'CURRENT') / NULLIF(SUM(delinquent_exposure), 0) "
+        f"AS value, "
         f"COUNT(DISTINCT agency_id) FILTER (WHERE placed_accounts > 0 AND agency_id IS NOT NULL "
         f"AND agency_id <> '{SENTINEL}') AS aux {_P}",
-        lambda r: f"{count(r['aux'] or 0)} agencies holding placements"),
+        lambda r: f"{count(r['aux'] or 0)} {'agency' if (r['aux'] or 0) == 1 else 'agencies'} holding placements"),
     KpiDef(
         "unworked_exposure", "Unworked Exposure", "book", "inr", False,
         "Placed exposure with no field visit or call in the 7 days to the reading date (placed exposure minus "
@@ -178,13 +179,14 @@ KPIS: tuple[KpiDef, ...] = (
     KpiDef(
         "cost_to_collect", "Cost to Collect", "outcome", "rs", False,
         "Agency commission accrued plus field cost, per ₹100 collected through agencies, month to date. "
-        "Field cost counts only where a FIELD_VISIT cost rate exists; the sub-line says when it is missing.",
+        "Field cost counts only where a FIELD_VISIT cost rate exists; the sub-line says when any visited cell has "
+        "none (a cell with no visits costs 0 either way).",
         "cost", "month", (SCORECARD,),
         f"""SELECT 100.0 * (SUM(commission_accrued) + COALESCE(SUM(field_cost), 0))
                    / NULLIF(SUM(verified_collections), 0) AS value,
-                   COUNT(*) FILTER (WHERE field_cost IS NOT NULL) AS aux
+                   COUNT(*) FILTER (WHERE visits > 0 AND field_cost IS NULL) AS aux
             FROM analytics.{SCORECARD} WHERE bank_id = :bank AND month_start BETWEEN :m0 AND :m1""",
-        lambda r: "per ₹100 collected (commission + field cost)" if r.get("aux")
+        lambda r: "per ₹100 collected (commission + field cost)" if not r.get("aux")
         else "per ₹100 collected — commission only: field cost not costed (no FIELD_VISIT rate yet)"),
     KpiDef(
         "compliance_integrity", "Compliance & Integrity", "outcome", "score", True,
@@ -294,7 +296,8 @@ def compute_overview(db: Session, bank_id: str, f: KpiFilter | None = None) -> O
 
 
 def _unavailable(k: KpiDef, reason: str) -> dict:
-    return {"id": k.id, "label": k.label, "value": "—", "sub": "Not available", "trend": reason,
+    # The reason goes on the sub-line, which wraps; the trend line is one line and truncates.
+    return {"id": k.id, "label": k.label, "value": "—", "sub": reason[:1].upper() + reason[1:], "trend": "Not available",
             "trendUp": None, "good": None, "basis": f"{k.basis} Not available: {reason}.", "drill": k.drill,
             "available": False, "reason": reason}
 
@@ -333,14 +336,14 @@ def _one(db: Session, k: KpiDef, bank: str, as_of: date | None, views: set[str],
         cohort = "AND NOT is_backfill" if like_for_like else ""
         base_now = _read(db, sql.format(cohort=cohort), {**base, "d": as_of}) if cohort else now
         prev = _read(db, sql.format(cohort=cohort), {**base, "d": prev_d})
-        against = f"vs {short_date(prev_d)}" + (" (like for like)" if cohort else "")
+        against = f"vs {prev_d:%d %b}"          # short enough for the card; like-for-like is in the basis
         trend = _trend(k, base_now.value, prev.value, against) if base_now.value is not None else None
     elif k.kind == "month":
         sql = k.sql + " " + clause
         m0, m1, pm0, pm1, span = _month_span(*f.window(as_of))
         now = _read(db, sql, {**base, "m0": m0, "m1": m1})
         prev = _read(db, sql, {**base, "m0": pm0, "m1": pm1})
-        label = "vs last month" if span == 1 else f"vs the {span} months before"
+        label = "vs last month" if span == 1 else f"vs prior {span} months"
         trend = _trend(k, now.value, prev.value, label) if now.value is not None else None
     elif k.kind == "visits":
         sql = k.sql + " " + clause
@@ -351,7 +354,7 @@ def _one(db: Session, k: KpiDef, bank: str, as_of: date | None, views: set[str],
         span = (hi - lo).days + 1
         now = _read(db, sql, {**base, "lo": lo, "hi": hi})
         prev = _read(db, sql, {**base, "lo": lo - timedelta(days=span), "hi": lo - timedelta(days=1)})
-        trend = _trend(k, now.value, prev.value, f"vs the {span} days before") if now.value is not None else None
+        trend = _trend(k, now.value, prev.value, f"vs prior {span} days") if now.value is not None else None
     else:  # transition: the latest month-end on or before the reading, against the one before
         sql = k.sql + " " + clause
         me = db.execute(text(f"SELECT MAX(month_end) FROM analytics.{TRANSITIONS} WHERE bank_id = :bank "
@@ -364,9 +367,12 @@ def _one(db: Session, k: KpiDef, bank: str, as_of: date | None, views: set[str],
     if now.value is None:
         return _unavailable(k, "no reading for this selection")
     trend_text, up, good = trend
+    basis = k.basis
+    if k.kind == "stock" and like_for_like:
+        basis += " The change is like for like: only loans read on both dates."
     return {"id": k.id, "label": k.label, "value": _fmt(k.unit, now.value),
             "sub": k.sub({"aux": now.aux}) if k.sub else "", "trend": trend_text, "trendUp": up, "good": good,
-            "basis": k.basis, "drill": k.drill, "available": True, "reason": None, "raw": now.value}
+            "basis": basis, "drill": k.drill, "available": True, "reason": None, "raw": now.value}
 
 
 _TOTAL_QUERIES = (

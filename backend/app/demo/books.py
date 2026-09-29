@@ -433,7 +433,7 @@ def generate_book(conn: Connection, w: AgencyWorld, *, slots_per_agent: float, s
                             ("PREMISES_LOCKED" if rng.random() < 0.55 else "CUSTOMER_AWAY")),
             default_reason=(reason if met and isinstance(reason, str) else None),
             borrower_disposition=(disp if met and isinstance(disp, str) and disp else None),
-            consent_given=met,
+            consent_given=(True if met else None),   # nobody to ask when the borrower was not met
             agent_photo_lat=(round(photo[0], 6) if photo else None),
             agent_photo_lon=(round(photo[1], 6) if photo else None),
             agent_photo_accuracy=(float(rng.uniform(4, 18)) if photo else None),
