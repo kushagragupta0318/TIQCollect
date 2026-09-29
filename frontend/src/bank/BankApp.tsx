@@ -2,7 +2,7 @@
 // `/bank/*` (plan §2.4). It guards the roles, mounts the Command Center shell
 // and registers every page in navigation.ts, so the sidebar and the router
 // cannot list different screens.
-import { Suspense, useCallback } from "react";
+import { Suspense, useCallback, type ComponentType } from "react";
 import { Navigate, Route, Routes, useNavigate } from "react-router";
 import api from "@/api/axios";
 import { useAuthStore } from "@/store/authStore";
@@ -14,6 +14,7 @@ import { BankLayout } from "./layout/BankLayout";
 import { guardRedirect } from "@/lib/roles";
 import { BANK_PORTAL_ROLES, BANK_ROLE_LABELS, isBankPortalRole } from "./layout/bankRoles";
 import { BANK_NAV_ITEMS } from "./layout/navigation";
+import { BankPlacementPage } from "./pages/BankPlacementPage";
 import { BankPlaceholderPage } from "./pages/BankPlaceholderPage";
 import OnboardAgencyWizardPage from "./pages/onboarding/OnboardAgencyWizardPage";
 import AgencyDirectoryPage from "./pages/directory/AgencyDirectoryPage";
@@ -26,6 +27,9 @@ import AgencyPerformancePage from "./pages/performance/AgencyPerformancePage";
 const ONBOARD_AGENCY_PATH = "agencies/onboard";
 const AGENCY_DIRECTORY_PATH = "agencies/directory";
 const AGENCY_PERFORMANCE_PATH = "agencies/performance";
+
+// Screens that are built; every other nav item renders its placeholder.
+const BUILT_PAGES: Record<string, ComponentType> = { "agencies/placement": BankPlacementPage };
 
 
 export default function BankApp() {
@@ -57,9 +61,10 @@ export default function BankApp() {
         <Route index element={<Navigate to="overview" replace />} />
         {BANK_NAV_ITEMS.filter((item) =>
           item.path !== ONBOARD_AGENCY_PATH && item.path !== AGENCY_DIRECTORY_PATH && item.path !== AGENCY_PERFORMANCE_PATH,
-        ).map((item) => (
-          <Route key={item.path} path={item.path} element={<BankPlaceholderPage item={item} />} />
-        ))}
+        ).map((item) => {
+          const Page = BUILT_PAGES[item.path];
+          return <Route key={item.path} path={item.path} element={Page ? <Page /> : <BankPlaceholderPage item={item} />} />;
+        })}
         {/* D01-D03: fresh draft (no id yet), or resuming one by its agency_id. */}
         <Route path={ONBOARD_AGENCY_PATH} element={<OnboardAgencyWizardPage />} />
         <Route path={`${ONBOARD_AGENCY_PATH}/:agencyId`} element={<OnboardAgencyWizardPage />} />

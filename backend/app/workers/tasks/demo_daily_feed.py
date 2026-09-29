@@ -222,6 +222,23 @@ def _seed_day(db, day: date) -> int:
         return 0
     from app.services.placement_service import PlacementRefused, PlacementService
     placements = PlacementService(db)
+    # A new loan is booked at a branch inside its agency's contracted territory
+    # (coverage fails closed in placement_service). An agency with no contract in
+    # force, or no covered branch, gets no new loans today: skipped with a
+    # warning, not a quarantine per row.
+    branches_by_agency: dict[str, list[str]] = {}
+    for agency_id in sorted({a[4] for a in anchors}):
+        contract = placements.contract_in_force(agency_id, day)
+        codes = placements.covered_branch_codes(contract) if contract is not None else []
+        if codes:
+            branches_by_agency[agency_id] = codes
+        else:
+            logger.warning("demo_daily_feed.agency_skipped_no_covered_branch", agency_id=agency_id, day=str(day),
+                           contract=getattr(contract, "contract_no", None))
+    anchors = [a for a in anchors if a[4] in branches_by_agency]
+    if not anchors:
+        logger.info("demo_daily_feed.skip_no_placeable_agency", day=str(day))
+        return 0
     batches: dict = {}
     held_by_bank: dict[str, int] = {}
     quarantined = 0
@@ -278,7 +295,7 @@ def _seed_day(db, day: date) -> int:
         loan = Loan(
             id=_uid(), bank_id=bank_id, loan_account_number=f"{ref_prefix}LN{i:02d}",
             customer_id=cust.id, loan_type=loan_type,
-            branch_code="GGN044",
+            branch_code=random.choice(branches_by_agency[agency_id]),
             sanctioned_amount=round(outstanding * 1.4, 2),
             disbursed_amount=round(outstanding * 1.3, 2),
             outstanding_principal=outstanding,

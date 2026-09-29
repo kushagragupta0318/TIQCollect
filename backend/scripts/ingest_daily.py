@@ -325,6 +325,46 @@ def _close_case_recall(case_obj: Case, recall_reason: str, bank_remark: str) -> 
     return "auto_closed_recall"
 
 
+def _end_placement_on_recall(db, case_obj: Case, today: date, recall_reason: str, bank_remark: str) -> str:
+    """A bank recall ends the PLACEMENT too, or the loan stays placed with the
+    agency and can never be re-placed (found 2026-09-29, P3 D08). The one
+    recall rule is PlacementService.recall; the system is the actor."""
+    from app.core.audit import stage_audit
+    from app.models.audit_log import AuditAction
+    from app.models.placement import Placement
+    placement = db.get(Placement, case_obj.placement_id) if case_obj.placement_id else None
+    if placement is None or placement.status != "ACTIVE":
+        return "no_active_placement"
+    note = f"{recall_reason}. {bank_remark}".strip(" .")
+    closed = PlacementService(db).recall(placement, on=today, end_reason="FEED_RECALL", note=note, ended_by=None)
+    stage_audit(db, action=AuditAction.PLACEMENT_RECALLED, user_id=None, entity_type="Placement",
+                entity_id=placement.id,
+                details={"source": "FEED", "reason": note, "agency_id": placement.agency_id,
+                         "loan_id": placement.loan_id, "case_id": case_obj.id,
+                         "other_cases_closed": [c.id for c in closed]})
+    return "placement_recalled"
+
+
+def _end_placement_from_feed(db, case_obj: Case, today: date, bank_action: str) -> str:
+    """PAID_DIRECT / SETTLED / DECEASED end the case's placement as RESOLVED and
+    WRITTEN_OFF as RETURNED (PlacementService.end_from_feed), audited as
+    PLACEMENT_ENDED with the system as actor. Without it the loan stays
+    placed with the agency after the bank has closed it."""
+    from app.core.audit import stage_audit
+    from app.models.audit_log import AuditAction
+    from app.models.placement import Placement
+    placement = db.get(Placement, case_obj.placement_id) if case_obj.placement_id else None
+    if placement is None or placement.status != "ACTIVE":
+        return "no_active_placement"
+    PlacementService(db).end_from_feed(placement, bank_action=bank_action, on=today)
+    stage_audit(db, action=AuditAction.PLACEMENT_ENDED, user_id=None, entity_type="Placement",
+                entity_id=placement.id,
+                details={"source": "FEED", "bank_action": bank_action, "status": placement.status,
+                         "end_reason": placement.end_reason, "agency_id": placement.agency_id,
+                         "loan_id": placement.loan_id, "case_id": case_obj.id})
+    return f"placement_{placement.status.lower()}"
+
+
 def _close_case_written_off(case_obj: Case, bank_remark: str) -> str:
     """Bank wrote off the loan."""
     if case_obj.status in ALREADY_RESOLVED:
@@ -592,6 +632,8 @@ def process_row(row: dict, db, dry_run: bool, today: date, ctx: FeedContext | No
     if bank_action == "PAID_DIRECT":
         if existing_case:
             result["action_case"] = _close_case_paid(existing_case)
+            if result["action_case"] == "auto_closed_paid":
+                result["placement"] = _end_placement_from_feed(db, existing_case, today, "PAID_DIRECT")
             # Only when the close ACTUALLY happened. `_close_case_paid` returns
             # early on an already-resolved case, so re-ingesting the same file
             # cannot write the payment twice.
@@ -606,24 +648,32 @@ def process_row(row: dict, db, dry_run: bool, today: date, ctx: FeedContext | No
     elif bank_action == "SETTLED":
         if existing_case:
             result["action_case"] = _close_case_paid(existing_case, settlement_amount)
+            if result["action_case"] == "auto_closed_paid":
+                result["placement"] = _end_placement_from_feed(db, existing_case, today, "SETTLED")
         else:
             result["action_case"] = "settled_before_allocation"
 
     elif bank_action == "RECALL":
         if existing_case:
             result["action_case"] = _close_case_recall(existing_case, recall_reason, bank_remark)
+            if result["action_case"] == "auto_closed_recall":
+                result["placement"] = _end_placement_on_recall(db, existing_case, today, recall_reason, bank_remark)
         else:
             result["action_case"] = "recall_no_case"
 
     elif bank_action == "WRITTEN_OFF":
         if existing_case:
             result["action_case"] = _close_case_written_off(existing_case, bank_remark)
+            if result["action_case"] == "auto_closed_written_off":
+                result["placement"] = _end_placement_from_feed(db, existing_case, today, "WRITTEN_OFF")
         else:
             result["action_case"] = "written_off_no_case"
 
     elif bank_action == "DECEASED":
         if existing_case:
             result["action_case"] = _close_case_deceased(existing_case)
+            if result["action_case"] == "auto_closed_deceased":
+                result["placement"] = _end_placement_from_feed(db, existing_case, today, "DECEASED")
         else:
             result["action_case"] = "deceased_no_case"
 
@@ -666,7 +716,7 @@ def process_row(row: dict, db, dry_run: bool, today: date, ctx: FeedContext | No
                 else:
                     ctx.placements.open_case(
                         placement, loan, case_number=case_number,
-                        target_amount=overdue_amount if overdue_amount > 0 else total_outstanding,
+                        target_amount=ctx.placements.case_target_amount(loan),
                         id=_uid(), priority=priority_for(dpd), allocation_date=None, allocation_score=0.0,
                         is_ml_allocated=False, visit_count=0, max_visits_allowed=3, is_escalated=False,
                     )
