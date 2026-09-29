@@ -38,8 +38,14 @@ def test_the_scorecard_reads_the_real_view_and_carries_the_performance_index(boo
         assert card["agency_id"] == A1
         assert "collection_efficiency" in card
         assert "performance_index" in card   # from agency_effect, not recomputed
-        if card["performance_index"] is not None:
-            assert 0.0 <= card["performance_index"]["index"] <= 100.0
+        # CI-found (PR#25): the dict itself is None only when the estimator had
+        # NOTHING for this window at all — a real dict with index: None (no raw/
+        # peer rate to shrink) is the common case and must be guarded separately,
+        # or `0.0 <= None` raises TypeError on Python 3 (no total ordering with
+        # None, unlike Python 2's fallback).
+        pi = card["performance_index"]
+        if pi is not None and pi["index"] is not None:
+            assert 0.0 <= pi["index"] <= 100.0
     finally:
         trans.rollback()
         conn.close()
