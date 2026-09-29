@@ -556,3 +556,14 @@ def test_live_submit_with_only_a_key_is_idempotent_and_judged_now(w, monkeypatch
     b = _record(w, req, token=None)
     assert a["id"] == b["id"] and w.db.query(Visit).count() == 1
     assert ct.as_utc(w.db.get(Visit, a["id"]).check_in_time) == fixed
+
+
+def test_a_binding_with_no_time_refuses_late_items(w):
+    """Fail closed (audit LOW): without bound_at nothing shows the capture came after binding."""
+    w.dev.bound_at = None
+    w.db.commit()
+    now = ist(DAY, 11)
+    with pytest.raises(HTTPException) as exc:
+        _judge(w, now - timedelta(hours=2), now)
+    assert _code(exc) == ErrorCode.CAPTURE_DEVICE_MISMATCH
+    assert not _judge(w, now - timedelta(seconds=30), now).late       # live submits unaffected

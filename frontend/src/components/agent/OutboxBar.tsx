@@ -91,10 +91,18 @@ export function OutboxBar() {
                       </button>
                     </div>
                   ) : (
-                    <p className="mt-0.5 text-slate-500">
-                      Waiting for signal{it.attempts > 0 ? ` · tried ${it.attempts}×` : ""}
-                      {it.kind === "visit" && it.media.length > 0 ? ` · ${it.media.length} photo${it.media.length > 1 ? "s" : ""}` : ""}
-                    </p>
+                    <div className="mt-0.5 flex items-center justify-between gap-2 text-slate-500">
+                      <span>
+                        Waiting for signal{it.attempts > 0 ? ` · tried ${it.attempts}×` : ""}
+                        {it.kind === "visit" && it.media.length > 0 ? ` · ${it.media.length} photo${it.media.length > 1 ? "s" : ""}` : ""}
+                      </span>
+                      {/* A record that never goes (e.g. a session that keeps failing) must not hold the cap forever. */}
+                      {it.attempts > 0 && (
+                        <button type="button" onClick={() => void drop(it)} className="inline-flex items-center gap-1 text-slate-600">
+                          <Trash2 className="w-3 h-3" /> Discard
+                        </button>
+                      )}
+                    </div>
                   )}
                 </li>
               ))}

@@ -25,7 +25,7 @@
 // ────────────────────────────────────────────────────────────────────────────
 import { sendLocationBatch } from "@/api/agent";
 import { subscribeToFixes, type RawFix } from "@/hooks/useLiveLocation";
-import { flushOutbox, outboxUsage } from "@/lib/outboxRunner";
+import { flushOutbox } from "@/lib/outboxRunner";
 import { slotKey } from "@/lib/sessionSlot";
 import { useAuthStore } from "@/store/authStore";
 
@@ -212,7 +212,8 @@ export async function flush(): Promise<void> {
   flushing = true;
   // Offline visits go first (see the 2026-09-29 note). Never blocks the trail:
   // a lone worker's position matters more than the order of the two.
-  if (outboxUsage().pending > 0) await flushOutbox();
+  // A fresh read of the queue, not the badge's cached count, which can lag a submit.
+  await flushOutbox();
   // Take a snapshot and clear optimistically, so fixes arriving mid-request are
   // not lost to the splice. On failure the snapshot is put back in front.
   const batch = queue.slice(0, MAX_BATCH_SEND);

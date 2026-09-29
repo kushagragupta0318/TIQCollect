@@ -85,8 +85,9 @@ def judge_capture(db: Session, agent, *, captured_at: datetime | None, device_se
         raise AppException(403, ErrorCode.CAPTURE_DEVICE_MISMATCH,
                            "Recorded offline on a different phone. Only the phone it was recorded "
                            "on can send it.")
+    # Fail closed: a binding with no time cannot show the capture came after it.
     bound_at = device.bound_at and as_utc(device.bound_at)
-    if bound_at is not None and at < bound_at - tolerance:
+    if bound_at is None or at < bound_at - tolerance:
         raise AppException(403, ErrorCode.CAPTURE_DEVICE_MISMATCH,
                            "Recorded before this phone was registered to you.")
     last_seq = device.last_outbox_seq
