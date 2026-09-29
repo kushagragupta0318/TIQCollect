@@ -346,7 +346,7 @@ def _end_placement_on_recall(db, case_obj: Case, today: date, recall_reason: str
 
 
 def _end_placement_from_feed(db, case_obj: Case, today: date, bank_action: str) -> str:
-    """PAID_DIRECT / SETTLED end the case's placement as RESOLVED and
+    """PAID_DIRECT / SETTLED / DECEASED end the case's placement as RESOLVED and
     WRITTEN_OFF as RETURNED (PlacementService.end_from_feed), audited as
     PLACEMENT_ENDED with the system as actor. Without it the loan stays
     placed with the agency after the bank has closed it."""
@@ -672,6 +672,8 @@ def process_row(row: dict, db, dry_run: bool, today: date, ctx: FeedContext | No
     elif bank_action == "DECEASED":
         if existing_case:
             result["action_case"] = _close_case_deceased(existing_case)
+            if result["action_case"] == "auto_closed_deceased":
+                result["placement"] = _end_placement_from_feed(db, existing_case, today, "DECEASED")
         else:
             result["action_case"] = "deceased_no_case"
 

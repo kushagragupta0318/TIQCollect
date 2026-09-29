@@ -167,6 +167,7 @@ def test_a_feed_recall_ends_the_placement_and_the_loan_can_be_placed_again(db):
     ({"bank_action": "PAID_DIRECT", "dpd": "0", "overdue_amount": "0"}, "RESOLVED", "FEED_PAID_DIRECT"),
     ({"bank_action": "SETTLED", "settlement_amount": "150000"}, "RESOLVED", "FEED_SETTLED"),
     ({"bank_action": "WRITTEN_OFF", "bank_remark": "board approved"}, "RETURNED", "FEED_WRITTEN_OFF"),
+    ({"bank_action": "DECEASED"}, "RESOLVED", "FEED_DECEASED"),
 ])
 def test_a_feed_closure_ends_the_placement_with_its_mapped_status(db, over, status, reason):
     """Coordinator ruling (2026-09-29): PAID_DIRECT / SETTLED -> RESOLVED,
@@ -186,6 +187,11 @@ def test_a_feed_closure_ends_the_placement_with_its_mapped_status(db, over, stat
     audit = db.query(AuditLog).filter(AuditLog.action == AuditAction.PLACEMENT_ENDED).one()
     assert (audit.user_id, audit.entity_id, audit.details["bank_action"]) == (
         None, placement.id, over["bank_action"])
+
+    if over["bank_action"] == "DECEASED":
+        # d4's rule, untouched: the borrower stays tagged deceased (do not contact).
+        from app.models.customer import CUSTOMER_TAG_DECEASED
+        assert CUSTOMER_TAG_DECEASED in db.query(Customer).one().tags
 
     # Re-ingesting the same file ends nothing twice.
     again = process_row(_row(**over), db, False, TODAY, ctx=ctx, row_no=3)

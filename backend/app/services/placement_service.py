@@ -191,6 +191,18 @@ class PlacementService:
         leaf = self.branch_region_path(loan.bank_id, loan.branch_code)
         return leaf is not None and any(path_covers(p, leaf) for p in self.coverage_paths(contract))
 
+    def covered_branch_codes(self, contract: AgencyContract) -> list[str]:
+        """The bank's active branches whose region the contract covers, sorted:
+        where a loan must be booked for this contract to take it."""
+        tops = self.coverage_paths(contract)
+        if not tops:
+            return []
+        rows = (self.db.query(Branch.branch_code, Region.path)
+                .join(Region, Region.id == Branch.region_id)
+                .filter(Branch.bank_id == contract.bank_id, Region.bank_id == contract.bank_id,
+                        Branch.is_active.is_(True)))
+        return sorted(code for code, path in rows if any(path_covers(t, path) for t in tops))
+
     def placed_count(self, contract: AgencyContract) -> int:
         return (self.db.query(func.count(Placement.id))
                 .filter(Placement.contract_id == contract.id, Placement.status == "ACTIVE").scalar()) or 0
@@ -427,13 +439,15 @@ class PlacementService:
         return closed
 
     # Feed events that end a placement without a recall (coordinator, 2026-09-29):
-    # the bank was paid or settled, so the placement did its job; or the loan
-    # was written off, so it goes back to the bank.
-    FEED_END_STATUS = {"PAID_DIRECT": "RESOLVED", "SETTLED": "RESOLVED", "WRITTEN_OFF": "RETURNED"}
+    # the bank was paid or settled, so the placement did its job; the loan was
+    # written off, so it goes back to the bank; or the borrower died, so there
+    # is nothing left to work (RESOLVED, not RETURNED: nobody failed).
+    FEED_END_STATUS = {"PAID_DIRECT": "RESOLVED", "SETTLED": "RESOLVED", "WRITTEN_OFF": "RETURNED",
+                       "DECEASED": "RESOLVED"}
 
     def end_from_feed(self, placement: Placement, *, bank_action: str, on: date) -> None:
         """End an ACTIVE placement because the bank's feed closed the loan's
-        case (PAID_DIRECT / SETTLED to RESOLVED, WRITTEN_OFF to RETURNED).
+        case (FEED_END_STATUS).
         Unlike a recall it closes no other case: what the feed closed, it
         closed with its own typed reason."""
         status = self.FEED_END_STATUS[bank_action]

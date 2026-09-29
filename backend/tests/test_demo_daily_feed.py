@@ -80,12 +80,23 @@ def test_every_new_case_stands_on_a_placement_of_its_own_agency():
         assert p.dpd_at_placement == db.get(Loan, c.loan_id).dpd
 
 
-def test_without_a_contract_in_force_every_row_is_quarantined_and_no_case_is_opened():
-    """Never an unowned case: the loan (a bank fact) lands, the case does not,
-    and the row waits in quarantine with the reason."""
+def test_without_a_contract_in_force_the_agency_gets_no_loans_today():
+    """Never an unowned case, and no quarantine parade (coordinator,
+    2026-09-29): with no contract in force there is no covered branch to book
+    a loan at, so the agency is skipped for the day."""
     db = _db()
     _roster(db)
     _contract(db, start=date(2025, 4, 1), end=date(2026, 3, 31))     # expired before the feed day
+    assert feed._seed_day(db, date(2026, 9, 18)) == 0
+    assert db.query(Case).count() == db.query(Loan).count() == db.query(BankFeedRow).count() == 0
+
+
+def test_a_full_contract_quarantines_every_row_and_opens_no_case():
+    """The loan (a bank fact) lands, the case does not, and the row waits in
+    quarantine with the reason."""
+    db = _db()
+    _roster(db)
+    _contract(db, cap=0)
     created = feed._seed_day(db, date(2026, 9, 18))
     assert created == 0
     assert db.query(Case).count() == 0
@@ -93,9 +104,36 @@ def test_without_a_contract_in_force_every_row_is_quarantined_and_no_case_is_ope
     held = db.query(BankFeedRow).all()
     assert loans > 0 and len(held) == loans
     assert {r.status for r in held} == {"QUARANTINED"}
-    assert {e["reason"] for r in held for e in r.dq_errors} == {"NO_CONTRACT_IN_FORCE"}
+    assert {e["reason"] for r in held for e in r.dq_errors} == {"CONTRACT_FULL"}
     batch = db.query(BankFeedBatch).one()
     assert (batch.status, batch.rows_quarantined, batch.received_via) == ("PARTIAL", loans, "DEMO")
+
+
+def test_new_loans_are_booked_only_at_branches_the_agency_covers():
+    """Coverage fails closed (placement_service); the feed used to book every
+    loan at GGN044 whatever the agency's territory (found 2026-09-29, P3 D08)."""
+    from app.models.tenancy import AgencyContract, AgencyRegion, Branch
+    from tests._placement import region_tree
+    db = _db()
+    _roster(db)
+    c = _contract(db)
+    db.query(AgencyRegion).delete()
+    ids = region_tree(db)
+    db.add(AgencyRegion(bank_id=TEST_BANK_ID, agency_id=TEST_AGENCY_ID, contract_id=c.id, region_id=ids["GGN"]))
+    outside = db.query(Branch).filter_by(branch_code="DL01").one()
+    outside.region_id = ids["HR"]                                        # HR is above GGN: not covered
+    db.commit()
+    created = feed._seed_day(db, date(2026, 9, 18))
+    assert created > 0 and db.query(BankFeedRow).count() == 0
+    codes = {l.branch_code for l in db.query(Loan)}
+    assert "DL01" not in codes
+    covered = set(feed_rules(db).covered_branch_codes(db.get(AgencyContract, c.id)))
+    assert codes <= covered and "DL01" not in covered
+
+
+def feed_rules(db):
+    from app.services.placement_service import PlacementService
+    return PlacementService(db)
 
 
 def test_seed_day_is_idempotent_per_calendar_day():
