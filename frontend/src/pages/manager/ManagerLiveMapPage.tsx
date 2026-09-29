@@ -17,6 +17,7 @@ import { getAgentsLive, getAgentTrail, type AgentTrail, type LiveAgentPosition }
 import { addBaseTiles, nightVariantAvailable } from "@/components/map/baseTiles";
 import { AdaptivePointGroup } from "@/components/map/points";
 import { escapeHtml } from "@/lib/html";
+import { simplifyPath } from "@/lib/simplify";
 import type { MapVariant } from "@/lib/mapTiles";
 import { readMapVariant, writeMapVariant } from "@/lib/mapVariantPref";
 import { STALE_AFTER_S } from "./liveMapConstants";
@@ -388,7 +389,7 @@ export default function ManagerLiveMapPage() {
       setTrail(t);
       const selAgent = agents.find((ag) => ag.agent_id === selected);
       const selColor = selAgent ? getAgentColor(selAgent.agent_id, selAgent.employee_code) : "#2563EB";
-      const pts = t.points.map((p) => [p.latitude, p.longitude] as [number, number]);
+      const pts = simplifyPath(t.points.map((p) => [p.latitude, p.longitude] as [number, number]));
       if (pts.length > 1) {
         L.polyline(pts, { color: selColor, weight: 3.5, opacity: 0.8 }).addTo(trailRef.current);
       }

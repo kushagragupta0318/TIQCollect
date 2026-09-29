@@ -130,6 +130,27 @@ describe("ManagerLiveMapPage", () => {
     expect(container.querySelector('.leaflet-marker-icon.custom-agent-marker[title="Neha Verma"]')).not.toBeNull();
   });
 
+  it("draws the selected agent's trail simplified: 500 heartbeats on a straight road become two points", async () => {
+    vi.mocked(getAgentsLive).mockResolvedValue({ agents: [agent("1")], sos_count: 0 } as never);
+    vi.mocked(getAgentTrail).mockResolvedValue({
+      agent_id: "1",
+      points: Array.from({ length: 500 }, (_, i) => ({
+        latitude: 28.4 + i * 0.0001, longitude: 77.0, accuracy_metres: 5,
+        recorded_at: "2026-09-29T05:00:00Z", source: "HEARTBEAT", is_sos: false,
+      })),
+    } as never);
+    const polyline = vi.spyOn(L, "polyline");
+    const { container } = render(<ManagerLiveMapPage />);
+    const icon = await waitFor(() => {
+      const el = container.querySelector<HTMLElement>(".leaflet-marker-icon.custom-agent-marker");
+      expect(el).not.toBeNull();
+      return el as HTMLElement;
+    });
+    fireEvent.click(icon);
+    await waitFor(() => expect(polyline).toHaveBeenCalled());
+    expect(polyline.mock.calls[0][0]).toHaveLength(2);
+  });
+
   it("swaps only the tiles for the night map, and remembers the choice", async () => {
     vi.mocked(getAgentsLive).mockResolvedValue({ agents: [agent("1"), agent("2")], sos_count: 0 } as never);
     const { container } = render(<ManagerLiveMapPage />);

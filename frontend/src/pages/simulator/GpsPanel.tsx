@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import L from "leaflet";
 import { escapeHtml } from "@/lib/html";
+import { simplifyPath } from "@/lib/simplify";
 import "leaflet/dist/leaflet.css";
 import { MapCanvas } from "@/components/map/MapCanvas";
 import type { LatLng, Track } from "./routePlayback";
@@ -62,7 +63,7 @@ export function GpsPanel({
         mapRef.current = map;
         const layers: L.Layer[] = [];
         if (track && track.points.length > 1) {
-          const line = L.polyline(track.points, { color: sim.tone.brand, weight: 3, opacity: 0.55 });
+          const line = L.polyline(simplifyPath(track.points), { color: sim.tone.brand, weight: 3, opacity: 0.55 });
           layers.push(line);
           map.fitBounds(line.getBounds(), { padding: [16, 16] });
         }

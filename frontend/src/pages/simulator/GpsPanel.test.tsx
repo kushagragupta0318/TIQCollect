@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import L from "leaflet";
 import { GpsPanel } from "./GpsPanel";
+import { buildTrack } from "./routePlayback";
 
 const HOSTILE = `<img src=x onerror="alert(1)"><script>alert(2)</script>"Stop' 1`;
 
@@ -16,6 +17,15 @@ afterEach(() => {
 });
 
 describe("GpsPanel", () => {
+  it("draws the route simplified, but leaves the playback track whole", async () => {
+    const polyline = vi.spyOn(L, "polyline");
+    const track = buildTrack(Array.from({ length: 200 }, (_, i) => [28.4 + i * 0.0001, 77.0] as [number, number]));
+    render(<GpsPanel fix={null} track={track} stops={[]} gpsLost={false} onPick={() => {}} />);
+    await waitFor(() => expect(polyline).toHaveBeenCalled());
+    expect(polyline.mock.calls[0][0]).toHaveLength(2);
+    expect(track.points).toHaveLength(200);
+  });
+
   it("draws the phone plus one point per stop, and a hostile stop label renders as text", async () => {
     const stops = [
       { id: "s1", label: HOSTILE, lat: 28.46, lon: 77.03 },

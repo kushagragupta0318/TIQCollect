@@ -16,6 +16,7 @@
 import { useMemo } from "react";
 import L from "leaflet";
 import { escapeHtml } from "@/lib/html";
+import { simplifyPath } from "@/lib/simplify";
 import { MapCanvas } from "./MapCanvas";
 import { decodePolyline } from "./polyline";
 
@@ -64,7 +65,7 @@ export function BeatRouteMap({
   className,
 }: BeatRouteMapProps) {
   const road = useMemo(
-    () => (geometry ? decodePolyline(geometry) : []),
+    () => (geometry ? simplifyPath(decodePolyline(geometry)) : []),
     [geometry],
   );
 
