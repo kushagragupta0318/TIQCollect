@@ -325,6 +325,26 @@ def _close_case_recall(case_obj: Case, recall_reason: str, bank_remark: str) -> 
     return "auto_closed_recall"
 
 
+def _end_placement_on_recall(db, case_obj: Case, today: date, recall_reason: str, bank_remark: str) -> str:
+    """A bank recall ends the PLACEMENT too, or the loan stays placed with the
+    agency and can never be re-placed (found 2026-09-29, P3 D08). The one
+    recall rule is PlacementService.recall; the system is the actor."""
+    from app.core.audit import stage_audit
+    from app.models.audit_log import AuditAction
+    from app.models.placement import Placement
+    placement = db.get(Placement, case_obj.placement_id) if case_obj.placement_id else None
+    if placement is None or placement.status != "ACTIVE":
+        return "no_active_placement"
+    note = f"{recall_reason}. {bank_remark}".strip(" .")
+    closed = PlacementService(db).recall(placement, on=today, end_reason="FEED_RECALL", note=note, ended_by=None)
+    stage_audit(db, action=AuditAction.PLACEMENT_RECALLED, user_id=None, entity_type="Placement",
+                entity_id=placement.id,
+                details={"source": "FEED", "reason": note, "agency_id": placement.agency_id,
+                         "loan_id": placement.loan_id, "case_id": case_obj.id,
+                         "other_cases_closed": [c.id for c in closed]})
+    return "placement_recalled"
+
+
 def _close_case_written_off(case_obj: Case, bank_remark: str) -> str:
     """Bank wrote off the loan."""
     if case_obj.status in ALREADY_RESOLVED:
@@ -612,6 +632,8 @@ def process_row(row: dict, db, dry_run: bool, today: date, ctx: FeedContext | No
     elif bank_action == "RECALL":
         if existing_case:
             result["action_case"] = _close_case_recall(existing_case, recall_reason, bank_remark)
+            if result["action_case"] == "auto_closed_recall":
+                result["placement"] = _end_placement_on_recall(db, existing_case, today, recall_reason, bank_remark)
         else:
             result["action_case"] = "recall_no_case"
 

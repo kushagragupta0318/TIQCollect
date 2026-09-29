@@ -56,9 +56,10 @@ class BatchResult:
         return sum(1 for v in self.verdicts if v.outcome == outcome)
 
 
-def _not_found(what: str) -> AppException:
-    # "Not found" and "not yours" are the same answer (A03).
-    return AppException(404, ErrorCode.NOT_FOUND, f"{what} not found")
+def _not_found(_what: str) -> AppException:
+    # "Not found" and "not yours" are the same answer (A03), and the same body
+    # core/ids gives a malformed id.
+    return AppException(404, ErrorCode.NOT_FOUND, "Not found")
 
 
 def _verdict(loan: Loan, res: GateResult) -> tuple[str, str]:

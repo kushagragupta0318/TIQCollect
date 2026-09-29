@@ -382,10 +382,14 @@ class PlacementService:
         exp = self.recovery_expectation(loan, placement.placed_on)
         if exp is None:
             return
+        from app.services.bank.expected_recovery import expected_recovery_inr
         p_pay, pred_id, as_of = exp
         placement.expected_recovery_prob = p_pay
-        # expected_recovery_inr stays NULL: what amount P(pay next cycle) implies
-        # is D06's definition to make (asked 2026-09-29), not this writer's.
+        # The amount is D06's one definition (ce), written here, never restated.
+        placement.expected_recovery_inr = expected_recovery_inr(
+            prob=p_pay, overdue_at_placement=float(placement.overdue_at_placement or 0.0),
+            exposure_at_placement=float(placement.exposure_at_placement or 0.0),
+            dpd_bucket=placement.dpd_bucket_at_placement, loan_type=loan.loan_type)
         placement.model_prediction_id, placement.model_prediction_as_of = pred_id, as_of
 
     # ── ending a placement ──────────────────────────────────────────────────

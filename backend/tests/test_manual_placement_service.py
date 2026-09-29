@@ -22,6 +22,7 @@ from app.models.placement import Placement
 from app.models.planning import PlacementDecision, PlacementRun
 from app.models.tenancy import Agency, AgencyContract, Bank, Branch
 from app.models.user import User, UserRole
+from app.services.bank.expected_recovery import expected_recovery_inr
 from app.services.manual_placement_service import MAX_BATCH, ManualPlacementService
 from app.services.placement_service import PlacementService
 from tests._db import TEST_AGENCY_ID, TEST_BANK_ID, create_schema, make_engine, make_session_factory, test_id
@@ -191,7 +192,11 @@ def test_expected_recovery_is_the_complement_of_the_newest_prior_prediction(db):
     p = db.query(Placement).one()
     assert p.expected_recovery_prob == pytest.approx(0.38)
     assert (p.model_prediction_id, p.model_prediction_as_of) == (newest.id, date(2026, 9, 20))
-    assert p.expected_recovery_inr is None                     # D06 defines the amount
+    # ce's one definition (services/bank/expected_recovery): P(pay) x overdue, capped at exposure.
+    assert p.expected_recovery_inr == expected_recovery_inr(
+        prob=p.expected_recovery_prob, overdue_at_placement=24600.0, exposure_at_placement=281000.0,
+        dpd_bucket=p.dpd_bucket_at_placement, loan_type=loan.loan_type)
+    assert p.expected_recovery_inr == pytest.approx(0.38 * 24600.0, abs=0.01)
 
 
 def test_expected_recovery_abstains_without_a_prediction(db):
@@ -202,6 +207,7 @@ def test_expected_recovery_abstains_without_a_prediction(db):
                                      loan_ids=[loan.id], on=DAY)
     p = db.query(Placement).one()
     assert p.expected_recovery_prob is None and p.model_prediction_id is None
+    assert p.expected_recovery_inr is None
 
 
 # ── case numbers ─────────────────────────────────────────────────────────────
@@ -272,3 +278,17 @@ def test_recall_refuses_no_reason_another_bank_and_a_second_recall(db):
     with pytest.raises(AppException) as e:
         svc.recall(bank_id=TEST_BANK_ID, actor_id=ACTOR, placement_id=p.id, note="moved", on=DAY)
     assert e.value.status_code == 409
+
+
+def test_a_case_number_collision_is_refused_by_the_database_and_rolls_the_batch_back(db, monkeypatch):
+    """UNIQUE (bank_id, case_number) is the guard behind the 40-bit tag
+    (coordinator R2): force two placements onto one number."""
+    from sqlalchemy.exc import IntegrityError
+    _contract(db)
+    loans = [make_loan(db, n) for n in (1, 2)]
+    db.commit()
+    monkeypatch.setattr(PlacementService, "case_number_for", staticmethod(lambda p: "PL260929AAAAAAAA"))
+    with pytest.raises(IntegrityError):
+        ManualPlacementService(db).apply(bank_id=TEST_BANK_ID, actor_id=ACTOR, agency_id=TEST_AGENCY_ID,
+                                         loan_ids=_ids(loans), on=DAY)
+    assert db.query(Placement).count() == db.query(Case).count() == db.query(PlacementRun).count() == 0

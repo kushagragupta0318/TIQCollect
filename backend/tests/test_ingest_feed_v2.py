@@ -10,7 +10,7 @@ from datetime import date
 
 import pytest
 
-from app.models.case import Case, ClosureReason
+from app.models.case import Case, CaseStatus, ClosureReason
 from app.models.customer import Customer
 from app.models.lending import BankFeedBatch, BankFeedRow
 from app.models.loan import Loan
@@ -125,3 +125,39 @@ def test_a_recall_closure_records_the_typed_reason(db):
     assert case.closure_reason == ClosureReason.RECALLED.value
     # The free-text marker ml/pipeline/outcomes.py matches is still written.
     assert case.resolution_notes.startswith("RECALLED by bank")
+
+
+def test_a_feed_recall_ends_the_placement_and_the_loan_can_be_placed_again(db):
+    """Found 2026-09-29 (P3 D08): a feed RECALL closed the case but left its
+    placement ACTIVE, so the loan stayed placed with the agency for good."""
+    from app.models.audit_log import AuditAction, AuditLog
+    ctx = _ctx(db)
+    process_row(_row(), db, False, TODAY, ctx=ctx, row_no=1)
+    db.commit()
+    first = db.query(Placement).one()
+
+    res = process_row(_row(bank_action="RECALL", recall_reason="LEGAL_PROCEEDINGS", bank_remark="court order"),
+                      db, False, TODAY, ctx=ctx, row_no=2)
+    db.commit()
+    assert (res["action_case"], res["placement"]) == ("auto_closed_recall", "placement_recalled")
+    db.refresh(first)
+    assert (first.status, first.end_reason, first.ended_on, first.ended_by) == ("RECALLED", "FEED_RECALL", TODAY, None)
+    case = db.query(Case).one()
+    assert case.status == CaseStatus.CLOSED and case.resolution_notes.startswith("RECALLED by bank")
+    audit = db.query(AuditLog).filter(AuditLog.action == AuditAction.PLACEMENT_RECALLED).one()
+    assert (audit.user_id, audit.entity_id, audit.details["source"]) == (None, first.id, "FEED")
+
+    # The same row again changes nothing more.
+    again = process_row(_row(bank_action="RECALL", recall_reason="LEGAL_PROCEEDINGS"), db, False, TODAY,
+                        ctx=ctx, row_no=3)
+    db.commit()
+    assert again.get("placement") is None
+    assert db.query(AuditLog).filter(AuditLog.action == AuditAction.PLACEMENT_RECALLED).count() == 1
+
+    # A later overdue row under a new case number re-places the loan: new placement, new case.
+    res = process_row(_row(case_number="MTB-CASE-0101"), db, False, TODAY, ctx=ctx, row_no=4)
+    db.commit()
+    assert res["action_case"] == "inserted", res
+    assert db.query(Placement).count() == 2
+    assert db.query(Placement).filter_by(status="ACTIVE").one().id != first.id
+    assert db.query(Case).count() == 2
