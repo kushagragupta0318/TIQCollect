@@ -39,7 +39,7 @@ import os
 from functools import lru_cache
 from typing import List, Literal
 
-from pydantic import field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.demo.roster import DEMO_EMAIL_DOMAINS as _DEMO_ROSTER_DOMAINS  # a stdlib-only module: no cycle
@@ -486,6 +486,10 @@ class Settings(BaseSettings):
     # fatigue, and capacity is preserved by swapping rather than moving.
     # Set to 0.0 to switch it off.
     ALLOCATOR_EXPLORATION_RATE: float = 0.10
+    # The placement engine's epsilon-greedy slice (ADR 0010): OFF by default.
+    # Randomising AGENCIES moves commission between real firms, so the owner
+    # opts in per run; a run may ask for at most 0.20 (PLACEMENT_EXPLORATION_MAX).
+    PLACEMENT_EXPLORATION_RATE: float = Field(default=0.0, ge=0.0, le=0.20)
     # Log every served score to model_predictions for the feedback loop. Cheap,
     # append-only, and it is the only way the monitor can compare what was
     # predicted against what happened. Separate from ML_SCORING_ENABLED so a
