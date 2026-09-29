@@ -220,3 +220,34 @@ def test_with_no_agent_bases_the_feed_creates_nothing():
     _contract(db)
     assert feed._seed_day(db, date(2026, 9, 21)) == 0
     assert db.query(Customer).count() == 0 and db.query(Case).count() == 0
+
+def _terms(db, contract, pairs):
+    from app.models.tenancy import AgencyContractTerm
+    for lt, bucket in pairs:
+        db.add(AgencyContractTerm(bank_id=TEST_BANK_ID, agency_id=TEST_AGENCY_ID, contract_id=contract.id,
+                                  loan_type=lt, dpd_bucket=bucket, commission_pct=8.0))
+    db.commit()
+
+
+def test_new_loans_are_only_products_and_buckets_the_contract_authorises():
+    """The feed drew a random product, so a contract with terms quarantined
+    rows NOT_AUTHORISED (38 on one fixture day, 2026-09-29)."""
+    from app.models.loan import DPDBucket, LoanType
+    db = _db()
+    _roster(db)
+    c = _contract(db)
+    allowed = {(LoanType.PERSONAL, DPDBucket.BUCKET_2), (LoanType.HOME, DPDBucket.NPA)}
+    _terms(db, c, allowed)
+    created = feed._seed_day(db, date(2026, 9, 18))
+    assert created > 0 and db.query(BankFeedRow).count() == 0
+    assert {(l.loan_type, dpd_bucket_for(l.dpd)) for l in db.query(Loan)} <= allowed
+
+
+def test_an_agency_whose_contract_authorises_nothing_the_feed_draws_is_skipped():
+    from app.models.loan import DPDBucket, LoanType
+    db = _db()
+    _roster(db)
+    c = _contract(db)
+    _terms(db, c, [(LoanType.PERSONAL, DPDBucket.BUCKET_1)])      # the feed never draws 1-30 DPD
+    assert feed._seed_day(db, date(2026, 9, 18)) == 0
+    assert db.query(Loan).count() == db.query(BankFeedRow).count() == 0
