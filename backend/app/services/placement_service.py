@@ -54,7 +54,7 @@ from typing import Any
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.models.case import Case, CaseStatus, priority_for
+from app.models.case import Case, CaseStatus, ClosureReason, priority_for
 from app.models.lending import BankFeedBatch, BankFeedRow
 from app.models.loan import Loan, LoanStatus, dpd_bucket_for
 from app.models.placement import PLACEMENT_SOURCES, Placement
@@ -549,8 +549,11 @@ class PlacementService:
     # the bank was paid or settled, so the placement did its job; the loan was
     # written off, so it goes back to the bank; or the borrower died, so there
     # is nothing left to work (RESOLVED, not RETURNED: nobody failed).
-    FEED_END_STATUS = {"PAID_DIRECT": "RESOLVED", "SETTLED": "RESOLVED", "WRITTEN_OFF": "RETURNED",
-                       "DECEASED": "RESOLVED"}
+    # Keyed by the feed action, spelled as the case's ClosureReason (the same
+    # four codes); "DECEASED" here is that closure reason, not the customer
+    # tag (CUSTOMER_TAG_DECEASED, test_deceased_tag).
+    FEED_END_STATUS = {ClosureReason.PAID_DIRECT.value: "RESOLVED", ClosureReason.SETTLED.value: "RESOLVED",
+                       ClosureReason.WRITTEN_OFF.value: "RETURNED", ClosureReason.DECEASED.value: "RESOLVED"}
 
     def end_from_feed(self, placement: Placement, *, bank_action: str, on: date) -> None:
         """End an ACTIVE placement because the bank's feed closed the loan's
