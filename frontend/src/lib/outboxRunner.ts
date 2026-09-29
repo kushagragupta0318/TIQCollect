@@ -16,6 +16,7 @@ import {
 } from "@/lib/outbox";
 import { IdbOutboxStore } from "@/lib/outboxIdb";
 import { purgeReadCache } from "@/lib/readCacheRuntime";
+import { serverNow } from "@/lib/serverClock";
 import { SESSION_SLOT } from "@/lib/sessionSlot";
 import { useAuthStore } from "@/store/authStore";
 import type { LogCallPayload } from "@/api/agent";
@@ -133,7 +134,7 @@ export async function submitVisit(v: NewVisit): Promise<SubmitResult> {
 
 export async function submitCall(c: { caseId: string; caseLabel: string; body: LogCallPayload }): Promise<SubmitResult> {
   askPersistence();
-  const item = await enqueueCall(outboxStore(), requireWho(), { ...c, capturedAt: new Date() });
+  const item = await enqueueCall(outboxStore(), requireWho(), { ...c, capturedAt: serverNow() });
   return settle(item);
 }
 

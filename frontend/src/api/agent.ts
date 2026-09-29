@@ -28,9 +28,11 @@
 import api from "./axios";
 import { beatKey, cachedRead, caseKey } from "@/lib/readCache";
 import { currentUserId, installReadCacheInvalidation, noteServed, readStore } from "@/lib/readCacheRuntime";
+import { installServerClock } from "@/lib/serverClock";
 import type { Case } from "@/types";
 
 installReadCacheInvalidation(api);
+installServerClock(api);
 
 export async function getHomeSummary(): Promise<{
   cases_today: number;

@@ -112,6 +112,7 @@ import { toast } from "react-hot-toast";
 import type { VisitPayload } from "@/api/agent";
 import { OutboxFullError, type NewVisit } from "@/lib/outbox";
 import { submitVisit } from "@/lib/outboxRunner";
+import { serverNow } from "@/lib/serverClock";
 import { getCaseDetail, recordVisit, collectPayment, setPTP, getPhotoUploadUrl, getCasePhotos, getRecordingUploadUrl, reoptimizeBeat, transcribeAudio, queueVisitTranscription, sendPaymentOtp, verifyPaymentOtp, getUpiConfig } from "@/api/agent";
 import { useQuery } from "@tanstack/react-query";
 import { DEMO_UPI_REFERENCE_PREFIX, demoUpiAutoconfirmEnabled, demoUpiReference, paymentReferenceOk, upiQrValue, upiReferenceOk } from "./upiPayment";
@@ -1147,7 +1148,7 @@ export default function RecordVisitPage() {
           if (dataUrl) photos.push({ subject, blob: await (await fetch(dataUrl)).blob() });
         }
         const res = await submitVisit({
-          caseId, caseLabel: caseData?.case_number ?? "this case", capturedAt: new Date(),
+          caseId, caseLabel: caseData?.case_number ?? "this case", capturedAt: serverNow(),
           body: {
             ...body,
             ...photoMeta("agent", form.agentPhotoGps, !!freshPhoto.agent),
