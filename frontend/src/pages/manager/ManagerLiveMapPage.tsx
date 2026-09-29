@@ -12,8 +12,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { AlertTriangle, BatteryLow, Check, Crosshair, Move, Navigation, RefreshCw, Route } from "lucide-react";
+import { AlertTriangle, BatteryLow, Check, Crosshair, Moon, Move, Navigation, RefreshCw, Route, Sun } from "lucide-react";
 import { getAgentsLive, getAgentTrail, type AgentTrail, type LiveAgentPosition } from "@/api/manager";
+import { addBaseTiles, nightVariantAvailable } from "@/components/map/baseTiles";
+import { AdaptivePointGroup } from "@/components/map/points";
+import { escapeHtml } from "@/lib/html";
+import { simplifyPath } from "@/lib/simplify";
+import type { MapVariant } from "@/lib/mapTiles";
+import { readMapVariant, writeMapVariant } from "@/lib/mapVariantPref";
 import { STALE_AFTER_S } from "./liveMapConstants";
 import { navigateAction } from "./liveMapNavigate";
 import { useLiveEvents } from "@/hooks/useLiveEvents";
@@ -94,12 +100,44 @@ function ageLabel(seconds: number | null): string {
   return h < 24 ? `${h} hr ago` : `${Math.round(h / 24)} d ago`;
 }
 
-function escapeHtml(v: string): string {
-  return v.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
-}
-
 // lucide "navigation" glyph, inlined because the popup is an HTML string.
 const NAVIGATE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="3 11 22 2 13 21 11 13 3 11"/></svg>`;
+
+function tooltipHtml(a: LiveAgentPosition): string {
+  return (
+    `<b>${escapeHtml(a.full_name)}</b><br/>${escapeHtml(a.employee_code)} · ${ageLabel(a.age_seconds)}` +
+    (a.sos_active ? "<br/><b style='color:#DC2626'>SOS ACTIVE</b>" : "")
+  );
+}
+
+// Click → popup with a Navigate link to wherever the marker is. A plain anchor
+// rather than a handler: Leaflet popups are HTML strings, and an <a target=_blank>
+// needs no listener to survive the popup's content being replaced on a poll.
+function popupHtml(a: LiveAgentPosition): string {
+  const nav = navigateAction(a, ageLabel);
+  return `<div style="font:12px system-ui,-apple-system,sans-serif;min-width:180px">
+           <div style="font-weight:700;color:#1C1C1F">${escapeHtml(a.full_name)}</div>
+           <div style="color:#6B6D76;margin-top:2px">${escapeHtml(a.employee_code)} · ${ageLabel(a.age_seconds)}</div>
+           ${nav ? `
+             <a href="${nav.url}" target="_blank" rel="noopener noreferrer"
+                style="display:inline-flex;align-items:center;gap:6px;margin-top:8px;padding:6px 10px;border-radius:8px;
+                       background:#2563EB;color:#fff;font-weight:600;text-decoration:none">
+               ${NAVIGATE_SVG} ${nav.label}
+             </a>
+             <div style="color:${nav.stale ? "#B45309" : "#6B6D76"};margin-top:6px;font-size:11px">${nav.note}</div>
+           ` : `<div style="color:#B45309;margin-top:6px;font-size:11px">No position to navigate to</div>`}
+         </div>`;
+}
+
+/** What a marker last drew, so a poll touches only what changed (and an open tooltip stays open). */
+interface DrawnMarker {
+  lat: number;
+  lon: number;
+  iconKey: string;
+  selected: boolean;
+  tooltip: string;
+  popup: string;
+}
 
 /** Distinct vibrant colored marker with initials & pin pointer for each agent */
 function agentIcon(a: LiveAgentPosition, isSelected: boolean = false): L.DivIcon {
@@ -133,7 +171,7 @@ function agentIcon(a: LiveAgentPosition, isSelected: boolean = false): L.DivIcon
           transition:transform 0.15s ease;
           ${isSelected ? "transform:scale(1.15);" : ""}
         ">
-          ${sos ? '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>' : initials}
+          ${sos ? '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>' : escapeHtml(initials)}
         </div>
         <div style="
           width:0;height:0;
@@ -150,7 +188,12 @@ export default function ManagerLiveMapPage() {
   const mapEl = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
   const markersRef = useRef<Map<string, L.Marker>>(new Map());
+  const drawnRef = useRef<Map<string, DrawnMarker>>(new Map());
   const trailRef = useRef<L.LayerGroup | null>(null);
+  // Agents cluster only when there are more than 40. An SOS marker sits outside the
+  // clusters so it can never be hidden inside a bubble: a safety rule, not a display choice.
+  const teamRef = useRef<AdaptivePointGroup | null>(null);
+  const sosLayerRef = useRef<L.LayerGroup | null>(null);
   const fittedRef = useRef(false);
   // Which SOS incident the map has already snapped to, so it snaps once per
   // incident rather than on every poll.
@@ -168,6 +211,14 @@ export default function ManagerLiveMapPage() {
   // Decided at first render (not in an effect — no setState-in-effect), so
   // the map is created with the matching `dragging` option.
   const [touchLocked, setTouchLocked] = useState<boolean | null>(() => (isCoarsePointer() ? true : null));
+  // Night tiles exist only on Mapbox; without them the toggle is not offered.
+  const [nightAvailable] = useState(() => nightVariantAvailable());
+  const [variant, setVariant] = useState<MapVariant>(() => (nightAvailable ? readMapVariant() : "day"));
+  const toggleVariant = () => {
+    const next: MapVariant = variant === "night" ? "day" : "night";
+    writeMapVariant(next);
+    setVariant(next);
+  };
   const toggleTouchLock = () => {
     const map = mapRef.current;
     if (!map) return;
@@ -193,11 +244,9 @@ export default function ManagerLiveMapPage() {
     // wheel scrolls the page unless the pointer is over the map, as before.
     const map = L.map(mapEl.current, { zoomControl: true, attributionControl: true, dragging: !isCoarsePointer() })
       .setView(DEFAULT_CENTRE, 9);
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      maxZoom: 19,
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-    }).addTo(map);
     trailRef.current = L.layerGroup().addTo(map);
+    teamRef.current = new AdaptivePointGroup(map);
+    sosLayerRef.current = L.layerGroup().addTo(map);
     mapRef.current = map;
     // Leaflet measures its container on creation; inside a flex/grid shell that
     // measurement can land before layout settles, leaving grey tiles.
@@ -205,12 +254,23 @@ export default function ManagerLiveMapPage() {
     // Captured now, not read from the ref at teardown: by cleanup time the ref
     // may already point at a different Map instance.
     const markers = markersRef.current;
+    const drawn = drawnRef.current;
     return () => {
       map.remove();
       mapRef.current = null;
+      teamRef.current = null;
+      sosLayerRef.current = null;
       markers.clear();
+      drawn.clear();
     };
   }, []);
+
+  // Declared after the bootstrap so the map exists; a variant switch swaps only the tiles.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    return addBaseTiles(map, variant);
+  }, [variant]);
 
   // ── polling ───────────────────────────────────────────────────────────────
   const load = useCallback(async () => {
@@ -266,7 +326,9 @@ export default function ManagerLiveMapPage() {
   // ── markers ───────────────────────────────────────────────────────────────
   useEffect(() => {
     const map = mapRef.current;
-    if (!map) return;
+    const team = teamRef.current;
+    const sosLayer = sosLayerRef.current;
+    if (!map || !team || !sosLayer) return;
     const seen = new Set<string>();
 
     for (const a of agents) {
@@ -274,50 +336,55 @@ export default function ManagerLiveMapPage() {
       seen.add(a.agent_id);
       const pos: [number, number] = [a.latitude, a.longitude];
       const isSel = a.agent_id === selected;
-      const existing = markersRef.current.get(a.agent_id);
-      if (existing) {
-        existing.setLatLng(pos);
-        existing.setIcon(agentIcon(a, isSel));
-        if (isSel) existing.setZIndexOffset(1000);
-        else existing.setZIndexOffset(0);
+      const icon = agentIcon(a, isSel);
+      const next: DrawnMarker = {
+        lat: a.latitude,
+        lon: a.longitude,
+        iconKey: `${icon.options.html as string}|${a.full_name}`,
+        selected: isSel,
+        tooltip: tooltipHtml(a),
+        popup: popupHtml(a),
+      };
+      const prev = drawnRef.current.get(a.agent_id);
+      let marker = markersRef.current.get(a.agent_id);
+      if (!marker || !prev) {
+        marker = L.marker(pos, { icon, title: a.full_name, zIndexOffset: isSel ? 1000 : 0 })
+          .on("click", () => setSelected(a.agent_id))
+          // No JS hover delay, on purpose: hover costs one Leaflet tooltip and no redraw, and
+          // Leaflet's own handler also opens it on keyboard focus (P3-map D4).
+          .bindTooltip(next.tooltip, { direction: "top", offset: [0, -16] })
+          .bindPopup(next.popup, { offset: [0, -28], closeButton: false, className: "agent-nav-popup" });
+        markersRef.current.set(a.agent_id, marker);
       } else {
-        const m = L.marker(pos, { icon: agentIcon(a, isSel), title: a.full_name, zIndexOffset: isSel ? 1000 : 0 })
-          .addTo(map)
-          .on("click", () => setSelected(a.agent_id));
-        markersRef.current.set(a.agent_id, m);
+        // setIcon rebuilds the pin (replaying its pop-in) and rebinding closes an open
+        // tooltip, so each is done only when its content actually changed.
+        if (prev.lat !== next.lat || prev.lon !== next.lon) marker.setLatLng(pos);
+        if (prev.iconKey !== next.iconKey) {
+          marker.options.title = a.full_name;
+          marker.setIcon(icon);
+        }
+        if (prev.selected !== next.selected) marker.setZIndexOffset(isSel ? 1000 : 0);
+        if (prev.tooltip !== next.tooltip) marker.setTooltipContent(next.tooltip);
+        if (prev.popup !== next.popup) marker.setPopupContent(next.popup);
       }
-      const marker = markersRef.current.get(a.agent_id)!;
-      marker.bindTooltip(
-        `<b>${a.full_name}</b><br/>${a.employee_code} · ${ageLabel(a.age_seconds)}` +
-        (a.sos_active ? "<br/><b style='color:#DC2626'>SOS ACTIVE</b>" : ""),
-        { direction: "top", offset: [0, -16] },
-      );
-      // Click → popup with a Navigate link to wherever the marker is. A plain
-      // anchor rather than a handler: Leaflet popups are HTML strings, and an
-      // <a target=_blank> needs no listener to survive the popup being
-      // re-rendered on the next poll. `escapeHtml` on the name because it is
-      // user-entered data going into innerHTML.
-      const nav = navigateAction(a, ageLabel);
-      marker.bindPopup(
-        `<div style="font:12px system-ui,-apple-system,sans-serif;min-width:180px">
-           <div style="font-weight:700;color:#1C1C1F">${escapeHtml(a.full_name)}</div>
-           <div style="color:#6B6D76;margin-top:2px">${escapeHtml(a.employee_code)} · ${ageLabel(a.age_seconds)}</div>
-           ${nav ? `
-             <a href="${nav.url}" target="_blank" rel="noopener noreferrer"
-                style="display:inline-flex;align-items:center;gap:6px;margin-top:8px;padding:6px 10px;border-radius:8px;
-                       background:#2563EB;color:#fff;font-weight:600;text-decoration:none">
-               ${NAVIGATE_SVG} ${nav.label}
-             </a>
-             <div style="color:${nav.stale ? "#B45309" : "#6B6D76"};margin-top:6px;font-size:11px">${nav.note}</div>
-           ` : `<div style="color:#B45309;margin-top:6px;font-size:11px">No position to navigate to</div>`}
-         </div>`,
-        { offset: [0, -28], closeButton: false, className: "agent-nav-popup" },
-      );
+      drawnRef.current.set(a.agent_id, next);
+      if (a.sos_active) {
+        team.delete(marker);
+        sosLayer.addLayer(marker);
+      } else {
+        sosLayer.removeLayer(marker);
+        team.add(marker);
+      }
     }
 
     // Drop markers for agents that no longer report a position at all.
     for (const [id, m] of markersRef.current) {
-      if (!seen.has(id)) { m.remove(); markersRef.current.delete(id); }
+      if (!seen.has(id)) {
+        team.delete(m);
+        sosLayer.removeLayer(m);
+        markersRef.current.delete(id);
+        drawnRef.current.delete(id);
+      }
     }
 
     // Fit once, on the first data that has anything in it. Re-fitting on every
@@ -360,7 +427,7 @@ export default function ManagerLiveMapPage() {
       setTrail(t);
       const selAgent = agents.find((ag) => ag.agent_id === selected);
       const selColor = selAgent ? getAgentColor(selAgent.agent_id, selAgent.employee_code) : "#2563EB";
-      const pts = t.points.map((p) => [p.latitude, p.longitude] as [number, number]);
+      const pts = simplifyPath(t.points.map((p) => [p.latitude, p.longitude] as [number, number]));
       if (pts.length > 1) {
         L.polyline(pts, { color: selColor, weight: 3.5, opacity: 0.8 }).addTo(trailRef.current);
       }
@@ -374,7 +441,7 @@ export default function ManagerLiveMapPage() {
           fillColor: p.is_sos ? "#DC2626" : selColor,
           fillOpacity: 0.9, weight: 2,
         })
-          .bindTooltip(`${p.source} · ${new Date(p.recorded_at).toLocaleTimeString()}`,
+          .bindTooltip(`${escapeHtml(p.source)} · ${new Date(p.recorded_at).toLocaleTimeString()}`,
                        { direction: "top" })
           .addTo(trailRef.current);
       }
@@ -444,21 +511,36 @@ export default function ManagerLiveMapPage() {
           <div className="rounded-card overflow-hidden relative"
                style={{ border: "2px solid #C7CBD4", boxShadow: "0 0 0 1px rgba(0,0,0,0.04)", animation: `enter 420ms ${EASE} 60ms both` }}>
             <div ref={mapEl} style={{ height: "clamp(380px, 62vh, 720px)", width: "100%", background: "#E8EAEE" }} />
-            {touchLocked !== null && (
-              <button
-                type="button"
-                onClick={toggleTouchLock}
-                aria-pressed={!touchLocked}
-                className="tap-target absolute top-3 right-3 z-[1000] inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold shadow-md"
-                style={{ background: touchLocked ? "#fff" : "#2563EB", color: touchLocked ? "#1C1C1F" : "#fff", border: "1px solid rgba(0,0,0,0.12)" }}
-                title={touchLocked ? "One finger scrolls the page. Tap to move the map instead." : "One finger moves the map. Tap when done to scroll the page again."}
-              >
-                {touchLocked ? <Move className="w-3.5 h-3.5" aria-hidden="true" /> : <Check className="w-3.5 h-3.5" aria-hidden="true" />}
-                {touchLocked ? "Move map" : "Done"}
-              </button>
-            )}
+            <div className="absolute top-3 right-3 z-[1000] flex flex-col items-end gap-2">
+              {nightAvailable && (
+                <button
+                  type="button"
+                  onClick={toggleVariant}
+                  aria-pressed={variant === "night"}
+                  className="tap-target inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold shadow-md"
+                  style={{ background: "#fff", color: "#1C1C1F", border: "1px solid rgba(0,0,0,0.12)" }}
+                  title={variant === "night" ? "Switch to the day map" : "Switch to the night map"}
+                >
+                  {variant === "night" ? <Sun className="w-3.5 h-3.5" aria-hidden="true" /> : <Moon className="w-3.5 h-3.5" aria-hidden="true" />}
+                  {variant === "night" ? "Day map" : "Night map"}
+                </button>
+              )}
+              {touchLocked !== null && (
+                <button
+                  type="button"
+                  onClick={toggleTouchLock}
+                  aria-pressed={!touchLocked}
+                  className="tap-target inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold shadow-md"
+                  style={{ background: touchLocked ? "#fff" : "#2563EB", color: touchLocked ? "#1C1C1F" : "#fff", border: "1px solid rgba(0,0,0,0.12)" }}
+                  title={touchLocked ? "One finger scrolls the page. Tap to move the map instead." : "One finger moves the map. Tap when done to scroll the page again."}
+                >
+                  {touchLocked ? <Move className="w-3.5 h-3.5" aria-hidden="true" /> : <Check className="w-3.5 h-3.5" aria-hidden="true" />}
+                  {touchLocked ? "Move map" : "Done"}
+                </button>
+              )}
+            </div>
             {touchLocked === true && (
-              <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-[1000] rounded-full px-3 py-1 text-[11px] font-medium pointer-events-none"
+              <div className="absolute bottom-10 left-1/2 -translate-x-1/2 z-[1000] rounded-full px-3 py-1 text-[11px] font-medium pointer-events-none"
                    style={{ background: "rgba(17,24,39,0.78)", color: "#F9FAFB" }}>
                 Swipe to scroll the page · pinch to zoom
               </div>

@@ -255,6 +255,11 @@ services:
     container_name: fieldops_dev_web
     restart: unless-stopped
     working_dir: /app
+    # For VITE_MAPBOX_TOKEN / VITE_ALLOWED_MAP_HOSTS (src/lib/mapTiles.ts). Only
+    # VITE_* vars reach the browser; without the file the maps use OSM tiles.
+    env_file:
+      - path: ./backend/.env
+        required: false
     environment:
       # Vite proxies /api and /ws to this. Inside the network the backend is
       # api:8000; the config's default of localhost:8400 would resolve to this

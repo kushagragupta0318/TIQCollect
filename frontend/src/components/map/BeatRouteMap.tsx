@@ -15,6 +15,8 @@
  */
 import { useMemo } from "react";
 import L from "leaflet";
+import { escapeHtml } from "@/lib/html";
+import { simplifyPath } from "@/lib/simplify";
 import { MapCanvas } from "./MapCanvas";
 import { decodePolyline } from "./polyline";
 
@@ -63,7 +65,7 @@ export function BeatRouteMap({
   className,
 }: BeatRouteMapProps) {
   const road = useMemo(
-    () => (geometry ? decodePolyline(geometry) : []),
+    () => (geometry ? simplifyPath(decodePolyline(geometry)) : []),
     [geometry],
   );
 
@@ -103,7 +105,7 @@ export function BeatRouteMap({
         icon: pin(colour, String(i + 1), !!s.done),
       })
         .bindTooltip(
-          `<strong>${s.label}</strong>${s.sublabel ? `<br>${s.sublabel}` : ""}`,
+          `<strong>${escapeHtml(s.label)}</strong>${s.sublabel ? `<br>${escapeHtml(s.sublabel)}` : ""}`,
           { direction: "top" },
         )
         .addTo(layer);
@@ -127,7 +129,7 @@ export function BeatRouteMap({
         className={className ?? "h-64 w-full rounded-xl overflow-hidden"}
       />
       {approximate && (
-        <div className="absolute bottom-2 left-2 z-[400] text-xs text-slate-600 bg-white/90 px-2 py-1 rounded-lg shadow-sm">
+        <div className="absolute bottom-10 left-2 z-[400] text-xs text-slate-600 bg-white/90 px-2 py-1 rounded-lg shadow-sm">
           Straight-line order{source ? ` · ${source}` : ""} — road route
           unavailable
         </div>
