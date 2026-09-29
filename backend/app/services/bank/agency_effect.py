@@ -7,9 +7,8 @@ never recomputed from base tables.
 
     rate   = verified_collections / collectible_due          (per agency, region)
     peer   = the same ratio over every agency in the region
-    shrunk = n/(n+k) * rate + k/(n+k) * peer                  (ml/empirical_bayes)
+    shrunk, multiplier = ml/empirical_bayes.eb_shrink(n, k, rate, peer)
     index  = 100 * shrunk                                     (0-100)
-    multiplier = shrunk / peer, bounded to [0.75, 1.25]       (the EB agent bound)
 
 n is placement-months (active placements at each month end), so a thin agency
 is pulled to its peers and says so ("based on n"). The grain is the view's,
@@ -26,15 +25,14 @@ from datetime import date
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.ml.empirical_bayes import eb_shrink
+
 VERSION = "agency-effect-1.0.0"
 
 #: Evidence (placement-months) at which an agency's own rate and its peers'
 #: weigh the same. The agent estimator uses 10 cases; a placement-month is a
 #: coarser unit, so the same k is deliberately conservative.
 SMOOTHING_K = 10.0
-MULTIPLIER_BOUNDS = (0.75, 1.25)
-#: A peer rate below this is noise, not a denominator (as the EB agent floor).
-PEER_FLOOR = 0.05
 
 _VIEW = "analytics.agency_scorecard_monthly_scoped"
 
@@ -108,7 +106,6 @@ def shrink(cells: list[ScorecardCell], *, pooled: bool, k: float = SMOOTHING_K) 
         p[1] += float(c.collectible_due or 0)
 
     out = []
-    lo, hi = MULTIPLIER_BOUNDS
     for (month, agency_id, region_id), (got, due, n, unread) in sorted(own.items(), key=lambda kv: (kv[0][0], kv[0][2], kv[0][1])):
         raw = _ratio(got, due)
         pr = peer.get((month, region_id), [0.0, 0.0])
@@ -116,10 +113,9 @@ def shrink(cells: list[ScorecardCell], *, pooled: bool, k: float = SMOOTHING_K) 
         if raw is None or peer_rate is None:
             shrunk, index, mult = None, None, 1.0
         else:
-            w = n / (n + k) if (n + k) > 0 else 0.0
-            shrunk = w * raw + (1 - w) * peer_rate
+            eb = eb_shrink(n, k, raw, peer_rate)
+            shrunk, mult = eb["shrunk"], eb["multiplier"]
             index = round(100.0 * shrunk, 1)
-            mult = max(lo, min(hi, shrunk / max(peer_rate, PEER_FLOOR)))
         out.append(AgencyEffect(agency_id=agency_id, region_id=region_id, month_start=month, months=months, n=n,
                                 months_unread=unread,
                                 raw_rate=raw, peer_rate=peer_rate, shrunk_rate=shrunk, index=index,

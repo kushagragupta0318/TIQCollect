@@ -6,7 +6,8 @@ from datetime import date
 
 import pytest
 
-from app.services.bank.agency_effect import MULTIPLIER_BOUNDS, SMOOTHING_K, ScorecardCell, _month_back, shrink
+from app.ml.empirical_bayes import MULTIPLIER_BOUNDS, EmpiricalBayesAgentAdjuster, eb_shrink
+from app.services.bank.agency_effect import SMOOTHING_K, ScorecardCell, _month_back, shrink
 
 M1, M2, M3 = date(2026, 6, 1), date(2026, 7, 1), date(2026, 8, 1)
 
@@ -96,3 +97,23 @@ def test_a_month_with_unknown_due_is_skipped_not_read_as_zero_due():
     assert (a.raw_rate, a.n, a.months_unread) == (pytest.approx(0.4), 5, 1)
     only_unknown = shrink([cell("B", "R", got=10, due=None)], pooled=False)[0]
     assert (only_unknown.raw_rate, only_unknown.index, only_unknown.multiplier) == (None, None, 1.0)
+
+
+@pytest.mark.parametrize("n,own,prior", [(1, 0.9, 0.4), (10, 0.6, 0.4), (500, 0.1, 0.5), (7, 0.3, 0.01)])
+def test_the_agent_adjuster_and_the_agency_effect_shrink_identically(n, own, prior):
+    """One formula, two consumers (coordinator 2026-09-29): the agent EB
+    adjuster and agency_effect give the same shrunk rate and multiplier on
+    the same evidence."""
+    adj = EmpiricalBayesAgentAdjuster(smoothing_k=SMOOTHING_K, min_sample_threshold=1)
+    adj.segment_priors[("PERSONAL", "BUCKET_2")] = prior
+    adj.agent_observations[("AG", "PERSONAL", "BUCKET_2")] = {"n": n, "recovered": own * 1000, "target": 1000}
+    agent_shrunk, _, agent_mult = adj.get_segment_multiplier("AG", "PERSONAL", "BUCKET_2")
+
+    # Both are eb_shrink on their own inputs: the agent's (own, segment prior)
+    # and the agency's (rate, regional peer rate).
+    eb = eb_shrink(n, SMOOTHING_K, own, prior)
+    cells = [cell("A", "R", got=own * 1000, due=1000, n=n), cell("PEER", "R", got=prior * 5000, due=5000, n=1)]
+    assert agent_shrunk == pytest.approx(eb["shrunk"]) and agent_mult == pytest.approx(eb["multiplier"])
+    a = next(e for e in shrink(cells, pooled=False) if e.agency_id == "A")
+    expected = eb_shrink(n, SMOOTHING_K, a.raw_rate, a.peer_rate)
+    assert a.shrunk_rate == pytest.approx(expected["shrunk"]) and a.multiplier == pytest.approx(round(expected["multiplier"], 4))

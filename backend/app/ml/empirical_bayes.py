@@ -65,6 +65,24 @@ from app.models.case import Case
 from app.models.loan import Loan
 
 
+#: The multiplier's conservative bounds, and the prior below which a rate is
+#: noise rather than a denominator. Shared by every EB consumer (eb_shrink).
+MULTIPLIER_BOUNDS = (0.75, 1.25)
+PRIOR_FLOOR = 0.05
+
+
+def eb_shrink(n: float, k: float, own: float, prior: float, *,
+              bounds: tuple[float, float] = MULTIPLIER_BOUNDS, prior_floor: float = PRIOR_FLOOR) -> dict:
+    """The shrinkage formula, once: w = n/(n+k); shrunk = w*own + (1-w)*prior;
+    multiplier = shrunk / max(prior, floor), bounded. Pure. Used by the agent
+    adjuster below and by services/bank/agency_effect (coordinator 2026-09-29:
+    one definition)."""
+    w = n / (n + k) if (n + k) > 0 else 0.0
+    shrunk = w * own + (1.0 - w) * prior
+    lo, hi = bounds
+    return {"shrunk": shrunk, "multiplier": max(lo, min(hi, shrunk / max(prior, prior_floor)))}
+
+
 class EmpiricalBayesAgentAdjuster:
     """Calculates segment-aware Empirical Bayes performance adjustments for agents."""
 
@@ -257,15 +275,9 @@ class EmpiricalBayesAgentAdjuster:
         raw_win_rate = ag_data["recovered"] / max(1.0, ag_data["target"])
         raw_win_rate = max(0.0, min(1.0, raw_win_rate))
 
-        # Empirical Bayes shrinkage formula
-        shrunk_win_rate = (n / (n + self.smoothing_k)) * raw_win_rate + (self.smoothing_k / (n + self.smoothing_k)) * mu_s
-
-        # Calculate multiplier relative to segment prior
-        raw_multiplier = shrunk_win_rate / max(mu_s, 0.05)
-        # Conservative bounding to [0.75, 1.25]
-        bounded_multiplier = max(0.75, min(1.25, raw_multiplier))
-
-        return shrunk_win_rate, mu_s, bounded_multiplier
+        # Empirical Bayes shrinkage, bounded relative to the segment prior (eb_shrink).
+        eb = eb_shrink(n, self.smoothing_k, raw_win_rate, mu_s)
+        return eb["shrunk"], mu_s, eb["multiplier"]
 
     # ── Evidence, for consumers that need to weigh the estimate ──────────────
     def get_segment_evidence(self, agent_id: str, loan_type: str, dpd_bucket: str) -> int:
