@@ -12,8 +12,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { AlertTriangle, BatteryLow, Check, Crosshair, Move, Navigation, RefreshCw, Route } from "lucide-react";
+import { AlertTriangle, BatteryLow, Check, Crosshair, Moon, Move, Navigation, RefreshCw, Route, Sun } from "lucide-react";
 import { getAgentsLive, getAgentTrail, type AgentTrail, type LiveAgentPosition } from "@/api/manager";
+import { addBaseTiles, nightVariantAvailable } from "@/components/map/baseTiles";
+import { escapeHtml } from "@/lib/html";
+import type { MapVariant } from "@/lib/mapTiles";
+import { readMapVariant, writeMapVariant } from "@/lib/mapVariantPref";
 import { STALE_AFTER_S } from "./liveMapConstants";
 import { navigateAction } from "./liveMapNavigate";
 import { useLiveEvents } from "@/hooks/useLiveEvents";
@@ -94,10 +98,6 @@ function ageLabel(seconds: number | null): string {
   return h < 24 ? `${h} hr ago` : `${Math.round(h / 24)} d ago`;
 }
 
-function escapeHtml(v: string): string {
-  return v.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
-}
-
 // lucide "navigation" glyph, inlined because the popup is an HTML string.
 const NAVIGATE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="3 11 22 2 13 21 11 13 3 11"/></svg>`;
 
@@ -133,7 +133,7 @@ function agentIcon(a: LiveAgentPosition, isSelected: boolean = false): L.DivIcon
           transition:transform 0.15s ease;
           ${isSelected ? "transform:scale(1.15);" : ""}
         ">
-          ${sos ? '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>' : initials}
+          ${sos ? '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>' : escapeHtml(initials)}
         </div>
         <div style="
           width:0;height:0;
@@ -168,6 +168,14 @@ export default function ManagerLiveMapPage() {
   // Decided at first render (not in an effect — no setState-in-effect), so
   // the map is created with the matching `dragging` option.
   const [touchLocked, setTouchLocked] = useState<boolean | null>(() => (isCoarsePointer() ? true : null));
+  // Night tiles exist only on Mapbox; without them the toggle is not offered.
+  const [nightAvailable] = useState(() => nightVariantAvailable());
+  const [variant, setVariant] = useState<MapVariant>(() => (nightAvailable ? readMapVariant() : "day"));
+  const toggleVariant = () => {
+    const next: MapVariant = variant === "night" ? "day" : "night";
+    writeMapVariant(next);
+    setVariant(next);
+  };
   const toggleTouchLock = () => {
     const map = mapRef.current;
     if (!map) return;
@@ -193,10 +201,6 @@ export default function ManagerLiveMapPage() {
     // wheel scrolls the page unless the pointer is over the map, as before.
     const map = L.map(mapEl.current, { zoomControl: true, attributionControl: true, dragging: !isCoarsePointer() })
       .setView(DEFAULT_CENTRE, 9);
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      maxZoom: 19,
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-    }).addTo(map);
     trailRef.current = L.layerGroup().addTo(map);
     mapRef.current = map;
     // Leaflet measures its container on creation; inside a flex/grid shell that
@@ -211,6 +215,13 @@ export default function ManagerLiveMapPage() {
       markers.clear();
     };
   }, []);
+
+  // Declared after the bootstrap so the map exists; a variant switch swaps only the tiles.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    return addBaseTiles(map, variant);
+  }, [variant]);
 
   // ── polling ───────────────────────────────────────────────────────────────
   const load = useCallback(async () => {
@@ -288,7 +299,7 @@ export default function ManagerLiveMapPage() {
       }
       const marker = markersRef.current.get(a.agent_id)!;
       marker.bindTooltip(
-        `<b>${a.full_name}</b><br/>${a.employee_code} · ${ageLabel(a.age_seconds)}` +
+        `<b>${escapeHtml(a.full_name)}</b><br/>${escapeHtml(a.employee_code)} · ${ageLabel(a.age_seconds)}` +
         (a.sos_active ? "<br/><b style='color:#DC2626'>SOS ACTIVE</b>" : ""),
         { direction: "top", offset: [0, -16] },
       );
@@ -374,7 +385,7 @@ export default function ManagerLiveMapPage() {
           fillColor: p.is_sos ? "#DC2626" : selColor,
           fillOpacity: 0.9, weight: 2,
         })
-          .bindTooltip(`${p.source} · ${new Date(p.recorded_at).toLocaleTimeString()}`,
+          .bindTooltip(`${escapeHtml(p.source)} · ${new Date(p.recorded_at).toLocaleTimeString()}`,
                        { direction: "top" })
           .addTo(trailRef.current);
       }
@@ -444,19 +455,34 @@ export default function ManagerLiveMapPage() {
           <div className="rounded-card overflow-hidden relative"
                style={{ border: "2px solid #C7CBD4", boxShadow: "0 0 0 1px rgba(0,0,0,0.04)", animation: `enter 420ms ${EASE} 60ms both` }}>
             <div ref={mapEl} style={{ height: "clamp(380px, 62vh, 720px)", width: "100%", background: "#E8EAEE" }} />
-            {touchLocked !== null && (
-              <button
-                type="button"
-                onClick={toggleTouchLock}
-                aria-pressed={!touchLocked}
-                className="tap-target absolute top-3 right-3 z-[1000] inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold shadow-md"
-                style={{ background: touchLocked ? "#fff" : "#2563EB", color: touchLocked ? "#1C1C1F" : "#fff", border: "1px solid rgba(0,0,0,0.12)" }}
-                title={touchLocked ? "One finger scrolls the page. Tap to move the map instead." : "One finger moves the map. Tap when done to scroll the page again."}
-              >
-                {touchLocked ? <Move className="w-3.5 h-3.5" aria-hidden="true" /> : <Check className="w-3.5 h-3.5" aria-hidden="true" />}
-                {touchLocked ? "Move map" : "Done"}
-              </button>
-            )}
+            <div className="absolute top-3 right-3 z-[1000] flex flex-col items-end gap-2">
+              {nightAvailable && (
+                <button
+                  type="button"
+                  onClick={toggleVariant}
+                  aria-pressed={variant === "night"}
+                  className="tap-target inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold shadow-md"
+                  style={{ background: "#fff", color: "#1C1C1F", border: "1px solid rgba(0,0,0,0.12)" }}
+                  title={variant === "night" ? "Switch to the day map" : "Switch to the night map"}
+                >
+                  {variant === "night" ? <Sun className="w-3.5 h-3.5" aria-hidden="true" /> : <Moon className="w-3.5 h-3.5" aria-hidden="true" />}
+                  {variant === "night" ? "Day map" : "Night map"}
+                </button>
+              )}
+              {touchLocked !== null && (
+                <button
+                  type="button"
+                  onClick={toggleTouchLock}
+                  aria-pressed={!touchLocked}
+                  className="tap-target inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold shadow-md"
+                  style={{ background: touchLocked ? "#fff" : "#2563EB", color: touchLocked ? "#1C1C1F" : "#fff", border: "1px solid rgba(0,0,0,0.12)" }}
+                  title={touchLocked ? "One finger scrolls the page. Tap to move the map instead." : "One finger moves the map. Tap when done to scroll the page again."}
+                >
+                  {touchLocked ? <Move className="w-3.5 h-3.5" aria-hidden="true" /> : <Check className="w-3.5 h-3.5" aria-hidden="true" />}
+                  {touchLocked ? "Move map" : "Done"}
+                </button>
+              )}
+            </div>
             {touchLocked === true && (
               <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-[1000] rounded-full px-3 py-1 text-[11px] font-medium pointer-events-none"
                    style={{ background: "rgba(17,24,39,0.78)", color: "#F9FAFB" }}>

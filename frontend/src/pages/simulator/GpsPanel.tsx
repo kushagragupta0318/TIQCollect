@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import L from "leaflet";
+import { escapeHtml } from "@/lib/html";
 import "leaflet/dist/leaflet.css";
 import { MapCanvas } from "@/components/map/MapCanvas";
 import type { LatLng, Track } from "./routePlayback";
@@ -69,7 +70,7 @@ export function GpsPanel({
           layers.push(
             L.circleMarker([s.lat, s.lon], {
               radius: 6, color: "#FFFFFF", weight: 2, fillColor: sim.tone.warn, fillOpacity: 1,
-            }).bindTooltip(`${i + 1}. ${s.label}`, { direction: "top" }),
+            }).bindTooltip(`${i + 1}. ${escapeHtml(s.label)}`, { direction: "top" }),
           );
         });
         const agent = L.circleMarker(fix ?? map.getCenter(), {

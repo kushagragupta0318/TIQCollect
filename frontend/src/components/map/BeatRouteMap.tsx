@@ -15,6 +15,7 @@
  */
 import { useMemo } from "react";
 import L from "leaflet";
+import { escapeHtml } from "@/lib/html";
 import { MapCanvas } from "./MapCanvas";
 import { decodePolyline } from "./polyline";
 
@@ -103,7 +104,7 @@ export function BeatRouteMap({
         icon: pin(colour, String(i + 1), !!s.done),
       })
         .bindTooltip(
-          `<strong>${s.label}</strong>${s.sublabel ? `<br>${s.sublabel}` : ""}`,
+          `<strong>${escapeHtml(s.label)}</strong>${s.sublabel ? `<br>${escapeHtml(s.sublabel)}` : ""}`,
           { direction: "top" },
         )
         .addTo(layer);

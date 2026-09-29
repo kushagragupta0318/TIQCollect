@@ -17,6 +17,7 @@ import { useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import L from "leaflet";
+import { escapeHtml } from "@/lib/html";
 import { Building2 } from "lucide-react";
 import { ExecutiveHeader, PageFailure, PageLoading, PageRoot } from "../../components/PageTemplate";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "../../ui/card";
@@ -93,7 +94,7 @@ export default function AgencyDirectoryPage() {
     for (const m of markers) {
       const point: L.LatLngExpression = [m.latitude, m.longitude];
       L.circleMarker(point, { radius: 7, color: "#1677FF", weight: 2, fillColor: "#1677FF", fillOpacity: 0.5 })
-        .bindTooltip(`${m.name} (${m.level}) — ${m.agencyNames.join(", ")}`, { direction: "top" })
+        .bindTooltip(`${escapeHtml(m.name)} (${escapeHtml(m.level)}) — ${escapeHtml(m.agencyNames.join(", "))}`, { direction: "top" })
         .addTo(layer);
       bounds.push(point);
     }
