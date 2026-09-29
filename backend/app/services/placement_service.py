@@ -155,6 +155,8 @@ class AgencyFacts:
     terms: tuple | None
     coverage: tuple[str, ...]
     placed: int
+    #: commission_pct per (loan_type, bucket) from the contract's terms; empty when it has none.
+    commission: dict = field(default_factory=dict)
 
 
 def authorises(terms: tuple | None, loan: Loan) -> bool:
@@ -328,6 +330,12 @@ class PlacementService:
 
     # ── facts, loaded one at a time or in batch, then judged purely ─────────
 
+    def commission_of(self, contract: AgencyContract) -> dict:
+        return {(t, b): float(pct) for t, b, pct in
+                self.db.query(AgencyContractTerm.loan_type, AgencyContractTerm.dpd_bucket,
+                              AgencyContractTerm.commission_pct)
+                .filter(AgencyContractTerm.contract_id == contract.id)}
+
     def terms_of(self, contract: AgencyContract) -> tuple | None:
         """(loan_type, bucket, is_authorised) rows; None when the contract has
         none (unrestricted by product/bucket, see the changelog)."""
@@ -354,7 +362,8 @@ class PlacementService:
             agency_id=agency_id, on=on, agency=agency, contract=contract,
             terms=self.terms_of(contract) if contract is not None else None,
             coverage=self.coverage_paths(contract) if contract is not None else (),
-            placed=self.placed_count(contract) if contract is not None else 0)
+            placed=self.placed_count(contract) if contract is not None else 0,
+            commission=self.commission_of(contract) if contract is not None else {})
 
     def agency_facts_many(self, bank_id: str, on: date) -> dict[str, AgencyFacts]:
         """Every agency of the bank, for the engine: one query per kind of fact."""
@@ -367,10 +376,13 @@ class PlacementService:
             contracts.setdefault(c.agency_id, c)             # the latest-starting, as contract_in_force
         cids = [c.id for c in contracts.values()]
         terms: dict[str, list] = {}
-        for cid, t, b, a in (self.db.query(AgencyContractTerm.contract_id, AgencyContractTerm.loan_type,
-                                           AgencyContractTerm.dpd_bucket, AgencyContractTerm.is_authorised)
-                             .filter(AgencyContractTerm.contract_id.in_(cids))):
+        commission: dict[str, dict] = {}
+        for cid, t, b, a, pct in (self.db.query(AgencyContractTerm.contract_id, AgencyContractTerm.loan_type,
+                                                AgencyContractTerm.dpd_bucket, AgencyContractTerm.is_authorised,
+                                                AgencyContractTerm.commission_pct)
+                                  .filter(AgencyContractTerm.contract_id.in_(cids))):
             terms.setdefault(cid, []).append((t, b, bool(a)))
+            commission.setdefault(cid, {})[(t, b)] = float(pct)
         cover: dict[str, list] = {}
         for cid, path in (self.db.query(AgencyRegion.contract_id, Region.path)
                           .join(Region, Region.id == AgencyRegion.region_id)
@@ -386,7 +398,8 @@ class PlacementService:
                 agency_id=a.id, on=on, agency=a, contract=c,
                 terms=tuple(terms[c.id]) if c is not None and c.id in terms else None,
                 coverage=tuple(sorted(cover.get(c.id, ()))) if c is not None else (),
-                placed=int(placed.get(c.id, 0)) if c is not None else 0)
+                placed=int(placed.get(c.id, 0)) if c is not None else 0,
+                commission=commission.get(c.id, {}) if c is not None else {})
         return out
 
     def evaluate(self, loan: Loan, agency_id: str | None, on: date, *, planned: int = 0,

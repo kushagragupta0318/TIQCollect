@@ -14,7 +14,8 @@ from typing import Literal, Optional
 from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel, Field
 
-from app.core.dependencies import DbSession
+from app.core.config import settings
+from app.core.dependencies import AnalyticsDb, DbSession
 from app.core.errors import AppException, ErrorCode
 from app.core.ids import UUIDPath, UUIDQuery, UUIDStr
 from app.core.permissions import require_perm
@@ -22,6 +23,7 @@ from app.core.request_context import CurrentContext, RequestContext
 from app.models.loan import DPDBucket, LoanType
 from app.models.placement import PLACEMENT_STATUSES
 from app.models.user import User
+from app.services.bank import placement_engine as engine
 from app.services.manual_placement_service import MAX_BATCH, MAX_RECALL_NOTE, BatchResult, ManualPlacementService
 from app.services.placement_read_service import MAX_PAGE_SIZE, LoanFilter, PlacementReadService
 from app.services.scope import access_day, region_limit_path
@@ -146,3 +148,57 @@ def list_placements(
     return PlacementReadService(db).placements(bank_id=ctx.bank_id, agency_id=own_agency, status=status,
                                                filter_agency_id=agency_id, region_limit=region_limit,
                                                page=page, page_size=page_size)
+
+
+# ── The placement engine (D09, ADR 0010) ─────────────────────────────────────
+
+class RunIn(BaseModel):
+    mode: Literal["simulate", "plan"]
+    #: ADR 0010: off unless asked for; never above 0.20.
+    exploration_rate: Optional[float] = Field(None, ge=0.0, le=0.20)
+
+
+def _engine_bank_id(ctx: RequestContext, db, user: User) -> str:
+    # The engine works on the whole book; a region-limited user may not run
+    # or apply it (fail closed rather than plan outside their region).
+    bank_id = _bank_id(ctx)
+    if region_limit_path(db, user) is not None:
+        raise AppException(403, ErrorCode.FORBIDDEN, "The placement engine needs a user without a region limit")
+    return bank_id
+
+
+@router.post("/runs")
+def plan_run(body: RunIn, ctx: CurrentContext, db: DbSession, adb: AnalyticsDb,
+             _user: User = require_perm("placement.run")):
+    bank_id = _engine_bank_id(ctx, db, _user)
+    rate = settings.PLACEMENT_EXPLORATION_RATE if body.exploration_rate is None else body.exploration_rate
+    try:
+        run = engine.plan_run(db, adb, bank_id=bank_id, actor_id=ctx.user_id, today=access_day(),
+                              simulate=body.mode == "simulate", exploration_rate=rate)
+    except engine.EngineTooSlow as slow:
+        raise AppException(422, ErrorCode.VALIDATION_ERROR, str(slow))
+    return engine.run_out(run)
+
+
+@router.get("/runs")
+def list_runs(ctx: CurrentContext, db: DbSession, _user: User = require_perm("placement.read"),
+              limit: int = Query(30, ge=1, le=100)):
+    return {"items": engine.list_runs(db, _bank_id(ctx), limit=limit)}
+
+
+@router.get("/runs/{run_id}/decisions")
+def run_decisions(run_id: UUIDPath, ctx: CurrentContext, db: DbSession,
+                  _user: User = require_perm("placement.read"),
+                  outcome: Optional[Literal["PLACED", "DEFERRED", "BLOCKED", "RECALLED"]] = None,
+                  page: int = Query(1, ge=1, le=100_000), page_size: int = Query(50, ge=1, le=MAX_PAGE_SIZE)):
+    return engine.run_decisions(db, bank_id=_bank_id(ctx), run_id=run_id, outcome=outcome, page=page,
+                                page_size=page_size)
+
+
+@router.post("/runs/{run_id}/apply")
+def apply_run(run_id: UUIDPath, request: Request, ctx: CurrentContext, db: DbSession,
+              _user: User = require_perm("placement.run")):
+    bank_id = _engine_bank_id(ctx, db, _user)
+    run = engine.apply_run(db, bank_id=bank_id, run_id=run_id, actor_id=ctx.user_id, today=access_day(),
+                           ip_address=_ip(request))
+    return engine.run_out(run)
