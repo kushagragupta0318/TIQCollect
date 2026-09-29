@@ -113,6 +113,12 @@ BANK_USERS = [  # Appendix C.5
     ("ananya.iyer", "Ananya Iyer", "BANK_ADMIN", "9820031101"),
     ("rohan.mehta", "Rohan Mehta", "BANK_ANALYST", "9820031102"),
     ("farah.siddiqui", "Farah Siddiqui", "BANK_TECHOPS", "9820031103"),
+    # A second BANK_ADMIN (2b, 2026-09-29): the placement engine's apply step
+    # is four-eyes (applied_by must differ from created_by, ADR 0010), so a
+    # bank with one admin cannot demo apply end to end. Unusable hash like
+    # every other fixture user; deliberately NOT in MASTER_ACCOUNTS below —
+    # adding a 4th master login needs the owner's yes, which is still pending.
+    ("kavya.reddy", "Kavya Reddy", "BANK_ADMIN", "9820031104"),
 ]
 # v1's non-agent users. Deviation from Appendix C.5, announced to the
 # coordinator: manager1 (Vikram Malhotra, 15 agents) stays AGENCY_MANAGER —
