@@ -3,8 +3,8 @@
 // — that is explicitly deferred (STANDALONE-PRODUCT-PLAN §6.1); the map here
 // only plots simple markers for whichever regions carry a latitude/longitude.
 import { useMemo, useState } from "react";
-import L from "leaflet";
-import { escapeHtml } from "@/lib/html";
+import type L from "leaflet";
+import { drawPoints } from "@/components/map/points";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle, CardDescription } from "../../../ui/card";
@@ -52,17 +52,10 @@ export function CoverageStep({ agencyId, detail, regions, regionsLoading, onSave
   }
 
   function drawMarkers(map: L.Map) {
-    const layer = L.layerGroup().addTo(map);
-    const bounds: L.LatLngExpression[] = [];
-    for (const r of selectedRegions) {
-      const point: L.LatLngExpression = [r.latitude as number, r.longitude as number];
-      L.circleMarker(point, { radius: 7, color: "#1677FF", weight: 2, fillColor: "#1677FF", fillOpacity: 0.5 })
-        .bindTooltip(`${escapeHtml(r.name)} (${escapeHtml(r.level)})`, { direction: "top" })
-        .addTo(layer);
-      bounds.push(point);
-    }
-    if (bounds.length) map.fitBounds(L.latLngBounds(bounds).pad(0.25), { maxZoom: 10 });
-    return () => layer.remove();
+    return drawPoints(
+      map,
+      selectedRegions.map((r) => ({ lat: r.latitude as number, lon: r.longitude as number, label: `${r.name} (${r.level})` })),
+    );
   }
 
   return (

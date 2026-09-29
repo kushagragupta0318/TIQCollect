@@ -49,8 +49,8 @@ function tileUrls(container: HTMLElement): string[] {
 }
 
 beforeEach(() => {
-  // jsdom has no layout; Leaflet needs a size to fit bounds and place tiles.
-  vi.spyOn(L.Map.prototype, "getSize").mockReturnValue(L.point(800, 600));
+  // jsdom has no layout; Leaflet needs a size. A fresh point each call: Leaflet divides it in place.
+  vi.spyOn(L.Map.prototype, "getSize").mockImplementation(() => L.point(800, 600));
   vi.mocked(getAgentTrail).mockResolvedValue({ agent_id: "1", points: [] } as never);
   localStorage.clear();
 });
@@ -112,6 +112,22 @@ describe("ManagerLiveMapPage", () => {
     expect(tooltipText).toContain(HOSTILE_NAME);
     expect(tooltipText).toContain(`E"1<b>`);
     expect(popup.textContent).toContain(HOSTILE_NAME);
+  });
+
+  it("clusters a team of more than 40, but never hides an SOS agent inside a cluster", async () => {
+    const team = Array.from({ length: 41 }, (_, i) =>
+      agent(String(i + 1), { latitude: 28.4 + i * 0.01, longitude: 77.0, full_name: `Agent ${i + 1}` }),
+    );
+    // In the middle of the team, where a clustered SOS marker would be swallowed by a bubble.
+    const sos = agent("99", { latitude: 28.6, longitude: 77.0, full_name: "Neha Verma", sos_active: true });
+    vi.mocked(getAgentsLive).mockResolvedValue({ agents: [...team, sos], sos_count: 1 } as never);
+    const { container } = render(<ManagerLiveMapPage />);
+
+    await waitFor(() => expect(container.querySelectorAll(".marker-cluster").length).toBeGreaterThan(0));
+    expect(container.querySelectorAll(".leaflet-marker-icon.custom-agent-marker").length).toBeLessThan(42);
+    // markercluster finishes (un)clustering on 200 ms timers; let it settle before looking.
+    await new Promise((r) => setTimeout(r, 500));
+    expect(container.querySelector('.leaflet-marker-icon.custom-agent-marker[title="Neha Verma"]')).not.toBeNull();
   });
 
   it("swaps only the tiles for the night map, and remembers the choice", async () => {

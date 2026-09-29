@@ -15,6 +15,7 @@ import "leaflet/dist/leaflet.css";
 import { AlertTriangle, BatteryLow, Check, Crosshair, Moon, Move, Navigation, RefreshCw, Route, Sun } from "lucide-react";
 import { getAgentsLive, getAgentTrail, type AgentTrail, type LiveAgentPosition } from "@/api/manager";
 import { addBaseTiles, nightVariantAvailable } from "@/components/map/baseTiles";
+import { AdaptivePointGroup } from "@/components/map/points";
 import { escapeHtml } from "@/lib/html";
 import type { MapVariant } from "@/lib/mapTiles";
 import { readMapVariant, writeMapVariant } from "@/lib/mapVariantPref";
@@ -151,6 +152,10 @@ export default function ManagerLiveMapPage() {
   const mapRef = useRef<L.Map | null>(null);
   const markersRef = useRef<Map<string, L.Marker>>(new Map());
   const trailRef = useRef<L.LayerGroup | null>(null);
+  // Agents cluster only when there are more than 40; an SOS marker sits outside the
+  // clusters so it can never be hidden inside a bubble.
+  const teamRef = useRef<AdaptivePointGroup | null>(null);
+  const sosLayerRef = useRef<L.LayerGroup | null>(null);
   const fittedRef = useRef(false);
   // Which SOS incident the map has already snapped to, so it snaps once per
   // incident rather than on every poll.
@@ -202,6 +207,8 @@ export default function ManagerLiveMapPage() {
     const map = L.map(mapEl.current, { zoomControl: true, attributionControl: true, dragging: !isCoarsePointer() })
       .setView(DEFAULT_CENTRE, 9);
     trailRef.current = L.layerGroup().addTo(map);
+    teamRef.current = new AdaptivePointGroup(map);
+    sosLayerRef.current = L.layerGroup().addTo(map);
     mapRef.current = map;
     // Leaflet measures its container on creation; inside a flex/grid shell that
     // measurement can land before layout settles, leaving grey tiles.
@@ -212,6 +219,8 @@ export default function ManagerLiveMapPage() {
     return () => {
       map.remove();
       mapRef.current = null;
+      teamRef.current = null;
+      sosLayerRef.current = null;
       markers.clear();
     };
   }, []);
@@ -277,7 +286,9 @@ export default function ManagerLiveMapPage() {
   // ── markers ───────────────────────────────────────────────────────────────
   useEffect(() => {
     const map = mapRef.current;
-    if (!map) return;
+    const team = teamRef.current;
+    const sosLayer = sosLayerRef.current;
+    if (!map || !team || !sosLayer) return;
     const seen = new Set<string>();
 
     for (const a of agents) {
@@ -293,11 +304,17 @@ export default function ManagerLiveMapPage() {
         else existing.setZIndexOffset(0);
       } else {
         const m = L.marker(pos, { icon: agentIcon(a, isSel), title: a.full_name, zIndexOffset: isSel ? 1000 : 0 })
-          .addTo(map)
           .on("click", () => setSelected(a.agent_id));
         markersRef.current.set(a.agent_id, m);
       }
       const marker = markersRef.current.get(a.agent_id)!;
+      if (a.sos_active) {
+        team.delete(marker);
+        sosLayer.addLayer(marker);
+      } else {
+        sosLayer.removeLayer(marker);
+        team.add(marker);
+      }
       marker.bindTooltip(
         `<b>${escapeHtml(a.full_name)}</b><br/>${escapeHtml(a.employee_code)} · ${ageLabel(a.age_seconds)}` +
         (a.sos_active ? "<br/><b style='color:#DC2626'>SOS ACTIVE</b>" : ""),
@@ -328,7 +345,7 @@ export default function ManagerLiveMapPage() {
 
     // Drop markers for agents that no longer report a position at all.
     for (const [id, m] of markersRef.current) {
-      if (!seen.has(id)) { m.remove(); markersRef.current.delete(id); }
+      if (!seen.has(id)) { team.delete(m); sosLayer.removeLayer(m); markersRef.current.delete(id); }
     }
 
     // Fit once, on the first data that has anything in it. Re-fitting on every
@@ -484,7 +501,7 @@ export default function ManagerLiveMapPage() {
               )}
             </div>
             {touchLocked === true && (
-              <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-[1000] rounded-full px-3 py-1 text-[11px] font-medium pointer-events-none"
+              <div className="absolute bottom-10 left-1/2 -translate-x-1/2 z-[1000] rounded-full px-3 py-1 text-[11px] font-medium pointer-events-none"
                    style={{ background: "rgba(17,24,39,0.78)", color: "#F9FAFB" }}>
                 Swipe to scroll the page · pinch to zoom
               </div>

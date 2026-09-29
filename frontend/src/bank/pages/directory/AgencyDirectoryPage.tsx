@@ -16,8 +16,8 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { useQuery } from "@tanstack/react-query";
-import L from "leaflet";
-import { escapeHtml } from "@/lib/html";
+import type L from "leaflet";
+import { drawPoints } from "@/components/map/points";
 import { Building2 } from "lucide-react";
 import { ExecutiveHeader, PageFailure, PageLoading, PageRoot } from "../../components/PageTemplate";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "../../ui/card";
@@ -89,17 +89,10 @@ export default function AgencyDirectoryPage() {
   }
 
   function drawMarkers(map: L.Map) {
-    const layer = L.layerGroup().addTo(map);
-    const bounds: L.LatLngExpression[] = [];
-    for (const m of markers) {
-      const point: L.LatLngExpression = [m.latitude, m.longitude];
-      L.circleMarker(point, { radius: 7, color: "#1677FF", weight: 2, fillColor: "#1677FF", fillOpacity: 0.5 })
-        .bindTooltip(`${escapeHtml(m.name)} (${escapeHtml(m.level)}) — ${escapeHtml(m.agencyNames.join(", "))}`, { direction: "top" })
-        .addTo(layer);
-      bounds.push(point);
-    }
-    if (bounds.length) map.fitBounds(L.latLngBounds(bounds).pad(0.25), { maxZoom: 10 });
-    return () => layer.remove();
+    return drawPoints(
+      map,
+      markers.map((m) => ({ lat: m.latitude, lon: m.longitude, label: `${m.name} (${m.level}) — ${m.agencyNames.join(", ")}` })),
+    );
   }
 
   const header = (
