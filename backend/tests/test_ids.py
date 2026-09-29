@@ -92,7 +92,10 @@ def test_every_id_path_parameter_on_the_routers_is_validated():
     handler then does. It exists so the next route added with `case_id: str`
     fails here instead of 500-ing on Postgres."""
     endpoints = pathlib.Path(__file__).resolve().parents[1] / "app" / "api" / "v1" / "endpoints"
-    not_uuid = {"account_id"}   # Command Centre's loan account number
+    not_uuid = {"account_id",   # Command Centre's loan account number
+                # The phone's client-generated device id (authStore: "<ms>-<random>"),
+                # compared to the token's claim, never looked up as a row (I02).
+                "device_id"}
     offenders = []
     for f in sorted(endpoints.glob("*.py")):
         src = f.read_text(encoding="utf-8")
