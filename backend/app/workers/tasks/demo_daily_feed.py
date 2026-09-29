@@ -200,6 +200,10 @@ def _core():
             LoanStatus, Case, CaseStatus, CasePriority, dpd_bucket_for, priority_for)
 
 
+#: The DPDs a demo day draws from (every one past 30: a new feed case is overdue).
+_FEED_DPDS = (32, 47, 65, 88, 95, 120, 155)
+
+
 def _seed_day(db, day: date) -> int:
     (_, Customer, Loan, LoanType, DPDBucket, LoanStatus,
      Case, CaseStatus, CasePriority, dpd_bucket_for, priority_for) = _core()
@@ -222,19 +226,29 @@ def _seed_day(db, day: date) -> int:
         return 0
     from app.services.placement_service import PlacementRefused, PlacementService
     placements = PlacementService(db)
-    # A new loan is booked at a branch inside its agency's contracted territory
-    # (coverage fails closed in placement_service). An agency with no contract in
-    # force, or no covered branch, gets no new loans today: skipped with a
-    # warning, not a quarantine per row.
+    # A new loan is booked at a branch inside its agency's contracted territory,
+    # as a product and DPD the contract authorises (both gates fail closed in
+    # placement_service). An agency with no contract in force, no covered branch
+    # or nothing authorised gets no new loans today: skipped with a warning, not
+    # a quarantine per row.
+    from types import SimpleNamespace
+    from app.services.placement_service import authorises
     branches_by_agency: dict[str, list[str]] = {}
+    products_by_agency: dict[str, dict[int, list]] = {}
     for agency_id in sorted({a[4] for a in anchors}):
         contract = placements.contract_in_force(agency_id, day)
         codes = placements.covered_branch_codes(contract) if contract is not None else []
-        if codes:
+        terms = placements.terms_of(contract) if contract is not None else None
+        allowed = {d: [t for t in LoanType if authorises(terms, SimpleNamespace(loan_type=t, dpd=d))]
+                   for d in _FEED_DPDS}
+        allowed = {d: ts for d, ts in allowed.items() if ts}
+        if codes and allowed:
             branches_by_agency[agency_id] = codes
+            products_by_agency[agency_id] = allowed
         else:
-            logger.warning("demo_daily_feed.agency_skipped_no_covered_branch", agency_id=agency_id, day=str(day),
-                           contract=getattr(contract, "contract_no", None))
+            logger.warning("demo_daily_feed.agency_skipped_nothing_placeable", agency_id=agency_id, day=str(day),
+                           contract=getattr(contract, "contract_no", None), covered_branches=len(codes),
+                           authorised_dpds=len(allowed))
     anchors = [a for a in anchors if a[4] in branches_by_agency]
     if not anchors:
         logger.info("demo_daily_feed.skip_no_placeable_agency", day=str(day))
@@ -245,8 +259,10 @@ def _seed_day(db, day: date) -> int:
     created = 0
     new_loan_ids: list[str] = []
     for i in range(n):
-        dpd = random.choice([32, 47, 65, 88, 95, 120, 155])
-        loan_type = random.choice(list(LoanType))
+        base_lat, base_lon, territory, bank_id, agency_id = random.choice(anchors)
+        allowed = products_by_agency[agency_id]
+        dpd = random.choice(sorted(allowed))
+        loan_type = random.choice(allowed[dpd])
         # EMI first, then the loan derived from it — the opposite of how this
         # used to work, and the reason it has to change.
         #
@@ -269,7 +285,6 @@ def _seed_day(db, day: date) -> int:
         outstanding = round(emi * months_left, 2)
         priority = priority_for(dpd)   # 2026-09-21: the one rule (models/case.py)
 
-        base_lat, base_lon, territory, bank_id, agency_id = random.choice(anchors)
         lat, lon = _point_near(base_lat, base_lon)
         city, state, pincode = _city_for(territory)
         cust = Customer(
