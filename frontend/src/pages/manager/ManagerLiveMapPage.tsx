@@ -103,6 +103,42 @@ function ageLabel(seconds: number | null): string {
 // lucide "navigation" glyph, inlined because the popup is an HTML string.
 const NAVIGATE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="3 11 22 2 13 21 11 13 3 11"/></svg>`;
 
+function tooltipHtml(a: LiveAgentPosition): string {
+  return (
+    `<b>${escapeHtml(a.full_name)}</b><br/>${escapeHtml(a.employee_code)} · ${ageLabel(a.age_seconds)}` +
+    (a.sos_active ? "<br/><b style='color:#DC2626'>SOS ACTIVE</b>" : "")
+  );
+}
+
+// Click → popup with a Navigate link to wherever the marker is. A plain anchor
+// rather than a handler: Leaflet popups are HTML strings, and an <a target=_blank>
+// needs no listener to survive the popup's content being replaced on a poll.
+function popupHtml(a: LiveAgentPosition): string {
+  const nav = navigateAction(a, ageLabel);
+  return `<div style="font:12px system-ui,-apple-system,sans-serif;min-width:180px">
+           <div style="font-weight:700;color:#1C1C1F">${escapeHtml(a.full_name)}</div>
+           <div style="color:#6B6D76;margin-top:2px">${escapeHtml(a.employee_code)} · ${ageLabel(a.age_seconds)}</div>
+           ${nav ? `
+             <a href="${nav.url}" target="_blank" rel="noopener noreferrer"
+                style="display:inline-flex;align-items:center;gap:6px;margin-top:8px;padding:6px 10px;border-radius:8px;
+                       background:#2563EB;color:#fff;font-weight:600;text-decoration:none">
+               ${NAVIGATE_SVG} ${nav.label}
+             </a>
+             <div style="color:${nav.stale ? "#B45309" : "#6B6D76"};margin-top:6px;font-size:11px">${nav.note}</div>
+           ` : `<div style="color:#B45309;margin-top:6px;font-size:11px">No position to navigate to</div>`}
+         </div>`;
+}
+
+/** What a marker last drew, so a poll touches only what changed (and an open tooltip stays open). */
+interface DrawnMarker {
+  lat: number;
+  lon: number;
+  iconKey: string;
+  selected: boolean;
+  tooltip: string;
+  popup: string;
+}
+
 /** Distinct vibrant colored marker with initials & pin pointer for each agent */
 function agentIcon(a: LiveAgentPosition, isSelected: boolean = false): L.DivIcon {
   const sos = a.sos_active;
@@ -152,6 +188,7 @@ export default function ManagerLiveMapPage() {
   const mapEl = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
   const markersRef = useRef<Map<string, L.Marker>>(new Map());
+  const drawnRef = useRef<Map<string, DrawnMarker>>(new Map());
   const trailRef = useRef<L.LayerGroup | null>(null);
   // Agents cluster only when there are more than 40; an SOS marker sits outside the
   // clusters so it can never be hidden inside a bubble.
@@ -217,12 +254,14 @@ export default function ManagerLiveMapPage() {
     // Captured now, not read from the ref at teardown: by cleanup time the ref
     // may already point at a different Map instance.
     const markers = markersRef.current;
+    const drawn = drawnRef.current;
     return () => {
       map.remove();
       mapRef.current = null;
       teamRef.current = null;
       sosLayerRef.current = null;
       markers.clear();
+      drawn.clear();
     };
   }, []);
 
@@ -297,18 +336,36 @@ export default function ManagerLiveMapPage() {
       seen.add(a.agent_id);
       const pos: [number, number] = [a.latitude, a.longitude];
       const isSel = a.agent_id === selected;
-      const existing = markersRef.current.get(a.agent_id);
-      if (existing) {
-        existing.setLatLng(pos);
-        existing.setIcon(agentIcon(a, isSel));
-        if (isSel) existing.setZIndexOffset(1000);
-        else existing.setZIndexOffset(0);
+      const icon = agentIcon(a, isSel);
+      const next: DrawnMarker = {
+        lat: a.latitude,
+        lon: a.longitude,
+        iconKey: `${icon.options.html as string}|${a.full_name}`,
+        selected: isSel,
+        tooltip: tooltipHtml(a),
+        popup: popupHtml(a),
+      };
+      const prev = drawnRef.current.get(a.agent_id);
+      let marker = markersRef.current.get(a.agent_id);
+      if (!marker || !prev) {
+        marker = L.marker(pos, { icon, title: a.full_name, zIndexOffset: isSel ? 1000 : 0 })
+          .on("click", () => setSelected(a.agent_id))
+          .bindTooltip(next.tooltip, { direction: "top", offset: [0, -16] })
+          .bindPopup(next.popup, { offset: [0, -28], closeButton: false, className: "agent-nav-popup" });
+        markersRef.current.set(a.agent_id, marker);
       } else {
-        const m = L.marker(pos, { icon: agentIcon(a, isSel), title: a.full_name, zIndexOffset: isSel ? 1000 : 0 })
-          .on("click", () => setSelected(a.agent_id));
-        markersRef.current.set(a.agent_id, m);
+        // setIcon rebuilds the pin (replaying its pop-in) and rebinding closes an open
+        // tooltip, so each is done only when its content actually changed.
+        if (prev.lat !== next.lat || prev.lon !== next.lon) marker.setLatLng(pos);
+        if (prev.iconKey !== next.iconKey) {
+          marker.options.title = a.full_name;
+          marker.setIcon(icon);
+        }
+        if (prev.selected !== next.selected) marker.setZIndexOffset(isSel ? 1000 : 0);
+        if (prev.tooltip !== next.tooltip) marker.setTooltipContent(next.tooltip);
+        if (prev.popup !== next.popup) marker.setPopupContent(next.popup);
       }
-      const marker = markersRef.current.get(a.agent_id)!;
+      drawnRef.current.set(a.agent_id, next);
       if (a.sos_active) {
         team.delete(marker);
         sosLayer.addLayer(marker);
@@ -316,37 +373,16 @@ export default function ManagerLiveMapPage() {
         sosLayer.removeLayer(marker);
         team.add(marker);
       }
-      marker.bindTooltip(
-        `<b>${escapeHtml(a.full_name)}</b><br/>${escapeHtml(a.employee_code)} · ${ageLabel(a.age_seconds)}` +
-        (a.sos_active ? "<br/><b style='color:#DC2626'>SOS ACTIVE</b>" : ""),
-        { direction: "top", offset: [0, -16] },
-      );
-      // Click → popup with a Navigate link to wherever the marker is. A plain
-      // anchor rather than a handler: Leaflet popups are HTML strings, and an
-      // <a target=_blank> needs no listener to survive the popup being
-      // re-rendered on the next poll. `escapeHtml` on the name because it is
-      // user-entered data going into innerHTML.
-      const nav = navigateAction(a, ageLabel);
-      marker.bindPopup(
-        `<div style="font:12px system-ui,-apple-system,sans-serif;min-width:180px">
-           <div style="font-weight:700;color:#1C1C1F">${escapeHtml(a.full_name)}</div>
-           <div style="color:#6B6D76;margin-top:2px">${escapeHtml(a.employee_code)} · ${ageLabel(a.age_seconds)}</div>
-           ${nav ? `
-             <a href="${nav.url}" target="_blank" rel="noopener noreferrer"
-                style="display:inline-flex;align-items:center;gap:6px;margin-top:8px;padding:6px 10px;border-radius:8px;
-                       background:#2563EB;color:#fff;font-weight:600;text-decoration:none">
-               ${NAVIGATE_SVG} ${nav.label}
-             </a>
-             <div style="color:${nav.stale ? "#B45309" : "#6B6D76"};margin-top:6px;font-size:11px">${nav.note}</div>
-           ` : `<div style="color:#B45309;margin-top:6px;font-size:11px">No position to navigate to</div>`}
-         </div>`,
-        { offset: [0, -28], closeButton: false, className: "agent-nav-popup" },
-      );
     }
 
     // Drop markers for agents that no longer report a position at all.
     for (const [id, m] of markersRef.current) {
-      if (!seen.has(id)) { team.delete(m); sosLayer.removeLayer(m); markersRef.current.delete(id); }
+      if (!seen.has(id)) {
+        team.delete(m);
+        sosLayer.removeLayer(m);
+        markersRef.current.delete(id);
+        drawnRef.current.delete(id);
+      }
     }
 
     // Fit once, on the first data that has anything in it. Re-fitting on every

@@ -151,6 +151,47 @@ describe("ManagerLiveMapPage", () => {
     expect(polyline.mock.calls[0][0]).toHaveLength(2);
   });
 
+  it("a poll touches only the agent that changed, and hovering or polling keeps an open tooltip open", async () => {
+    const first = [agent("1"), agent("2"), agent("3")];
+    const moved = [agent("1", { latitude: 28.5, longitude: 77.1 }), agent("2"), agent("3")];
+    vi.mocked(getAgentsLive)
+      .mockResolvedValueOnce({ agents: first, sos_count: 0 } as never)
+      .mockResolvedValue({ agents: moved, sos_count: 0 } as never);
+    const { container } = render(<ManagerLiveMapPage />);
+    await waitFor(() => expect(container.querySelectorAll(".leaflet-marker-icon.custom-agent-marker")).toHaveLength(3));
+    const pinOf = (name: string) =>
+      container.querySelector(`.leaflet-marker-icon.custom-agent-marker[title="${name}"]`)?.firstElementChild;
+    const pinsBefore = ["Agent 1", "Agent 2", "Agent 3"].map(pinOf);
+
+    const setIcon = vi.spyOn(L.Marker.prototype, "setIcon");
+    const setLatLng = vi.spyOn(L.Marker.prototype, "setLatLng");
+    fireEvent.mouseOver(container.querySelector('.leaflet-marker-icon[title="Agent 2"]') as HTMLElement);
+    await waitFor(() => expect(container.querySelector(".leaflet-tooltip")?.textContent).toContain("Agent 2"));
+    expect(setIcon).not.toHaveBeenCalled();
+    expect(setLatLng).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTitle("Refresh now"));
+    await waitFor(() => expect(setLatLng).toHaveBeenCalledTimes(1));
+    expect(setLatLng.mock.contexts[0]).toBeInstanceOf(L.Marker);
+    expect((setLatLng.mock.contexts[0] as L.Marker).options.title).toBe("Agent 1");
+    expect(setIcon).not.toHaveBeenCalled();
+    // Same pin elements: nothing was rebuilt, so no pop-in replays.
+    expect(["Agent 1", "Agent 2", "Agent 3"].map(pinOf)).toEqual(pinsBefore);
+    expect(container.querySelector(".leaflet-tooltip")?.textContent).toContain("Agent 2");
+  });
+
+  it("selecting an agent rebuilds only that agent's pin", async () => {
+    vi.mocked(getAgentsLive).mockResolvedValue({ agents: [agent("1"), agent("2"), agent("3")], sos_count: 0 } as never);
+    const { container } = render(<ManagerLiveMapPage />);
+    await waitFor(() => expect(container.querySelectorAll(".leaflet-marker-icon.custom-agent-marker")).toHaveLength(3));
+    const setIcon = vi.spyOn(L.Marker.prototype, "setIcon");
+
+    fireEvent.click(container.querySelector('.leaflet-marker-icon[title="Agent 1"]') as HTMLElement);
+
+    await waitFor(() => expect(setIcon).toHaveBeenCalledTimes(1));
+    expect((setIcon.mock.contexts[0] as L.Marker).options.title).toBe("Agent 1");
+  });
+
   it("swaps only the tiles for the night map, and remembers the choice", async () => {
     vi.mocked(getAgentsLive).mockResolvedValue({ agents: [agent("1"), agent("2")], sos_count: 0 } as never);
     const { container } = render(<ManagerLiveMapPage />);
