@@ -121,7 +121,16 @@ services:
   # RUN_SEED=true), then serves the API. Worker and beat wait for it.
   api:
     <<: *app
-    build: .                # one build; worker and beat run the same image
+    # One build; worker and beat run the same image. Build args are Vite
+    # build-time values baked into the SPA bundle (p3-map, pending merge):
+    # changing VITE_MAPBOX_TOKEN needs a rebuild, `up -d` alone will not pick
+    # it up. Empty token = OpenStreetMap tiles, with a build-log warning, never
+    # a build failure; a secret key (sk.*) fails the build on purpose.
+    build:
+      context: .
+      args:
+        VITE_MAPBOX_TOKEN: ${VITE_MAPBOX_TOKEN:-}
+        VITE_ALLOWED_MAP_HOSTS: ${VITE_ALLOWED_MAP_HOSTS:-${APP_DOMAIN}}
     environment:
       <<: *app-env
       RUN_SEED: "true"

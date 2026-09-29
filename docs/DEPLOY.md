@@ -78,8 +78,8 @@ chmod 600 deploy/.env.prod
 
 Fill in `deploy/.env.prod`:
 - every value under **REQUIRED**;
-- the choices you need: LLM keys, `UPI_VPA`, `OSRM_BASE_URL`, and `MINIO_IMAGE` (see State
-  today);
+- the choices you need: LLM keys, `UPI_VPA`, `OSRM_BASE_URL`, `MINIO_IMAGE` (see State
+  today), and `VITE_MAPBOX_TOKEN`;
 - leave every **Demo only** line commented.
 
 The file itself says how to generate each secret.
@@ -90,6 +90,10 @@ $C build                     # tags tiqcollect:$TIQ_VERSION
 $C up -d
 $C logs -f api               # wait for "[entrypoint] empty database — creating the v2 schema"
 ```
+
+- **The map tile source is baked into the image at build time.** `VITE_MAPBOX_TOKEN` and
+  `VITE_ALLOWED_MAP_HOSTS` are Vite build args, inlined into the SPA bundle; changing either
+  needs `$C build` again, `up -d` alone will not pick it up.
 
 - **First start on an empty database.** The API container creates the v2 schema (Alembic
   `upgrade head`) and sets the database's `search_path` and timezone. It also creates the
@@ -103,7 +107,9 @@ once, valid for 72 hours, with which the admin chooses their own password. No pa
 chosen, printed or logged. The command refuses if the bank already has an admin.
 
 ```bash
-$C exec api python -m scripts.create_first_admin --bank-code <CODE>     --bank-name "<legal name>" --bank-display "<short name>"     --email <admin email> --name "<full name>" --phone <10-digit mobile>
+$C exec api python -m scripts.create_first_admin --bank-code <CODE> \
+    --bank-name "<legal name>" --bank-display "<short name>" \
+    --email <admin email> --name "<full name>" --phone <10-digit mobile>
 ```
 
 Hand the link to the admin over a channel you trust. From there the admin invites everyone
@@ -111,6 +117,7 @@ else from the app.
 
 Verify, from outside the host:
 
+- [ ] The build log shows no `WARNING: VITE_MAPBOX_TOKEN is not set` (or you meant OSM tiles).
 - [ ] `https://$APP_DOMAIN/api/v1/health` returns 200.
 - [ ] `/api/v1/ready` returns 200 with `database: ok`, `redis: ok` and
       `rate_limit_storage: redis`.
