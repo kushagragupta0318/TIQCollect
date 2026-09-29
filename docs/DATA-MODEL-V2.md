@@ -128,9 +128,12 @@ DEFERRED are not built and are tracked as tasks.
 - **Placement quarantine reasons** (`bank_feed_rows.dq_errors[].reason`):
   `NO_AGENCY`, `AGENCY_NOT_ACTIVE`, `NO_CONTRACT_IN_FORCE`, `NOT_AUTHORISED`,
   `CONTRACT_FULL`, `PLACED_ELSEWHERE`, `UNKNOWN_BRANCH`, `NOT_COVERED`.
-  `NOT_COVERED` is the coverage gate (coordinator ruling Q2, 2026-09-29): the loan's branch region `path` must
-  prefix-match one of the contract agency's `agency_regions`. It applies to FEED, MANUAL and ENGINE placements alike,
-  and a contract with no coverage rows fails closed.
+  `NOT_COVERED` is the coverage gate (coordinator ruling Q1, 2026-09-29).
+  - The loan's branch region `path` must match, by path SEGMENT, one of the `agency_regions` rows of the contract in force.
+    A covered region covers itself and its subtree: `NORTH.HR` covers `NORTH.HR.GGN`, and never `NORTH.HRX`.
+  - Paths are dot-joined in the data (`demo/world.py`); the `regions.path` model comment shows `/a/b/`. `path_covers` accepts both.
+  - The gate applies to FEED, MANUAL and ENGINE placements alike.
+  - It fails closed: a contract with no coverage rows covers nothing, and a loan whose branch has no region is never covered.
 - **`strategy.simulation_runs` carries the engine's honesty fields** (E02,
   engine `mc-1.1.0`): `calibrated_by_backtest BOOLEAN`, `synthetic_inputs
   BOOLEAN`, `synthetic_warning TEXT NULL` (`SYNTHETIC: …` / `UNCALIBRATED: …`),
