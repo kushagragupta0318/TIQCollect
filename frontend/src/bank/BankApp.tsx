@@ -17,13 +17,15 @@ import { BANK_NAV_ITEMS } from "./layout/navigation";
 import { BankPlaceholderPage } from "./pages/BankPlaceholderPage";
 import OnboardAgencyWizardPage from "./pages/onboarding/OnboardAgencyWizardPage";
 import AgencyDirectoryPage from "./pages/directory/AgencyDirectoryPage";
+import AgencyPerformancePage from "./pages/performance/AgencyPerformancePage";
 
 /** The nav items with a real page instead of the generic placeholder
- *  (D01-D03, D05). Kept out of the BANK_NAV_ITEMS.map() below so their own
- *  routes never collide with the placeholder route for the same path — see
- *  this file's own route list. */
+ *  (D01-D03, D05, D06). Kept out of the BANK_NAV_ITEMS.map() below so their
+ *  own routes never collide with the placeholder route for the same path —
+ *  see this file's own route list. */
 const ONBOARD_AGENCY_PATH = "agencies/onboard";
 const AGENCY_DIRECTORY_PATH = "agencies/directory";
+const AGENCY_PERFORMANCE_PATH = "agencies/performance";
 
 
 export default function BankApp() {
@@ -53,7 +55,9 @@ export default function BankApp() {
     <Routes>
       <Route element={<BankLayout persona={persona} onSignOut={signOut} />}>
         <Route index element={<Navigate to="overview" replace />} />
-        {BANK_NAV_ITEMS.filter((item) => item.path !== ONBOARD_AGENCY_PATH && item.path !== AGENCY_DIRECTORY_PATH).map((item) => (
+        {BANK_NAV_ITEMS.filter((item) =>
+          item.path !== ONBOARD_AGENCY_PATH && item.path !== AGENCY_DIRECTORY_PATH && item.path !== AGENCY_PERFORMANCE_PATH,
+        ).map((item) => (
           <Route key={item.path} path={item.path} element={<BankPlaceholderPage item={item} />} />
         ))}
         {/* D01-D03: fresh draft (no id yet), or resuming one by its agency_id. */}
@@ -61,6 +65,8 @@ export default function BankApp() {
         <Route path={`${ONBOARD_AGENCY_PATH}/:agencyId`} element={<OnboardAgencyWizardPage />} />
         {/* D05: the agency directory table + coverage map. */}
         <Route path={AGENCY_DIRECTORY_PATH} element={<AgencyDirectoryPage />} />
+        {/* D06: agency scorecard + regional leaderboard. */}
+        <Route path={AGENCY_PERFORMANCE_PATH} element={<AgencyPerformancePage />} />
         {BankComponentGalleryPage && (
           <Route
             path="_gallery"
