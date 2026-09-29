@@ -259,3 +259,69 @@ export function recallReasonError(reason: string): string | null {
   if (t.length > 500) return "Keep the reason to 500 characters.";
   return null;
 }
+
+// ── the engine (D09, ADR 0010) ─────────────────────────────────────────────
+
+/** The API's exploration cap (config PLACEMENT_EXPLORATION_RATE, ADR 0010). */
+export const MAX_EXPLORATION = 0.2;
+
+export type RunStatus = "PLANNED" | "APPLIED" | "SIMULATED" | "ROLLED_BACK" | "FAILED";
+export type DecisionOutcome = "PLACED" | "DEFERRED" | "BLOCKED" | "RECALLED";
+
+export interface EngineRun {
+  run_id: string;
+  plan_date: string;
+  status: RunStatus;
+  simulate: boolean;
+  strategy: string;
+  exploration_rate: number;
+  seed: number | null;
+  created_by: string | null;
+  applied_by: string | null;
+  applied_at: string | null;
+  totals: { evaluated: number; placed: number; kept: number; blocked: number; deferred: number; recalled: number };
+  expected_recovery_total: number | null;
+  summary: {
+    synthetic_warning?: string | null;
+    limitations?: string;
+    effect_note?: string;
+    elapsed_s?: number;
+    explored?: number;
+    apply?: { placed: number; recalled: number; skipped_total: number; skipped: { loan_id: string; step: string; why: string }[] };
+  };
+}
+
+export interface EngineDecision {
+  loan_id: string;
+  loan_account_number: string;
+  outcome: DecisionOutcome;
+  reason: string;
+  score: number | null;
+  chosen_agency_id: string | null;
+  chosen_agency_name: string | null;
+  previous_agency_id: string | null;
+  previous_agency_name: string | null;
+  score_breakdown: { is_modelled?: boolean; exploration?: boolean; multiplier?: number | null; commission_pct?: number | null };
+  gate_results: { refused?: Record<string, string>; eligible?: string[] };
+}
+
+/**
+ * Why this person cannot apply this run, or null when they can. Four-eyes
+ * (ADR 0010): the planner never applies their own run. Staleness is the
+ * server's to judge (it knows the IST day), so it is not guessed here.
+ */
+export function applyBlocker(run: EngineRun, userId: string | undefined): string | null {
+  if (run.simulate || run.status === "SIMULATED") return "A simulation cannot be applied.";
+  if (run.status !== "PLANNED") return `This run is ${run.status.toLowerCase()}.`;
+  if (!userId || run.created_by === userId) return "Another bank admin must apply a run you planned.";
+  return null;
+}
+
+/** A 0-20 percent text box as the API's rate, or null when it is not a valid number in range. */
+export function explorationRate(percent: string): number | null {
+  const t = percent.trim();
+  if (t === "") return 0;
+  if (!/^\d{1,2}(\.\d{1,2})?$/.test(t)) return null;
+  const r = Number(t) / 100;
+  return r >= 0 && r <= MAX_EXPLORATION ? r : null;
+}

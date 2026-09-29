@@ -4,9 +4,10 @@
 // the server's (placement_service), shown here, never re-decided.
 import { useMemo, useState, type ReactNode } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRightLeft, RotateCcw } from "lucide-react";
+import { ArrowRightLeft, Play, RotateCcw } from "lucide-react";
 import api from "@/api/axios";
 import { errorDetail } from "@/lib/apiError";
+import { useAuthStore } from "@/store/authStore";
 import { AnalyticsError, AnalyticsLoading, AnalyticsTabBar, Panel, Tile } from "../components/analytics";
 import { DataTable, type DataColumn } from "../components/DataTable";
 import { PageRoot, ToolHeader } from "../components/PageTemplate";
@@ -23,12 +24,14 @@ import {
   DPD_BUCKETS, EMPTY_FILTERS, LOAN_TYPES, MAX_BATCH, blockedByReason, headroomLabel, loanQuery, pageSelection,
   recallReasonError, regionOptions, selectable, toggle, togglePage, verdictText,
   type AgencyRoom, type BatchResult, type LoanFilters, type Page, type PlaceableLoan, type PlacementPage,
-  type PlacementRow,
+  type PlacementRow, applyBlocker, explorationRate, type DecisionOutcome, type EngineDecision, type EngineRun,
 } from "./placementModel";
 
 const PAGE_SIZE = 50;
-type Tab = "place" | "placements";
-const TABS = [{ id: "place", label: "Place loans" }, { id: "placements", label: "Placements" }] as const;
+type Tab = "place" | "placements" | "engine";
+const TABS = [
+  { id: "place", label: "Place loans" }, { id: "placements", label: "Placements" }, { id: "engine", label: "Engine" },
+] as const;
 
 export function BankPlacementPage() {
   const [tab, setTab] = useState<Tab>("place");
@@ -40,7 +43,7 @@ export function BankPlacementPage() {
         description="Place delinquent loans with an agency. Each loan is checked against the agency's contract: in force, product and bucket authorised, territory covered, room under its cap."
       />
       <AnalyticsTabBar tabs={TABS} active={tab} onChange={setTab} />
-      {tab === "place" ? <PlaceLoans /> : <Placements />}
+      {tab === "place" ? <PlaceLoans /> : tab === "placements" ? <Placements /> : <Engine />}
     </PageRoot>
   );
 }
@@ -406,6 +409,181 @@ function Placements() {
         </DialogContent>
       </Dialog>
     </Panel>
+  );
+}
+
+// ── Engine (D09, ADR 0010) ───────────────────────────────────────────────────
+
+const OUTCOME_BADGE: Record<DecisionOutcome, "softSuccess" | "softPrimary" | "softDanger" | "softWarning"> = {
+  PLACED: "softSuccess", DEFERRED: "softWarning", BLOCKED: "softDanger", RECALLED: "softPrimary",
+};
+
+function Engine() {
+  const qc = useQueryClient();
+  const userId = useAuthStore((s) => s.user?.id);
+  const [percent, setPercent] = useState("0");
+  const [selected, setSelected] = useState<string | null>(null);
+  const [outcome, setOutcome] = useState<DecisionOutcome | "">("");
+  const [page, setPage] = useState(1);
+
+  const runs = useQuery({
+    queryKey: ["bank", "placements", "runs"],
+    queryFn: async () => (await api.get<{ items: EngineRun[] }>("/bank/placements/runs")).data.items,
+  });
+  const rate = explorationRate(percent);
+  const start = useMutation({
+    mutationFn: async (mode: "simulate" | "plan") =>
+      (await api.post<EngineRun>("/bank/placements/runs", { mode, exploration_rate: rate })).data,
+    onSuccess: (run) => {
+      setSelected(run.run_id);
+      setPage(1);
+      qc.invalidateQueries({ queryKey: ["bank", "placements", "runs"] });
+    },
+  });
+  const apply = useMutation({
+    mutationFn: async (runId: string) => (await api.post<EngineRun>(`/bank/placements/runs/${runId}/apply`)).data,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["bank", "placements"] }),
+  });
+  const params = new URLSearchParams({ page: String(page), page_size: String(PAGE_SIZE), ...(outcome ? { outcome } : {}) });
+  const decisions = useQuery({
+    queryKey: ["bank", "placements", "runs", selected, params.toString()],
+    queryFn: async () =>
+      (await api.get<Page<EngineDecision> & { run: EngineRun }>(`/bank/placements/runs/${selected}/decisions?${params}`)).data,
+    enabled: selected !== null,
+    placeholderData: keepPreviousData,
+  });
+
+  const runColumns: DataColumn<EngineRun>[] = [
+    { key: "plan_date", header: "Day" },
+    { key: "status", header: "Status" },
+    { key: "placed", header: "Placed", align: "right", render: (r) => r.totals.placed.toLocaleString("en-IN") },
+    { key: "recalled", header: "Recalled", align: "right", render: (r) => r.totals.recalled.toLocaleString("en-IN") },
+    { key: "deferred", header: "Deferred", align: "right", render: (r) => r.totals.deferred.toLocaleString("en-IN") },
+    { key: "blocked", header: "Blocked", align: "right", render: (r) => r.totals.blocked.toLocaleString("en-IN") },
+    { key: "kept", header: "Kept", align: "right", render: (r) => r.totals.kept.toLocaleString("en-IN") },
+    { key: "exp", header: "Exploration", align: "right", render: (r) => `${Math.round(r.exploration_rate * 100)}%` },
+    {
+      key: "apply", header: "", align: "right",
+      render: (r) => {
+        if (r.status !== "PLANNED") return null;
+        const blocker = applyBlocker(r, userId);
+        return (
+          <span title={blocker ?? undefined}>
+            <Button size="sm" disabled={blocker !== null || apply.isPending}
+                    onClick={(e) => { e.stopPropagation(); apply.mutate(r.run_id); }}>
+              Apply
+            </Button>
+          </span>
+        );
+      },
+    },
+  ];
+  const decisionColumns: DataColumn<EngineDecision>[] = [
+    { key: "loan_account_number", header: "Loan", className: "font-semibold text-foreground" },
+    { key: "outcome", header: "Decision", render: (d) => <Badge variant={OUTCOME_BADGE[d.outcome]}>{d.outcome}</Badge> },
+    { key: "chosen", header: "Agency", render: (d) => d.chosen_agency_name ?? "—" },
+    { key: "previous", header: "From", render: (d) => d.previous_agency_name ?? "" },
+    { key: "score", header: "Value", align: "right", render: (d) => (d.score === null ? "—" : rs(Math.round(d.score))) },
+    {
+      key: "flags", header: "",
+      render: (d) => (
+        <span className="text-[10.5px] text-muted-foreground">
+          {d.score_breakdown.exploration ? "explored " : ""}
+          {d.score_breakdown.is_modelled === false ? "no model score" : ""}
+        </span>
+      ),
+    },
+    { key: "reason", header: "Why", className: "max-w-[420px]" },
+  ];
+  const run = decisions.data?.run;
+  const pages = decisions.data ? Math.max(1, Math.ceil(decisions.data.total / PAGE_SIZE)) : 1;
+
+  return (
+    <div className="space-y-6">
+      <Panel
+        title="Run the placement engine"
+        hint="Plans today's placements for every unplaced loan; nothing changes until a second admin applies it."
+      >
+        <div className="flex flex-col gap-4 md:flex-row md:items-end">
+          <Field label="Exploration (% of placements randomised, 0-20)" className="md:w-72">
+            <Input inputMode="decimal" value={percent} onChange={(e) => setPercent(e.target.value)} />
+          </Field>
+          <div className="flex gap-2 md:ml-auto">
+            <Button variant="outline" disabled={rate === null || start.isPending} onClick={() => start.mutate("simulate")}>
+              Simulate
+            </Button>
+            <Button disabled={rate === null || start.isPending} onClick={() => start.mutate("plan")}>
+              <Play /> {start.isPending ? "Planning…" : "Plan for today"}
+            </Button>
+          </div>
+        </div>
+        {rate === null && <p role="alert" className="mt-2 text-[12px] text-destructive">Enter a number from 0 to 20.</p>}
+        {start.isError && <p role="alert" className="mt-2 text-[12px] text-destructive">{errorDetail(start.error, "The run failed.")}</p>}
+        {apply.isError && <p role="alert" className="mt-2 text-[12px] text-destructive">{errorDetail(apply.error, "Apply failed.")}</p>}
+      </Panel>
+
+      <Panel title="Runs">
+        {runs.isLoading ? (
+          <AnalyticsLoading label="Loading runs…" />
+        ) : runs.isError ? (
+          <AnalyticsError>{errorDetail(runs.error, "The runs could not be loaded.")}</AnalyticsError>
+        ) : (
+          <DataTable
+            columns={runColumns}
+            rows={runs.data ?? []}
+            rowKey={(r) => r.run_id}
+            density="compact"
+            minWidth={760}
+            onRowClick={(r) => { setSelected(r.run_id); setPage(1); }}
+            rowLabel={(r) => `Open the run of ${r.plan_date}`}
+          />
+        )}
+      </Panel>
+
+      {selected && (
+        <Panel
+          title={run ? `Decisions · ${run.plan_date} · ${run.status}` : "Decisions"}
+          hint={run?.summary.synthetic_warning
+            ? <span title={run.summary.synthetic_warning}><SampleDataNote label="Scores use synthetic-data models" /></span>
+            : undefined}
+        >
+          {run && (
+            <div className="mb-4 space-y-1 text-[11.5px] text-muted-foreground">
+              {run.summary.limitations && <p>{run.summary.limitations}</p>}
+              {run.summary.effect_note && <p>{run.summary.effect_note}</p>}
+              {run.summary.apply && (
+                <p>
+                  Applied: {run.summary.apply.placed} placed, {run.summary.apply.recalled} recalled,{" "}
+                  {run.summary.apply.skipped_total} skipped because a gate no longer passed.
+                </p>
+              )}
+            </div>
+          )}
+          <div className="mb-4 w-48">
+            <Field label="Decision">
+              <Select value={outcome} onChange={(e) => { setOutcome(e.target.value as DecisionOutcome | ""); setPage(1); }}>
+                <option value="">All</option>
+                <option value="PLACED">Placed</option>
+                <option value="RECALLED">Recalled</option>
+                <option value="DEFERRED">Deferred</option>
+                <option value="BLOCKED">Blocked</option>
+              </Select>
+            </Field>
+          </div>
+          {decisions.isLoading ? (
+            <AnalyticsLoading label="Loading decisions…" />
+          ) : decisions.isError ? (
+            <AnalyticsError>{errorDetail(decisions.error, "The decisions could not be loaded.")}</AnalyticsError>
+          ) : (
+            <>
+              <DataTable columns={decisionColumns} rows={decisions.data?.items ?? []} rowKey={(d) => d.loan_id}
+                         density="compact" minWidth={980} />
+              <Pager page={page} pages={pages} onPage={setPage} />
+            </>
+          )}
+        </Panel>
+      )}
+    </div>
   );
 }
 

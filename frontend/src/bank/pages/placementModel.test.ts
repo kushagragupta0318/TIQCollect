@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   EMPTY_FILTERS, MAX_BATCH, blockedByReason, headroomLabel, loanQuery, pageSelection, recallReasonError,
-  refusalCode, regionOptions, toggle, togglePage, verdictText,
-  type AgencyRoom, type LoanVerdict, type PlaceableLoan,
+  refusalCode, regionOptions, toggle, togglePage, verdictText, applyBlocker, explorationRate,
+  type AgencyRoom, type EngineRun, type LoanVerdict, type PlaceableLoan,
 } from "./placementModel";
 
 const loan = (id: string, placed = false): PlaceableLoan => ({
@@ -112,5 +112,31 @@ describe("recall reason", () => {
     expect(recallReasonError("   ")).not.toBeNull();
     expect(recallReasonError("x".repeat(501))).not.toBeNull();
     expect(recallReasonError(" Borrower moved ")).toBeNull();
+  });
+});
+
+describe("engine runs", () => {
+  const run = (over: Partial<EngineRun> = {}): EngineRun => ({
+    run_id: "r", plan_date: "2026-10-15", status: "PLANNED", simulate: false, strategy: "MIN_COST_FLOW",
+    exploration_rate: 0, seed: 20261015, created_by: "u-planner", applied_by: null, applied_at: null,
+    totals: { evaluated: 3, placed: 3, kept: 0, blocked: 0, deferred: 0, recalled: 0 },
+    expected_recovery_total: 1000, summary: {}, ...over,
+  });
+
+  it("lets only a second person apply a planned run", () => {
+    expect(applyBlocker(run(), "u-other")).toBeNull();
+    expect(applyBlocker(run(), "u-planner")).toMatch(/Another bank admin/);
+    expect(applyBlocker(run(), undefined)).not.toBeNull();
+    expect(applyBlocker(run({ status: "SIMULATED", simulate: true }), "u-other")).toMatch(/simulation/);
+    expect(applyBlocker(run({ status: "APPLIED" }), "u-other")).toMatch(/applied/);
+  });
+
+  it("reads the exploration percent within 0-20", () => {
+    expect(explorationRate("")).toBe(0);
+    expect(explorationRate("10")).toBeCloseTo(0.1);
+    expect(explorationRate("20")).toBeCloseTo(0.2);
+    expect(explorationRate("20.5")).toBeNull();
+    expect(explorationRate("-1")).toBeNull();
+    expect(explorationRate("1e1")).toBeNull();
   });
 });
