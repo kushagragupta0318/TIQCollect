@@ -16,9 +16,18 @@
 //   fresh timestamp when nothing has been queued for MAX_INTERVAL_MS, so a
 //   still phone is "still here", not "silent". Battery cost is one small
 //   request every 15s; the 50 m movement gate is unchanged.
+// 2026-09-29 (I02, P0-A6) — The queue key is namespaced by session slot AND
+//   login, so a simulator frame or the next login in this tab can never upload
+//   another session's fixes under its own token. The queue holds 48 h, the
+//   server's window since I02 (services/capture_time.OFFLINE_MAX_AGE_HOURS).
+//   The offline outbox is flushed before every batch: a visit captured offline
+//   must not trail GPS that got through (fraud_service SYNC_WITHHELD).
 // ────────────────────────────────────────────────────────────────────────────
 import { sendLocationBatch } from "@/api/agent";
 import { subscribeToFixes, type RawFix } from "@/hooks/useLiveLocation";
+import { flushOutbox, outboxUsage } from "@/lib/outboxRunner";
+import { slotKey } from "@/lib/sessionSlot";
+import { useAuthStore } from "@/store/authStore";
 
 export interface QueuedPing {
   latitude: number;
@@ -48,7 +57,7 @@ const FLUSH_AT_SIZE = 20;
 // ~8 h of dead zone; at 15 s it buffers ~2 h, so the 15 s change quietly cut
 // offline endurance fourfold. The queue is sized in TIME now (8 h) and the
 // request ceiling is its own constant, which is what MAX_BATCH always was.
-const QUEUE_HOURS = 8;
+const QUEUE_HOURS = 48;
 const MAX_QUEUE = (QUEUE_HOURS * 3_600_000) / MAX_INTERVAL_MS;   // 1,920 at 15 s
 // Must not exceed MAX_BATCH in app/services/location_service.py — the server
 // rejects an oversized batch outright, which would strand the whole backlog.
@@ -57,7 +66,14 @@ const MAX_BATCH_SEND = 500;
 // localStorage, not memory: a phone that reloads, crashes or is backgrounded
 // out of memory mid-shift must not lose the queue. The payload is small —
 // 500 fixes is roughly 60KB, well inside the ~5MB budget.
-const STORAGE_KEY = "tiq.location.queue.v1";
+// Namespaced per slot and login (P0-A6); set at start, when the login is known.
+const LEGACY_KEY = "tiq.location.queue.v1";
+let storageKey: string | null = null;
+
+function keyForCurrentLogin(): string | null {
+  const userId = useAuthStore.getState().user?.id;
+  return userId ? `${slotKey(LEGACY_KEY)}:${userId}` : null;
+}
 
 let queue: QueuedPing[] = [];
 let unsubscribe: (() => void) | null = null;
@@ -72,7 +88,9 @@ let running = false;
 // ── persistence ─────────────────────────────────────────────────────────────
 function load(): void {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    // The unslotted, unowned queue cannot be attributed to anyone: drop it.
+    localStorage.removeItem(LEGACY_KEY);
+    const raw = storageKey ? localStorage.getItem(storageKey) : null;
     queue = raw ? (JSON.parse(raw) as QueuedPing[]) : [];
   } catch {
     queue = [];
@@ -81,7 +99,7 @@ function load(): void {
 
 function persist(): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(queue));
+    if (storageKey) localStorage.setItem(storageKey, JSON.stringify(queue));
   } catch {
     // Quota exceeded, or storage disabled in a private window. Losing
     // persistence is survivable; losing the in-memory queue is not, so this
@@ -192,6 +210,9 @@ export async function flush(): Promise<void> {
   if (typeof navigator !== "undefined" && navigator.onLine === false) return;
 
   flushing = true;
+  // Offline visits go first (see the 2026-09-29 note). Never blocks the trail:
+  // a lone worker's position matters more than the order of the two.
+  if (outboxUsage().pending > 0) await flushOutbox();
   // Take a snapshot and clear optimistically, so fixes arriving mid-request are
   // not lost to the splice. On failure the snapshot is put back in front.
   const batch = queue.slice(0, MAX_BATCH_SEND);
@@ -214,6 +235,8 @@ export async function flush(): Promise<void> {
 export function startLocationReporting(): void {
   if (running) return;
   running = true;
+  storageKey = keyForCurrentLogin();
+  queue = [];
   load();
   watchBattery();
   unsubscribe = subscribeToFixes(onFix);

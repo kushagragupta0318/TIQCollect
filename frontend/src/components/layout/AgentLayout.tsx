@@ -23,6 +23,8 @@ import { BeatProvider } from "@/contexts/BeatContext";
 import { useBeat } from "@/contexts/useBeat";
 import { refreshLocation, useLiveLocation } from "@/hooks/useLiveLocation";
 import { reportNow, startLocationReporting, stopLocationReporting } from "@/lib/locationReporter";
+import { outboxUsage, startOutbox, stopOutbox } from "@/lib/outboxRunner";
+import { OutboxBar } from "@/components/agent/OutboxBar";
 import { logout as apiLogout } from "@/api/auth";
 
 const SIDEBAR_KEY  = "tiq:agent-sidebar";
@@ -186,8 +188,14 @@ function AgentLayoutInner() {
     return () => stopLocationReporting();
   }, []);
 
+  // I02: the offline outbox sends for as long as the agent is logged in.
   useEffect(() => {
-    const onOnline  = () => { setIsOnline(true);  toast.success("Back online — you can submit now"); };
+    startOutbox();
+    return () => stopOutbox();
+  }, []);
+
+  useEffect(() => {
+    const onOnline  = () => { setIsOnline(true);  toast.success("Back online — sending anything saved on this phone"); };
     // The copy here used to promise "actions will queue" and "visits will sync
     // when reconnected". Neither was true: there is no service worker, no
     // outbox and no background sync anywhere in this app, so a visit submitted
@@ -195,10 +203,9 @@ function AgentLayoutInner() {
     // was safe. A false reassurance is worse than no banner at all, because it
     // is the reason someone keeps working instead of walking to find signal.
     //
-    // RecordVisitPage now also blocks submission while offline and keeps the
-    // typed part of the form on the device, so the promise below is one the app
-    // can actually keep.
-    const onOffline = () => { setIsOnline(false); toast.error("You're offline — you can't submit visits until you reconnect"); };
+    // 2026-09-29 (I02): now there IS an outbox (lib/outbox.ts), so the banner
+    // can say visits are kept. Payments are the exception, and it says so.
+    const onOffline = () => { setIsOnline(false); toast("Offline — visits are saved on this phone and sent when signal returns"); };
     window.addEventListener("online",  onOnline);
     window.addEventListener("offline", onOffline);
     return () => {
@@ -224,6 +231,10 @@ function AgentLayoutInner() {
   }, []);
 
   const handleLogout = useCallback(() => {
+    const { pending, attention } = outboxUsage();
+    if (pending + attention > 0 && !window.confirm(
+      `${pending + attention} record${pending + attention > 1 ? "s are" : " is"} not yet sent. ` +
+      "They stay on this phone and send when you log in here again. Log out?")) return;
     apiLogout().finally(() => {
       logout();
       navigate("/login", { replace: true });
@@ -339,10 +350,11 @@ function AgentLayoutInner() {
           </div>
 
           <ContactHourBanner />
+          <OutboxBar />
           {!isOnline && (
             <div className="bg-slate-800 text-white text-xs text-center py-1.5 px-4 font-medium flex items-center justify-center gap-1.5">
               <WifiOff className="w-3 h-3" />
-              Offline — notes are saved on this device. Reconnect to submit.
+              Offline — visits are saved on this phone. Payments need signal.
             </div>
           )}
         </header>
