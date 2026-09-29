@@ -70,6 +70,9 @@ class AuditAction(str, enum.Enum):
     # v2_0011 (2026-09-28, D02): an agency document reviewed; the verifier is never the uploader
     DOCUMENT_VERIFIED = "DOCUMENT_VERIFIED"
     DOCUMENT_REJECTED = "DOCUMENT_REJECTED"
+    # v2_0016 (2026-09-29, P3): the bank feed ended a placement (paid direct / settled -> RESOLVED,
+    # written off -> RETURNED); a recall is PLACEMENT_RECALLED
+    PLACEMENT_ENDED = "PLACEMENT_ENDED"
 
 
 class AuditLog(Base, UUIDPrimaryKey):

@@ -10,9 +10,13 @@ Creates:
     REFRESH ... CONCURRENTLY needs (sentinel for "unknown"/"none" keys);
   - the five *_scoped views the API reads, one per materialized view;
   - v_visit_to_pay (C03 Visit-to-Pay, coordinator 2026-09-28): per visit,
-    whether a VERIFIED payment on the same case followed within 7 days of the
-    bank's calendar. security_invoker AND tenant-filtered in its own WHERE,
-    because RLS is not yet enforced for the API.
+    the VERIFIED payments ATTRIBUTED to it. Each payment goes to the latest
+    visit on its case at or before it, if within 7 days: bank-local CALENDAR
+    days, since no holiday calendar exists yet. A payment counts once.
+    security_invoker AND tenant-filtered, because RLS is not yet enforced.
+  - Every view the API reads is security_barrier and shares one TENANT
+    predicate: BANK sees its bank, AGENCY its agency; a field agent (scope
+    AGENT), PLATFORM, or a missing scope or tenant sees nothing.
 
 The *_scoped views are NOT security_invoker, deliberately (§6 said they were).
 A security_invoker view needs the caller to hold SELECT on the materialized
@@ -27,10 +31,15 @@ Honesty rules the views follow:
     days, else it is counted in excluded_stale_pairs / excluded_missing_pairs.
   - Only complete months form transitions (month-end <= the bank's latest reading).
   - collectible_due is NULL for a (bank, month) with no instalment due in it
-    (the demo fixture windows instalments; an uncovered month is unknown, not
-    zero), and the placements with no opening reading are counted beside it.
+    (the demo fixture windows instalments), and NULL when any active
+    placement lacks its opening reading (counted in collectible_due_unread):
+    unknown, never a silent understatement.
+  - "Today" is the bank-local business_date(now()), never the server's
+    current_date.
   - field_cost is NULL when any visit in the cell has no FIELD_VISIT rate.
   - agent_days_with_visits is not attendance: no attendance table exists.
+  - consent is missing only on a MET visit (CONSENT_MISSING); mv_field_activity_daily
+    is recreated with the same predicate (v2_0007 counted every visit).
   - mv_portfolio_daily splits rows by is_backfill (a transformed snapshot,
     not an observation), so a day-on-day delta can be taken like for like.
     contacted_7d_* is a subset of placed_*: a met visit or answered call in
@@ -135,6 +144,98 @@ def _grant_specs() -> list[tuple[str, str, str]]:
     return out
 
 
+# Consent is asked only when the borrower is met (RecordVisitPage shows the RBI attestation only for
+# meetingType BORROWER, which is customer_met), so it can only be MISSING on a met visit (d4, 2026-09-29).
+CONSENT_MISSING = "customer_met AND consent_given IS NOT TRUE"
+
+# mv_field_activity_daily exactly as v2_0007 created it (frozen; tests/test_analytics_views_b pins the copy).
+FIELD_ACTIVITY_V2_0007 = '''
+        CREATE MATERIALIZED VIEW analytics.mv_field_activity_daily AS
+        WITH tz AS (SELECT id AS bank_id, timezone FROM tenancy.banks),
+        v AS (
+            SELECT analytics.business_date(x.check_in_time, tz.timezone) AS d, x.bank_id, x.agency_id, x.agent_id,
+                   count(*) AS visits, count(*) FILTER (WHERE x.customer_met) AS met_visits,
+                   count(DISTINCT x.case_id) AS distinct_cases_visited,
+                   count(*) FILTER (WHERE x.geo_verified IS NOT TRUE) AS geo_unverified_visits,
+                   count(*) FILTER (WHERE x.consent_given IS NOT TRUE) AS consent_missing_visits,
+                   min(x.check_in_time) AS first_at, max(coalesce(x.check_out_time, x.check_in_time)) AS last_at
+            FROM collections.visits x JOIN tz ON tz.bank_id = x.bank_id GROUP BY 1, 2, 3, 4
+        ),
+        t AS (
+            SELECT analytics.business_date(x.created_at, tz.timezone) AS d, x.bank_id, x.agency_id, x.agent_id,
+                   count(*) AS ptps_set
+            FROM collections.ptps x JOIN tz ON tz.bank_id = x.bank_id GROUP BY 1, 2, 3, 4
+        ),
+        p AS (
+            SELECT analytics.business_date(x.payment_date, tz.timezone) AS d, x.bank_id, x.agency_id, x.agent_id,
+                   count(*) FILTER (WHERE x.status = 'VERIFIED') AS payments_verified_count,
+                   coalesce(sum(x.amount) FILTER (WHERE x.status = 'VERIFIED'), 0) AS payments_verified_amount,
+                   coalesce(sum(x.amount) FILTER (WHERE x.status = 'PENDING_VERIFICATION'), 0) AS payments_pending_amount
+            FROM collections.payments x JOIN tz ON tz.bank_id = x.bank_id
+            WHERE x.agent_id IS NOT NULL GROUP BY 1, 2, 3, 4
+        ),
+        c AS (
+            SELECT analytics.business_date(x.called_at, tz.timezone) AS d, x.bank_id, x.agency_id, x.agent_id,
+                   count(*) AS calls, count(*) FILTER (WHERE x.outcome = 'ANSWERED') AS calls_answered,
+                   min(x.called_at) AS first_at, max(x.called_at) AS last_at
+            FROM collections.call_logs x JOIN tz ON tz.bank_id = x.bank_id GROUP BY 1, 2, 3, 4
+        ),
+        bt AS (
+            SELECT x.beat_date AS d, x.bank_id, x.agency_id, x.agent_id,
+                   sum(x.total_cases) AS planned_stops, sum(coalesce(x.cases_completed, 0)) AS visited_stops,
+                   sum(coalesce(x.estimated_distance_km, 0)) AS planned_km, sum(x.actual_distance_km) AS actual_km
+            FROM planning.beats x WHERE x.is_leave_day IS NOT TRUE GROUP BY 1, 2, 3, 4
+        ),
+        oh AS (
+            SELECT analytics.business_date(l.created_at, tz.timezone) AS d, g.bank_id, g.agency_id, g.id AS agent_id,
+                   count(*) AS out_of_hours_attempts
+            FROM audit.audit_logs l JOIN workforce.agents g ON g.user_id = l.user_id JOIN tz ON tz.bank_id = g.bank_id
+            WHERE l.action = 'CONTACT_HOUR_VIOLATION_ATTEMPT' GROUP BY 1, 2, 3, 4
+        ),
+        keys AS (
+            SELECT d, bank_id, agency_id, agent_id FROM v UNION SELECT d, bank_id, agency_id, agent_id FROM t
+            UNION SELECT d, bank_id, agency_id, agent_id FROM p UNION SELECT d, bank_id, agency_id, agent_id FROM c
+            UNION SELECT d, bank_id, agency_id, agent_id FROM bt UNION SELECT d, bank_id, agency_id, agent_id FROM oh
+        )
+        SELECT k.d AS activity_date, k.bank_id, k.agency_id, k.agent_id,
+               CASE WHEN EXISTS (SELECT 1 FROM workforce.leave_requests lr WHERE lr.agent_id = k.agent_id
+                                 AND lr.status = 'APPROVED' AND k.d BETWEEN lr.from_date AND lr.to_date)
+                    THEN 'ON_LEAVE' ELSE 'PRESENT' END AS attendance_status,
+               coalesce(v.visits, 0) AS visits, coalesce(v.met_visits, 0) AS met_visits,
+               coalesce(v.distinct_cases_visited, 0) AS distinct_cases_visited,
+               coalesce(t.ptps_set, 0) AS ptps_set,
+               coalesce(p.payments_verified_count, 0) AS payments_verified_count,
+               coalesce(p.payments_verified_amount, 0) AS payments_verified_amount,
+               coalesce(p.payments_pending_amount, 0) AS payments_pending_amount,
+               coalesce(c.calls, 0) AS calls, coalesce(c.calls_answered, 0) AS calls_answered,
+               coalesce(bt.planned_stops, 0) AS planned_stops, coalesce(bt.visited_stops, 0) AS visited_stops,
+               coalesce(bt.planned_km, 0) AS planned_km, bt.actual_km,
+               coalesce(oh.out_of_hours_attempts, 0) AS out_of_hours_attempts,
+               coalesce(v.geo_unverified_visits, 0) AS geo_unverified_visits,
+               coalesce(v.consent_missing_visits, 0) AS consent_missing_visits,
+               least(v.first_at, c.first_at) AS first_activity_at,
+               greatest(v.last_at, c.last_at) AS last_activity_at
+        FROM keys k
+        LEFT JOIN v  ON (v.d, v.agent_id)   = (k.d, k.agent_id)
+        LEFT JOIN t  ON (t.d, t.agent_id)   = (k.d, k.agent_id)
+        LEFT JOIN p  ON (p.d, p.agent_id)   = (k.d, k.agent_id)
+        LEFT JOIN c  ON (c.d, c.agent_id)   = (k.d, k.agent_id)
+        LEFT JOIN bt ON (bt.d, bt.agent_id) = (k.d, k.agent_id)
+        LEFT JOIN oh ON (oh.d, oh.agent_id) = (k.d, k.agent_id)
+'''
+FIELD_ACTIVITY = FIELD_ACTIVITY_V2_0007.replace(
+    'count(*) FILTER (WHERE x.consent_given IS NOT TRUE) AS consent_missing_visits',
+    "count(*) FILTER (WHERE x.customer_met AND x.consent_given IS NOT TRUE) AS consent_missing_visits")
+
+
+def _field_activity(sql: str) -> None:
+    op.execute("DROP MATERIALIZED VIEW analytics.mv_field_activity_daily")
+    op.execute(sql)
+    op.execute("CREATE UNIQUE INDEX uq_mv_field_activity_daily ON analytics.mv_field_activity_daily "
+               "(activity_date, agency_id, agent_id)")
+    op.execute(_if_role(JOBS_ROLE, f"GRANT SELECT ON analytics.mv_field_activity_daily TO {JOBS_ROLE}"))
+
+
 PORTFOLIO_STATE_SQL = """
 CREATE FUNCTION analytics.portfolio_state(dpd_bucket text, loan_status text, npa_since date, as_of date)
 RETURNS text LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
@@ -148,6 +249,7 @@ RETURNS text LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     WHEN dpd_bucket = 'BUCKET_1' THEN 'SMA_0'
     WHEN dpd_bucket = 'BUCKET_2' THEN 'SMA_1'
     WHEN dpd_bucket = 'BUCKET_3' THEN 'SMA_2'
+    ELSE 'UNKNOWN'
   END
 $$
 """
@@ -245,8 +347,10 @@ case_region AS (
 pl AS (SELECT p.*, lr.region_id, lr.loan_type FROM collections.placements p JOIN loan_region lr ON lr.loan_id = p.loan_id),
 months AS (
     SELECT p.id AS placement_id, gs::date AS month_start, (gs + interval '1 month - 1 day')::date AS month_end
-    FROM pl p, generate_series(date_trunc('month', p.placed_on),
-                               date_trunc('month', coalesce(p.ended_on, current_date)), interval '1 month') gs
+    FROM pl p JOIN tz ON tz.bank_id = p.bank_id
+    CROSS JOIN LATERAL generate_series(
+        date_trunc('month', p.placed_on),
+        date_trunc('month', coalesce(p.ended_on, analytics.business_date(now(), tz.timezone))), interval '1 month') gs
 ),
 m_placed AS (
     SELECT date_trunc('month', placed_on)::date AS month_start, bank_id, agency_id, region_id,
@@ -314,8 +418,8 @@ m_ptp AS (
     SELECT date_trunc('month', t.committed_date)::date AS month_start, t.bank_id, t.agency_id,
            coalesce(cr.region_id, {S}) AS region_id,
            count(*) AS ptps_matured, count(*) FILTER (WHERE t.status::text IN ({kept})) AS ptps_honoured
-    FROM collections.ptps t LEFT JOIN case_region cr ON cr.case_id = t.case_id
-    WHERE t.committed_date <= current_date
+    FROM collections.ptps t JOIN tz ON tz.bank_id = t.bank_id LEFT JOIN case_region cr ON cr.case_id = t.case_id
+    WHERE t.committed_date <= analytics.business_date(now(), tz.timezone)
     GROUP BY 1, 2, 3, 4
 ),
 vis AS (
@@ -336,7 +440,7 @@ m_visit AS (
            count(*) AS visits, count(*) FILTER (WHERE customer_met) AS met_visits,
            count(*) FILTER (WHERE within_contact_hours IS FALSE) AS breaches_out_of_hours,
            count(*) FILTER (WHERE geo_verified IS FALSE) AS breaches_geofence,
-           count(*) FILTER (WHERE consent_given IS NOT TRUE) AS consent_missing,
+           count(*) FILTER (WHERE {CONSENT_MISSING}) AS consent_missing,
            CASE WHEN count(*) FILTER (WHERE rate_inr IS NULL) > 0 THEN NULL ELSE round(sum(rate_inr), 2) END AS field_cost
     FROM vis GROUP BY 1, 2, 3, 4
 ),
@@ -380,9 +484,10 @@ m_leave AS (
 m_contracted AS (
     SELECT gs::date AS month_start, c.bank_id, c.agency_id, {S} AS region_id,
            coalesce(sum(c.max_agents), 0) AS agents_contracted
-    FROM tenancy.agency_contracts c,
-         generate_series(date_trunc('month', c.start_date),
-                         date_trunc('month', least(c.end_date, current_date)), interval '1 month') gs
+    FROM tenancy.agency_contracts c JOIN tz ON tz.bank_id = c.bank_id
+    CROSS JOIN LATERAL generate_series(
+        date_trunc('month', c.start_date),
+        date_trunc('month', least(c.end_date, analytics.business_date(now(), tz.timezone))), interval '1 month') gs
     WHERE c.status <> 'DRAFT'
     GROUP BY 1, 2, 3
 ),
@@ -397,7 +502,7 @@ SELECT k.month_start, k.bank_id, k.agency_id, k.region_id,
        coalesce(ma.active_placements_eom, 0) AS active_placements_eom,
        coalesce(me.resolved_placements, 0) AS resolved_placements,
        coalesce(me.recalled_placements, 0) AS recalled_placements,
-       CASE WHEN ma.due_covered THEN ma.collectible_due END AS collectible_due,
+       CASE WHEN ma.due_covered AND ma.collectible_due_unread = 0 THEN ma.collectible_due END AS collectible_due,
        coalesce(ma.collectible_due_unread, 0) AS collectible_due_unread,
        coalesce(mp.verified_collections, 0) AS verified_collections,
        coalesce(mp.bank_direct_collections, 0) AS bank_direct_collections,
@@ -425,32 +530,44 @@ LEFT JOIN m_exited mx USING ({k}) LEFT JOIN m_leave ml USING ({k}) LEFT JOIN m_c
 """
 
 
+# The one tenant predicate of every analytics view the API reads. BANK sees its bank; AGENCY its agency;
+# AGENT (a field agent), PLATFORM, a missing scope or a missing tenant see nothing.
+TENANT = ("bank_id = tenancy.current_bank_id() AND (tenancy.current_scope() = 'BANK' OR "
+          "(tenancy.current_scope() = 'AGENCY' AND agency_id = tenancy.current_agency_id()))")
+V_TENANT = ("v.bank_id = tenancy.current_bank_id() AND (tenancy.current_scope() = 'BANK' OR "
+            "(tenancy.current_scope() = 'AGENCY' AND v.agency_id = tenancy.current_agency_id()))")
+
 VISIT_TO_PAY = f"""
-CREATE VIEW analytics.v_visit_to_pay WITH (security_invoker = true) AS
-SELECT v.id AS visit_id, v.bank_id, v.agency_id, v.agent_id, v.case_id,
-       analytics.business_date(v.check_in_time, b.timezone) AS visit_date, v.customer_met,
-       coalesce(pay.paid_amount, 0) AS paid_amount_7d, pay.paid_amount IS NOT NULL AS paid_within_7d,
-       pay.first_paid_date
-FROM collections.visits v
-JOIN tenancy.banks b ON b.id = v.bank_id
-LEFT JOIN LATERAL (
-    SELECT sum(p.amount) AS paid_amount, min(analytics.business_date(p.payment_date, b.timezone)) AS first_paid_date
+CREATE VIEW analytics.v_visit_to_pay WITH (security_invoker = true, security_barrier = true) AS
+WITH vis AS (
+    SELECT v.id, v.bank_id, v.agency_id, v.agent_id, v.case_id, v.customer_met, v.check_in_time,
+           analytics.business_date(v.check_in_time, b.timezone) AS visit_date
+    FROM collections.visits v JOIN tenancy.banks b ON b.id = v.bank_id
+    WHERE {V_TENANT}
+),
+attributed AS (
+    SELECT p.id, p.amount, analytics.business_date(p.payment_date, b.timezone) AS paid_date, lv.id AS visit_id
     FROM collections.payments p
-    WHERE p.case_id = v.case_id AND p.status::text = 'VERIFIED' AND p.payment_date >= v.check_in_time
-      AND analytics.business_date(p.payment_date, b.timezone)
-          <= analytics.business_date(v.check_in_time, b.timezone) + {VISIT_TO_PAY_DAYS}
-    HAVING count(*) > 0
-) pay ON true
-WHERE v.bank_id = tenancy.current_bank_id()
-  AND (tenancy.current_scope() = 'BANK' OR v.agency_id = tenancy.current_agency_id())
+    JOIN tenancy.banks b ON b.id = p.bank_id
+    CROSS JOIN LATERAL (
+        SELECT x.id, x.visit_date FROM vis x
+        WHERE x.case_id = p.case_id AND x.check_in_time <= p.payment_date
+        ORDER BY x.check_in_time DESC LIMIT 1) lv
+    WHERE p.status::text = 'VERIFIED'
+      AND analytics.business_date(p.payment_date, b.timezone) <= lv.visit_date + {VISIT_TO_PAY_DAYS}
+)
+SELECT v.id AS visit_id, v.bank_id, v.agency_id, v.agent_id, v.case_id, v.visit_date, v.customer_met,
+       coalesce(sum(a.amount), 0) AS paid_amount_7d, count(a.id) > 0 AS paid_within_7d,
+       min(a.paid_date) AS first_paid_date
+FROM vis v LEFT JOIN attributed a ON a.visit_id = v.id
+GROUP BY v.id, v.bank_id, v.agency_id, v.agent_id, v.case_id, v.visit_date, v.customer_met
 """
 
 
 def _scoped_sql(view: str, mv: str, cols: tuple[str, ...]) -> str:
     sel = ", ".join(f"NULLIF({c}, {S}) AS {c}" if c in ("agency_id", "region_id") else c for c in cols)
-    return (f"CREATE VIEW analytics.{view} AS SELECT {sel} FROM analytics.{mv} "
-            "WHERE bank_id = tenancy.current_bank_id() "
-            "AND (tenancy.current_scope() = 'BANK' OR agency_id = tenancy.current_agency_id())")
+    return (f"CREATE VIEW analytics.{view} WITH (security_barrier = true) AS SELECT {sel} "
+            f"FROM analytics.{mv} WHERE {TENANT}")
 
 
 UNIQUE = {
@@ -500,6 +617,7 @@ def upgrade() -> None:
     op.execute(PORTFOLIO_DAILY)
     op.execute(TRANSITIONS)
     op.execute(_scorecard())
+    _field_activity(FIELD_ACTIVITY)
     for mv, cols in UNIQUE.items():
         op.execute(f"CREATE UNIQUE INDEX uq_{mv} ON analytics.{mv} {cols}")
     for view, (mv, cols) in SCOPED.items():
@@ -515,6 +633,7 @@ def downgrade() -> None:
     op.execute("DROP VIEW IF EXISTS analytics.v_visit_to_pay")
     for view in reversed(list(SCOPED)):
         op.execute(f"DROP VIEW IF EXISTS analytics.{view}")
+    _field_activity(FIELD_ACTIVITY_V2_0007)
     for mv in reversed(MATERIALIZED):
         op.execute(f"DROP MATERIALIZED VIEW IF EXISTS analytics.{mv}")
     op.execute("DROP VIEW IF EXISTS analytics.dim_portfolio_state")

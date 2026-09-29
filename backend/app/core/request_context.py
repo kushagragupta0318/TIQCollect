@@ -61,7 +61,7 @@ class RequestContext:
 
     @property
     def scope(self) -> str:
-        """PLATFORM / BANK / AGENCY: the RLS scope this request's transactions carry."""
+        """PLATFORM / BANK / AGENCY / AGENT: the RLS scope this request's transactions carry."""
         return tenant_scope(self.role)
 
 

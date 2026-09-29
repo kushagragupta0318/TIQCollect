@@ -101,8 +101,9 @@ def book():
             _history(conn, L2, date(2025, 1, 31), "CURRENT", 0, month_end=True)
             _history(conn, L2, date(2025, 2, 18), "BUCKET_2", 40)
             _history(conn, L3, date(2025, 1, 31), "BUCKET_1", 5, month_end=True)
-            # One case, one visit on 2025-01-10 IST, payments at +3 days (counts), +9 days (does not) and
-            # one hour BEFORE the visit (does not).
+            # One case, visits on 2025-01-10 and 2025-01-15 IST; payments at +3 days (the first visit's),
+            # +9 days (the SECOND visit's: attributed to the latest prior visit) and one hour BEFORE the
+            # first visit (nobody's).
             _insert(conn, "collections.cases", id=CASE1, bank_id=B1, agency_id=A1, loan_id=L1, customer_id=CUST,
                     placement_id=P1, agent_id=AGENT1)
             _insert(conn, "workforce.agents", id=AGENT1, bank_id=B1, agency_id=A1, user_id=USER1, exited_on=None)
@@ -110,6 +111,9 @@ def book():
             _insert(conn, "collections.visits", bank_id=B1, agency_id=A1, case_id=CASE1, agent_id=AGENT1,
                     check_in_time=visit_at, customer_met=True, within_contact_hours=True, geo_verified=True,
                     consent_given=True)
+            _insert(conn, "collections.visits", bank_id=B1, agency_id=A1, case_id=CASE1, agent_id=AGENT1,
+                    check_in_time=visit_at + timedelta(days=5), customer_met=False, within_contact_hours=True,
+                    geo_verified=True, consent_given=None)          # not met: consent was never asked
             for delta, amount in ((timedelta(days=3), 2_000), (timedelta(days=9), 7_000), (timedelta(hours=-1), 500)):
                 _insert(conn, "collections.payments", bank_id=B1, agency_id=A1, case_id=CASE1, loan_id=L1,
                         agent_id=AGENT1, amount=amount, mode="CASH", status="VERIFIED",
@@ -123,7 +127,8 @@ def book():
 
 def _refresh(eng):
     with eng.begin() as conn:
-        for mv in ("mv_portfolio_daily", "mv_bucket_transitions_monthly", "mv_agency_scorecard_monthly"):
+        for mv in ("mv_field_activity_daily", "mv_portfolio_daily", "mv_bucket_transitions_monthly",
+                   "mv_agency_scorecard_monthly"):
             conn.execute(text(f"REFRESH MATERIALIZED VIEW analytics.{mv}"))
 
 
@@ -142,7 +147,8 @@ BANK1 = {"bank_id": B1, "agency_id": None, "scope": "BANK"}
 def test_portfolio_state_in_sql_is_the_python_definition(pg_engine):
     npa = [None, date(2024, 2, 29), date(2025, 1, 31), date(2025, 9, 1), date(2025, 9, 2)]
     as_of = [date(2025, 2, 28), date(2026, 1, 31), date(2026, 2, 28), date(2026, 9, 1)]
-    grid = list(itertools.product([b.value for b in DPDBucket], [s.value for s in LoanStatus], npa, as_of))
+    grid = list(itertools.product([b.value for b in DPDBucket] + ["BOGUS"], [s.value for s in LoanStatus],
+                                  npa, as_of))
     with pg_engine.connect() as conn:
         got = [conn.execute(text("SELECT analytics.portfolio_state(:b, :s, :n, :a)"),
                             {"b": b, "s": s, "n": n, "a": a}).scalar() for b, s, n, a in grid]
@@ -173,7 +179,8 @@ def test_the_scoped_views_are_tenant_bound(book):
     for ctx, expect_rows in ((None, False), ({"bank_id": B2, "agency_id": None, "scope": "BANK"}, False),
                              ({"bank_id": B1, "agency_id": A2, "scope": "AGENCY"}, False),
                              ({"bank_id": B1, "agency_id": None, "scope": None}, False),   # never widens to the bank
-                             ({"bank_id": B1, "agency_id": A1, "scope": None}, True),      # but sees its own
+                             ({"bank_id": B1, "agency_id": A1, "scope": None}, False),     # nor to its agency
+                             ({"bank_id": B1, "agency_id": A1, "scope": "AGENT"}, False),  # a field agent reads none
                              ({"bank_id": B1, "agency_id": A1, "scope": "AGENCY"}, True), (BANK1, True)):
         counts = {v: _as(book, f"SELECT count(*) FROM analytics.{v}", ctx)[0][0] for v in views}
         if expect_rows:
@@ -190,22 +197,56 @@ def test_the_app_role_reads_wrappers_never_the_materialized_views(book):
     assert _as(book, "SELECT count(*) FROM analytics.mv_portfolio_daily", role="tiq_jobs")[0][0] > 0
 
 
-def test_unpriced_visits_and_uncovered_months_read_null_not_zero(book):
-    sql = ("SELECT field_cost, collectible_due, visits FROM analytics.agency_scorecard_monthly_scoped "
+def test_unpriced_visits_read_null_until_a_rate_exists(book):
+    sql = ("SELECT field_cost, visits FROM analytics.agency_scorecard_monthly_scoped "
            "WHERE month_start = '2025-01-01' AND visits > 0")
-    assert _as(book, sql, BANK1) == [(None, None, 1)]
+    assert _as(book, sql, BANK1) == [(None, 2)]
     with book.begin() as conn:
         conn.execute(text("SET LOCAL session_replication_role = replica"))
         _insert(conn, "strategy.cost_rates", bank_id=B1, channel="FIELD_VISIT", unit="PER_ATTEMPT",
                 rate_inr=180, valid_from=date(2025, 1, 1), valid_to=None)
+    _refresh(book)
+    assert _as(book, sql, BANK1) == [(360, 2)]
+
+
+def test_collectible_due_is_null_when_unread_or_uncovered_never_understated(book):
+    def due(month):
+        return _as(book, "SELECT collectible_due, collectible_due_unread FROM analytics.agency_scorecard_monthly_scoped "
+                         f"WHERE month_start = '{month}' AND active_placements_eom > 0", BANK1)
+    with book.begin() as conn:
+        conn.execute(text("SET LOCAL session_replication_role = replica"))
         _insert(conn, "lending.loan_instalments", bank_id=B1, loan_id=L1, instalment_no=1, due_date=date(2025, 1, 20),
                 amount_due=4_000, is_current_schedule=True, source="LEDGER")
     _refresh(book)
-    (cost, due, _), = _as(book, sql, BANK1)
-    assert cost == 180
-    assert due is not None and due >= 4_000
+    assert due("2025-01-01") == [(None, 3)]           # covered, but no placement has a December reading
+    assert due("2025-02-01") == [(None, 0)]           # every opening reading exists, but no instalment is due
+    with book.begin() as conn:
+        conn.execute(text("SET LOCAL session_replication_role = replica"))
+        _insert(conn, "lending.loan_instalments", bank_id=B1, loan_id=L1, instalment_no=2, due_date=date(2025, 2, 20),
+                amount_due=4_000, is_current_schedule=True, source="LEDGER")
+    _refresh(book)
+    assert due("2025-02-01") == [(3 * 5_000 + 4_000, 0)]   # three opening overdues plus the instalment
 
 
-def test_visit_to_pay_counts_only_verified_payments_after_the_visit_within_seven_days(book):
-    rows = _as(book, "SELECT paid_within_7d, paid_amount_7d FROM analytics.v_visit_to_pay", BANK1)
-    assert rows == [(True, 2_000)]
+def test_visit_to_pay_attributes_each_verified_payment_to_the_latest_prior_visit(book):
+    rows = _as(book, "SELECT visit_date, paid_within_7d, paid_amount_7d FROM analytics.v_visit_to_pay "
+                     "ORDER BY visit_date", BANK1)
+    assert rows == [(date(2025, 1, 10), True, 2_000), (date(2025, 1, 15), True, 7_000)]
+
+
+
+def test_consent_is_missing_only_on_a_met_visit(book):
+    """January: one met visit WITH consent, one not-met visit with none asked: nothing missing. A met
+    visit without consent (March) is missing, in the scorecard and in field activity alike."""
+    sc = "SELECT consent_missing FROM analytics.agency_scorecard_monthly_scoped WHERE month_start = :m AND visits > 0"
+    fa = "SELECT sum(consent_missing_visits) FROM analytics.field_activity_daily_scoped WHERE activity_date = :d"
+    assert _as(book, sc, BANK1, params={"m": date(2025, 1, 1)}) == [(0,)]
+    assert _as(book, fa, BANK1, params={"d": date(2025, 1, 15)})[0][0] == 0
+    with book.begin() as conn:
+        conn.execute(text("SET LOCAL session_replication_role = replica"))
+        _insert(conn, "collections.visits", bank_id=B1, agency_id=A1, case_id=CASE1, agent_id=AGENT1,
+                check_in_time=datetime(2025, 3, 3, 11, 0, tzinfo=IST), customer_met=True,
+                within_contact_hours=True, geo_verified=True, consent_given=None)
+    _refresh(book)
+    assert _as(book, sc, BANK1, params={"m": date(2025, 3, 1)}) == [(1,)]
+    assert _as(book, fa, BANK1, params={"d": date(2025, 3, 3)})[0][0] == 1

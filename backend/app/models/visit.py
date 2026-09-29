@@ -16,6 +16,7 @@
 # ───────────────────────────────────────────────────────────────────────────
 import enum
 from datetime import datetime
+from sqlalchemy import text
 from sqlalchemy import (
     String, Float, Boolean, Enum as SAEnum, ForeignKeyConstraint, Index, Text, DateTime, SmallInteger,
     UniqueConstraint,
@@ -94,6 +95,9 @@ class Visit(Base, UUIDPrimaryKey, TimestampMixin):
     agency_id: Mapped[str] = mapped_column(UUIDType, nullable=False)
     case_id: Mapped[str] = mapped_column(UUIDType, nullable=False)
     agent_id: Mapped[str] = mapped_column(UUIDType, nullable=False)
+    # v2_0015 (P7 offline outbox): the client's id for this submission, so a replay hours later
+    # returns the row it already made instead of writing a second one.
+    client_submission_id: Mapped[str | None] = mapped_column(UUIDType, nullable=True)
     agent_device_id: Mapped[str | None] = uuid_fk("workforce.agent_devices.id", nullable=True)
 
     # Geo-verification — visit must be within 100m of customer address
@@ -195,5 +199,8 @@ class Visit(Base, UUIDPrimaryKey, TimestampMixin):
         Index("ix_visit_case", "case_id", "check_in_time"),
         Index(None, "agency_id", "outcome", "check_in_time"),
         Index(None, "bank_id", "check_in_time"),
+        Index("uq_visits_agent_id_client_submission_id", "agent_id", "client_submission_id", unique=True,
+              postgresql_where=text("client_submission_id IS NOT NULL"),
+              sqlite_where=text("client_submission_id IS NOT NULL")),
         {"schema": "collections"},
     )
