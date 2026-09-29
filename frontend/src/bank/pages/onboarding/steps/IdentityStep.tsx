@@ -18,6 +18,7 @@ import {
   type Agency, type AgencyContact, type AgencyIdentityFields,
 } from "@/api/bank";
 import { errorDetail } from "@/lib/apiError";
+import { normaliseWebsite } from "../onboardingLogic";
 
 interface Props {
   agency: Agency | null;
@@ -83,7 +84,7 @@ export function IdentityStep({ agency, onSaved }: Props) {
         ? { line1: addressLine1, line2: addressLine2, city: addressCity, state: addressState, pincode: addressPincode }
         : null,
       hq_city: hqCity.trim() || null,
-      website: website.trim() || null,
+      website: normaliseWebsite(website),
       contacts: contacts.filter((c) => (c.name ?? "").trim() || (c.email ?? "").trim() || (c.phone ?? "").trim()),
       contact_name: primaryName.trim() || null,
       contact_email: primaryEmail.trim() || null,
@@ -142,7 +143,11 @@ export function IdentityStep({ agency, onSaved }: Props) {
           </div>
           <div>
             <Label htmlFor="id-website">Website</Label>
-            <Input id="id-website" type="url" placeholder="https://" value={website} onChange={(e) => setWebsite(e.target.value)} className="mt-1.5" />
+            {/* text, not url — type="url" demands a scheme the browser refuses to
+                submit without, so typing "google.com" (how most people actually
+                write it) failed native validation. normaliseWebsite adds https://
+                on save; see onboardingLogic.ts's own docblock. */}
+            <Input id="id-website" type="text" placeholder="google.com" value={website} onChange={(e) => setWebsite(e.target.value)} className="mt-1.5" />
           </div>
 
           <Separator />
