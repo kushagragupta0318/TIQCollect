@@ -127,7 +127,13 @@ DEFERRED are not built and are tracked as tasks.
   `DEVICE_RESET`, each with a write site.
 - **Placement quarantine reasons** (`bank_feed_rows.dq_errors[].reason`):
   `NO_AGENCY`, `AGENCY_NOT_ACTIVE`, `NO_CONTRACT_IN_FORCE`, `NOT_AUTHORISED`,
-  `CONTRACT_FULL`, `PLACED_ELSEWHERE`, `UNKNOWN_BRANCH`.
+  `CONTRACT_FULL`, `PLACED_ELSEWHERE`, `UNKNOWN_BRANCH`, `NOT_COVERED`.
+  `NOT_COVERED` is the coverage gate (coordinator ruling Q1, 2026-09-29).
+  - The loan's branch region `path` must match, by path SEGMENT, one of the `agency_regions` rows of the contract in force.
+    A covered region covers itself and its subtree: `NORTH.HR` covers `NORTH.HR.GGN`, and never `NORTH.HRX`.
+  - Paths are dot-joined in the data (`demo/world.py`); the `regions.path` model comment shows `/a/b/`. `path_covers` accepts both.
+  - The gate applies to FEED, MANUAL and ENGINE placements alike.
+  - It fails closed: a contract with no coverage rows covers nothing, and a loan whose branch has no region is never covered.
 - **`strategy.simulation_runs` carries the engine's honesty fields** (E02,
   engine `mc-1.1.0`): `calibrated_by_backtest BOOLEAN`, `synthetic_inputs
   BOOLEAN`, `synthetic_warning TEXT NULL` (`SYNTHETIC: …` / `UNCALIBRATED: …`),
@@ -1382,7 +1388,7 @@ period; the agency's cases hang off the placement.
 | agency_id | UUID | — | | `(agency_id, bank_id)→agencies` RESTRICT | |
 | loan_id | UUID | — | | `(loan_id, bank_id)→loans` RESTRICT | |
 | contract_id | UUID | — | | `(contract_id, agency_id)→agency_contracts` RESTRICT | |
-| placement_run_id | UUID | N | | planning.placement_runs RESTRICT | NULL for a manual placement |
+| placement_run_id | UUID | N | | planning.placement_runs RESTRICT | Every MANUAL and ENGINE placement links to its run: a manual batch is a `placement_runs` row with strategy `MANUAL_BATCH` and status `APPLIED`, with one `placement_decisions` row per loan carrying `gate_results`, as the engine does (Q2, 2026-09-29). It read "NULL for a manual placement" until then |
 | source | VARCHAR(12) | — | | | CHECK `MANUAL`/`ENGINE`/`RE_PLACEMENT`/`TRANSFORM` |
 | status | VARCHAR(12) | — | `'ACTIVE'` | | CHECK `ACTIVE`/`RECALLED`/`RETURNED`/`EXPIRED`/`RESOLVED`/`TRANSFERRED` |
 | placed_on | DATE | — | | | |
@@ -2940,6 +2946,45 @@ The five views are refreshed `CONCURRENTLY` in the order listed.
 | `v_today_field_activity` | one row per agent, for `business_date(now())` | attendance status (leave from `leave_requests` / `attendance`, the one rule of commit `4bff733`), beat status, stops planned / visited / dropped, visits, met, payments verified and pending, PTPs set, last location (lat, lon, at), minutes since the last ping, `sos_active` | backs the Field Operations tab and the simulator timeline before SSE |
 
 ---
+
+### 6.4 As built: B13a (`v2_0007`) and B13b (`v2_0013`, 2026-09-28)
+
+The API reads **only** the `*_scoped` views and `v_*` views, through `dependencies.AnalyticsDb`, which binds the caller's tenant as `get_current_user` does.
+
+| Scoped view | Over | Notes |
+|---|---|---|
+| `portfolio_daily_scoped` | `mv_portfolio_daily` | `is_backfill` is **in the grain**, so a delta can be taken like for like. `contacted_7d_*` is a subset of `placed_*` (a met visit or answered call on a placed loan) |
+| `bucket_transitions_monthly_scoped` | `mv_bucket_transitions_monthly` | `month_end` is the **to**-month. Adds `excluded_missing_pairs`; a missing to-reading is `to_state = 'NO_READING'`. Only complete months (month-end ≤ the bank's latest reading) |
+| `agency_scorecard_monthly_scoped` | `mv_agency_scorecard_monthly` | See the column notes below |
+| `collections_daily_scoped`, `field_activity_daily_scoped` | the B13a MVs | Unchanged columns |
+
+`v_visit_to_pay` (per visit): the VERIFIED payments attributed to it. Each payment goes to the latest visit on its case at or before it, within 7 bank-local **calendar** days; no holiday calendar exists yet (board B13c).
+
+All six API views are `security_barrier` and share one tenant predicate: BANK sees its bank and AGENCY its agency. A field agent (scope AGENT), PLATFORM, or a missing scope or tenant sees nothing.
+
+"Today" is the bank-local `business_date(now())`. `collectible_due` is also NULL when any active placement lacks its opening reading (B13b audit).
+
+**Deviations from the text above, all deliberate.**
+- **The `*_scoped` views are not `security_invoker`.** An invoker view needs the caller to hold `SELECT` on the materialized view beneath it, and `tiq_app` holds none.
+  Each wrapper instead runs as its owner, with the tenant predicate in its own `WHERE`. It returns nothing when no tenant is set.
+  `v_visit_to_pay` is `security_invoker` **and** tenant-filtered, because RLS is not yet enforced for the API.
+- **Scorecard column notes.**
+  - `agent_days_with_visits` replaces `agent_days_present`: there is no attendance table.
+  - Added: `agents_exited`, `agent_leave_days` (ce: attrition and leave rate) and `collectible_due_unread`.
+  - `expected_recovery_inr` is the cohort of placements **placed** in the month.
+  - `verified_collections` excludes `BANK_DIRECT`, which is its own column.
+  - Commission is `verified × commission_pct / 100` via the placement's contract terms, rounded to paise.
+- **NULL means unknown, never zero.**
+  - `collectible_due` is NULL for a (bank, month) with no instalment due in it; the demo fixture windows instalments.
+  - `field_cost` is NULL when any visit in the cell has no `FIELD_VISIT` rate in `strategy.cost_rates`, and that table starts empty.
+- **The region sentinel row is not a total.** Agent-level measures live only there, together with loan-linked measures whose region cannot be resolved. `SUM` over all rows is exact.
+- **The NPA split is not point in time.** `portfolio_state` takes `npa_since` from `lending.loans` (current), since the history row does not carry it.
+
+**Measured on the committed demo fixture** (`fieldops-demo-v2.dump` at v2_0010, upgraded to v2_0013).
+- Portfolio: 0 days mismatched against `loan_dpd_history`.
+- Transitions: 0 months mismatched; every from-reading of a complete pair is a pair, stale or missing.
+- Scorecard: collections, visits, placements, matured and kept PTPs, ended placements and confirmed fraud are all exactly equal to the base tables.
+- Refresh times: 11.5 s (portfolio), 1.6 s (transitions), 23.8 s (scorecard).
 
 ## 7. Partitioning
 

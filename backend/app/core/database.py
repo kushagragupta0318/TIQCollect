@@ -144,7 +144,8 @@ def get_db() -> Generator[Session, None, None]:
 
 
 def get_analytics_db() -> Generator[Session, None, None]:
-    """The read-only analytics session (B14). Writes on it fail at Postgres."""
+    """The read-only analytics session (B14), NOT bound to a tenant: jobs and scripts.
+    API routes use dependencies.AnalyticsDb, which binds the caller's tenant."""
     db = AnalyticsSession()
     try:
         yield db

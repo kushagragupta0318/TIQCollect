@@ -16,6 +16,7 @@
 #     from Doubtful for the Monte Carlo state space.
 #   - legal_status / settlement_status are FKs to lookup tables.
 # ────────────────────────────────────────────────────────────────────────────
+import calendar
 import enum
 from datetime import date
 
@@ -85,6 +86,38 @@ def dpd_bucket_for(dpd: int | float | None) -> DPDBucket:
     if d <= 90:
         return DPDBucket.BUCKET_3
     return DPDBucket.NPA
+
+
+# The portfolio's 8-state space (plan §7.1; DATA-MODEL-V2 §6 dim_portfolio_state),
+# in display order. analytics.portfolio_state() is rendered from this function.
+PORTFOLIO_STATES = ("CURRENT", "SMA_0", "SMA_1", "SMA_2", "NPA_SUB", "NPA_DOUBTFUL", "WRITTEN_OFF", "RESOLVED")
+NPA_DOUBTFUL_AFTER_MONTHS = 12
+_STATE_OF_BUCKET = {DPDBucket.CURRENT: "CURRENT", DPDBucket.BUCKET_1: "SMA_0",
+                    DPDBucket.BUCKET_2: "SMA_1", DPDBucket.BUCKET_3: "SMA_2"}
+
+
+def _add_months(d: date, months: int) -> date:
+    """Postgres `date + interval 'n months'`: the day clamps to the month's last day."""
+    y, m = divmod(d.month - 1 + months, 12)
+    y, m = d.year + y, m + 1
+    return date(y, m, min(d.day, calendar.monthrange(y, m)[1]))
+
+
+def portfolio_state(dpd_bucket: str, loan_status: str, npa_since: date | None, as_of: date) -> str:
+    """Terminal status wins; NPA splits into sub-standard and doubtful at 12
+    months since npa_since (unknown npa_since reads sub-standard, never doubtful)."""
+    if loan_status == "WRITTEN_OFF":
+        return "WRITTEN_OFF"
+    if loan_status in ("CLOSED", "SETTLED"):
+        return "RESOLVED"
+    if loan_status == "NPA" or dpd_bucket == DPDBucket.NPA.value:
+        if npa_since is not None and _add_months(npa_since, NPA_DOUBTFUL_AFTER_MONTHS) <= as_of:
+            return "NPA_DOUBTFUL"
+        return "NPA_SUB"
+    try:
+        return _STATE_OF_BUCKET[DPDBucket(dpd_bucket)]
+    except (KeyError, ValueError):
+        return "UNKNOWN"             # a data defect, surfaced as itself; not one of the 8 states
 
 
 class LoanStatus(str, enum.Enum):

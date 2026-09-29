@@ -8,6 +8,7 @@ import enum
 from datetime import datetime, date
 from sqlalchemy import (
     Boolean, CheckConstraint, Date, DateTime, Enum as SAEnum, ForeignKeyConstraint, Index, SmallInteger, Text,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import PUBLIC, Base, Money, TimestampMixin, UUIDPrimaryKey, UUIDType, uuid_fk
@@ -44,6 +45,9 @@ class PTP(Base, UUIDPrimaryKey, TimestampMixin):
     case_id: Mapped[str] = mapped_column(UUIDType, nullable=False)
     visit_id: Mapped[str | None] = mapped_column(UUIDType)
     agent_id: Mapped[str] = mapped_column(UUIDType, nullable=False)
+    # v2_0015 (P7 offline outbox): the client's id for this submission, so a replay hours later
+    # returns the row it already made instead of writing a second one.
+    client_submission_id: Mapped[str | None] = mapped_column(UUIDType, nullable=True)
 
     committed_amount: Mapped[float] = mapped_column(Money, nullable=False)
     committed_date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -77,5 +81,8 @@ class PTP(Base, UUIDPrimaryKey, TimestampMixin):
         Index("ix_ptp_committed_date", "agency_id", "committed_date", "status"),
         Index("ix_ptp_agent", "agent_id", "status"),
         Index(None, "case_id", "created_at"),
+        Index("uq_ptps_agent_id_client_submission_id", "agent_id", "client_submission_id", unique=True,
+              postgresql_where=text("client_submission_id IS NOT NULL"),
+              sqlite_where=text("client_submission_id IS NOT NULL")),
         {"schema": "collections"},
     )
