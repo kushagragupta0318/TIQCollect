@@ -1,8 +1,26 @@
 # 0011. Offline outbox: capture time, replay and its bounds
 
-**Status:** Proposed by tiqcollect-37 (P7, task I02) on 2026-09-29, for the coordinator's
-review before any code. The number may shift at integration (0009 and 0010 are on other
+**Status:** Accepted by the coordinator (tiqcollect-0c) on 2026-09-29. Written by
+tiqcollect-37 (P7, task I02). The number may shift at integration (0009 and 0010 are on other
 branches).
+
+**Decisions on the open questions (coordinator):**
+
+1. **48 h, one window for visits and the GPS trail.** The location path changes from 24 h to
+   48 h. The change is recorded on the claims board and pinned by a test.
+2. **The read cache is in I02:** today's beat and case detail, through runtime caching of
+   `/agent/beat` and `/agent/cases/{id}`.
+   - Only the agent's own cases are cached.
+   - Entries expire at the end of the IST day and are invalidated by any successful mutation.
+   - The cache is not encrypted, the same as the outbox.
+3. **No recordings in the pilot outbox.**
+4. **The pilot's encryption stance** is §8's recommendation, and it goes on the pilot risks list.
+5. **Do-Not-Contact is judged at sync time,** against the current list. The client's "needs
+   attention" entry explains why the item was refused.
+6. **Client tests use an in-memory storage double.** A Playwright smoke test on real IndexedDB
+   comes later.
+7. **Order of work:** the outbox, the capture-time judgement and the signals first, then the
+   read cache. The per-device public-key column is deferred.
 
 ## Context
 
@@ -21,7 +39,8 @@ branches).
 ### 1. What is queued
 
 - **Queued:** visits (with the PTP set on the visit form, the borrower stance and the notes),
-  their photos, signature and recordings, the GPS trail, and call logs.
+  their photos and signature, the GPS trail, and call logs. Recordings upload only while online
+  (decision 3). Offline, the recorder is disabled with a message.
 - **Never queued: payments.** The payment step needs the borrower's OTP to reach the server.
   Offline, the form disables PAID_FULL, PART_PAID and PART_PAID_PTP with "Needs signal: the
   borrower's OTP must reach the server". The server's existing PENDING_VERIFICATION path is not
