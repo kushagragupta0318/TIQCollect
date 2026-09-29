@@ -252,3 +252,44 @@ def test_recall_writes_an_audit_row_naming_the_actor(w):
     assert (row.user_id, row.details["reason"]) == (w["ba"].id, "SLA breached twice")
     assert w["c"].post(f"{BASE}/{pid}/recall", headers=_h(w["ba"]), json={"reason": "again"}).status_code == 409
     assert w["c"].post(f"{BASE}/{pid}/recall", headers=_h(w["ba"]), json={"reason": ""}).status_code == 422
+
+
+def test_an_analysts_region_limit_narrows_the_placements_they_see(w):
+    """users.scope_region_id (BANK_ANALYST's region limit), matched by path
+    segment. Unset = bank-wide; an id outside their bank = nothing."""
+    from app.models.tenancy import Region
+    db, c, ba = w["db"], w["c"], w["ba"]
+    north = test_id(f"region:{TEST_BANK_ID}:NORTH")
+    hrx = test_id("region:hrx")
+    db.add(Region(id=hrx, bank_id=TEST_BANK_ID, parent_id=north, level="STATE", code="HRX", name="HRX",
+                  path="NORTH.HRX"))
+    db.flush()
+    db.add(Branch(id=test_id("branch:hrx01"), bank_id=TEST_BANK_ID, branch_code="HRX01", name="HRX 01",
+                  region_id=hrx, is_active=True))
+    db.flush()
+    in_hrx = make_loan(db, 9, branch_code="HRX01")
+    db.commit()
+    assert _place(w, ba, [w["a"][0], in_hrx], agency=AGENCY1B).status_code == 200
+
+    def seen(region_id):
+        u = db.get(User, w["an"].id)
+        u.scope_region_id = region_id
+        db.commit()
+        body = c.get(BASE, headers=_h(u)).json()
+        return sorted(r["loan_account_number"] for r in body["items"])
+
+    assert seen(None) == ["LN00000001", "LN00000009"]                      # bank-wide
+    assert seen(test_id(f"region:{TEST_BANK_ID}:HR")) == ["LN00000001"]     # HR, not its HRX sibling
+    assert seen(hrx) == ["LN00000009"]
+    assert seen(north) == ["LN00000001", "LN00000009"]
+
+    # users (scope_region_id, bank_id) -> regions is a composite FK, so a foreign
+    # region cannot be stored; the helper still fails closed if one ever resolves to nothing.
+    from types import SimpleNamespace
+    from app.services.placement_read_service import PlacementReadService
+    from app.services.scope import REGION_LIMIT_UNRESOLVED, region_limit_path
+    foreign = SimpleNamespace(scope_region_id=test_id(f"region:{BANK2}:NORTH"), bank_id=TEST_BANK_ID)
+    assert region_limit_path(db, foreign) is REGION_LIMIT_UNRESOLVED
+    out = PlacementReadService(db).placements(bank_id=TEST_BANK_ID, agency_id=None,
+                                              region_limit=REGION_LIMIT_UNRESOLVED)
+    assert out["total"] == 0

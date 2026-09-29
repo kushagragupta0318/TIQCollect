@@ -18,6 +18,7 @@ from app.models.loan import DPDBucket, Loan, LoanType, dpd_bucket_for
 from app.models.placement import Placement
 from app.models.tenancy import Agency, AgencyRegion, Branch, Region
 from app.services.placement_service import PLACEABLE_LOAN_STATUSES, PlacementService
+from app.services.scope import REGION_LIMIT_UNRESOLVED
 
 MAX_PAGE_SIZE = 200
 
@@ -155,9 +156,11 @@ class PlacementReadService:
     # ── placements made (bank) or received (agency) ─────────────────────────
 
     def placements(self, *, bank_id: str, agency_id: str | None, status: str | None = None,
-                   filter_agency_id: str | None = None, page: int = 1, page_size: int = 50) -> dict:
-        """`agency_id` is the caller's own agency (AGENCY scope) and always
-        applies; `filter_agency_id` is a bank user's filter."""
+                   filter_agency_id: str | None = None, region_limit=None,
+                   page: int = 1, page_size: int = 50) -> dict:
+        """`agency_id` is the caller's own agency (AGENCY scope) and
+        `region_limit` their region limit (scope.region_limit_path); both
+        always apply. `filter_agency_id` is a bank user's filter."""
         page_size = max(1, min(int(page_size), MAX_PAGE_SIZE))
         page = max(1, int(page))
         q = (self.db.query(Placement, Loan.loan_account_number, Agency.trade_name, Agency.legal_name)
@@ -166,6 +169,12 @@ class PlacementReadService:
              .filter(Placement.bank_id == bank_id))
         if agency_id is not None:
             q = q.filter(Placement.agency_id == agency_id)
+        if region_limit is REGION_LIMIT_UNRESOLVED:
+            return {"items": [], "total": 0, "page": page, "page_size": page_size}
+        if region_limit is not None:
+            q = (q.join(Branch, and_(Branch.bank_id == Loan.bank_id, Branch.branch_code == Loan.branch_code))
+                 .join(Region, and_(Region.id == Branch.region_id, Region.bank_id == Loan.bank_id))
+                 .filter(region_subtree_clause(region_limit)))
         if filter_agency_id:
             q = q.filter(Placement.agency_id == filter_agency_id)
         if status:

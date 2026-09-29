@@ -23,7 +23,7 @@ from app.models.placement import PLACEMENT_STATUSES
 from app.models.user import User
 from app.services.manual_placement_service import MAX_BATCH, MAX_RECALL_NOTE, BatchResult, ManualPlacementService
 from app.services.placement_read_service import MAX_PAGE_SIZE, LoanFilter, PlacementReadService
-from app.services.scope import access_day
+from app.services.scope import access_day, region_limit_path
 
 router = APIRouter(prefix="/bank/placements", tags=["bank-placements"])
 
@@ -128,9 +128,13 @@ def list_placements(
         raise AppException(403, ErrorCode.FORBIDDEN, "A bank or agency user is required")
     if ctx.scope == "BANK":
         own_agency = None
+        # A bank user with scope_region_id set sees only that region's subtree.
+        region_limit = region_limit_path(db, _user)
     elif ctx.scope == "AGENCY" and ctx.agency_id:
         own_agency = ctx.agency_id
+        region_limit = None
     else:
         raise AppException(403, ErrorCode.FORBIDDEN, "A bank or agency user is required")
     return PlacementReadService(db).placements(bank_id=ctx.bank_id, agency_id=own_agency, status=status,
-                                               filter_agency_id=agency_id, page=page, page_size=page_size)
+                                               filter_agency_id=agency_id, region_limit=region_limit,
+                                               page=page, page_size=page_size)

@@ -181,3 +181,23 @@ def today_beat_cases(db: Session, agent, *, options=()):
         q = q.options(*options)
     rows = {c.id: c for c in q.filter(Case.id.in_(ids), Case.agency_id == agent.agency_id).all()}
     return beat, [rows[i] for i in ids if i in rows]
+
+
+# Sentinel for a region limit that names no region of the caller's bank:
+# the caller sees nothing (fail closed), never the whole bank.
+REGION_LIMIT_UNRESOLVED = object()
+
+
+def region_limit_path(db: Session, principal):
+    """The regions.path a bank user's `scope_region_id` limits them to
+    (BANK_ANALYST's region limit), or None when they have none (bank-wide).
+    REGION_LIMIT_UNRESOLVED when the id does not resolve inside their own
+    bank. Callers match loans' branch regions against it BY SEGMENT
+    (placement_read_service.region_subtree_clause)."""
+    from app.models.tenancy import Region
+
+    rid = getattr(principal, "scope_region_id", None)
+    if not rid:
+        return None
+    row = db.query(Region.path).filter(Region.id == rid, Region.bank_id == principal.bank_id).first()
+    return row.path if row is not None else REGION_LIMIT_UNRESOLVED
