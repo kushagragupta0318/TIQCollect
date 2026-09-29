@@ -104,8 +104,8 @@ A refusal carries a typed `ErrorCode`, and the client moves the item to "needs a
 - **Borrower SMS/WhatsApp notice:** sent only if the sync falls inside contact hours and on the
   capture's IST day. Otherwise it is skipped and logged. An evening sync must not text a
   borrower at 21:00.
-- **PTP:** `committed_date ≥` the capture date, not the sync date. The 00:05 lifecycle handles a
-  date that has already passed.
+- **PTP:** the server has no check on the promise date against today, so none was relaxed and
+  none was added. The 00:05 lifecycle handles a date that has already passed.
 - **Beat reoptimisation:** not called on replay.
 - **Audit and events:** VISIT_RECORDED and `visit.recorded` gain `captured_at`, `lag_s` and
   `offline`.
@@ -113,21 +113,26 @@ A refusal carries a typed `ErrorCode`, and the client moves the item to "needs a
 ### 6. Manager signals (`fraud_service`, rules)
 
 - **LATE_SYNC (LOW):** lag > 2 h. Informational only.
-- **SYNC_WITHHELD (MEDIUM):** the same `agent_device_id` delivered GPS pings
-  (`AgentLocation.received_at`) more than 10 minutes after `captured_at`, yet the visit arrived
-  later.
+- **SYNC_WITHHELD (MEDIUM):** the agent's GPS pings reached the server
+  (`AgentLocation.received_at`) at least 10 minutes after `captured_at` and at least 5 minutes
+  before the visit arrived. The check is per agent: location rows do not record their device.
   - This holds because the client flushes the visit outbox **before** each location batch: a
     genuinely offline visit cannot trail pings that got through.
-  - A refused-then-retried item is the known false positive, hence MEDIUM.
+  - A visit held back by a server error while pings got through is the known false positive,
+    hence MEDIUM. The trail is never held back for the outbox: a lone worker's position comes
+    first.
 - **TRAIL_CONTRADICTS_VISIT:** unchanged. It already tests the claimed position against the trail.
 
 ### 7. Client
 
 - **Storage and scoping:**
-  - One IndexedDB database per session slot and user: `tiq-outbox.<slot>.<userId>`.
+  - One IndexedDB database per session slot (`slotKey("tiq-outbox")`). Every item carries its
+    user and device, and is sent only under that login.
   - Object stores: `items` (JSON, state machine), `blobs` (media), `meta` (`device_seq`).
-  - This fixes P0-A6 for the new queue. `locationReporter`'s key moves to `slotKey()`, and the
-    old unslotted key is dropped (at most 8 h of trail).
+  - `device_seq` is `max(last + 1, Date.now())`, so a phone whose storage was cleared never
+    restarts below what the server holds.
+  - This fixes P0-A6. `locationReporter`'s key becomes slot and login (`<slotKey>:<userId>`).
+    The old unslotted key is dropped (at most 8 h of trail). Its queue now holds 48 h.
 - **Item states:**
   - `queued → media_uploaded (keys recorded per blob) → visit_posted → ptp_posted → done`
     (blobs deleted on done).
@@ -148,7 +153,12 @@ A refusal carries a typed `ErrorCode`, and the client moves the item to "needs a
 - **Identity:**
   - Items are bound to (user, device) and never replay under another login.
   - Logout with items pending asks first.
-  - A 401 for an unbound device wipes the queue.
+  - A CAPTURE_DEVICE_MISMATCH refusal parks the item and deletes its photos: they can never
+    be delivered.
+  - A payment visit is sent live and never queued, and carries only its
+    `client_submission_id`. A retry after a lost response returns the stored row.
+  - `Visit.device_id` stores the login's bound device id, the one the token signs, not the
+    user-agent string (coordinator, 2026-09-29).
 
 ### 8. Encryption at rest
 
@@ -180,6 +190,18 @@ A refusal carries a typed `ErrorCode`, and the client moves the item to "needs a
   - Also cache the contact hours, so the client can warn at capture time.
   - Purge at logout and at the IST day change.
 - This puts borrower PII on the device, which is the same at-rest question as §8.
+
+**Decided (coordinator, 2026-09-29): an in-app cache, not the service worker's runtime
+caching.**
+
+- Workbox caches by URL, not by the Authorization header, and there is one service worker per
+  origin. Offline, the simulator's frames, or a second login on the same phone, would read the
+  previous agent's beat and cases.
+- The cache is in IndexedDB, in the outbox's slot database, keyed by user.
+- It is written on every successful read and used only when the network fails.
+- Entries expire at the end of the IST day.
+- A case's entry is invalidated by any successful mutation of that case.
+- The cache is purged at logout, on a change of login in the slot, and on unbind.
 
 ## Backend changes
 

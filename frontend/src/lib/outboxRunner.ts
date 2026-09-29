@@ -15,6 +15,7 @@ import {
   type FlushReport, type NewVisit, type OutboxApi, type OutboxItem, type OutboxStore, type Usage, type Who,
 } from "@/lib/outbox";
 import { IdbOutboxStore } from "@/lib/outboxIdb";
+import { purgeReadCache } from "@/lib/readCacheRuntime";
 import { SESSION_SLOT } from "@/lib/sessionSlot";
 import { useAuthStore } from "@/store/authStore";
 import type { LogCallPayload } from "@/api/agent";
@@ -86,6 +87,12 @@ export async function flushOutbox(): Promise<FlushReport> {
   let report = EMPTY;
   try {
     report = await withFlushLock(() => flush(outboxStore(), realApi, who));
+    // Refused as another phone's: this device is no longer the agent's, so
+    // the saved copies of their cases go (coordinator: purge on unbind).
+    if (report.refused.length) {
+      const refused = (await outboxStore().list()).filter((it) => report.refused.includes(it.id));
+      if (refused.some((it) => it.error?.code === "CAPTURE_DEVICE_MISMATCH")) await purgeReadCache();
+    }
   } catch {
     // Storage failed mid-flush; the next trigger tries again.
   }

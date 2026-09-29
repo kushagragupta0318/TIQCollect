@@ -26,7 +26,11 @@
 //   them — not the other way round.
 // ──────────────────────────────────────────────────────────────────────────
 import api from "./axios";
+import { beatKey, cachedRead, caseKey } from "@/lib/readCache";
+import { currentUserId, installReadCacheInvalidation, noteServed, readStore } from "@/lib/readCacheRuntime";
 import type { Case } from "@/types";
+
+installReadCacheInvalidation(api);
 
 export async function getHomeSummary(): Promise<{
   cases_today: number;
@@ -56,8 +60,14 @@ export async function checkIn(latitude: number, longitude: number): Promise<{ st
 }
 
 export async function getBeat() {
-  const { data } = await api.get("/agent/beat");
-  return data;
+  // I02: offline, today's beat as last fetched (lib/readCache.ts).
+  const userId = currentUserId();
+  const served = await cachedRead(readStore(), userId, userId && beatKey(userId), async () => {
+    const { data } = await api.get("/agent/beat");
+    return data;
+  });
+  noteServed(served.cachedAt);
+  return served.data;
 }
 
 export async function reoptimizeBeat(lat: number, lon: number): Promise<{
@@ -87,8 +97,14 @@ export async function getRankedCases(): Promise<RankedCase[]> {
 }
 
 export async function getCaseDetail(caseId: string) {
-  const { data } = await api.get(`/agent/cases/${caseId}`);
-  return data;
+  // I02: offline, the case as last fetched today (lib/readCache.ts).
+  const userId = currentUserId();
+  const served = await cachedRead(readStore(), userId, userId && caseKey(userId, caseId), async () => {
+    const { data } = await api.get(`/agent/cases/${caseId}`);
+    return data;
+  });
+  noteServed(served.cachedAt);
+  return served.data;
 }
 
 // Path and parameter style both have to match the backend exactly: it serves

@@ -13,7 +13,7 @@
 import { NavLink, Outlet, useNavigate, useLocation } from "react-router";
 import { Home, Briefcase, User, Map, LogOut, WifiOff, MapPin, LocateFixed, RotateCcw } from "lucide-react";
 import { BrandLogo } from "@/components/ui/BrandLogo";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useSyncExternalStore } from "react";
 import { toast } from "react-hot-toast";
 import { useAuthStore } from "@/store/authStore";
 import { useSOSStore } from "@/store/sosStore";
@@ -25,6 +25,7 @@ import { refreshLocation, useLiveLocation } from "@/hooks/useLiveLocation";
 import { reportNow, startLocationReporting, stopLocationReporting } from "@/lib/locationReporter";
 import { outboxUsage, startOutbox, stopOutbox } from "@/lib/outboxRunner";
 import { OutboxBar } from "@/components/agent/OutboxBar";
+import { readCacheServedAt, subscribeReadCache } from "@/lib/readCacheRuntime";
 import { logout as apiLogout } from "@/api/auth";
 
 const SIDEBAR_KEY  = "tiq:agent-sidebar";
@@ -150,6 +151,8 @@ function AgentLayoutInner() {
   const navigate = useNavigate();
   const location = useLocation();
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+  // I02: set while a page shows the copy saved on the phone (lib/readCache.ts).
+  const cachedAt = useSyncExternalStore(subscribeReadCache, readCacheServedAt);
 
   useEffect(() => {
     if (beat != null) setSosActive(beat.sos_active);
@@ -355,6 +358,13 @@ function AgentLayoutInner() {
             <div className="bg-slate-800 text-white text-xs text-center py-1.5 px-4 font-medium flex items-center justify-center gap-1.5">
               <WifiOff className="w-3 h-3" />
               Offline — visits are saved on this phone. Payments need signal.
+            </div>
+          )}
+          {cachedAt != null && (
+            <div className="bg-slate-100 text-slate-700 text-xs text-center py-1 px-4">
+              Showing cases as saved at{" "}
+              {new Date(cachedAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
+              {" "}— they may have changed since.
             </div>
           )}
         </header>
