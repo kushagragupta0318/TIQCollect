@@ -14,6 +14,7 @@
  */
 import { useEffect, useRef } from "react";
 import L from "leaflet";
+import "leaflet/dist/leaflet.css";
 import { DEFAULT_CENTRE } from "./constants";
 import { addBaseTiles } from "./baseTiles";
 
