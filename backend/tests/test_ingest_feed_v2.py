@@ -18,6 +18,7 @@ from app.models.placement import Placement
 from app.models.tenancy import AgencyContract
 from scripts.ingest_daily import _close_case_recall, feed_context, process_row
 from tests._db import TEST_AGENCY_ID, TEST_BANK_ID, create_schema, make_engine, make_session_factory
+from tests._placement import cover
 
 TODAY = date(2026, 9, 24)
 
@@ -35,6 +36,8 @@ def _ctx(db, *, contract=True):
     if contract:
         db.add(AgencyContract(bank_id=TEST_BANK_ID, agency_id=TEST_AGENCY_ID, contract_no="MTB/FCA/2026-27/014",
                               start_date=date(2026, 4, 1), end_date=date(2027, 3, 31), status="ACTIVE"))
+        db.flush()
+        cover(db, db.query(AgencyContract).one())   # coverage fails closed (placement_service)
     batch = BankFeedBatch(bank_id=TEST_BANK_ID, feed_type="DAILY_BOOK", business_date=TODAY,
                           file_sha256=hashlib.sha256(b"feed").hexdigest(), received_via="UPLOAD")
     db.add(batch)

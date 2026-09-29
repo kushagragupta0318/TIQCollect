@@ -17,6 +17,7 @@ from app.models.lending import BankFeedBatch, BankFeedRow
 from app.models.loan import Loan, dpd_bucket_for
 from app.models.placement import Placement
 from app.workers.tasks import demo_daily_feed as feed
+from tests._placement import cover
 from tests._db import (  # noqa: F401
     TEST_AGENCY_ID, TEST_BANK_ID, create_schema, drop_schema, make_engine, make_session_factory, test_id,
 )
@@ -35,6 +36,8 @@ def _contract(db, *, start=date(2026, 4, 1), end=date(2027, 3, 31), status="ACTI
                        start_date=start, end_date=end, status=status, max_placed_cases=cap,
                        sla_first_visit_days=5)
     db.add(c)
+    db.flush()
+    cover(db, c)          # coverage fails closed (placement_service); the suite's branches sit in its tree
     db.commit()
     return c
 

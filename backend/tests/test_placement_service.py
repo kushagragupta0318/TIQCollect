@@ -16,11 +16,12 @@ from app.models.customer import Customer
 from app.models.lending import BankFeedBatch
 from app.models.loan import DPDBucket, Loan, LoanType
 from app.models.placement import Placement
-from app.models.tenancy import Agency, AgencyContract, AgencyContractTerm
+from app.models.tenancy import Agency, AgencyContract, AgencyContractTerm, AgencyRegion, Branch
 from app.services.placement_service import (
-    AGENCY_NOT_ACTIVE, CONTRACT_FULL, NO_AGENCY, NO_CONTRACT_IN_FORCE, NOT_AUTHORISED, PLACED_ELSEWHERE,
-    PlacementRefused, PlacementService,
+    AGENCY_NOT_ACTIVE, CONTRACT_FULL, GATES, NO_AGENCY, NO_CONTRACT_IN_FORCE, NOT_AUTHORISED, NOT_COVERED,
+    PLACED_ELSEWHERE, PlacementRefused, PlacementService, path_covers,
 )
+from tests._placement import cover, put_branches_in, region_tree
 from tests._db import TEST_AGENCY_ID, TEST_BANK_ID, create_schema, make_engine, make_session_factory, test_id
 
 DAY = date(2026, 9, 24)
@@ -52,11 +53,13 @@ def _loan(db, n=1, *, dpd=47, loan_type=LoanType.PERSONAL):
 
 
 def _contract(db, *, agency_id=TEST_AGENCY_ID, no="MTB/FCA/2026-27/014", start=date(2026, 4, 1),
-              end=date(2027, 3, 31), status="ACTIVE", cap=None):
+              end=date(2027, 3, 31), status="ACTIVE", cap=None, covered=True):
     c = AgencyContract(bank_id=TEST_BANK_ID, agency_id=agency_id, contract_no=no, start_date=start, end_date=end,
                        status=status, max_placed_cases=cap, sla_first_visit_days=5)
     db.add(c)
     db.flush()
+    if covered:
+        cover(db, c)
     return c
 
 
@@ -179,3 +182,105 @@ def test_quarantine_holds_the_row_and_appends_reasons(db):
     assert again.id == row.id and row.status == "QUARANTINED"
     assert [e["reason"] for e in row.dq_errors] == [NO_CONTRACT_IN_FORCE, NOT_AUTHORISED]
     assert (row.loan_account_number, row.case_number) == ("MTB0000009", "MTB-CASE-9")
+
+
+# ── P3 D08: coverage, the gate evaluator, capacity within a batch ────────────
+
+def test_coverage_admits_the_covered_region_and_its_subtree(db):
+    c = _contract(db, covered=False)
+    cover(db, c, "HR", branch_region="GGN")            # HR covers its city GGN
+    p = PlacementService(db).place_new_loan(_loan(db), agency_id=TEST_AGENCY_ID, on=DAY, source="FEED")
+    assert p.contract_id == c.id
+
+
+@pytest.mark.parametrize("covered_code,branch_region", [
+    ("GGN", "HR"),        # a city does not cover its parent state
+    ("GGN", "NORTH"),
+])
+def test_coverage_refuses_a_region_outside_the_contract(db, covered_code, branch_region):
+    c = _contract(db, covered=False)
+    cover(db, c, covered_code, branch_region=branch_region)
+    with pytest.raises(PlacementRefused) as r:
+        PlacementService(db).place_new_loan(_loan(db), agency_id=TEST_AGENCY_ID, on=DAY, source="FEED")
+    assert r.value.reason == NOT_COVERED
+    assert "does not cover region" in str(r.value)
+
+
+def test_coverage_fails_closed_without_coverage_rows_or_a_branch_region(db):
+    _contract(db, covered=False)                        # no agency_regions rows at all
+    put_branches_in(db, "GGN")
+    with pytest.raises(PlacementRefused) as r:
+        PlacementService(db).place_new_loan(_loan(db, 1), agency_id=TEST_AGENCY_ID, on=DAY, source="FEED")
+    assert r.value.reason == NOT_COVERED
+
+    c2 = _contract(db, no="MTB/FCA/2026-27/016", start=date(2026, 5, 1), covered=False)   # the newer contract wins
+    region = region_tree(db)["NORTH"]
+    db.add(AgencyRegion(bank_id=TEST_BANK_ID, agency_id=TEST_AGENCY_ID, contract_id=c2.id, region_id=region))
+    for b in db.query(Branch).filter(Branch.bank_id == TEST_BANK_ID):
+        b.region_id = None                              # covered contract, but the branch has no region
+    db.flush()
+    with pytest.raises(PlacementRefused) as r:
+        PlacementService(db).place_new_loan(_loan(db, 2), agency_id=TEST_AGENCY_ID, on=DAY, source="FEED")
+    assert r.value.reason == NOT_COVERED
+    assert "has no region" in str(r.value)
+
+
+def test_a_region_code_that_only_shares_a_prefix_is_not_covered():
+    assert path_covers("NORTH.HR", "NORTH.HR.GGN")
+    assert path_covers("/NORTH/HR/", "NORTH.HR")          # both path spellings compare by segment
+    assert not path_covers("NORTH.HR", "NORTH.HRX")
+    assert not path_covers("NORTH.HR.GGN", "NORTH.HR")
+    assert not path_covers("", "NORTH")
+    assert not path_covers(None, "NORTH")
+
+
+def test_evaluate_reports_every_failing_gate_without_raising(db):
+    c = _contract(db, covered=False)
+    db.add(AgencyContractTerm(bank_id=TEST_BANK_ID, agency_id=TEST_AGENCY_ID, contract_id=c.id,
+                              loan_type=LoanType.HOME, dpd_bucket=DPDBucket.BUCKET_2, commission_pct=9.5))
+    put_branches_in(db, "GGN")
+    res = PlacementService(db).evaluate(_loan(db), TEST_AGENCY_ID, DAY)
+    assert not res.ok
+    assert {g: c.reason for g, c in res.checks.items() if c.passed is False} == {
+        "authorisation": NOT_AUTHORISED, "coverage": NOT_COVERED}
+    assert res.first_failure.reason == NOT_AUTHORISED          # the order place_new_loan raises in
+    assert set(res.as_json()) == set(GATES)
+    assert db.query(Placement).count() == 0
+
+
+def test_evaluate_marks_gates_it_cannot_judge(db):
+    res = PlacementService(db).evaluate(_loan(db), test_id("agency:nowhere"), DAY)
+    assert res.checks["agency"].reason == NO_AGENCY
+    assert [res.checks[g].passed for g in ("contract", "authorisation", "coverage", "capacity")] == [None] * 4
+    assert res.first_failure.gate == "agency"
+
+
+def test_evaluate_counts_placements_planned_in_the_same_batch(db):
+    _contract(db, cap=3)
+    svc = PlacementService(db)
+    svc.place_new_loan(_loan(db, 1), agency_id=TEST_AGENCY_ID, on=DAY, source="FEED")
+    loan = _loan(db, 2)
+    assert svc.evaluate(loan, TEST_AGENCY_ID, DAY, planned=1).ok            # 1 placed + 1 planned < 3
+    full = svc.evaluate(loan, TEST_AGENCY_ID, DAY, planned=2)                # 1 + 2 = cap
+    assert full.checks["capacity"].reason == CONTRACT_FULL
+    assert svc.headroom(full.contract) == 2
+
+
+def test_a_loan_already_held_by_the_agency_passes_capacity_at_the_cap(db):
+    _contract(db, cap=1)
+    svc = PlacementService(db)
+    loan = _loan(db)
+    svc.place_new_loan(loan, agency_id=TEST_AGENCY_ID, on=DAY, source="FEED")
+    res = svc.evaluate(loan, TEST_AGENCY_ID, DAY)
+    assert res.ok and res.existing is not None
+
+
+def test_place_new_loan_records_its_run(db):
+    from app.models.planning import PlacementRun
+    _contract(db)
+    run = PlacementRun(bank_id=TEST_BANK_ID, plan_date=DAY, strategy="MANUAL_BATCH", status="APPLIED")
+    db.add(run)
+    db.flush()
+    p = PlacementService(db).place_new_loan(_loan(db), agency_id=TEST_AGENCY_ID, on=DAY, source="MANUAL",
+                                            placement_run_id=run.id)
+    assert p.placement_run_id == run.id
