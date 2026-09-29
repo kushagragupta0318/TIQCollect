@@ -20,7 +20,7 @@ from sqlalchemy import (
     ForeignKey, Enum as SAEnum, Index, Text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy import ForeignKeyConstraint
+from sqlalchemy import ForeignKeyConstraint, text
 from app.models.base import PUBLIC, Base, TimestampMixin, UUIDPrimaryKey, UUIDType
 
 
@@ -87,6 +87,9 @@ class CallLog(Base, UUIDPrimaryKey, TimestampMixin):
     agency_id:   Mapped[str] = mapped_column(UUIDType, nullable=False)
     case_id:     Mapped[str] = mapped_column(UUIDType, nullable=False)
     agent_id:    Mapped[str] = mapped_column(UUIDType, nullable=False)
+    # v2_0015 (P7 offline outbox): the client's id for this submission, so a replay hours later
+    # returns the row it already made instead of writing a second one.
+    client_submission_id: Mapped[str | None] = mapped_column(UUIDType, nullable=True)
     customer_id: Mapped[str] = mapped_column(UUIDType, nullable=False)
 
     # ── Call metadata ────────────────────────────────────────────────────────
@@ -150,5 +153,8 @@ class CallLog(Base, UUIDPrimaryKey, TimestampMixin):
         Index("ix_call_log_customer_time", "customer_id", "called_at"),
         Index(None, "agency_id", "called_at"),
         Index("ix_call_log_outcome",       "agency_id", "outcome", "called_at"),
+        Index("uq_call_logs_agent_id_client_submission_id", "agent_id", "client_submission_id", unique=True,
+              postgresql_where=text("client_submission_id IS NOT NULL"),
+              sqlite_where=text("client_submission_id IS NOT NULL")),
         {"schema": "collections"},
     )
