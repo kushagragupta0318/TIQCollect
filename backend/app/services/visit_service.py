@@ -213,6 +213,7 @@ class VisitService:
             check_in_longitude=req.check_in_longitude,
             check_in_time=capture.at,
             client_submission_id=csid,
+            agent_device_id=capture.device.id if capture.device is not None else None,
             distance_from_customer_metres=round(distance_m, 1),
             geo_verified=geo_ok,
             within_contact_hours=within_hours,

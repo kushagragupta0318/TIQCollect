@@ -471,3 +471,64 @@ def test_route_judges_the_tokens_device(w, monkeypatch):
             assert right.status_code == 200, right.text
     finally:
         app.dependency_overrides.pop(get_db, None)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 7. Manager signals: LATE_SYNC and SYNC_WITHHELD (fraud_service)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _vis(w, captured, received, csid=True):
+    return SimpleNamespace(
+        id=_uid(), agent_id=w.agent.id, case_id=w.case.id, check_in_time=captured, created_at=received,
+        client_submission_id=_uid() if csid else None,
+        agent=SimpleNamespace(employee_code="OFA", user=SimpleNamespace(full_name="Agent OFA")),
+        case=SimpleNamespace(case_number="C-A1"))
+
+
+def _ping(w, received):
+    w.db.add(AgentLocation(agent_id=w.agent.id, latitude=28.6, longitude=77.2,
+                           recorded_at=received, received_at=received))
+    w.db.commit()
+
+
+def _signals(w, visits):
+    from app.services.fraud_service import FraudService
+    return [(f["type"], f["severity"]) for f in FraudService(w.db)._late_sync(visits)]
+
+
+def test_offline_visit_synced_three_hours_later_is_low_late_sync(w):
+    c = ist(DAY, 12)
+    assert _signals(w, [_vis(w, c, c + timedelta(hours=3))]) == [("LATE_SYNC", "LOW")]
+
+
+def test_short_offline_gap_and_live_visits_raise_nothing(w):
+    c = ist(DAY, 12)
+    assert _signals(w, [_vis(w, c, c + timedelta(minutes=30)),
+                        _vis(w, c, c + timedelta(hours=3), csid=False)]) == []
+
+
+def test_gps_getting_through_long_before_the_visit_is_sync_withheld(w):
+    c = ist(DAY, 12)
+    _ping(w, c + timedelta(hours=1))
+    assert _signals(w, [_vis(w, c, c + timedelta(hours=3))]) == [("SYNC_WITHHELD", "MEDIUM")]
+
+
+def test_gps_in_the_same_flush_as_the_visit_is_not_withheld(w):
+    c = ist(DAY, 12)
+    _ping(w, c + timedelta(hours=3) - timedelta(minutes=2))     # same flush, within slack
+    _ping(w, c + timedelta(minutes=5))                           # before the phone went offline
+    assert _signals(w, [_vis(w, c, c + timedelta(hours=3))]) == [("LATE_SYNC", "LOW")]
+
+
+def test_another_agents_gps_is_not_evidence(w):
+    c = ist(DAY, 12)
+    w.db.add(AgentLocation(agent_id=w.other.id, latitude=28.6, longitude=77.2,
+                           recorded_at=c + timedelta(hours=1), received_at=c + timedelta(hours=1)))
+    w.db.commit()
+    assert _signals(w, [_vis(w, c, c + timedelta(hours=3))]) == [("LATE_SYNC", "LOW")]
+
+
+def test_late_visit_records_its_bound_device(w, monkeypatch):
+    _freeze(monkeypatch, ist(DAY, 15))
+    out = _record(w, _visit(**_offline(ist(DAY, 12))))
+    assert w.db.get(Visit, out["id"]).agent_device_id == w.dev.id
