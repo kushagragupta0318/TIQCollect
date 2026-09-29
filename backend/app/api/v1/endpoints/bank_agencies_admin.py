@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 
 from app.core.dependencies import DbSession
 from app.core.emails import AccountEmail
-from app.core.ids import UUIDPath
+from app.core.ids import UUIDPath, UUIDQuery
 from app.core.permissions import require_perm
 from app.core.ratelimit import AUTH_LIMIT, limiter
 from app.models.user import User
@@ -200,13 +200,20 @@ def list_regions_route(db: DbSession, current_user: User = require_perm("agency.
 
 @router.get("/agencies-directory")
 def list_agency_directory_route(
-    db: DbSession, region_id: str | None = None, status: str | None = None, loan_type: str | None = None,
+    db: DbSession, region_id: UUIDQuery = None, status: str | None = None, loan_type: str | None = None,
     contract_expiring_before: date | None = None, current_user: User = require_perm("agency.read"),
 ):
     """D05: the directory table + coverage map. A separate route from
     GET /agencies (not a query param on it) — that one is the wizard's own
     plain list and callers of it should not have to pay for a contract +
-    coverage + product join they never asked for."""
+    coverage + product join they never asked for.
+
+    region_id: UUIDQuery (test_ids.py's tripwire, CI-found) — a malformed
+    id now 404s at the boundary instead of reaching list_agency_directory's
+    own DB lookup and answering with a slightly different 422. That
+    service-side check still stands for a well-formed id that names no
+    real region (never a 404 for a syntactically valid id — 422, since the
+    id parsed fine and the failure is "not found", not "malformed")."""
     return agency_service.list_agency_directory(
         db, current_user, region_id=region_id, status=status, loan_type=loan_type,
         contract_expiring_before=contract_expiring_before,

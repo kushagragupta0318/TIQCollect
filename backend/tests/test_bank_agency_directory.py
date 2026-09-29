@@ -179,3 +179,14 @@ def test_http_directory_is_scoped_and_reachable(w):
     r = client.get("/api/v1/bank/agencies-directory", headers=_h(bank_admin))
     assert r.status_code == 200, r.text
     assert len(r.json()) >= 1
+
+
+def test_http_directory_rejects_a_malformed_region_id_at_the_boundary(w):
+    """test_ids.py's tripwire (CI-found): region_id is UUIDQuery now, so a
+    string that isn't even a UUID 404s before list_agency_directory's own
+    DB lookup ever runs — distinct from a well-formed id naming no real
+    region, which is 422 (see test_directory_filter_by_region_rejects_an_unknown_id)."""
+    client = TestClient(app)
+    r = client.get("/api/v1/bank/agencies-directory", params={"region_id": "not-a-uuid"},
+                   headers=_h(w["bank_admin"]))
+    assert r.status_code == 404, r.text
