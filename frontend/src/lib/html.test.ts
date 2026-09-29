@@ -18,6 +18,7 @@ describe("escapeHtml", () => {
   it("leaves ordinary text alone and stringifies numbers and empties", () => {
     expect(escapeHtml("Priya Sharma · EMP0006")).toBe("Priya Sharma · EMP0006");
     expect(escapeHtml(42)).toBe("42");
+    expect(escapeHtml(0)).toBe("0");
     expect(escapeHtml(null)).toBe("");
     expect(escapeHtml(undefined)).toBe("");
   });

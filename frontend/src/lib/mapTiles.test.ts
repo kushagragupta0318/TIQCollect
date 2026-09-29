@@ -62,8 +62,8 @@ describe("resolveTileSource", () => {
     expect(resolveTileSource("day", env, "192.168.1.20").provider).toBe("mapbox");
   });
 
-  it("refuses a secret or malformed token and never puts it in a URL", () => {
-    for (const token of ["sk.eyJsecret.value", "not-a-token"]) {
+  it("refuses a secret or malformed token, or an uninterpolated ${VAR}, and never puts it in a URL", () => {
+    for (const token of ["sk.eyJsecret.value", "not-a-token", "${VITE_MAPBOX_TOKEN}"]) {
       const s = resolveTileSource("day", { VITE_MAPBOX_TOKEN: token }, "localhost");
       expect(s.provider).toBe("osm");
       expect(s.url).not.toContain(token);
@@ -97,6 +97,7 @@ describe("isAllowedMapHost", () => {
     expect(isAllowedMapHost("fieldops.example.net.evil.com", allowed)).toBe(false);
     expect(isAllowedMapHost("example.net", allowed)).toBe(false);
     expect(isAllowedMapHost("", allowed)).toBe(false);
+    expect(isAllowedMapHost("fieldops.example.net", "${VITE_ALLOWED_MAP_HOSTS}")).toBe(false);
   });
 });
 
@@ -120,6 +121,8 @@ describe("checkMapboxToken", () => {
     expect(checkMapboxToken("").level).toBe("missing");
     expect(checkMapboxToken("sk.abc").level).toBe("secret");
     expect(checkMapboxToken("abc").level).toBe("malformed");
+    // backend/.env was written for the platform; an uninterpolated reference counts as unset.
+    expect(checkMapboxToken("${VITE_MAPBOX_TOKEN}").level).toBe("malformed");
   });
 });
 

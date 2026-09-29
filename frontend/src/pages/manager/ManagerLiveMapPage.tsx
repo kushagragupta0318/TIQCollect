@@ -190,8 +190,8 @@ export default function ManagerLiveMapPage() {
   const markersRef = useRef<Map<string, L.Marker>>(new Map());
   const drawnRef = useRef<Map<string, DrawnMarker>>(new Map());
   const trailRef = useRef<L.LayerGroup | null>(null);
-  // Agents cluster only when there are more than 40; an SOS marker sits outside the
-  // clusters so it can never be hidden inside a bubble.
+  // Agents cluster only when there are more than 40. An SOS marker sits outside the
+  // clusters so it can never be hidden inside a bubble: a safety rule, not a display choice.
   const teamRef = useRef<AdaptivePointGroup | null>(null);
   const sosLayerRef = useRef<L.LayerGroup | null>(null);
   const fittedRef = useRef(false);
@@ -350,6 +350,8 @@ export default function ManagerLiveMapPage() {
       if (!marker || !prev) {
         marker = L.marker(pos, { icon, title: a.full_name, zIndexOffset: isSel ? 1000 : 0 })
           .on("click", () => setSelected(a.agent_id))
+          // No JS hover delay, on purpose: hover costs one Leaflet tooltip and no redraw, and
+          // Leaflet's own handler also opens it on keyboard focus (P3-map D4).
           .bindTooltip(next.tooltip, { direction: "top", offset: [0, -16] })
           .bindPopup(next.popup, { offset: [0, -28], closeButton: false, className: "agent-nav-popup" });
         markersRef.current.set(a.agent_id, marker);
