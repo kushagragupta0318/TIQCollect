@@ -110,20 +110,22 @@ class VisitService:
           6. Notify the customer by SMS/WhatsApp for non-payment outcomes
              (payment outcomes are notified by collect_payment instead).
         """
+        now_utc = datetime.now(timezone.utc)
+        # I02: a replayed offline visit returns the row it already made, then is
+        # judged at its capture time (ADR 0011). A live submit has no key.
+        csid = getattr(req, "client_submission_id", None)
+        if csid:
+            stored = self._by_submission(agent, csid)
+            if stored is not None:
+                return self._repeat(stored, case_id)
+        capture = judge_capture(self.db, agent, captured_at=getattr(req, "captured_at", None),
+                                device_seq=getattr(req, "device_seq", None),
+                                item_device_id=getattr(req, "device_id", None),
+                                token_device_id=token_device_id, now=now_utc)
         # 2026-09-24 (A03): the one access rule. The old copy here granted any
         # unassigned case in any tenant and then RE-ASSIGNED it to the caller,
         # so recording a visit took the case over. A stale assignee is synced
         # only for a case on the caller's beat today, inside their agency.
-        now_utc = datetime.now(timezone.utc)
-        # I02: a replayed offline visit returns the row it already made, then is
-        # judged at its capture time (ADR 0011). A live submit has no key.
-        if req.client_submission_id:
-            stored = self._by_submission(agent, req.client_submission_id)
-            if stored is not None:
-                return self._repeat(stored, case_id)
-        capture = judge_capture(self.db, agent, captured_at=req.captured_at, device_seq=req.device_seq,
-                                item_device_id=req.device_id, token_device_id=token_device_id,
-                                now=now_utc)
         case = agent_case_or_404(self.db, agent, case_id,
                                  options=(joinedload(Case.customer), joinedload(Case.loan)),
                                  on_day=capture.day if capture.late else None)
@@ -136,7 +138,7 @@ class VisitService:
         check_visit_stance(req.borrower_disposition, customer_met=req.customer_met, person_met=req.person_met)
 
         # Idempotency guard for a keyless submit — see _DUPLICATE_SUBMIT_WINDOW_SECONDS above.
-        recent_duplicate = None if req.client_submission_id else (
+        recent_duplicate = None if csid else (
             self.db.query(Visit)
             .filter(
                 Visit.case_id == case.id,
@@ -210,7 +212,7 @@ class VisitService:
             check_in_latitude=req.check_in_latitude,
             check_in_longitude=req.check_in_longitude,
             check_in_time=capture.at,
-            client_submission_id=req.client_submission_id,
+            client_submission_id=csid,
             distance_from_customer_metres=round(distance_m, 1),
             geo_verified=geo_ok,
             within_contact_hours=within_hours,
@@ -281,8 +283,7 @@ class VisitService:
         except IntegrityError:
             # Two deliveries of one key raced and the other landed first.
             self.db.rollback()
-            stored = (self._by_submission(agent, req.client_submission_id)
-                      if req.client_submission_id else None)
+            stored = self._by_submission(agent, csid) if csid else None
             if stored is None:
                 raise
             return self._repeat(stored, case_id)
