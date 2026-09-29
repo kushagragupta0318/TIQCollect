@@ -127,7 +127,10 @@ DEFERRED are not built and are tracked as tasks.
   `DEVICE_RESET`, each with a write site.
 - **Placement quarantine reasons** (`bank_feed_rows.dq_errors[].reason`):
   `NO_AGENCY`, `AGENCY_NOT_ACTIVE`, `NO_CONTRACT_IN_FORCE`, `NOT_AUTHORISED`,
-  `CONTRACT_FULL`, `PLACED_ELSEWHERE`, `UNKNOWN_BRANCH`.
+  `CONTRACT_FULL`, `PLACED_ELSEWHERE`, `UNKNOWN_BRANCH`, `NOT_COVERED`.
+  `NOT_COVERED` is the coverage gate (coordinator ruling Q2, 2026-09-29): the loan's branch region `path` must
+  prefix-match one of the contract agency's `agency_regions`. It applies to FEED, MANUAL and ENGINE placements alike,
+  and a contract with no coverage rows fails closed.
 - **`strategy.simulation_runs` carries the engine's honesty fields** (E02,
   engine `mc-1.1.0`): `calibrated_by_backtest BOOLEAN`, `synthetic_inputs
   BOOLEAN`, `synthetic_warning TEXT NULL` (`SYNTHETIC: …` / `UNCALIBRATED: …`),
@@ -1382,7 +1385,7 @@ period; the agency's cases hang off the placement.
 | agency_id | UUID | — | | `(agency_id, bank_id)→agencies` RESTRICT | |
 | loan_id | UUID | — | | `(loan_id, bank_id)→loans` RESTRICT | |
 | contract_id | UUID | — | | `(contract_id, agency_id)→agency_contracts` RESTRICT | |
-| placement_run_id | UUID | N | | planning.placement_runs RESTRICT | NULL for a manual placement |
+| placement_run_id | UUID | N | | planning.placement_runs RESTRICT | Every MANUAL and ENGINE placement links to its run: a manual batch is a `placement_runs` row with strategy `MANUAL_BATCH` and status `APPLIED`, with one `placement_decisions` row per loan carrying `gate_results`, as the engine does (Q2, 2026-09-29). It read "NULL for a manual placement" until then |
 | source | VARCHAR(12) | — | | | CHECK `MANUAL`/`ENGINE`/`RE_PLACEMENT`/`TRANSFORM` |
 | status | VARCHAR(12) | — | `'ACTIVE'` | | CHECK `ACTIVE`/`RECALLED`/`RETURNED`/`EXPIRED`/`RESOLVED`/`TRANSFERRED` |
 | placed_on | DATE | — | | | |
