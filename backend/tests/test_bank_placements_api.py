@@ -293,3 +293,21 @@ def test_an_analysts_region_limit_narrows_the_placements_they_see(w):
     out = PlacementReadService(db).placements(bank_id=TEST_BANK_ID, agency_id=None,
                                               region_limit=REGION_LIMIT_UNRESOLVED)
     assert out["total"] == 0
+
+
+def test_the_placement_list_carries_the_models_synthetic_warning(w):
+    """expected_recovery_prob comes from a model trained on synthetic
+    borrowers; the list says so, from the artifact's own metadata."""
+    from app.ml.pipeline.config import RECOVERY_RISK
+    from app.models.model_prediction import ModelPrediction
+    db = w["db"]
+    assert w["c"].get(BASE, headers=_h(w["ba"])).json()["synthetic_warning"] is None      # nothing modelled
+    loan = w["a"][0]
+    db.add(ModelPrediction(bank_id=TEST_BANK_ID, model_name=RECOVERY_RISK.name, model_version="2.2.0",
+                           entity_type="loan", entity_id=loan.id, loan_id=loan.id, as_of_date=date(2026, 1, 1),
+                           probability=0.6, is_modelled=True))
+    db.commit()
+    _place(w, w["ba"], [loan])
+    body = w["c"].get(BASE, headers=_h(w["ba"])).json()
+    assert body["items"][0]["expected_recovery_prob"] == pytest.approx(0.4)
+    assert "synthetic" in body["synthetic_warning"].lower()

@@ -39,6 +39,23 @@ def bucket_dpd_range(bucket: DPDBucket) -> tuple[int | None, int | None]:
     return lo, hi
 
 
+@lru_cache(maxsize=64)
+def artifact_synthetic_warning(model: str, version: str) -> str | None:
+    """SYNTHETIC_WARNING from ml/artifacts/<model>/<version>/metadata.json.
+    A version whose metadata cannot be read is reported as unverified, never
+    as real."""
+    import json
+    from app.ml.pipeline.registry import ARTIFACT_ROOT
+    root = ARTIFACT_ROOT
+    path = (root / model / version / "metadata.json").resolve()
+    if root.resolve() not in path.parents:
+        return f"UNVERIFIED: model {model} {version} has no readable artifact metadata."
+    try:
+        return json.loads(path.read_text(encoding="utf-8")).get("SYNTHETIC_WARNING") or None
+    except (OSError, ValueError):
+        return f"UNVERIFIED: model {model} {version} has no readable artifact metadata."
+
+
 def _like_escape(s: str) -> str:
     return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
@@ -193,5 +210,21 @@ class PlacementReadService:
             "sla_first_visit_due": p.sla_first_visit_due.isoformat() if p.sla_first_visit_due else None,
             "placement_run_id": p.placement_run_id,
         } for p, lan, trade, legal in rows]
-        return {"items": items, "total": total, "page": page, "page_size": page_size}
+        return {"items": items, "total": total, "page": page, "page_size": page_size,
+                "synthetic_warning": self._synthetic_warning([p.model_prediction_id for p, *_ in rows])}
+
+    def _synthetic_warning(self, prediction_ids: list[str | None]) -> str | None:
+        """The SYNTHETIC_WARNING of the model artifact(s) behind the shown
+        expected_recovery_prob values, read from the artifact's own metadata
+        (the ml/pipeline convention), so the page cannot show a synthetic
+        model's number without saying so."""
+        from app.ml.pipeline.config import RECOVERY_RISK
+        from app.models.model_prediction import ModelPrediction
+        ids = [i for i in prediction_ids if i]
+        if not ids:
+            return None
+        versions = sorted({v for (v,) in self.db.query(ModelPrediction.model_version)
+                           .filter(ModelPrediction.id.in_(ids)).distinct()})
+        warnings = [w for v in versions if (w := artifact_synthetic_warning(RECOVERY_RISK.name, v))]
+        return " ".join(dict.fromkeys(warnings)) or None
 
