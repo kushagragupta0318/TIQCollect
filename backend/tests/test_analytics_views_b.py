@@ -120,3 +120,11 @@ def test_no_route_reads_the_unbound_analytics_session():
             if "get_analytics_db" in f.read_text(encoding="utf-8")
             or "AnalyticsSession" in f.read_text(encoding="utf-8")]
     assert hits == []
+
+
+def test_the_field_activity_copy_is_v2_0007_s_and_changes_only_consent(mig):
+    src = (PATH.parent / "v2_0007_analytics.py").read_text(encoding="utf-8")
+    assert mig.FIELD_ACTIVITY_V2_0007.strip() in src
+    changed = [(a, b) for a, b in zip(mig.FIELD_ACTIVITY_V2_0007.splitlines(), mig.FIELD_ACTIVITY.splitlines()) if a != b]
+    assert len(changed) == 1 and "x.customer_met AND x.consent_given IS NOT TRUE" in changed[0][1]
+    assert mig.CONSENT_MISSING == "customer_met AND consent_given IS NOT TRUE"

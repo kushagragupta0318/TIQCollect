@@ -38,6 +38,8 @@ Honesty rules the views follow:
     current_date.
   - field_cost is NULL when any visit in the cell has no FIELD_VISIT rate.
   - agent_days_with_visits is not attendance: no attendance table exists.
+  - consent is missing only on a MET visit (CONSENT_MISSING); mv_field_activity_daily
+    is recreated with the same predicate (v2_0007 counted every visit).
   - mv_portfolio_daily splits rows by is_backfill (a transformed snapshot,
     not an observation), so a day-on-day delta can be taken like for like.
     contacted_7d_* is a subset of placed_*: a met visit or answered call in
@@ -140,6 +142,98 @@ def _grant_specs() -> list[tuple[str, str, str]]:
         out += [(r, "SELECT", f"analytics.{v}") for v in SCOPED]
     out += [(JOBS_ROLE, "SELECT", f"analytics.{mv}") for mv in MATERIALIZED]
     return out
+
+
+# Consent is asked only when the borrower is met (RecordVisitPage shows the RBI attestation only for
+# meetingType BORROWER, which is customer_met), so it can only be MISSING on a met visit (d4, 2026-09-29).
+CONSENT_MISSING = "customer_met AND consent_given IS NOT TRUE"
+
+# mv_field_activity_daily exactly as v2_0007 created it (frozen; tests/test_analytics_views_b pins the copy).
+FIELD_ACTIVITY_V2_0007 = '''
+        CREATE MATERIALIZED VIEW analytics.mv_field_activity_daily AS
+        WITH tz AS (SELECT id AS bank_id, timezone FROM tenancy.banks),
+        v AS (
+            SELECT analytics.business_date(x.check_in_time, tz.timezone) AS d, x.bank_id, x.agency_id, x.agent_id,
+                   count(*) AS visits, count(*) FILTER (WHERE x.customer_met) AS met_visits,
+                   count(DISTINCT x.case_id) AS distinct_cases_visited,
+                   count(*) FILTER (WHERE x.geo_verified IS NOT TRUE) AS geo_unverified_visits,
+                   count(*) FILTER (WHERE x.consent_given IS NOT TRUE) AS consent_missing_visits,
+                   min(x.check_in_time) AS first_at, max(coalesce(x.check_out_time, x.check_in_time)) AS last_at
+            FROM collections.visits x JOIN tz ON tz.bank_id = x.bank_id GROUP BY 1, 2, 3, 4
+        ),
+        t AS (
+            SELECT analytics.business_date(x.created_at, tz.timezone) AS d, x.bank_id, x.agency_id, x.agent_id,
+                   count(*) AS ptps_set
+            FROM collections.ptps x JOIN tz ON tz.bank_id = x.bank_id GROUP BY 1, 2, 3, 4
+        ),
+        p AS (
+            SELECT analytics.business_date(x.payment_date, tz.timezone) AS d, x.bank_id, x.agency_id, x.agent_id,
+                   count(*) FILTER (WHERE x.status = 'VERIFIED') AS payments_verified_count,
+                   coalesce(sum(x.amount) FILTER (WHERE x.status = 'VERIFIED'), 0) AS payments_verified_amount,
+                   coalesce(sum(x.amount) FILTER (WHERE x.status = 'PENDING_VERIFICATION'), 0) AS payments_pending_amount
+            FROM collections.payments x JOIN tz ON tz.bank_id = x.bank_id
+            WHERE x.agent_id IS NOT NULL GROUP BY 1, 2, 3, 4
+        ),
+        c AS (
+            SELECT analytics.business_date(x.called_at, tz.timezone) AS d, x.bank_id, x.agency_id, x.agent_id,
+                   count(*) AS calls, count(*) FILTER (WHERE x.outcome = 'ANSWERED') AS calls_answered,
+                   min(x.called_at) AS first_at, max(x.called_at) AS last_at
+            FROM collections.call_logs x JOIN tz ON tz.bank_id = x.bank_id GROUP BY 1, 2, 3, 4
+        ),
+        bt AS (
+            SELECT x.beat_date AS d, x.bank_id, x.agency_id, x.agent_id,
+                   sum(x.total_cases) AS planned_stops, sum(coalesce(x.cases_completed, 0)) AS visited_stops,
+                   sum(coalesce(x.estimated_distance_km, 0)) AS planned_km, sum(x.actual_distance_km) AS actual_km
+            FROM planning.beats x WHERE x.is_leave_day IS NOT TRUE GROUP BY 1, 2, 3, 4
+        ),
+        oh AS (
+            SELECT analytics.business_date(l.created_at, tz.timezone) AS d, g.bank_id, g.agency_id, g.id AS agent_id,
+                   count(*) AS out_of_hours_attempts
+            FROM audit.audit_logs l JOIN workforce.agents g ON g.user_id = l.user_id JOIN tz ON tz.bank_id = g.bank_id
+            WHERE l.action = 'CONTACT_HOUR_VIOLATION_ATTEMPT' GROUP BY 1, 2, 3, 4
+        ),
+        keys AS (
+            SELECT d, bank_id, agency_id, agent_id FROM v UNION SELECT d, bank_id, agency_id, agent_id FROM t
+            UNION SELECT d, bank_id, agency_id, agent_id FROM p UNION SELECT d, bank_id, agency_id, agent_id FROM c
+            UNION SELECT d, bank_id, agency_id, agent_id FROM bt UNION SELECT d, bank_id, agency_id, agent_id FROM oh
+        )
+        SELECT k.d AS activity_date, k.bank_id, k.agency_id, k.agent_id,
+               CASE WHEN EXISTS (SELECT 1 FROM workforce.leave_requests lr WHERE lr.agent_id = k.agent_id
+                                 AND lr.status = 'APPROVED' AND k.d BETWEEN lr.from_date AND lr.to_date)
+                    THEN 'ON_LEAVE' ELSE 'PRESENT' END AS attendance_status,
+               coalesce(v.visits, 0) AS visits, coalesce(v.met_visits, 0) AS met_visits,
+               coalesce(v.distinct_cases_visited, 0) AS distinct_cases_visited,
+               coalesce(t.ptps_set, 0) AS ptps_set,
+               coalesce(p.payments_verified_count, 0) AS payments_verified_count,
+               coalesce(p.payments_verified_amount, 0) AS payments_verified_amount,
+               coalesce(p.payments_pending_amount, 0) AS payments_pending_amount,
+               coalesce(c.calls, 0) AS calls, coalesce(c.calls_answered, 0) AS calls_answered,
+               coalesce(bt.planned_stops, 0) AS planned_stops, coalesce(bt.visited_stops, 0) AS visited_stops,
+               coalesce(bt.planned_km, 0) AS planned_km, bt.actual_km,
+               coalesce(oh.out_of_hours_attempts, 0) AS out_of_hours_attempts,
+               coalesce(v.geo_unverified_visits, 0) AS geo_unverified_visits,
+               coalesce(v.consent_missing_visits, 0) AS consent_missing_visits,
+               least(v.first_at, c.first_at) AS first_activity_at,
+               greatest(v.last_at, c.last_at) AS last_activity_at
+        FROM keys k
+        LEFT JOIN v  ON (v.d, v.agent_id)   = (k.d, k.agent_id)
+        LEFT JOIN t  ON (t.d, t.agent_id)   = (k.d, k.agent_id)
+        LEFT JOIN p  ON (p.d, p.agent_id)   = (k.d, k.agent_id)
+        LEFT JOIN c  ON (c.d, c.agent_id)   = (k.d, k.agent_id)
+        LEFT JOIN bt ON (bt.d, bt.agent_id) = (k.d, k.agent_id)
+        LEFT JOIN oh ON (oh.d, oh.agent_id) = (k.d, k.agent_id)
+'''
+FIELD_ACTIVITY = FIELD_ACTIVITY_V2_0007.replace(
+    'count(*) FILTER (WHERE x.consent_given IS NOT TRUE) AS consent_missing_visits',
+    "count(*) FILTER (WHERE x.customer_met AND x.consent_given IS NOT TRUE) AS consent_missing_visits")
+
+
+def _field_activity(sql: str) -> None:
+    op.execute("DROP MATERIALIZED VIEW analytics.mv_field_activity_daily")
+    op.execute(sql)
+    op.execute("CREATE UNIQUE INDEX uq_mv_field_activity_daily ON analytics.mv_field_activity_daily "
+               "(activity_date, agency_id, agent_id)")
+    op.execute(_if_role(JOBS_ROLE, f"GRANT SELECT ON analytics.mv_field_activity_daily TO {JOBS_ROLE}"))
 
 
 PORTFOLIO_STATE_SQL = """
@@ -346,7 +440,7 @@ m_visit AS (
            count(*) AS visits, count(*) FILTER (WHERE customer_met) AS met_visits,
            count(*) FILTER (WHERE within_contact_hours IS FALSE) AS breaches_out_of_hours,
            count(*) FILTER (WHERE geo_verified IS FALSE) AS breaches_geofence,
-           count(*) FILTER (WHERE consent_given IS NOT TRUE) AS consent_missing,
+           count(*) FILTER (WHERE {CONSENT_MISSING}) AS consent_missing,
            CASE WHEN count(*) FILTER (WHERE rate_inr IS NULL) > 0 THEN NULL ELSE round(sum(rate_inr), 2) END AS field_cost
     FROM vis GROUP BY 1, 2, 3, 4
 ),
@@ -523,6 +617,7 @@ def upgrade() -> None:
     op.execute(PORTFOLIO_DAILY)
     op.execute(TRANSITIONS)
     op.execute(_scorecard())
+    _field_activity(FIELD_ACTIVITY)
     for mv, cols in UNIQUE.items():
         op.execute(f"CREATE UNIQUE INDEX uq_{mv} ON analytics.{mv} {cols}")
     for view, (mv, cols) in SCOPED.items():
@@ -538,6 +633,7 @@ def downgrade() -> None:
     op.execute("DROP VIEW IF EXISTS analytics.v_visit_to_pay")
     for view in reversed(list(SCOPED)):
         op.execute(f"DROP VIEW IF EXISTS analytics.{view}")
+    _field_activity(FIELD_ACTIVITY_V2_0007)
     for mv in reversed(MATERIALIZED):
         op.execute(f"DROP MATERIALIZED VIEW IF EXISTS analytics.{mv}")
     op.execute("DROP VIEW IF EXISTS analytics.dim_portfolio_state")

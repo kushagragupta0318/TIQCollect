@@ -56,7 +56,7 @@ d4's H14.
    | `BORROWER_HELPLINE` | optional | the number in the neutral post-visit message. Unset: that sentence is left out |
    | `TWILIO_*` | **leave unset on the demo site** | fixture borrowers have real-format phone numbers and demo-tenant suppression (B22) has not shipped. With no Twilio, SMS/WhatsApp and in-app calling are off |
    | `COMMAND_CENTRE_API_KEY`, `FIELD_OPS_REQUIRE_API_KEY` | delete | the `/api/field-ops` contract is gone; ignored if left |
-   | `WEB_CONCURRENCY` | leave unset (1) | the rate limiter counts per process until RESTRUCTURE-PLAN 1.8 |
+   | `WEB_CONCURRENCY` | leave unset (1) for the v1 deploy | the v1 build counts rate limits per process. From the build with RESTRUCTURE-PLAN 1.8 the counts live in Redis and more workers share one limit. Leave `RATE_LIMIT_STORAGE_URI` unset: it then uses `REDIS_URL` |
    | `ANTHROPIC_API_KEY` / `LLM_PROVIDER` | optional; `groq` stays the default | F01 |
    | `TOTP_ENC_KEY` | **not yet** | arrives with A08 (P1). Not read by this build |
 

@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 
 from app.core.config import settings
 from app.core.database import check_db_connection
+from app.core.ratelimit import limiter, storage_state
 
 router = APIRouter(tags=["Health"])
 logger = structlog.get_logger()
@@ -33,5 +34,7 @@ def ready():
         checks["redis"] = "error"
 
     all_ok = all(v == "ok" for v in checks.values())
-    body = {"status": "ready" if all_ok else "degraded", "checks": checks}
+    body = {"status": "ready" if all_ok else "degraded", "checks": checks,
+            # Informational, never a 503: the fallback still limits, per process.
+            "rate_limit_storage": storage_state(limiter)}
     return body if all_ok else JSONResponse(status_code=503, content=body)

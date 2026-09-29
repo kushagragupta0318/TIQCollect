@@ -3237,6 +3237,19 @@ safer than giving the API a bypass role.
 7. Every authenticated transaction now makes one extra round trip (`set_config` ×4 in one `SELECT`).
    It is cheap, but it has not been measured on `stress`.
 
+**Step-2 prerequisites from the Opus audit of A13 (2026-09-28).** These must be done before `FORCE`.
+- **(MED) System audit rows.** `audit_logs`' `WITH CHECK` refuses a pre-auth or NULL-bank row (a failed login, a system `PTP_UPDATED`) from `tiq_app`, and `write_audit` swallows the refusal.
+  Route those rows through a `SECURITY DEFINER` insert function or `tiq_jobs`, and add a `tests/pg` test that a pre-auth `LOGIN_FAILED` still lands.
+- **(MED) Sessions without a tenant.** The analytics session (`get_analytics_db`) and every Celery task have no tenant context.
+  Apply the context to the analytics session (B13b does this for the API's analytics reads), and run the workers as `tiq_jobs`.
+- **(LOW) Token lookups.** `SELECT` on `password_reset_tokens` and `used_quick_login_tokens` moves behind `SECURITY DEFINER`, like the other pre-auth lookups.
+
+**Tables with no policy, justified.** The drift test lists each of these as `NO_RLS` on purpose.
+- `planning.allocation_outcomes` and `planning.placement_outcomes` are lookups: code, label, sort order, flags.
+  They hold no tenant data. The FKs from the tenant tables point at them, never the other way.
+- `ml.model_candidates` is deployment-wide: there is one champion for every tenant (ADR 0007), and it carries no bank or agency.
+  Who may read it is a permission question (F12, `ml.*` capabilities), not a tenancy one. Its only tenant-adjacent columns are the approver and promoter user ids.
+
 ---
 
 ## 9. Migration strategy

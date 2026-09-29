@@ -113,7 +113,7 @@ def book():
                     consent_given=True)
             _insert(conn, "collections.visits", bank_id=B1, agency_id=A1, case_id=CASE1, agent_id=AGENT1,
                     check_in_time=visit_at + timedelta(days=5), customer_met=False, within_contact_hours=True,
-                    geo_verified=True, consent_given=True)
+                    geo_verified=True, consent_given=None)          # not met: consent was never asked
             for delta, amount in ((timedelta(days=3), 2_000), (timedelta(days=9), 7_000), (timedelta(hours=-1), 500)):
                 _insert(conn, "collections.payments", bank_id=B1, agency_id=A1, case_id=CASE1, loan_id=L1,
                         agent_id=AGENT1, amount=amount, mode="CASH", status="VERIFIED",
@@ -127,7 +127,8 @@ def book():
 
 def _refresh(eng):
     with eng.begin() as conn:
-        for mv in ("mv_portfolio_daily", "mv_bucket_transitions_monthly", "mv_agency_scorecard_monthly"):
+        for mv in ("mv_field_activity_daily", "mv_portfolio_daily", "mv_bucket_transitions_monthly",
+                   "mv_agency_scorecard_monthly"):
             conn.execute(text(f"REFRESH MATERIALIZED VIEW analytics.{mv}"))
 
 
@@ -231,3 +232,21 @@ def test_visit_to_pay_attributes_each_verified_payment_to_the_latest_prior_visit
     rows = _as(book, "SELECT visit_date, paid_within_7d, paid_amount_7d FROM analytics.v_visit_to_pay "
                      "ORDER BY visit_date", BANK1)
     assert rows == [(date(2025, 1, 10), True, 2_000), (date(2025, 1, 15), True, 7_000)]
+
+
+
+def test_consent_is_missing_only_on_a_met_visit(book):
+    """January: one met visit WITH consent, one not-met visit with none asked: nothing missing. A met
+    visit without consent (March) is missing, in the scorecard and in field activity alike."""
+    sc = "SELECT consent_missing FROM analytics.agency_scorecard_monthly_scoped WHERE month_start = :m AND visits > 0"
+    fa = "SELECT sum(consent_missing_visits) FROM analytics.field_activity_daily_scoped WHERE activity_date = :d"
+    assert _as(book, sc, BANK1, params={"m": date(2025, 1, 1)}) == [(0,)]
+    assert _as(book, fa, BANK1, params={"d": date(2025, 1, 15)})[0][0] == 0
+    with book.begin() as conn:
+        conn.execute(text("SET LOCAL session_replication_role = replica"))
+        _insert(conn, "collections.visits", bank_id=B1, agency_id=A1, case_id=CASE1, agent_id=AGENT1,
+                check_in_time=datetime(2025, 3, 3, 11, 0, tzinfo=IST), customer_met=True,
+                within_contact_hours=True, geo_verified=True, consent_given=None)
+    _refresh(book)
+    assert _as(book, sc, BANK1, params={"m": date(2025, 3, 1)}) == [(1,)]
+    assert _as(book, fa, BANK1, params={"d": date(2025, 3, 3)})[0][0] == 1
