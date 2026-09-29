@@ -532,3 +532,27 @@ def test_late_visit_records_its_bound_device(w, monkeypatch):
     _freeze(monkeypatch, ist(DAY, 15))
     out = _record(w, _visit(**_offline(ist(DAY, 12))))
     assert w.db.get(Visit, out["id"]).agent_device_id == w.dev.id
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 8. Do Not Contact is judged at sync (decision 5), and a live payment visit
+#    carries only its key
+# ═══════════════════════════════════════════════════════════════════════════
+
+def test_late_visit_to_a_borrower_now_on_do_not_contact_is_refused_with_its_code(w, monkeypatch):
+    w.case.customer.do_not_contact = True        # flagged after the capture
+    w.db.commit()
+    _freeze(monkeypatch, ist(DAY, 15))
+    with pytest.raises(HTTPException) as exc:
+        _record(w, _visit(**_offline(ist(DAY, 12))))
+    assert exc.value.status_code == 403 and _code(exc) == ErrorCode.DO_NOT_CONTACT
+    assert exc.value.detail == "Customer is marked Do Not Contact"      # the detail is unchanged
+
+
+def test_live_submit_with_only_a_key_is_idempotent_and_judged_now(w, monkeypatch):
+    fixed = _freeze(monkeypatch, ist(DAY, 11))
+    req = _visit(client_submission_id=str(uuid.uuid4()))
+    a = _record(w, req, token=None)
+    b = _record(w, req, token=None)
+    assert a["id"] == b["id"] and w.db.query(Visit).count() == 1
+    assert ct.as_utc(w.db.get(Visit, a["id"]).check_in_time) == fixed
