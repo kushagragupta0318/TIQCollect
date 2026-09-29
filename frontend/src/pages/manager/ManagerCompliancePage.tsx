@@ -495,6 +495,8 @@ const TYPE_META: Record<string, { label: string; icon: typeof MapPin; blurb: str
   DUPLICATE_PHOTO:         { label: "Re-used photo",         icon: Copy,       blurb: "The same image was submitted on more than one visit" },
   VISIT_TOO_SHORT:         { label: "Visit too short",       icon: Timer,      blurb: "Too brief for a conversation to have taken place" },
   FAR_FROM_CUSTOMER:       { label: "Outside the geo-fence", icon: MapPin,     blurb: "Recorded well away from the customer's address" },
+  SYNC_WITHHELD:           { label: "Held back while online", icon: Clock,     blurb: "Recorded offline, yet the phone was sending GPS well before the visit arrived" },
+  LATE_SYNC:               { label: "Synced late",           icon: Clock,      blurb: "Recorded offline and reached the server hours later" },
 };
 
 const SEV_STYLE: Record<string, { bg: string; fg: string; border: string }> = {

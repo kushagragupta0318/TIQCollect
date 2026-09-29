@@ -16,9 +16,19 @@ import { BANK_PORTAL_ROLES, BANK_ROLE_LABELS, isBankPortalRole } from "./layout/
 import { BANK_NAV_ITEMS } from "./layout/navigation";
 import { BankPlacementPage } from "./pages/BankPlacementPage";
 import { BankPlaceholderPage } from "./pages/BankPlaceholderPage";
+import OnboardAgencyWizardPage from "./pages/onboarding/OnboardAgencyWizardPage";
+import AgencyDirectoryPage from "./pages/directory/AgencyDirectoryPage";
+import AgencyPerformancePage from "./pages/performance/AgencyPerformancePage";
+
+/** The nav items with a real page instead of the generic placeholder
+ *  (D01-D03, D05, D06). Kept out of the BANK_NAV_ITEMS.map() below so their
+ *  own routes never collide with the placeholder route for the same path —
+ *  see this file's own route list. */
+const ONBOARD_AGENCY_PATH = "agencies/onboard";
+const AGENCY_DIRECTORY_PATH = "agencies/directory";
+const AGENCY_PERFORMANCE_PATH = "agencies/performance";
 
 // Screens that are built; every other nav item renders its placeholder.
-// (Same shape as d4's p3-d4, which adds `overview`; merge = one map entry each.)
 const BUILT_PAGES: Record<string, ComponentType> = { "agencies/placement": BankPlacementPage };
 
 
@@ -49,10 +59,19 @@ export default function BankApp() {
     <Routes>
       <Route element={<BankLayout persona={persona} onSignOut={signOut} />}>
         <Route index element={<Navigate to="overview" replace />} />
-        {BANK_NAV_ITEMS.map((item) => {
+        {BANK_NAV_ITEMS.filter((item) =>
+          item.path !== ONBOARD_AGENCY_PATH && item.path !== AGENCY_DIRECTORY_PATH && item.path !== AGENCY_PERFORMANCE_PATH,
+        ).map((item) => {
           const Page = BUILT_PAGES[item.path];
           return <Route key={item.path} path={item.path} element={Page ? <Page /> : <BankPlaceholderPage item={item} />} />;
         })}
+        {/* D01-D03: fresh draft (no id yet), or resuming one by its agency_id. */}
+        <Route path={ONBOARD_AGENCY_PATH} element={<OnboardAgencyWizardPage />} />
+        <Route path={`${ONBOARD_AGENCY_PATH}/:agencyId`} element={<OnboardAgencyWizardPage />} />
+        {/* D05: the agency directory table + coverage map. */}
+        <Route path={AGENCY_DIRECTORY_PATH} element={<AgencyDirectoryPage />} />
+        {/* D06: agency scorecard + regional leaderboard. */}
+        <Route path={AGENCY_PERFORMANCE_PATH} element={<AgencyPerformancePage />} />
         {BankComponentGalleryPage && (
           <Route
             path="_gallery"

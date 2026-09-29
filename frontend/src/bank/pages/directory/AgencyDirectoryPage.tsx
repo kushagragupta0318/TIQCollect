@@ -1,0 +1,276 @@
+// The agency directory (D05) — every empanelled agency with its coverage,
+// contract status and authorised products, filterable server-side. Replaces
+// the placeholder at /bank/agencies/directory.
+//
+// SCORE. Agency Performance Index is D06, not built yet — the backend row
+// (agency_service.list_agency_directory) does not return a `score` key at
+// all, on purpose (see its docblock). This page renders that column as
+// "Pending", never a computed stand-in — see the Score cell below.
+//
+// FILTERING IS SERVER-SIDE. region_id, status, loan_type and
+// contract_expiring_before are query params on GET /bank/agencies-directory;
+// changing a filter refetches rather than filtering the already-fetched
+// rows client-side, per the brief and matching how region_id's hierarchy
+// match (a ZONE also matches agencies covering anything beneath it) only
+// exists server-side.
+import { useMemo, useState } from "react";
+import { useNavigate } from "react-router";
+import { useQuery } from "@tanstack/react-query";
+import L from "leaflet";
+import { Building2 } from "lucide-react";
+import { ExecutiveHeader, PageFailure, PageLoading, PageRoot } from "../../components/PageTemplate";
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "../../ui/card";
+import { Button } from "../../ui/button";
+import { Input } from "../../ui/input";
+import { Label } from "../../ui/label";
+import { Select } from "../../ui/select";
+import { Badge, type BadgeProps } from "../../ui/badge";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../ui/table";
+import { MapCanvas } from "@/components/map/MapCanvas";
+import { DEFAULT_CENTRE } from "@/components/map/constants";
+import {
+  listAgencyDirectory, listRegions, AGENCY_STATUSES, LOAN_TYPES,
+  type AgencyDirectoryFilters, type AgencyDirectoryRow,
+} from "@/api/bank";
+import { errorDetail } from "@/lib/apiError";
+import { regionMarkersFromAgencies, summariseCoveredRegions } from "./directoryLogic";
+
+const AGENCY_STATUS_BADGE: Record<string, NonNullable<BadgeProps["variant"]>> = {
+  PENDING: "warning",
+  ACTIVE: "success",
+  SUSPENDED: "destructive",
+  OFFBOARDED: "outline",
+};
+
+const CONTRACT_STATUS_BADGE: Record<string, NonNullable<BadgeProps["variant"]>> = {
+  DRAFT: "outline",
+  ACTIVE: "success",
+  EXPIRED: "warning",
+  TERMINATED: "destructive",
+};
+
+export default function AgencyDirectoryPage() {
+  const navigate = useNavigate();
+  const [status, setStatus] = useState("");
+  const [regionId, setRegionId] = useState("");
+  const [loanType, setLoanType] = useState("");
+  const [expiringBefore, setExpiringBefore] = useState("");
+
+  const filters: AgencyDirectoryFilters = useMemo(() => {
+    const f: AgencyDirectoryFilters = {};
+    if (status) f.status = status;
+    if (regionId) f.region_id = regionId;
+    if (loanType) f.loan_type = loanType;
+    if (expiringBefore) f.contract_expiring_before = expiringBefore;
+    return f;
+  }, [status, regionId, loanType, expiringBefore]);
+
+  const regionsQuery = useQuery({ queryKey: ["bank-regions"], queryFn: listRegions, staleTime: 5 * 60_000 });
+  const directoryQuery = useQuery({
+    queryKey: ["bank-agency-directory", filters],
+    queryFn: () => listAgencyDirectory(filters),
+  });
+
+  const rows = useMemo(() => directoryQuery.data ?? [], [directoryQuery.data]);
+  const regions = useMemo(() => [...(regionsQuery.data ?? [])].sort((a, b) => a.path.localeCompare(b.path)), [regionsQuery.data]);
+  const markers = useMemo(() => regionMarkersFromAgencies(rows), [rows]);
+  const filtersActive = !!(status || regionId || loanType || expiringBefore);
+
+  function clearFilters() {
+    setStatus(""); setRegionId(""); setLoanType(""); setExpiringBefore("");
+  }
+
+  /** PENDING is the only status the wizard can still usefully resume — an
+   *  ACTIVE/SUSPENDED/OFFBOARDED agency's profile view is D07, a separate
+   *  task, not built yet, so those rows are not clickable. */
+  function openRow(row: AgencyDirectoryRow) {
+    if (row.status === "PENDING") navigate(`/bank/agencies/onboard/${row.agency_id}`);
+  }
+
+  function drawMarkers(map: L.Map) {
+    const layer = L.layerGroup().addTo(map);
+    const bounds: L.LatLngExpression[] = [];
+    for (const m of markers) {
+      const point: L.LatLngExpression = [m.latitude, m.longitude];
+      L.circleMarker(point, { radius: 7, color: "#1677FF", weight: 2, fillColor: "#1677FF", fillOpacity: 0.5 })
+        .bindTooltip(`${m.name} (${m.level}) — ${m.agencyNames.join(", ")}`, { direction: "top" })
+        .addTo(layer);
+      bounds.push(point);
+    }
+    if (bounds.length) map.fitBounds(L.latLngBounds(bounds).pad(0.25), { maxZoom: 10 });
+    return () => layer.remove();
+  }
+
+  const header = (
+    <ExecutiveHeader
+      title="Directory"
+      meta={["Agencies", "Task D05", directoryQuery.data ? `${rows.length} agenc${rows.length === 1 ? "y" : "ies"}` : "Loading…"]}
+      scopeNote="Every empanelled agency with coverage, contract status and authorised products. Filters are applied server-side."
+    />
+  );
+
+  if (directoryQuery.isLoading) {
+    return (
+      <PageRoot>
+        {header}
+        <PageLoading label="Loading the agency directory…" />
+      </PageRoot>
+    );
+  }
+
+  if (directoryQuery.isError) {
+    return (
+      <PageRoot>
+        {header}
+        <PageFailure>{errorDetail(directoryQuery.error, "The agency directory could not be loaded.")}</PageFailure>
+        <div className="flex justify-center">
+          <Button variant="outline" onClick={() => directoryQuery.refetch()}>Retry</Button>
+        </div>
+      </PageRoot>
+    );
+  }
+
+  return (
+    <PageRoot>
+      {header}
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Filters</CardTitle>
+          <CardDescription>Region, status and product filters are hierarchy-aware and applied by the server — picking a zone matches every agency covering anything beneath it.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div>
+            <Label htmlFor="dir-status">Status</Label>
+            <Select id="dir-status" value={status} onChange={(e) => setStatus(e.target.value)} className="mt-1.5">
+              <option value="">All statuses</option>
+              {AGENCY_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+            </Select>
+          </div>
+          <div>
+            <Label htmlFor="dir-region">Region</Label>
+            <Select
+              id="dir-region" value={regionId} onChange={(e) => setRegionId(e.target.value)} className="mt-1.5"
+              disabled={regionsQuery.isPending}
+            >
+              <option value="">All regions</option>
+              {regions.map((r) => <option key={r.region_id} value={r.region_id}>{r.name} · {r.level}</option>)}
+            </Select>
+          </div>
+          <div>
+            <Label htmlFor="dir-product">Product</Label>
+            <Select id="dir-product" value={loanType} onChange={(e) => setLoanType(e.target.value)} className="mt-1.5">
+              <option value="">All products</option>
+              {LOAN_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+            </Select>
+          </div>
+          <div>
+            <Label htmlFor="dir-expiry">Contract expiring before</Label>
+            <Input
+              id="dir-expiry" type="date" value={expiringBefore}
+              onChange={(e) => setExpiringBefore(e.target.value)} className="mt-1.5"
+            />
+          </div>
+        </CardContent>
+        {filtersActive && (
+          <CardFooter className="justify-end">
+            <Button type="button" variant="ghost" size="sm" onClick={clearFilters}>Clear filters</Button>
+          </CardFooter>
+        )}
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Coverage map</CardTitle>
+          <CardDescription>
+            One marker per region covered by any agency below, naming which agencies cover it. Points only — an
+            agency's drawn territory is a later task (STANDALONE-PRODUCT-PLAN §6.1).
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <MapCanvas onReady={drawMarkers} deps={[markers]} centre={DEFAULT_CENTRE} className="h-72 w-full rounded-inner overflow-hidden" />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Agencies</CardTitle>
+          {directoryQuery.isFetching && <CardDescription>Updating…</CardDescription>}
+        </CardHeader>
+        <CardContent>
+          {rows.length === 0 ? (
+            <div className="flex items-center gap-3 rounded-inner border border-dashed border-border p-6 text-[13px] text-muted-foreground">
+              <Building2 className="size-5 shrink-0 text-primary" />
+              No agencies match these filters.
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Agency</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Contract</TableHead>
+                  <TableHead>Covered regions</TableHead>
+                  <TableHead>Authorised products</TableHead>
+                  <TableHead>Score</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {rows.map((row) => {
+                  const coverage = summariseCoveredRegions(row.covered_regions);
+                  const resumable = row.status === "PENDING";
+                  return (
+                    <TableRow
+                      key={row.agency_id}
+                      onClick={() => openRow(row)}
+                      className={resumable ? "cursor-pointer" : undefined}
+                      title={resumable ? "Continue onboarding this draft" : undefined}
+                    >
+                      <TableCell>
+                        <div className="font-semibold text-foreground">{row.legal_name}</div>
+                        {row.trade_name && <div className="text-[11px] text-muted-foreground">{row.trade_name}</div>}
+                        <div className="text-[11px] text-muted-foreground">{row.code}</div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={AGENCY_STATUS_BADGE[row.status] ?? "outline"}>{row.status}</Badge>
+                      </TableCell>
+                      <TableCell>
+                        {row.contract ? (
+                          <div className="space-y-1">
+                            <Badge variant={CONTRACT_STATUS_BADGE[row.contract.status] ?? "outline"}>{row.contract.status}</Badge>
+                            <div className="text-[11px] text-muted-foreground">Ends {row.contract.end_date}</div>
+                          </div>
+                        ) : (
+                          <span className="text-[12px] text-muted-foreground">No contract yet</span>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        {coverage.count === 0 ? (
+                          <span className="text-[12px] text-muted-foreground">None</span>
+                        ) : (
+                          <span title={coverage.full}>{coverage.shown}</span>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        {row.authorised_products.length === 0 ? (
+                          <span className="text-[12px] text-muted-foreground">None</span>
+                        ) : (
+                          row.authorised_products.join(", ")
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className="text-muted-foreground" title="Agency Performance Index — D06, not built yet">
+                          Pending
+                        </Badge>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+    </PageRoot>
+  );
+}

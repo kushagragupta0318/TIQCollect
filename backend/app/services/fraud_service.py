@@ -41,6 +41,18 @@ DUPLICATE_PHOTO = "DUPLICATE_PHOTO"
 VISIT_TOO_SHORT = "VISIT_TOO_SHORT"
 FAR_FROM_CUSTOMER = "FAR_FROM_CUSTOMER"
 TRAIL_CONTRADICTS_VISIT = "TRAIL_CONTRADICTS_VISIT"
+LATE_SYNC = "LATE_SYNC"
+SYNC_WITHHELD = "SYNC_WITHHELD"
+
+# I02 offline outbox (docs/adr/0011-offline-outbox.md §6). A visit that reached
+# the server this long after its capture is worth a glance, no more.
+LATE_SYNC_SECONDS = 2 * 3600
+# The phone got GPS through this long after the capture, yet the visit came
+# later still. The outbox flushes before each location batch, so a truly
+# offline visit cannot trail pings that got through.
+WITHHELD_AFTER_SECONDS = 10 * 60
+# Slack for a location batch and a visit sent in the same flush.
+WITHHELD_SLACK_SECONDS = 5 * 60
 
 HIGH, MEDIUM, LOW = "HIGH", "MEDIUM", "LOW"
 
@@ -103,6 +115,7 @@ class FraudService:
         findings += self._short_visits(visits)
         findings += self._far_from_customer(visits)
         findings += self._trail_contradiction(visits, agent_ids, date_from, date_to)
+        findings += self._late_sync(visits)
 
         # Attach any standing verdict, keyed on (visit, check) — the pair that
         # survives a rescan, which is what lets a dismissal stay dismissed
@@ -350,6 +363,64 @@ class FraudService:
                 },
                 **self._meta(v),
             })
+        return out
+
+    # ── 8 & 9. an offline visit synced late, or held back while online ──────
+    def _late_sync(self, visits: list[Visit]) -> list[dict]:
+        """Only outbox visits (a client_submission_id): a live one is stamped at
+        receipt, so its lag is zero by construction. Receipt is created_at."""
+        late = []
+        for v in visits:
+            captured, received = _as_utc(v.check_in_time), _as_utc(v.created_at)
+            if not v.client_submission_id or captured is None or received is None:
+                continue
+            lag = (received - captured).total_seconds()
+            if lag > WITHHELD_AFTER_SECONDS:
+                late.append((v, captured, received, lag))
+        if not late:
+            return []
+
+        agent_ids = sorted({v.agent_id for v, *_ in late})
+        earliest = min(c for _, c, _, _ in late)
+        heard = defaultdict(list)
+        for agent_id, at in (
+            self.db.query(AgentLocation.agent_id, AgentLocation.received_at)
+            .filter(AgentLocation.agent_id.in_(agent_ids), AgentLocation.received_at >= earliest)
+            .all()
+        ):
+            heard[agent_id].append(_as_utc(at))
+
+        out: list[dict] = []
+        for v, captured, received, lag in late:
+            got_through = [
+                r for r in heard.get(v.agent_id, [])
+                if captured + timedelta(seconds=WITHHELD_AFTER_SECONDS) <= r
+                <= received - timedelta(seconds=WITHHELD_SLACK_SECONDS)
+            ]
+            if got_through:
+                first = min(got_through)
+                out.append({
+                    "type": SYNC_WITHHELD,
+                    # A refused-then-retried visit looks the same, hence not HIGH.
+                    "severity": MEDIUM,
+                    "occurred_at": captured.isoformat(),
+                    "summary": (
+                        f"The phone was sending GPS {int((first - captured).total_seconds() // 60)} min "
+                        f"after this visit, but the visit arrived {int(lag // 60)} min after it happened"
+                    ),
+                    "evidence": {"lag_seconds": int(lag), "first_gps_received_at": first.isoformat(),
+                                 "gps_batches_meanwhile": len(got_through)},
+                    **self._meta(v),
+                })
+            elif lag > LATE_SYNC_SECONDS:
+                out.append({
+                    "type": LATE_SYNC,
+                    "severity": LOW,
+                    "occurred_at": captured.isoformat(),
+                    "summary": f"Recorded offline; reached the server {round(lag / 3600, 1)} h later",
+                    "evidence": {"lag_seconds": int(lag)},
+                    **self._meta(v),
+                })
         return out
 
     # ── 7. the location trail says the agent was somewhere else ─────────────

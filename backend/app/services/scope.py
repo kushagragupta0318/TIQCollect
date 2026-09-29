@@ -111,9 +111,13 @@ def cases_in_scope(db: Session, principal):
     return q.filter(false())
 
 
-def agent_case_or_404(db: Session, agent, case_id, *, options=()):
+def agent_case_or_404(db: Session, agent, case_id, *, options=(), on_day: date | None = None):
     """The case, if `agent` may act on it; otherwise the uniform 404. A pure
-    read: it never changes the case (see sync_assignee below)."""
+    read: it never changes the case (see sync_assignee below).
+
+    `on_day` (I02): a replayed offline item is judged against the beat of the
+    IST day it was captured, not today's; the 20:00 allocation may have moved
+    the case since (ADR 0011 §3). Never sync_assignee on such a grant."""
     from app.models.beat import Beat
     from app.models.case import Case
 
@@ -129,7 +133,7 @@ def agent_case_or_404(db: Session, agent, case_id, *, options=()):
     if case.agent_id == agent.id:
         return case
     beat = (db.query(Beat)
-            .filter(Beat.agent_id == agent.id, Beat.beat_date == access_day()).first())
+            .filter(Beat.agent_id == agent.id, Beat.beat_date == (on_day or access_day())).first())
     if beat is not None and cid in (beat.ordered_case_ids or []):
         return case
     raise _not_found()
@@ -181,6 +185,45 @@ def today_beat_cases(db: Session, agent, *, options=()):
         q = q.options(*options)
     rows = {c.id: c for c in q.filter(Case.id.in_(ids), Case.agency_id == agent.agency_id).all()}
     return beat, [rows[i] for i in ids if i in rows]
+
+
+def agencies_in_scope(db: Session, principal):
+    """A Query of the agencies `principal` (a User) may see. Additive to
+    agents_in_scope/cases_in_scope above (2026-09-28, D02), not a change to
+    either — bank-side tenancy has no manager-of-agents concept, so this is
+    its own, smaller rule:
+
+        AGENCY_ADMIN/MANAGER -> their own agency only (bank-scoped tenants
+                                 never read another agency's onboarding draft)
+        BANK_* / SERVICE     -> every agency of their bank
+        PLATFORM_ADMIN       -> everyone
+        anything else        -> nothing"""
+    from sqlalchemy import false
+    from app.models.tenancy import Agency
+    from app.models.user import UserRole
+
+    q = db.query(Agency)
+    role = getattr(principal, "role", None)
+    if role in (UserRole.AGENCY_ADMIN, UserRole.AGENCY_MANAGER):
+        return q.filter(Agency.id == principal.agency_id)
+    if role in (UserRole.BANK_ADMIN, UserRole.BANK_ANALYST, UserRole.BANK_TECHOPS, UserRole.SERVICE):
+        return q.filter(Agency.bank_id == principal.bank_id)
+    if role == UserRole.PLATFORM_ADMIN:
+        return q
+    return q.filter(false())
+
+
+def agency_or_404(db: Session, principal, agency_id):
+    """The agency, if `principal` may see it; otherwise the uniform 404 —
+    same convention as agent_case_or_404: "not found" and "not yours" are
+    the identical body."""
+    aid = parse_uuid(agency_id)
+    if aid is None:
+        raise _not_found()
+    agency = agencies_in_scope(db, principal).filter_by(id=aid).first()
+    if agency is None:
+        raise _not_found()
+    return agency
 
 
 # Sentinel for a region limit that names no region of the caller's bank:

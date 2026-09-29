@@ -53,6 +53,16 @@ class ErrorCode(str, Enum):
     # ML-1: a borrower's stance sent on a contact that did not reach the
     # borrower (services/borrower_stance.py).
     DISPOSITION_WITHOUT_BORROWER = "DISPOSITION_WITHOUT_BORROWER"
+    # I02 offline outbox: a replayed item's capture time is refused
+    # (services/capture_time.py, ADR 0011 §4). Permanent: the client stops retrying.
+    CAPTURE_IN_FUTURE = "CAPTURE_IN_FUTURE"
+    CAPTURE_TOO_OLD = "CAPTURE_TOO_OLD"
+    CAPTURE_DEVICE_MISMATCH = "CAPTURE_DEVICE_MISMATCH"
+    CAPTURE_OUT_OF_ORDER = "CAPTURE_OUT_OF_ORDER"
+    # A visit to a Do-Not-Contact borrower. Judged against today's list, also
+    # for a replayed visit (coordinator, ADR 0011 decision 5); the code lets the
+    # outbox explain that to the agent. The 403 and its detail are unchanged.
+    DO_NOT_CONTACT = "DO_NOT_CONTACT"
 
 
 class AppException(HTTPException):

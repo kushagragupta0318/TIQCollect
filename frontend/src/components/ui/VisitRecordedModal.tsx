@@ -18,6 +18,8 @@ interface Props {
   outcomeLabel?: string;
   /** Auto-dismiss delay in ms. 0 disables it and waits for the tap. */
   autoCloseMs?: number;
+  /** I02: saved in the offline outbox, not yet on the server. Says so. */
+  queued?: boolean;
   onClose: () => void;
 }
 
@@ -26,6 +28,7 @@ export default function VisitRecordedModal({
   customerName,
   outcomeLabel,
   autoCloseMs = 2000,
+  queued = false,
   onClose,
 }: Props) {
   useEffect(() => {
@@ -39,7 +42,7 @@ export default function VisitRecordedModal({
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
       role="alertdialog"
       aria-live="assertive"
-      aria-label="Visit recorded"
+      aria-label={queued ? "Visit saved on this phone" : "Visit recorded"}
       onClick={onClose}
     >
       <div
@@ -52,7 +55,10 @@ export default function VisitRecordedModal({
             <span className="absolute inset-0 rounded-full bg-white/40 animate-tick-ring" />
             <CheckCircle className="relative w-16 h-16 animate-tick-pop" strokeWidth={1.75} />
           </div>
-          <p className="font-bold text-lg">Visit Recorded</p>
+          <p className="font-bold text-lg">{queued ? "Saved on this phone" : "Visit Recorded"}</p>
+          {queued && (
+            <p className="text-sm mt-1 opacity-95">No signal. It sends by itself when signal returns.</p>
+          )}
           {outcomeLabel && (
             <p className="text-sm mt-1 opacity-95 font-medium">{outcomeLabel}</p>
           )}
