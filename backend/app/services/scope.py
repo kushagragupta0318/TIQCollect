@@ -181,3 +181,42 @@ def today_beat_cases(db: Session, agent, *, options=()):
         q = q.options(*options)
     rows = {c.id: c for c in q.filter(Case.id.in_(ids), Case.agency_id == agent.agency_id).all()}
     return beat, [rows[i] for i in ids if i in rows]
+
+
+def agencies_in_scope(db: Session, principal):
+    """A Query of the agencies `principal` (a User) may see. Additive to
+    agents_in_scope/cases_in_scope above (2026-09-28, D02), not a change to
+    either — bank-side tenancy has no manager-of-agents concept, so this is
+    its own, smaller rule:
+
+        AGENCY_ADMIN/MANAGER -> their own agency only (bank-scoped tenants
+                                 never read another agency's onboarding draft)
+        BANK_* / SERVICE     -> every agency of their bank
+        PLATFORM_ADMIN       -> everyone
+        anything else        -> nothing"""
+    from sqlalchemy import false
+    from app.models.tenancy import Agency
+    from app.models.user import UserRole
+
+    q = db.query(Agency)
+    role = getattr(principal, "role", None)
+    if role in (UserRole.AGENCY_ADMIN, UserRole.AGENCY_MANAGER):
+        return q.filter(Agency.id == principal.agency_id)
+    if role in (UserRole.BANK_ADMIN, UserRole.BANK_ANALYST, UserRole.BANK_TECHOPS, UserRole.SERVICE):
+        return q.filter(Agency.bank_id == principal.bank_id)
+    if role == UserRole.PLATFORM_ADMIN:
+        return q
+    return q.filter(false())
+
+
+def agency_or_404(db: Session, principal, agency_id):
+    """The agency, if `principal` may see it; otherwise the uniform 404 —
+    same convention as agent_case_or_404: "not found" and "not yours" are
+    the identical body."""
+    aid = parse_uuid(agency_id)
+    if aid is None:
+        raise _not_found()
+    agency = agencies_in_scope(db, principal).filter_by(id=aid).first()
+    if agency is None:
+        raise _not_found()
+    return agency
