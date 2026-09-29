@@ -44,6 +44,14 @@ Environment variables are read at build time:
   `src/lib/mapTiles.ts`)
 - `VITE_ENABLE_SIMULATOR` (the `/simulator` page outside dev)
 
+Maps are Leaflet. Point maps with more than 40 points cluster through
+`leaflet.markercluster` (`src/components/map/points.ts`). The plugin ships in
+its own lazy chunk, `points-*.js`: 35.7 kB (9.4 kB gzip) plus 1.2 kB of CSS,
+measured on 2026-09-29. Agent pages never load it: the manager live map
+does, and the bank portal (`/bank`) does on entry, because it imports the
+agency directory eagerly. Re-measure after `npm run build` with
+`ls -l dist/assets/points-*`.
+
 ## Install the app on a phone (PWA, 2026-09-24)
 
 The app ships a web manifest and an app-shell service worker
