@@ -53,6 +53,12 @@ class ErrorCode(str, Enum):
     # ML-1: a borrower's stance sent on a contact that did not reach the
     # borrower (services/borrower_stance.py).
     DISPOSITION_WITHOUT_BORROWER = "DISPOSITION_WITHOUT_BORROWER"
+    # I02 offline outbox: a replayed item's capture time is refused
+    # (services/capture_time.py, ADR 0011 §4). Permanent: the client stops retrying.
+    CAPTURE_IN_FUTURE = "CAPTURE_IN_FUTURE"
+    CAPTURE_TOO_OLD = "CAPTURE_TOO_OLD"
+    CAPTURE_DEVICE_MISMATCH = "CAPTURE_DEVICE_MISMATCH"
+    CAPTURE_OUT_OF_ORDER = "CAPTURE_OUT_OF_ORDER"
 
 
 class AppException(HTTPException):

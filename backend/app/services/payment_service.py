@@ -41,6 +41,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone, timedelta
 
+from sqlalchemy.exc import IntegrityError
 
 from app.core.config import settings
 from app.core.errors import AppException, ErrorCode
@@ -61,6 +62,7 @@ from app.core.security import explicit_true
 from app.models.payment import Payment, PaymentMode, PaymentStatus
 from app.models.ptp import PTP, PTPStatus
 from app.services.scope import agent_case_or_404, sync_assignee
+from app.services.capture_time import judge_capture, moves_case, note_delivered, same_ist_month
 from app.services.ptp_lifecycle_service import verified_paid_against
 from app.services.brand import brand_for
 from app.services.notification_service import NotificationService
@@ -412,10 +414,21 @@ class PaymentService:
     # -----------------------------------------------------------------
     # POST /agent/cases/{case_id}/ptp
     # -----------------------------------------------------------------
-    def set_ptp(self, agent, case_id: str, req) -> dict:
-        case = self._get_accessible_case(agent, case_id)
+    def set_ptp(self, agent, case_id: str, req, *, token_device_id: str | None = None) -> dict:
+        # I02: a replayed offline promise returns the row it already made, then
+        # is judged at its capture time (ADR 0011), like its visit.
+        csid = getattr(req, "client_submission_id", None)
+        if csid:
+            stored = self._ptp_by_submission(agent, csid)
+            if stored is not None:
+                return self._ptp_repeat(stored, case_id)
+        capture = judge_capture(self.db, agent, captured_at=getattr(req, "captured_at", None),
+                                device_seq=getattr(req, "device_seq", None),
+                                item_device_id=getattr(req, "device_id", None),
+                                token_device_id=token_device_id, now=datetime.now(timezone.utc))
+        case = agent_case_or_404(self.db, agent, case_id, on_day=capture.day if capture.late else None)
 
-        existing = self._find_recent_duplicate_ptp(case.id, agent.id, req)
+        existing = None if csid else self._find_recent_duplicate_ptp(case.id, agent.id, req)
         if existing:
             return self._ptp_response(existing)
 
@@ -441,14 +454,27 @@ class PaymentService:
             customer_reason=req.customer_reason,
             agent_notes=req.agent_notes,
             follow_up_date=req.follow_up_date,
+            client_submission_id=csid,
         )
         self.db.add(ptp)
 
-        case.status = CaseStatus.PTP_SET
-        agent.current_month_ptps_set += 1
-        sync_assignee(case, agent)   # at the business commit, never at the read
+        if moves_case(self.db, case, capture):
+            case.status = CaseStatus.PTP_SET
+        if same_ist_month(capture.at, datetime.now(timezone.utc)):
+            agent.current_month_ptps_set += 1
+        if not capture.late:
+            sync_assignee(case, agent)   # at the business commit, never at the read; never on a replay
+        note_delivered(capture)
 
-        self.db.commit()
+        try:
+            self.db.commit()
+        except IntegrityError:
+            # Two deliveries of one key raced and the other landed first.
+            self.db.rollback()
+            stored = self._ptp_by_submission(agent, csid) if csid else None
+            if stored is None:
+                raise
+            return self._ptp_repeat(stored, case_id)
         self.db.refresh(ptp)
 
         # 2026-09-11 — PTP_SET, declared and never written. PTP_UPDATED (the
@@ -468,6 +494,17 @@ class PaymentService:
         })
 
         return self._ptp_response(ptp)
+
+    def _ptp_by_submission(self, agent, client_submission_id: str) -> PTP | None:
+        return (self.db.query(PTP)
+                .filter(PTP.agent_id == agent.id, PTP.client_submission_id == client_submission_id)
+                .first())
+
+    def _ptp_repeat(self, stored: PTP, case_id: str) -> dict:
+        if str(stored.case_id) != str(case_id):
+            raise AppException(409, ErrorCode.IDEMPOTENCY_KEY_REUSED,
+                               "This submission id was already used for another case.")
+        return self._ptp_response(stored)
 
     def _find_recent_duplicate_ptp(self, case_id: str, agent_id: str, req) -> PTP | None:
         window_start = datetime.now(timezone.utc) - timedelta(seconds=self._DUPLICATE_SUBMIT_WINDOW_SECONDS)

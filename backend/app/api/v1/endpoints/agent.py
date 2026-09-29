@@ -115,7 +115,7 @@ import uuid
 from datetime import datetime, date, time, timezone, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, File, Request, UploadFile
+from fastapi import APIRouter, HTTPException, File, Query, Request, UploadFile
 from fastapi.responses import Response as FastAPIResponse
 from pydantic import BaseModel
 from sqlalchemy import func
@@ -125,7 +125,7 @@ import structlog
 from app.core.dependencies import DbSession, AgentOnly, TokenPayload
 from app.core import llm
 from app.core.config import settings
-from app.core.ids import UUIDPath
+from app.core.ids import UUIDPath, UUIDQuery
 from app.models.agent import Agent, AgentStatus
 from app.models.beat import Beat
 from app.models.case import Case, CaseStatus, CasePriority
@@ -433,7 +433,8 @@ def get_case_detail(case_id: UUIDPath, current_user: AgentOnly, db: DbSession):
 # ---------------------------------------------------------------------------
 
 @router.post("/cases/{case_id}/visit", response_model=VisitResponse)
-def record_visit(case_id: UUIDPath, req: RecordVisitRequest, current_user: AgentOnly, db: DbSession):
+def record_visit(case_id: UUIDPath, req: RecordVisitRequest, current_user: AgentOnly,
+                 payload: TokenPayload, db: DbSession):
     """Record a field visit outcome.
 
     See VisitService.record_visit for the actual logic (geo/contact-hours
@@ -442,7 +443,7 @@ def record_visit(case_id: UUIDPath, req: RecordVisitRequest, current_user: Agent
     from app.services.visit_service import VisitService
 
     agent = _get_agent_or_404(current_user, db)
-    return VisitService(db).record_visit(agent, case_id, req)
+    return VisitService(db).record_visit(agent, case_id, req, token_device_id=payload.get("device_id"))
 
 
 # ---------------------------------------------------------------------------
@@ -646,9 +647,10 @@ def notify_case(case_id: UUIDPath, req: NotifyCaseRequest, current_user: AgentOn
 # ---------------------------------------------------------------------------
 
 @router.post("/cases/{case_id}/ptp", response_model=PTPResponse)
-def set_ptp(case_id: UUIDPath, req: SetPTPRequest, current_user: AgentOnly, db: DbSession):
+def set_ptp(case_id: UUIDPath, req: SetPTPRequest, current_user: AgentOnly,
+            payload: TokenPayload, db: DbSession):
     agent = _get_agent_or_404(current_user, db)
-    return PaymentService(db).set_ptp(agent, case_id, req)
+    return PaymentService(db).set_ptp(agent, case_id, req, token_device_id=payload.get("device_id"))
 
 
 # ---------------------------------------------------------------------------
@@ -714,44 +716,13 @@ def handover_case(case_id: UUIDPath, req: HandoverRequest, current_user: AgentOn
 # ---------------------------------------------------------------------------
 
 @router.post("/cases/{case_id}/call-log", status_code=201, response_model=LogCallResponse)
-def log_call(case_id: UUIDPath, req: LogCallRequest, current_user: AgentOnly, db: DbSession):
+def log_call(case_id: UUIDPath, req: LogCallRequest, current_user: AgentOnly,
+             payload: TokenPayload, db: DbSession):
     """Record a phone call attempt and any scheduling/payment intel gathered."""
-    from app.models.call_log import CallLog
+    from app.services.call_log_service import CallLogService
 
     agent = _get_agent_or_404(current_user, db)
-    case = _get_accessible_case_or_404(db, agent, case_id)
-    # ML-1: a stance only on an answered call — nobody said anything otherwise.
-    from app.services.borrower_stance import check_call_stance
-    check_call_stance(req.borrower_disposition, outcome=req.outcome)
-
-    log = CallLog(
-        case_id=case_id,
-        agent_id=agent.id,
-        customer_id=case.customer_id,
-        called_at=datetime.now(timezone.utc),
-        duration_seconds=req.duration_seconds,
-        outcome=req.outcome,
-        phone_used=req.phone_used,
-        customer_response_notes=req.customer_response_notes,
-        visit_feasible_today=req.visit_feasible_today,
-        best_time_to_visit=req.best_time_to_visit,
-        available_from=req.available_from,
-        available_until=req.available_until,
-        blocked_until_date=req.blocked_until_date,
-        alternate_location_hint=req.alternate_location_hint,
-        payment_intent_signalled=req.payment_intent_signalled,
-        verbal_payment_date=req.verbal_payment_date,
-        ai_intel_summary=req.ai_intel_summary,
-        borrower_disposition=req.borrower_disposition,
-    )
-    db.add(log)
-    db.commit()
-    db.refresh(log)
-    return {
-        "id": log.id,
-        "called_at": log.called_at.isoformat(),
-        "outcome": log.outcome,
-    }
+    return CallLogService(db).log_call(agent, case_id, req, token_device_id=payload.get("device_id"))
 
 
 # ---------------------------------------------------------------------------
@@ -772,9 +743,20 @@ def flag_customer(customer_id: UUIDPath, req: CustomerFlagRequest, current_user:
 # ---------------------------------------------------------------------------
 
 @router.post("/cases/{case_id}/photo-upload-url")
-def get_photo_upload_url(case_id: UUIDPath, subject: str, current_user: AgentOnly, db: DbSession):
+def get_photo_upload_url(case_id: UUIDPath, subject: str, current_user: AgentOnly,
+                         payload: TokenPayload, db: DbSession,
+                         client_submission_id: UUIDQuery = None,
+                         captured_at: Optional[datetime] = None,
+                         device_seq: Optional[int] = Query(default=None, ge=1, le=2**62),
+                         device_id: Optional[str] = Query(default=None, max_length=200)):
+    """The four optional query params are an I02 outbox upload's visit
+    (docs/adr/0011-offline-outbox.md); absent, it is a live upload as before."""
+    if captured_at is not None and captured_at.tzinfo is None:
+        raise HTTPException(status_code=422, detail="captured_at must carry a timezone")
     agent = _get_agent_or_404(current_user, db)
-    return MediaService(db).get_photo_upload_url(agent, case_id, subject)
+    return MediaService(db).get_photo_upload_url(
+        agent, case_id, subject, client_submission_id=client_submission_id, captured_at=captured_at,
+        device_seq=device_seq, device_id=device_id, token_device_id=payload.get("device_id"))
 
 
 @router.get("/cases/{case_id}/photos")

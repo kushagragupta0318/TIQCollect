@@ -111,9 +111,13 @@ def cases_in_scope(db: Session, principal):
     return q.filter(false())
 
 
-def agent_case_or_404(db: Session, agent, case_id, *, options=()):
+def agent_case_or_404(db: Session, agent, case_id, *, options=(), on_day: date | None = None):
     """The case, if `agent` may act on it; otherwise the uniform 404. A pure
-    read: it never changes the case (see sync_assignee below)."""
+    read: it never changes the case (see sync_assignee below).
+
+    `on_day` (I02): a replayed offline item is judged against the beat of the
+    IST day it was captured, not today's; the 20:00 allocation may have moved
+    the case since (ADR 0011 §3). Never sync_assignee on such a grant."""
     from app.models.beat import Beat
     from app.models.case import Case
 
@@ -129,7 +133,7 @@ def agent_case_or_404(db: Session, agent, case_id, *, options=()):
     if case.agent_id == agent.id:
         return case
     beat = (db.query(Beat)
-            .filter(Beat.agent_id == agent.id, Beat.beat_date == access_day()).first())
+            .filter(Beat.agent_id == agent.id, Beat.beat_date == (on_day or access_day())).first())
     if beat is not None and cid in (beat.ordered_case_ids or []):
         return case
     raise _not_found()

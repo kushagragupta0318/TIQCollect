@@ -60,6 +60,12 @@ def photo_key(case_id: str, photo_type: str, ext: str = "jpg") -> str:
     return f"collections/{d.year}/{d.month:02d}/{case_id[:8]}/{photo_type}_{uuid.uuid4().hex[:12]}.{ext}"
 
 
+def submission_photo_key(case_id: str, photo_type: str, submission_id: str, ext: str = "jpg") -> str:
+    """The same object for every retry of one offline visit's photo (I02).
+    Path: collections/offline/{case_id[:8]}/{submission_id}/{photo_type}.jpg"""
+    return f"collections/offline/{str(case_id)[:8]}/{submission_id}/{photo_type}.{ext}"
+
+
 def download_bytes(key: str) -> bytes:
     """Download an object from MinIO into memory (for transcription)."""
     resp = _client().get_object(BUCKET, key)

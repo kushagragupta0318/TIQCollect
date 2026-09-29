@@ -40,7 +40,7 @@
 # ───────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 from app.core.ids import UUIDStr
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 from datetime import date, datetime
 from typing import Optional
 from app.models.visit import VisitOutcome, PersonMet, DefaultReason, NotMetReason
@@ -60,7 +60,20 @@ class CheckInRequest(BaseModel):
     selfie_key: Optional[str] = None
 
 
-class RecordVisitRequest(BaseModel):
+class OfflineCapture(BaseModel):
+    """I02 offline outbox (docs/adr/0011-offline-outbox.md). All absent = a live
+    submit, judged exactly as before. services/capture_time.py bounds them."""
+    # Client-generated at capture; a repeat returns the row already stored.
+    client_submission_id: Optional[UUIDStr] = None
+    # The phone's clock when the agent pressed Submit.
+    captured_at: Optional[AwareDatetime] = None
+    # Strictly increasing per device across every outbox item.
+    device_seq: Optional[int] = Field(default=None, ge=1, le=2**62)
+    # The device the item was captured on (for a visit: also the photos' device).
+    device_id: Optional[str] = Field(default=None, max_length=200)
+
+
+class RecordVisitRequest(OfflineCapture):
     check_in_latitude: float
     check_in_longitude: float
     customer_met: bool
@@ -97,8 +110,6 @@ class RecordVisitRequest(BaseModel):
     object_photo_altitude: Optional[float] = None
     object_photo_captured_at: Optional[str] = None
     object_photo_sha256: Optional[str] = None
-    # Device that took all photos on this visit
-    device_id: Optional[str] = None
     # Visit recordings (keys returned by /agent/cases/{id}/recording-upload-url)
     agent_recording_key: Optional[str] = None
     borrower_recording_key: Optional[str] = None
@@ -128,7 +139,7 @@ class CollectPaymentRequest(BaseModel):
     verification_id: Optional[str] = None
 
 
-class SetPTPRequest(BaseModel):
+class SetPTPRequest(OfflineCapture):
     committed_amount: float = Field(gt=0)
     committed_date: date
     customer_reason: Optional[str] = None
@@ -159,7 +170,7 @@ class CustomerFlagRequest(BaseModel):
     do_not_contact: Optional[bool] = None
 
 
-class LogCallRequest(BaseModel):
+class LogCallRequest(OfflineCapture):
     outcome: CallOutcome
     duration_seconds: Optional[int] = None
     phone_used: Optional[str] = None          # "PRIMARY" | "ALTERNATE"
