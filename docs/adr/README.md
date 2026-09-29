@@ -17,3 +17,4 @@ source-file CHANGELOG headers (ADR 0006). Commit messages carry the per-change m
 | [0006](0006-comments-and-documentation.md) | Comments say why; history lives in git and ADRs | Accepted, 2026-09-24 |
 | [0007](0007-retraining-and-promotion.md) | Retraining is automatic up to a human approval; promotion needs four eyes | Accepted, 2026-09-09/10 |
 | [0008](0008-recovery-risk-2-2-0-champion.md) | recovery_risk 2.2.0 (a GAM) is champion; its known limits | Accepted, 2026-09-16 |
+| [0010](0010-placement-engine.md) | The placement engine v1: gates shared with manual placement, value = E × m × (1 − c), headroom as capacity, min-cost flow, exploration off by default, four-eyes apply | Accepted, 2026-09-29 |

@@ -10,7 +10,7 @@ from datetime import date
 
 import pytest
 
-from app.models.case import Case, ClosureReason
+from app.models.case import Case, CaseStatus, ClosureReason
 from app.models.customer import Customer
 from app.models.lending import BankFeedBatch, BankFeedRow
 from app.models.loan import Loan
@@ -18,6 +18,7 @@ from app.models.placement import Placement
 from app.models.tenancy import AgencyContract
 from scripts.ingest_daily import _close_case_recall, feed_context, process_row
 from tests._db import TEST_AGENCY_ID, TEST_BANK_ID, create_schema, make_engine, make_session_factory
+from tests._placement import cover
 
 TODAY = date(2026, 9, 24)
 
@@ -35,6 +36,8 @@ def _ctx(db, *, contract=True):
     if contract:
         db.add(AgencyContract(bank_id=TEST_BANK_ID, agency_id=TEST_AGENCY_ID, contract_no="MTB/FCA/2026-27/014",
                               start_date=date(2026, 4, 1), end_date=date(2027, 3, 31), status="ACTIVE"))
+        db.flush()
+        cover(db, db.query(AgencyContract).one())   # coverage fails closed (placement_service)
     batch = BankFeedBatch(bank_id=TEST_BANK_ID, feed_type="DAILY_BOOK", business_date=TODAY,
                           file_sha256=hashlib.sha256(b"feed").hexdigest(), received_via="UPLOAD")
     db.add(batch)
@@ -122,3 +125,76 @@ def test_a_recall_closure_records_the_typed_reason(db):
     assert case.closure_reason == ClosureReason.RECALLED.value
     # The free-text marker ml/pipeline/outcomes.py matches is still written.
     assert case.resolution_notes.startswith("RECALLED by bank")
+
+
+def test_a_feed_recall_ends_the_placement_and_the_loan_can_be_placed_again(db):
+    """Found 2026-09-29 (P3 D08): a feed RECALL closed the case but left its
+    placement ACTIVE, so the loan stayed placed with the agency for good."""
+    from app.models.audit_log import AuditAction, AuditLog
+    ctx = _ctx(db)
+    process_row(_row(), db, False, TODAY, ctx=ctx, row_no=1)
+    db.commit()
+    first = db.query(Placement).one()
+
+    res = process_row(_row(bank_action="RECALL", recall_reason="LEGAL_PROCEEDINGS", bank_remark="court order"),
+                      db, False, TODAY, ctx=ctx, row_no=2)
+    db.commit()
+    assert (res["action_case"], res["placement"]) == ("auto_closed_recall", "placement_recalled")
+    db.refresh(first)
+    assert (first.status, first.end_reason, first.ended_on, first.ended_by) == ("RECALLED", "FEED_RECALL", TODAY, None)
+    case = db.query(Case).one()
+    assert case.status == CaseStatus.CLOSED and case.resolution_notes.startswith("RECALLED by bank")
+    audit = db.query(AuditLog).filter(AuditLog.action == AuditAction.PLACEMENT_RECALLED).one()
+    assert (audit.user_id, audit.entity_id, audit.details["source"]) == (None, first.id, "FEED")
+
+    # The same row again changes nothing more.
+    again = process_row(_row(bank_action="RECALL", recall_reason="LEGAL_PROCEEDINGS"), db, False, TODAY,
+                        ctx=ctx, row_no=3)
+    db.commit()
+    assert again.get("placement") is None
+    assert db.query(AuditLog).filter(AuditLog.action == AuditAction.PLACEMENT_RECALLED).count() == 1
+
+    # A later overdue row under a new case number re-places the loan: new placement, new case.
+    res = process_row(_row(case_number="MTB-CASE-0101"), db, False, TODAY, ctx=ctx, row_no=4)
+    db.commit()
+    assert res["action_case"] == "inserted", res
+    assert db.query(Placement).count() == 2
+    assert db.query(Placement).filter_by(status="ACTIVE").one().id != first.id
+    assert db.query(Case).count() == 2
+
+
+@pytest.mark.parametrize("over,status,reason", [
+    ({"bank_action": "PAID_DIRECT", "dpd": "0", "overdue_amount": "0"}, "RESOLVED", "FEED_PAID_DIRECT"),
+    ({"bank_action": "SETTLED", "settlement_amount": "150000"}, "RESOLVED", "FEED_SETTLED"),
+    ({"bank_action": "WRITTEN_OFF", "bank_remark": "board approved"}, "RETURNED", "FEED_WRITTEN_OFF"),
+    ({"bank_action": "DECEASED"}, "RESOLVED", "FEED_DECEASED"),
+])
+def test_a_feed_closure_ends_the_placement_with_its_mapped_status(db, over, status, reason):
+    """Coordinator ruling (2026-09-29): PAID_DIRECT / SETTLED -> RESOLVED,
+    WRITTEN_OFF -> RETURNED, audited PLACEMENT_ENDED by the system."""
+    from app.models.audit_log import AuditAction, AuditLog
+    ctx = _ctx(db)
+    process_row(_row(), db, False, TODAY, ctx=ctx, row_no=1)
+    db.commit()
+    placement = db.query(Placement).one()
+
+    res = process_row(_row(**over), db, False, TODAY, ctx=ctx, row_no=2)
+    db.commit()
+    db.refresh(placement)
+    assert res["placement"] == f"placement_{status.lower()}", res
+    assert (placement.status, placement.end_reason, placement.ended_on, placement.ended_by) == (
+        status, reason, TODAY, None)
+    audit = db.query(AuditLog).filter(AuditLog.action == AuditAction.PLACEMENT_ENDED).one()
+    assert (audit.user_id, audit.entity_id, audit.details["bank_action"]) == (
+        None, placement.id, over["bank_action"])
+
+    if over["bank_action"] == "DECEASED":
+        # d4's rule, untouched: the borrower stays tagged deceased (do not contact).
+        from app.models.customer import CUSTOMER_TAG_DECEASED
+        assert CUSTOMER_TAG_DECEASED in db.query(Customer).one().tags
+
+    # Re-ingesting the same file ends nothing twice.
+    again = process_row(_row(**over), db, False, TODAY, ctx=ctx, row_no=3)
+    db.commit()
+    assert again.get("placement") is None
+    assert db.query(AuditLog).filter(AuditLog.action == AuditAction.PLACEMENT_ENDED).count() == 1

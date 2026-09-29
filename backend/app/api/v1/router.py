@@ -20,3 +20,7 @@ api_router.include_router(bank_agencies_admin.router)
 api_router.include_router(events.router)
 # 2026-09-28 (P3 C01/C03, d4): the bank Command Center.
 api_router.include_router(bank.router)
+# 2026-09-29 (P3 D08, 2b): the bank's placement routes, /bank/placements. Imported on
+# its own line so d4's p3-d4 edit of the import above merges without a conflict.
+from app.api.v1.endpoints import bank_placements  # noqa: E402
+api_router.include_router(bank_placements.router)
