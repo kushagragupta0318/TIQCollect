@@ -45,3 +45,31 @@ export function latestMasterLoginInvite(invites: InviteSummary[], agencyId: stri
     .sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""));
   return matches[0] ?? null;
 }
+
+/**
+ * Accepts a bare host ("google.com") as readily as a full URL
+ * ("https://foo.co"), and normalises both to one consistent stored form.
+ *
+ * 2026-09-29 — owner-reported: the Website field was `<input type="url">`,
+ * which requires a scheme, so a manager typing the domain as most people
+ * actually write it ("google.com") got the browser's native "Please enter a
+ * URL" and could not submit. The input is now `type="text"`; this function
+ * is what makes typing a bare host work anyway — no scheme -> prefix
+ * https://, an explicit http:// is left alone (never silently upgraded),
+ * and a bare-root trailing slash is trimmed so "https://foo.com/" and
+ * "https://foo.com" store the same way. Mirrored server-side
+ * (agency_service._normalise_website) so a value pasted straight into an
+ * API call, not just typed through this form, normalises the same way —
+ * one rule, stated once in each language since they cannot share source,
+ * with the same test-input table on both sides.
+ *
+ * Deliberately does NOT touch "www." — that changes which host is actually
+ * being named, which is not this function's business to decide for a bank
+ * whose real site might only resolve under www.
+ */
+export function normaliseWebsite(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const withScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed) ? trimmed : `https://${trimmed}`;
+  return withScheme.replace(/^(https?:\/\/[^/]+)\/$/, "$1");
+}

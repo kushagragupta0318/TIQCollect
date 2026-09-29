@@ -345,3 +345,116 @@ export async function listBankInvites(): Promise<InviteSummary[]> {
   const { data } = await api.get<InviteSummary[]>("/admin/invites");
   return data;
 }
+
+/**
+ * GET /bank/agencies — the wizard's own plain list (agency_service.list_agencies),
+ * distinct from listAgencyDirectory's joined D05 row: no contract, coverage or
+ * product columns, just Agency itself. This is the scorecard page's (D06) agency
+ * picker source — it needs every agency's id and name, not the directory's wider
+ * join it would otherwise have to pay for and discard.
+ */
+export async function listAgencies(status?: string): Promise<Agency[]> {
+  const { data } = await api.get<Agency[]>("/bank/agencies", { params: status ? { status } : undefined });
+  return data;
+}
+
+/**
+ * The Agency Performance Index (agency_effect.agency_effect, pooled — D06/2b).
+ * `index` is null when the estimator found nothing to score for this window;
+ * `n` is the evidence behind it (matured placement-months) and should be shown
+ * alongside the index, not hidden. Every ratio here is 0-100 already (not a
+ * 0-1 fraction) — see agency_scorecard.py's `agency_effect` import.
+ */
+export interface PerformanceIndex {
+  agency_id: string;
+  region_id: string | null;
+  month_start: string;
+  months: number;
+  /** Evidence behind the index — placement-months actually matured and scored. */
+  n: number;
+  months_unread: number;
+  raw_rate: number | null;
+  peer_rate: number | null;
+  shrunk_rate: number | null;
+  /** 0-100, THE headline number. Null means "not enough data", never 0. */
+  index: number | null;
+  multiplier: number;
+  version: string;
+}
+
+/**
+ * GET /bank/agencies/{id}/scorecard (agency_scorecard.agency_scorecard, D06).
+ * Every ratio below is a 0-1 fraction UNLESS its own comment says otherwise.
+ * `null` always means "not knowable for this window", never zero — see this
+ * module's docblock and backend/app/services/bank/agency_scorecard.py's own.
+ */
+export interface AgencyScorecard {
+  agency_id: string;
+  region_id: string | null;
+  month_start: string;
+  months: number;
+  version: string;
+  /** Null when the Performance Index estimator found nothing for this window. */
+  performance_index: PerformanceIndex | null;
+  /** 0 means nothing at all for this agency/window — an empty state, not a page of zeros. */
+  n_rows: number;
+  collection_efficiency: number | null;
+  resolution_rate: number | null;
+  /**
+   * NOT bounded to 1 — expected_recovery_inr is only the month's new-placement
+   * cohort while verified_collections is the whole active book, so this can
+   * honestly read above 100%. Never clamp it client-side (agency_scorecard.py's
+   * module docblock, "RECOVERY VS EXPECTED'S COHORT CAVEAT").
+   */
+  recovery_vs_expected: number | null;
+  ptp_conversion: number | null;
+  contact_rate: number | null;
+  sla_adherence: number | null;
+  /** A plain count, e.g. 2.4 visits/agent/day — not a ratio. */
+  productivity_per_agent_per_day: number | null;
+  /** Rupees per ₹100 collected. Null means no cost rate is configured for this
+   *  bank yet — show "not configured", never "₹0". */
+  cost_per_100_inr: number | null;
+  /** Confirmed fraud findings per 100 visits. LOWER is better. */
+  evidence_integrity_per_100_visits: number | null;
+  /** NOT bounded to 1 — can exceed if the agency is overstaffed against its contract. */
+  workforce_active_ratio: number | null;
+  /** NOT bounded to 1, same reasoning as workforce_active_ratio. */
+  workforce_attrition_ratio: number | null;
+  workforce_leave_rate: number | null;
+  /**
+   * A documented placeholder, NOT the plan's header Compliance Score (that KPI,
+   * C01-C03, does not exist on this branch yet — see agency_scorecard.py's
+   * module docblock). 0-100. Always label this provisional in the UI.
+   */
+  compliance_score: number | null;
+}
+
+export interface ScorecardFilters {
+  region_id?: string;
+  /** YYYY-MM-DD. Omit for the latest month. */
+  month_start?: string;
+  /** Window width in months, ending at month_start. Omit for 1. */
+  months?: number;
+}
+
+export interface LeaderboardFilters {
+  region_id?: string;
+  /** YYYY-MM-DD. Omit for the latest month. */
+  month_start?: string;
+}
+
+export async function getAgencyScorecard(agencyId: string, filters: ScorecardFilters = {}): Promise<AgencyScorecard> {
+  const { data } = await api.get<AgencyScorecard>(`/bank/agencies/${agencyId}/scorecard`, { params: filters });
+  return data;
+}
+
+/**
+ * GET /bank/agencies-leaderboard — every agency in scope, ranked by
+ * Performance Index descending, unscored (index: null) agencies last
+ * (agency_scorecard.leaderboard's own sort — this wrapper does not re-sort).
+ */
+export async function listAgencyLeaderboard(filters: LeaderboardFilters = {}): Promise<PerformanceIndex[]> {
+  const { data } = await api.get<PerformanceIndex[]>("/bank/agencies-leaderboard", { params: filters });
+  return data;
+}

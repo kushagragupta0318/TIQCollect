@@ -39,7 +39,8 @@ import { ArrowLeft, Phone, Navigation, Calendar, MapPin, CheckCircle, MessageCir
 import { toast } from "react-hot-toast";
 import { AiBadge } from "@/components/ui/AiBadge";
 import { RepaymentScore, type RepaymentScoreData } from "@/components/ui/RepaymentScore";
-import { getCaseDetail, handoverCase, getVisitStrategy, logCall, notifyCase, reoptimizeBeat, sendPaymentOtp, verifyPaymentOtp, type LogCallPayload } from "@/api/agent";
+import { submitCall } from "@/lib/outboxRunner";
+import { getCaseDetail, handoverCase, getVisitStrategy, notifyCase, reoptimizeBeat, sendPaymentOtp, verifyPaymentOtp, type LogCallPayload } from "@/api/agent";
 import { useVoiceCall } from "@/hooks/useVoiceCall";
 import CallModal from "@/components/ui/CallModal";
 import { useBeat } from "@/contexts/useBeat";
@@ -339,10 +340,18 @@ export default function AgentCaseDetailPage() {
       if (payload.best_time_to_visit === "") delete payload.best_time_to_visit;
       if (payload.alternate_location_hint === "") delete payload.alternate_location_hint;
       if (payload.customer_response_notes === "") delete payload.customer_response_notes;
-      await logCall(id, payload);
-      toast.success("Call logged — intel saved for AI ranking");
+      // I02: through the offline outbox, so a call logged without signal is kept.
+      const res = await submitCall({ caseId: id, caseLabel: caseData?.case_number ?? "this case", body: payload });
+      if (res.status === "refused") {
+        toast.error(res.message);
+        return;
+      }
+      toast.success(res.status === "sent"
+        ? "Call logged — intel saved for AI ranking"
+        : "Call saved on this phone — it sends when signal returns");
       setShowCallModal(false);
       setCallForm(initCallForm());
+      if (res.status !== "sent") return;
 
       // Auto-reoptimize only when this call actually changed routing-relevant
       // state (a real window or urgent preset) — skip it for plain outcome
