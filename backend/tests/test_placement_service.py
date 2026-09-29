@@ -14,7 +14,7 @@ import pytest
 from app.models.case import CaseStatus
 from app.models.customer import Customer
 from app.models.lending import BankFeedBatch
-from app.models.loan import DPDBucket, Loan, LoanType
+from app.models.loan import DPDBucket, Loan, LoanStatus, LoanType
 from app.models.placement import Placement
 from app.models.tenancy import Agency, AgencyContract, AgencyContractTerm, AgencyRegion, Branch
 from app.services.placement_service import (
@@ -311,3 +311,33 @@ def test_batch_facts_judge_exactly_as_evaluate_does(db):
                 batch = judge(lf, many[aid], planned=planned).as_json()
                 single = svc.evaluate(lf.loan, aid, DAY, planned=planned).as_json()
                 assert batch == single, (aid, lf.loan.loan_account_number, planned)
+
+
+# ── one-shot reconcile of placements on closed loans (coordinator, 2026-09-29) ──
+
+@pytest.mark.parametrize("loan_status,end_status", [
+    (LoanStatus.CLOSED, "RESOLVED"), (LoanStatus.SETTLED, "RESOLVED"), (LoanStatus.WRITTEN_OFF, "RETURNED"),
+])
+def test_reconcile_ends_a_placement_whose_loan_the_bank_closed(db, loan_status, end_status):
+    from app.models.audit_log import AuditAction, AuditLog
+    _contract(db)
+    svc = PlacementService(db)
+    closed, open_ = _loan(db, 1), _loan(db, 2)
+    p_closed = svc.place_new_loan(closed, agency_id=TEST_AGENCY_ID, on=DAY, source="FEED")
+    p_open = svc.place_new_loan(open_, agency_id=TEST_AGENCY_ID, on=DAY, source="FEED")
+    closed.status = loan_status
+    db.commit()
+
+    dry = svc.reconcile_orphans(TEST_BANK_ID, on=DAY, dry_run=True)
+    assert (dry["ended"], dry["by_status"]) == (1, {end_status: 1}) and p_closed.status == "ACTIVE"
+
+    out = svc.reconcile_orphans(TEST_BANK_ID, on=DAY)
+    db.commit()
+    assert out["ended"] == 1
+    assert (p_closed.status, p_closed.end_reason, p_closed.ended_on, p_closed.ended_by) == (
+        end_status, "FEED_RECONCILE", DAY, None)
+    assert p_open.status == "ACTIVE"
+    audit = db.query(AuditLog).filter(AuditLog.action == AuditAction.PLACEMENT_ENDED).one()
+    assert (audit.user_id, audit.entity_id, audit.details["source"]) == (None, p_closed.id, "RECONCILE")
+    assert svc.reconcile_orphans(TEST_BANK_ID, on=DAY)["ended"] == 0                   # idempotent
+    assert svc.reconcile_orphans(test_id("bank:other"), on=DAY)["ended"] == 0         # another bank: nothing

@@ -51,7 +51,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import func
+from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
 from app.models.case import Case, CaseStatus, ClosureReason, priority_for
@@ -568,6 +568,40 @@ class PlacementService:
         placement.ended_by = None
         placement.end_reason = f"FEED_{bank_action}"[:30]
         self.db.flush()
+
+    # A loan the bank has closed cannot stay placed. Before the feed ended
+    # placements (2026-09-29) a closure left them ACTIVE; this ends those once.
+    RECONCILE_END_STATUS = {LoanStatus.CLOSED: "RESOLVED", LoanStatus.SETTLED: "RESOLVED",
+                            LoanStatus.WRITTEN_OFF: "RETURNED"}
+    RECONCILE_REASON = "FEED_RECONCILE"
+
+    def reconcile_orphans(self, bank_id: str, *, on: date, dry_run: bool = False) -> dict:
+        """End every ACTIVE placement of `bank_id` whose loan is no longer open
+        (RESOLVED for closed/settled, RETURNED for written off), end_reason
+        FEED_RECONCILE, system actor, one PLACEMENT_ENDED audit row each.
+        Cases are not touched: the feed that closed the loan closed them, or a
+        person must. Idempotent. The caller commits (dry_run changes nothing)."""
+        from app.core.audit import stage_audit
+        from app.models.audit_log import AuditAction
+        rows = (self.db.query(Placement, Loan.status)
+                .join(Loan, and_(Loan.id == Placement.loan_id, Loan.bank_id == Placement.bank_id))
+                .filter(Placement.bank_id == bank_id, Placement.status == "ACTIVE",
+                        Loan.status.notin_(PLACEABLE_LOAN_STATUSES))
+                .order_by(Placement.id).all())
+        by_status: dict[str, int] = {}
+        for p, loan_status in rows:
+            status = self.RECONCILE_END_STATUS.get(loan_status, "RESOLVED")
+            by_status[status] = by_status.get(status, 0) + 1
+            if dry_run:
+                continue
+            p.status, p.ended_on, p.ended_by, p.end_reason = status, on, None, self.RECONCILE_REASON
+            stage_audit(self.db, action=AuditAction.PLACEMENT_ENDED, user_id=None, entity_type="Placement",
+                        entity_id=p.id,
+                        details={"source": "RECONCILE", "loan_status": loan_status.value, "status": status,
+                                 "agency_id": p.agency_id, "loan_id": p.loan_id})
+        if not dry_run:
+            self.db.flush()
+        return {"bank_id": bank_id, "ended": len(rows), "by_status": by_status, "dry_run": dry_run}
 
     # ── quarantine ───────────────────────────────────────────────────────────
 
