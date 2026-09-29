@@ -49,6 +49,9 @@ class MediaService:
         # I02: an outbox upload names its visit's submission. Judged like the
         # visit (capture-day access), and keyed by it, so a retried PUT
         # overwrites its own object rather than orphaning a new one.
+        # INVARIANT: an upload never advances the device's sequence
+        # (no note_delivered). Only the visit that uses the photo is delivered,
+        # so its sequence number is still unspent when it arrives.
         capture = judge_capture(self.db, agent, captured_at=captured_at, device_seq=device_seq,
                                 item_device_id=device_id, token_device_id=token_device_id,
                                 now=datetime.now(timezone.utc))

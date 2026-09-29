@@ -427,6 +427,11 @@ class PaymentService:
                                 item_device_id=getattr(req, "device_id", None),
                                 token_device_id=token_device_id, now=datetime.now(timezone.utc))
         case = agent_case_or_404(self.db, agent, case_id, on_day=capture.day if capture.late else None)
+        # A promise cannot fall due before it was made. For a replay "made" is
+        # the capture day, never the sync day (Opus audit of 1a85ffd, MED).
+        if req.committed_date < capture.day:
+            raise AppException(422, ErrorCode.VALIDATION_ERROR,
+                               "The promised date is before the day the promise was made.")
 
         existing = None if csid else self._find_recent_duplicate_ptp(case.id, agent.id, req)
         if existing:

@@ -80,6 +80,13 @@ export function mutatedCase(method: string | undefined, url: string | undefined)
   return CASE_PATH.exec(url)?.[1] ?? null;
 }
 
+/** Whose copies these are: the slot, the login and the device together. A
+ *  change of any one drops every saved copy (Opus audit of 1a85ffd). */
+export function cacheOwner(s: { isAuthenticated: boolean; user: { id: string } | null; deviceId: string },
+                           slot: string | null): string {
+  return `${slot ?? "main"}|${s.isAuthenticated ? s.user?.id ?? "" : ""}|${s.deviceId}`;
+}
+
 /** The in-memory store: tests, and the fallback when IndexedDB is unavailable. */
 export class MemoryReadStore implements ReadStore {
   private m = new Map<string, ReadEntry>();

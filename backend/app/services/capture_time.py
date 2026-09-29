@@ -81,6 +81,9 @@ def judge_capture(db: Session, agent, *, captured_at: datetime | None, device_se
                            "Tell your manager about this visit; it cannot be accepted now.")
 
     device = bound_device(db, agent, token_device_id)
+    # The gate is the token's device (server-signed, bound via the A09b secret).
+    # item_device_id is the client's own claim: checked as a consistency
+    # assertion that the item was captured here, not as a security boundary.
     if device is None or not item_device_id or item_device_id != token_device_id:
         raise AppException(403, ErrorCode.CAPTURE_DEVICE_MISMATCH,
                            "Recorded offline on a different phone. Only the phone it was recorded "
@@ -116,8 +119,10 @@ def bound_device(db: Session, agent, token_device_id: str | None):
 
 def moves_case(db: Session, case, capture: Capture) -> bool:
     """May this item change the case's status? A live one always. A late one
-    only if nothing newer happened to the case: no later visit, and not
-    resolved meanwhile (ADR 0011 §5). Otherwise it is stored as history."""
+    only if nothing newer happened to the case: no later visit, no promise
+    recorded after it, and not resolved meanwhile (ADR 0011 §5). Otherwise it
+    is stored as history."""
+    from app.models.ptp import PTP
     from app.models.visit import Visit
     if not capture.late:
         return True
@@ -126,7 +131,10 @@ def moves_case(db: Session, case, capture: Capture) -> bool:
     newer = (db.query(Visit.id)
              .filter(Visit.case_id == case.id, Visit.check_in_time > capture.at)
              .first())
-    return newer is None
+    newer_ptp = (db.query(PTP.id)
+                 .filter(PTP.case_id == case.id, PTP.created_at > capture.at)
+                 .first())
+    return newer is None and newer_ptp is None
 
 
 def same_ist_month(a: datetime, b: datetime) -> bool:

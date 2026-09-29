@@ -567,3 +567,40 @@ def test_a_binding_with_no_time_refuses_late_items(w):
         _judge(w, now - timedelta(hours=2), now)
     assert _code(exc) == ErrorCode.CAPTURE_DEVICE_MISMATCH
     assert not _judge(w, now - timedelta(seconds=30), now).late       # live submits unaffected
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 9. Opus audit of 1a85ffd
+# ═══════════════════════════════════════════════════════════════════════════
+
+def test_ptp_dated_before_its_capture_day_is_refused(w, monkeypatch):
+    _freeze(monkeypatch, ist(DAY + timedelta(days=1), 10))
+    req = SetPTPRequest(committed_amount=5000, committed_date=DAY - timedelta(days=1),
+                        **_offline(ist(DAY, 12)))
+    with pytest.raises(HTTPException) as exc:
+        ps.PaymentService(w.db).set_ptp(w.agent, w.case.id, req, token_device_id=DEVICE)
+    assert exc.value.status_code == 422
+    assert w.db.query(PTP).count() == 0
+    ok = SetPTPRequest(committed_amount=5000, committed_date=DAY, **_offline(ist(DAY, 12), seq=2))
+    ps.PaymentService(w.db).set_ptp(w.agent, w.case.id, ok, token_device_id=DEVICE)   # the capture day itself is fine
+
+
+def test_late_item_does_not_move_a_case_with_a_newer_promise(w, monkeypatch):
+    _freeze(monkeypatch, ist(DAY, 16))
+    live = SetPTPRequest(committed_amount=5000, committed_date=DAY + timedelta(days=3))
+    ps.PaymentService(w.db).set_ptp(w.agent, w.case.id, live)                         # live, 16:00
+    w.case.status = CaseStatus.IN_PROGRESS                                            # something moved it since
+    w.db.commit()
+    _record(w, _visit(**_offline(ist(DAY, 12)), outcome=VisitOutcome.RTP, customer_met=True, person_met="BORROWER"))
+    w.db.refresh(w.case)
+    assert w.case.status == CaseStatus.IN_PROGRESS, "a 12:00 visit must not override a 16:00 promise"
+
+
+def test_call_log_to_a_do_not_contact_borrower_is_refused(w, monkeypatch):
+    w.case.customer.do_not_contact = True
+    w.db.commit()
+    _freeze(monkeypatch, ist(DAY, 15))
+    with pytest.raises(HTTPException) as exc:
+        cls_mod.CallLogService(w.db).log_call(w.agent, w.case.id, LogCallRequest(outcome=CallOutcome.NO_ANSWER))
+    assert exc.value.status_code == 403 and _code(exc) == ErrorCode.DO_NOT_CONTACT
+    assert w.db.query(CallLog).count() == 0

@@ -3,7 +3,7 @@
  * in for the server, and for whom.
  */
 import { describe, expect, it } from "vitest";
-import { MemoryReadStore, beatKey, cachedRead, caseKey, mutatedCase, unreachable } from "./readCache";
+import { MemoryReadStore, beatKey, cacheOwner, cachedRead, caseKey, mutatedCase, unreachable } from "./readCache";
 
 const CASE = "8ba7d0eb-08e9-5234-ae3e-9407fef01280";
 const T0 = Date.UTC(2026, 8, 29, 4, 30);            // 10:00 IST
@@ -71,5 +71,17 @@ describe("invalidation", () => {
     expect(unreachable(new Error("Network Error"))).toBe(true);
     expect(unreachable({ response: { status: 502 } })).toBe(true);
     expect(unreachable({ response: { status: 404 } })).toBe(false);
+  });
+});
+
+describe("cacheOwner", () => {
+  const base = { isAuthenticated: true, user: { id: "u1" }, deviceId: "d1" };
+  it("changes with the login, the device, the slot, and at logout", () => {
+    const o = cacheOwner(base, null);
+    expect(cacheOwner({ ...base, user: { id: "u2" } }, null)).not.toBe(o);
+    expect(cacheOwner({ ...base, deviceId: "d2" }, null)).not.toBe(o);
+    expect(cacheOwner(base, "agent")).not.toBe(o);
+    expect(cacheOwner({ ...base, isAuthenticated: false }, null)).not.toBe(o);
+    expect(cacheOwner({ ...base }, null)).toBe(o);
   });
 });

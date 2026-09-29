@@ -5,7 +5,8 @@
  */
 import type { AxiosInstance } from "axios";
 import { IdbReadStore } from "@/lib/outboxIdb";
-import { MemoryReadStore, caseKey, mutatedCase, type ReadStore } from "@/lib/readCache";
+import { MemoryReadStore, cacheOwner, caseKey, mutatedCase, type ReadStore } from "@/lib/readCache";
+import { SESSION_SLOT } from "@/lib/sessionSlot";
 import { useAuthStore } from "@/store/authStore";
 
 let store: ReadStore | null = null;
@@ -60,12 +61,12 @@ export function installReadCacheInvalidation(instance: AxiosInstance): void {
   });
 }
 
-// A change of login in this slot (logout included) drops every saved copy.
-let lastUser = currentUserId();
-useAuthStore.subscribe(() => {
-  const now = currentUserId();
-  if (now !== lastUser) {
-    lastUser = now;
+// Any change of owner (logout, another login, a new device id) drops every saved copy.
+let lastOwner = cacheOwner(useAuthStore.getState(), SESSION_SLOT);
+useAuthStore.subscribe((s) => {
+  const now = cacheOwner(s, SESSION_SLOT);
+  if (now !== lastOwner) {
+    lastOwner = now;
     void purgeReadCache();
   }
 });

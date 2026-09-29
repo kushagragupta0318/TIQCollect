@@ -36,6 +36,10 @@ class CallLogService:
         case = agent_case_or_404(self.db, agent, case_id,
                                  options=(joinedload(Case.customer), joinedload(Case.loan)),
                                  on_day=capture.day if capture.late else None)
+        # The same gate as a visit (Opus audit of 1a85ffd): a Do-Not-Contact
+        # borrower is not called, and a call to one is not recorded as routine.
+        if case.customer.do_not_contact:
+            raise AppException(403, ErrorCode.DO_NOT_CONTACT, "Customer is marked Do Not Contact")
         # ML-1: a stance only on an answered call — nobody said anything otherwise.
         check_call_stance(req.borrower_disposition, outcome=req.outcome)
 

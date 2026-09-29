@@ -138,6 +138,8 @@ A refusal carries a typed `ErrorCode`, and the client moves the item to "needs a
     (blobs deleted on done).
   - Or `needs_attention`, which keeps the server's message. Only the agent discards it.
   - Each step is resumable, and none repeats once acknowledged.
+  - A photo upload never advances the device's sequence. Only the visit that uses the photo
+    is delivered, so its sequence number is still unspent when the visit arrives.
 - **Errors:**
   - Network, 5xx, 429, and 401 after a failed refresh: retry with backoff (capped at 5 min).
   - A typed 4xx: `needs_attention`. Nothing is dropped silently.
