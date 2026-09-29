@@ -425,6 +425,8 @@ function Engine() {
   const [selected, setSelected] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<DecisionOutcome | "">("");
   const [page, setPage] = useState(1);
+  const [confirming, setConfirming] = useState<EngineRun | null>(null);
+  const [appliedNote, setAppliedNote] = useState<string | null>(null);
 
   const runs = useQuery({
     queryKey: ["bank", "placements", "runs"],
@@ -442,7 +444,13 @@ function Engine() {
   });
   const apply = useMutation({
     mutationFn: async (runId: string) => (await api.post<EngineRun>(`/bank/placements/runs/${runId}/apply`)).data,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["bank", "placements"] }),
+    onSuccess: (run) => {
+      const a = run.summary.apply;
+      setConfirming(null);
+      setAppliedNote(a ? `Applied: ${a.placed} placed, ${a.recalled} recalled, ${a.skipped_total} skipped.` : "Applied.");
+      setSelected(run.run_id);
+      qc.invalidateQueries({ queryKey: ["bank", "placements"] });
+    },
   });
   const params = new URLSearchParams({ page: String(page), page_size: String(PAGE_SIZE), ...(outcome ? { outcome } : {}) });
   const decisions = useQuery({
@@ -470,7 +478,7 @@ function Engine() {
         return (
           <span title={blocker ?? undefined}>
             <Button size="sm" disabled={blocker !== null || apply.isPending}
-                    onClick={(e) => { e.stopPropagation(); apply.mutate(r.run_id); }}>
+                    onClick={(e) => { e.stopPropagation(); apply.reset(); setConfirming(r); }}>
               Apply
             </Button>
           </span>
@@ -519,8 +527,31 @@ function Engine() {
         </div>
         {rate === null && <p role="alert" className="mt-2 text-[12px] text-destructive">Enter a number from 0 to 20.</p>}
         {start.isError && <p role="alert" className="mt-2 text-[12px] text-destructive">{errorDetail(start.error, "The run failed.")}</p>}
-        {apply.isError && <p role="alert" className="mt-2 text-[12px] text-destructive">{errorDetail(apply.error, "Apply failed.")}</p>}
+        {appliedNote && <p role="status" className="mt-2 text-[12px] text-[#067647]">{appliedNote}</p>}
       </Panel>
+
+      <Dialog open={confirming !== null} onOpenChange={(o) => { if (!o) setConfirming(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Apply the run of {confirming?.plan_date}</DialogTitle>
+            <DialogDescription>
+              {confirming?.totals.placed.toLocaleString("en-IN")} loans are placed and{" "}
+              {confirming?.totals.recalled.toLocaleString("en-IN")} placements recalled, each case opened or closed now.
+              Every rule is checked again first; a loan that no longer passes is skipped.
+            </DialogDescription>
+          </DialogHeader>
+          {apply.isError && (
+            <p role="alert" className="px-6 text-[12px] text-destructive">{errorDetail(apply.error, "Apply failed.")}</p>
+          )}
+          <DialogFooter>
+            <DialogClose onClose={() => setConfirming(null)}>Cancel</DialogClose>
+            <Button disabled={apply.isPending || confirming === null}
+                    onClick={() => confirming && apply.mutate(confirming.run_id)}>
+              {apply.isPending ? "Applying…" : "Apply run"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Panel title="Runs">
         {runs.isLoading ? (
