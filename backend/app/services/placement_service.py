@@ -354,8 +354,8 @@ class PlacementService:
 
     @staticmethod
     def case_target_amount(loan: Loan) -> float:
-        """The overdue amount, or the whole outstanding when nothing is overdue
-        (the rule ingest_daily.process_row applies to a feed-opened case)."""
+        """The overdue amount, or the whole outstanding when nothing is overdue.
+        Every opener of a case uses it (ingest_daily, manual, engine)."""
         overdue = float(loan.overdue_amount or 0.0)
         return overdue if overdue > 0 else float(loan.total_outstanding or 0.0)
 

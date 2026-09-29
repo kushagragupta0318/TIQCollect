@@ -714,7 +714,7 @@ def process_row(row: dict, db, dry_run: bool, today: date, ctx: FeedContext | No
                 else:
                     ctx.placements.open_case(
                         placement, loan, case_number=case_number,
-                        target_amount=overdue_amount if overdue_amount > 0 else total_outstanding,
+                        target_amount=ctx.placements.case_target_amount(loan),
                         id=_uid(), priority=priority_for(dpd), allocation_date=None, allocation_score=0.0,
                         is_ml_allocated=False, visit_count=0, max_visits_allowed=3, is_escalated=False,
                     )
