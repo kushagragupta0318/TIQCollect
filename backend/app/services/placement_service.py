@@ -422,6 +422,25 @@ class PlacementService:
         self.db.flush()
         return closed
 
+    # Feed events that end a placement without a recall (coordinator, 2026-09-29):
+    # the bank was paid or settled, so the placement did its job; or the loan
+    # was written off, so it goes back to the bank.
+    FEED_END_STATUS = {"PAID_DIRECT": "RESOLVED", "SETTLED": "RESOLVED", "WRITTEN_OFF": "RETURNED"}
+
+    def end_from_feed(self, placement: Placement, *, bank_action: str, on: date) -> None:
+        """End an ACTIVE placement because the bank's feed closed the loan's
+        case (PAID_DIRECT / SETTLED to RESOLVED, WRITTEN_OFF to RETURNED).
+        Unlike a recall it closes no other case: what the feed closed, it
+        closed with its own typed reason."""
+        status = self.FEED_END_STATUS[bank_action]
+        if placement.status != "ACTIVE":
+            raise ValueError(f"placement {placement.id} is {placement.status}, not ACTIVE")
+        placement.status = status
+        placement.ended_on = on
+        placement.ended_by = None
+        placement.end_reason = f"FEED_{bank_action}"[:30]
+        self.db.flush()
+
     # ── quarantine ───────────────────────────────────────────────────────────
 
     def quarantine(self, batch: BankFeedBatch, *, row_no: int, raw: dict, reason: str, detail: str,

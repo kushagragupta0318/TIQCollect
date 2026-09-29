@@ -345,6 +345,26 @@ def _end_placement_on_recall(db, case_obj: Case, today: date, recall_reason: str
     return "placement_recalled"
 
 
+def _end_placement_from_feed(db, case_obj: Case, today: date, bank_action: str) -> str:
+    """PAID_DIRECT / SETTLED end the case's placement as RESOLVED and
+    WRITTEN_OFF as RETURNED (PlacementService.end_from_feed), audited as
+    PLACEMENT_ENDED with the system as actor. Without it the loan stays
+    placed with the agency after the bank has closed it."""
+    from app.core.audit import stage_audit
+    from app.models.audit_log import AuditAction
+    from app.models.placement import Placement
+    placement = db.get(Placement, case_obj.placement_id) if case_obj.placement_id else None
+    if placement is None or placement.status != "ACTIVE":
+        return "no_active_placement"
+    PlacementService(db).end_from_feed(placement, bank_action=bank_action, on=today)
+    stage_audit(db, action=AuditAction.PLACEMENT_ENDED, user_id=None, entity_type="Placement",
+                entity_id=placement.id,
+                details={"source": "FEED", "bank_action": bank_action, "status": placement.status,
+                         "end_reason": placement.end_reason, "agency_id": placement.agency_id,
+                         "loan_id": placement.loan_id, "case_id": case_obj.id})
+    return f"placement_{placement.status.lower()}"
+
+
 def _close_case_written_off(case_obj: Case, bank_remark: str) -> str:
     """Bank wrote off the loan."""
     if case_obj.status in ALREADY_RESOLVED:
@@ -612,6 +632,8 @@ def process_row(row: dict, db, dry_run: bool, today: date, ctx: FeedContext | No
     if bank_action == "PAID_DIRECT":
         if existing_case:
             result["action_case"] = _close_case_paid(existing_case)
+            if result["action_case"] == "auto_closed_paid":
+                result["placement"] = _end_placement_from_feed(db, existing_case, today, "PAID_DIRECT")
             # Only when the close ACTUALLY happened. `_close_case_paid` returns
             # early on an already-resolved case, so re-ingesting the same file
             # cannot write the payment twice.
@@ -626,6 +648,8 @@ def process_row(row: dict, db, dry_run: bool, today: date, ctx: FeedContext | No
     elif bank_action == "SETTLED":
         if existing_case:
             result["action_case"] = _close_case_paid(existing_case, settlement_amount)
+            if result["action_case"] == "auto_closed_paid":
+                result["placement"] = _end_placement_from_feed(db, existing_case, today, "SETTLED")
         else:
             result["action_case"] = "settled_before_allocation"
 
@@ -640,6 +664,8 @@ def process_row(row: dict, db, dry_run: bool, today: date, ctx: FeedContext | No
     elif bank_action == "WRITTEN_OFF":
         if existing_case:
             result["action_case"] = _close_case_written_off(existing_case, bank_remark)
+            if result["action_case"] == "auto_closed_written_off":
+                result["placement"] = _end_placement_from_feed(db, existing_case, today, "WRITTEN_OFF")
         else:
             result["action_case"] = "written_off_no_case"
 

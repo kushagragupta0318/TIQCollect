@@ -161,3 +161,34 @@ def test_a_feed_recall_ends_the_placement_and_the_loan_can_be_placed_again(db):
     assert db.query(Placement).count() == 2
     assert db.query(Placement).filter_by(status="ACTIVE").one().id != first.id
     assert db.query(Case).count() == 2
+
+
+@pytest.mark.parametrize("over,status,reason", [
+    ({"bank_action": "PAID_DIRECT", "dpd": "0", "overdue_amount": "0"}, "RESOLVED", "FEED_PAID_DIRECT"),
+    ({"bank_action": "SETTLED", "settlement_amount": "150000"}, "RESOLVED", "FEED_SETTLED"),
+    ({"bank_action": "WRITTEN_OFF", "bank_remark": "board approved"}, "RETURNED", "FEED_WRITTEN_OFF"),
+])
+def test_a_feed_closure_ends_the_placement_with_its_mapped_status(db, over, status, reason):
+    """Coordinator ruling (2026-09-29): PAID_DIRECT / SETTLED -> RESOLVED,
+    WRITTEN_OFF -> RETURNED, audited PLACEMENT_ENDED by the system."""
+    from app.models.audit_log import AuditAction, AuditLog
+    ctx = _ctx(db)
+    process_row(_row(), db, False, TODAY, ctx=ctx, row_no=1)
+    db.commit()
+    placement = db.query(Placement).one()
+
+    res = process_row(_row(**over), db, False, TODAY, ctx=ctx, row_no=2)
+    db.commit()
+    db.refresh(placement)
+    assert res["placement"] == f"placement_{status.lower()}", res
+    assert (placement.status, placement.end_reason, placement.ended_on, placement.ended_by) == (
+        status, reason, TODAY, None)
+    audit = db.query(AuditLog).filter(AuditLog.action == AuditAction.PLACEMENT_ENDED).one()
+    assert (audit.user_id, audit.entity_id, audit.details["bank_action"]) == (
+        None, placement.id, over["bank_action"])
+
+    # Re-ingesting the same file ends nothing twice.
+    again = process_row(_row(**over), db, False, TODAY, ctx=ctx, row_no=3)
+    db.commit()
+    assert again.get("placement") is None
+    assert db.query(AuditLog).filter(AuditLog.action == AuditAction.PLACEMENT_ENDED).count() == 1
