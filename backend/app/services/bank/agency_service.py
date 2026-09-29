@@ -28,6 +28,7 @@ documents -> master-login invite -> automatic activation."""
 from __future__ import annotations
 
 import hashlib
+import re
 import uuid
 from datetime import date, datetime, timezone
 
@@ -101,6 +102,31 @@ def _generate_code(db: Session, bank_id: str, legal_name: str) -> str:
     raise AppException(500, ErrorCode.CONFLICT, "Could not generate a unique agency code. Try again.")
 
 
+_SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://")
+_BARE_ROOT_TRAILING_SLASH_RE = re.compile(r"^(https?://[^/]+)/$")
+
+
+def _normalise_website(raw: str | None) -> str | None:
+    """Mirrored on the frontend (onboardingLogic.normaliseWebsite) — owner-
+    reported: the wizard's Website field used to be `<input type="url">`,
+    which demands a scheme, so typing "google.com" (how most people actually
+    write it) failed native browser validation before this API was ever
+    reached. Applied here too, not just client-side, so a value pasted
+    straight into a request (not typed through the form) normalises the
+    same way: no scheme -> prefix https://, an explicit http:// is left
+    alone (never silently upgraded), and a bare-root trailing slash is
+    trimmed so "https://foo.com/" and "https://foo.com" store identically.
+    Deliberately does not touch "www." — that changes which host is
+    actually named, not this function's call to make."""
+    if raw is None:
+        return None
+    trimmed = raw.strip()
+    if not trimmed:
+        return None
+    with_scheme = trimmed if _SCHEME_RE.match(trimmed) else f"https://{trimmed}"
+    return _BARE_ROOT_TRAILING_SLASH_RE.sub(r"\1", with_scheme)
+
+
 def create_draft(db: Session, bank_admin: User, *, legal_name: str, trade_name: str | None = None,
                  entity_type: str | None = None, cin: str | None = None, rbi_registration_no: str | None = None,
                  pan: str | None = None, gstin: str | None = None, registered_address: dict | None = None,
@@ -119,7 +145,7 @@ def create_draft(db: Session, bank_admin: User, *, legal_name: str, trade_name: 
         bank_id=bank_admin.bank_id, code=_generate_code(db, bank_admin.bank_id, legal_name),
         legal_name=legal_name, trade_name=(trade_name or "").strip() or None,
         entity_type=entity_type, cin=cin, rbi_registration_no=rbi_registration_no, pan=pan, gstin=gstin,
-        registered_address=registered_address, hq_city=hq_city, website=website,
+        registered_address=registered_address, hq_city=hq_city, website=_normalise_website(website),
         contacts=contacts or [], contact_name=contact_name, contact_email=contact_email,
         contact_phone=contact_phone, status="PENDING", created_by=bank_admin.id,
     )
@@ -150,7 +176,9 @@ def update_identity(db: Session, bank_admin: User, agency_id: str, **fields) -> 
         if value is None:
             continue
         current = getattr(agency, key)
-        if isinstance(value, str):
+        if key == "website":
+            value = _normalise_website(value)
+        elif isinstance(value, str):
             value = value.strip()
         if value != current:
             changed[key] = {"from": current, "to": value}

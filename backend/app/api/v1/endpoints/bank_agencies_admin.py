@@ -19,13 +19,14 @@ from datetime import date
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
-from app.core.dependencies import DbSession
+from app.core.dependencies import AnalyticsDb, DbSession
 from app.core.emails import AccountEmail
 from app.core.ids import UUIDPath, UUIDQuery
 from app.core.permissions import require_perm
 from app.core.ratelimit import AUTH_LIMIT, limiter
 from app.models.user import User
-from app.services.bank import agency_service
+from app.services.bank import agency_scorecard, agency_service
+from app.services.scope import agency_or_404
 
 router = APIRouter(prefix="/bank", tags=["bank-agencies-admin"])
 
@@ -218,3 +219,33 @@ def list_agency_directory_route(
         db, current_user, region_id=region_id, status=status, loan_type=loan_type,
         contract_expiring_before=contract_expiring_before,
     )
+
+
+@router.get("/agencies/{agency_id}/scorecard")
+def agency_scorecard_route(
+    agency_id: UUIDPath, db: DbSession, adb: AnalyticsDb, region_id: UUIDQuery = None,
+    month_start: date | None = None, months: int = 1, current_user: User = require_perm("agency.read"),
+):
+    """D06: plan §6.2's per-agency scorecard (every ratio metric, plus the
+    Performance Index from agency_effect). agency_or_404 on the ordinary
+    (DbSession) connection first — a nonexistent or foreign-tenant agency_id
+    is the same uniform 404 every other single-agency route in this file
+    gives, not a 200 with empty metrics that would make "wrong tenant" and
+    "no scorecard data yet" indistinguishable. Metrics themselves still come
+    from `adb` (AnalyticsDb), which is separately tenant-bound."""
+    agency_or_404(db, current_user, agency_id)
+    return agency_scorecard.agency_scorecard(
+        adb, bank_id=current_user.bank_id, agency_id=agency_id, region_id=region_id,
+        month_start=month_start, months=months,
+    )
+
+
+@router.get("/agencies-leaderboard")
+def agency_leaderboard_route(
+    adb: AnalyticsDb, region_id: UUIDQuery = None, month_start: date | None = None,
+    current_user: User = require_perm("agency.read"),
+):
+    """D06: agencies ranked by Performance Index within `region_id` (or the
+    whole bank), for the given month (default latest)."""
+    return agency_scorecard.leaderboard(adb, bank_id=current_user.bank_id, region_id=region_id,
+                                        month_start=month_start)
