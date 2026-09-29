@@ -257,6 +257,12 @@ task with a testable **Done when**.
 - A data processing agreement.
 - A BCP and disaster-recovery statement with restore-tested backups.
 - A support SLA.
+- **Field phones under MDM** (I02, ADR 0011 §8; accepted pilot risk, coordinator 2026-09-29):
+  - **What the phone holds:** the offline outbox keeps unsent visits (notes, photos and
+    signature) and today's cases on the phone for up to 48 h. The app does not encrypt them.
+  - **What protects it:** the phone itself. The lender's or agency's MDM must enforce
+    Android's file-based encryption and a screen lock.
+  - **Follow-up:** hybrid encryption to a server key, if the lender's infosec asks for it.
 
 The engineering inputs to the BCP (backups, restore test, RPO/RTO measured on the pilot
 deployment) are a bb task once the pilot environment exists.

@@ -109,6 +109,10 @@ import {
   User, Users, DoorClosed, Home, Car,
 } from "lucide-react";
 import { toast } from "react-hot-toast";
+import type { VisitPayload } from "@/api/agent";
+import { OutboxFullError, type NewVisit } from "@/lib/outbox";
+import { submitVisit } from "@/lib/outboxRunner";
+import { serverNow } from "@/lib/serverClock";
 import { getCaseDetail, recordVisit, collectPayment, setPTP, getPhotoUploadUrl, getCasePhotos, getRecordingUploadUrl, reoptimizeBeat, transcribeAudio, queueVisitTranscription, sendPaymentOtp, verifyPaymentOtp, getUpiConfig } from "@/api/agent";
 import { useQuery } from "@tanstack/react-query";
 import { DEMO_UPI_REFERENCE_PREFIX, demoUpiAutoconfirmEnabled, demoUpiReference, paymentReferenceOk, upiQrValue, upiReferenceOk } from "./upiPayment";
@@ -140,10 +144,11 @@ type MeetingType = "BORROWER" | "THIRD_PARTY" | "NOT_MET" | null;
 // filled in without signal was lost, and the banner was the reason the agent
 // kept working instead of walking to find a bar of signal.
 //
-// Submission is now blocked while offline (see canSubmit), which stops the
-// silent loss but would throw away the typing on a page refresh or a phone
-// that backgrounds and gets reaped. So the TEXT of the form is mirrored to
-// localStorage, keyed per case, and restored on mount.
+// 2026-09-29 (I02): a submitted visit now goes to the offline outbox
+// (lib/outbox.ts), photos and signature included. This draft still covers the
+// form BEFORE Submit: a page refresh or a reaped tab would otherwise lose the
+// typing. So the TEXT of the form is mirrored to localStorage, keyed per case,
+// and restored on mount.
 //
 // ONLY the serialisable fields. Photos, the signature and the two audio
 // recordings are Blobs and object URLs — they cannot be JSON'd, an object URL
@@ -424,6 +429,12 @@ function useRecordAndTranscribe(
   const startRef = useRef(0);
 
   async function start() {
+    // I02 (ADR 0011 decision 3): recordings are live-only, never kept in the
+    // outbox, and transcription needs the server anyway. Say so up front.
+    if (!navigator.onLine) {
+      toast.error("Recording needs signal: recordings are not saved on the phone.");
+      return;
+    }
     try {
       // Echo cancellation / noise suppression / auto-gain were previously
       // disabled here to avoid starving a SpeechRecognition capture running
@@ -491,7 +502,10 @@ type CameraTarget = "agentPhoto" | "borrowerPhoto" | "objectPhoto";
 export default function RecordVisitPage() {
   const { caseId } = useParams<{ caseId: string }>();
   const navigate = useNavigate();
-  const { user } = useAuthStore();
+  const { user, deviceId } = useAuthStore();
+  // I02: a payment visit is sent live, never queued; these ids make a retry
+  // after a lost response return what was already stored instead of a copy.
+  const liveSubmission = useRef({ visit: crypto.randomUUID(), ptp: crypto.randomUUID() });
   const { refresh: refreshBeat } = useBeat();
 
   const [caseData, setCaseData] = useState<VisitCase | null>(null);
@@ -500,7 +514,7 @@ export default function RecordVisitPage() {
   const [receipt, setReceipt] = useState<PaymentReceiptData | null>(null);
   // Success confirmation for the no-payment path. A collection ends in
   // PaymentReceiptModal, which is confirmation enough on its own.
-  const [visitDone, setVisitDone] = useState<{ outcomeLabel?: string } | null>(null);
+  const [visitDone, setVisitDone] = useState<{ outcomeLabel?: string; queued?: boolean } | null>(null);
   const [showQR, setShowQR] = useState(false);
   // Demo: after the QR is shown, auto-reveal a "Payment received ✓" tick (a
   // static UPI QR has no callback, so the received-moment is simulated on a
@@ -838,11 +852,9 @@ export default function RecordVisitPage() {
   const splitLayout = Boolean(form.meetingType);
 
   const canSubmit = (() => {
-    // Offline is a HARD gate. Every path out of handleSubmit is a network
-    // call — photo uploads, the visit POST, the payment POST — and none of
-    // them is queued anywhere. Letting the button through offline is what
-    // silently destroyed field work.
-    if (!isOnline) return false;
+    // 2026-09-29 (I02): offline, a visit goes to the outbox (lib/outbox.ts).
+    // A payment never does: the borrower's OTP must reach the server live.
+    if (!isOnline && sel?.needsPayment) return false;
     if (!form.meetingType) return false;
     if (!locationReady) return false;
     if (form.meetingType === "BORROWER")
@@ -1065,22 +1077,36 @@ export default function RecordVisitPage() {
           : `CUSTOMER STATEMENT: ${form.customerStatement.trim()}`;
       }
 
-      // Upload recordings in parallel with photos
-      const [agentRecKey, borrowerRecKey] = await Promise.all([
-        uploadRecording(form.agentRecordingBlob, "agent"),
-        uploadRecording(form.borrowerRecordingBlob, "borrower"),
-      ]);
+      // Recordings are live-only (ADR 0011 decision 3): uploaded now when there
+      // is signal, otherwise not kept, and the agent is told rather than left
+      // to find out later.
+      const [agentRecKey, borrowerRecKey] = isOnline
+        ? await Promise.all([
+            uploadRecording(form.agentRecordingBlob, "agent"),
+            uploadRecording(form.borrowerRecordingBlob, "borrower"),
+          ])
+        : [undefined, undefined];
+      if ((form.agentRecordingBlob && !agentRecKey) || (form.borrowerRecordingBlob && !borrowerRecKey)) {
+        toast("A recording could not be uploaded without signal and was not kept.");
+      }
 
-      // Upload only NEW (freshly captured) photos — skip pre-populated "from prev visit" ones
-      const [agentResult, borrowerResult, objectResult, signatureResult] = await Promise.all([
-        form.agentPhotoFromPrev ? undefined : uploadGeoPhoto(form.agentPhoto, "agent"),
-        form.borrowerPhotoFromPrev ? undefined : uploadGeoPhoto(form.borrowerPhoto, "borrower"),
-        form.objectPhotoFromPrev ? undefined : uploadGeoPhoto(form.objectPhoto, "object"),
-        uploadGeoPhoto(form.signatureUrl, "signature"),
-      ]);
-      const deviceId = navigator.userAgent?.substring(0, 200) || undefined;
+      // Only NEW (freshly captured) photos — skip pre-populated "from prev visit" ones
+      const freshPhoto = {
+        agent: form.agentPhotoFromPrev ? null : form.agentPhoto,
+        borrower: form.borrowerPhotoFromPrev ? null : form.borrowerPhoto,
+        object: form.objectPhotoFromPrev ? null : form.objectPhoto,
+      };
+      // A photo's own GPS and capture time, when that photo goes with the visit.
+      const photoMeta = (subject: "agent" | "borrower" | "object", gps: PhotoGps, include: boolean) =>
+        include ? {
+          [`${subject}_photo_lat`]: gps?.lat ?? form.gpsLat ?? undefined,
+          [`${subject}_photo_lon`]: gps?.lon ?? form.gpsLon ?? undefined,
+          [`${subject}_photo_accuracy`]: gps?.accuracy ?? form.gpsAccuracy ?? undefined,
+          [`${subject}_photo_altitude`]: gps?.altitude ?? form.gpsAltitude ?? undefined,
+          [`${subject}_photo_captured_at`]: gps?.iso ?? new Date().toISOString(),
+        } : {};
 
-      const visitRes = await recordVisit(caseId, {
+      const body: VisitPayload = {
         check_in_latitude: lat,
         check_in_longitude: lon,
         customer_met: form.customerMet!,
@@ -1099,34 +1125,77 @@ export default function RecordVisitPage() {
         occupancy_status: form.occupancyStatus || undefined,
         vehicle_present: form.vehiclePresent ?? undefined,
         business_running: form.businessRunning ?? undefined,
-        // Agent photo — full geo metadata
-        agent_photo_key: agentResult?.key,
-        agent_photo_lat: agentResult ? (form.agentPhotoGps?.lat ?? form.gpsLat ?? undefined) : undefined,
-        agent_photo_lon: agentResult ? (form.agentPhotoGps?.lon ?? form.gpsLon ?? undefined) : undefined,
-        agent_photo_accuracy: agentResult ? (form.agentPhotoGps?.accuracy ?? form.gpsAccuracy ?? undefined) : undefined,
-        agent_photo_altitude: agentResult ? (form.agentPhotoGps?.altitude ?? form.gpsAltitude ?? undefined) : undefined,
-        agent_photo_captured_at: agentResult ? (form.agentPhotoGps?.iso ?? new Date().toISOString()) : undefined,
-        agent_photo_sha256: agentResult?.sha256,
-        // Borrower photo
-        borrower_photo_key: borrowerResult?.key,
-        borrower_photo_lat: borrowerResult ? (form.borrowerPhotoGps?.lat ?? form.gpsLat ?? undefined) : undefined,
-        borrower_photo_lon: borrowerResult ? (form.borrowerPhotoGps?.lon ?? form.gpsLon ?? undefined) : undefined,
-        borrower_photo_accuracy: borrowerResult ? (form.borrowerPhotoGps?.accuracy ?? form.gpsAccuracy ?? undefined) : undefined,
-        borrower_photo_altitude: borrowerResult ? (form.borrowerPhotoGps?.altitude ?? form.gpsAltitude ?? undefined) : undefined,
-        borrower_photo_captured_at: borrowerResult ? (form.borrowerPhotoGps?.iso ?? new Date().toISOString()) : undefined,
-        borrower_photo_sha256: borrowerResult?.sha256,
-        // Object / asset photo
-        object_photo_key: objectResult?.key,
-        object_photo_lat: objectResult ? (form.objectPhotoGps?.lat ?? form.gpsLat ?? undefined) : undefined,
-        object_photo_lon: objectResult ? (form.objectPhotoGps?.lon ?? form.gpsLon ?? undefined) : undefined,
-        object_photo_accuracy: objectResult ? (form.objectPhotoGps?.accuracy ?? form.gpsAccuracy ?? undefined) : undefined,
-        object_photo_altitude: objectResult ? (form.objectPhotoGps?.altitude ?? form.gpsAltitude ?? undefined) : undefined,
-        object_photo_captured_at: objectResult ? (form.objectPhotoGps?.iso ?? new Date().toISOString()) : undefined,
-        object_photo_sha256: objectResult?.sha256,
+        // 2026-09-29 (I02): the login's device id, the one the server bound and
+        // signed into the token, not the browser's user-agent string.
         device_id: deviceId,
         agent_recording_key: agentRecKey,
         borrower_recording_key: borrowerRecKey,
+      };
+      const ptp = sel?.needsPTP && form.ptpAmount && form.ptpDate
+        ? { committed_amount: Number(form.ptpAmount), committed_date: form.ptpDate,
+            customer_reason: form.ptpReason || undefined }
+        : undefined;
+
+      if (!sel?.needsPayment) {
+        // I02: stored on the phone first, then sent (at once when there is
+        // signal). A refusal on the spot comes back here, so the agent fixes
+        // the form exactly as before.
+        const photos: NewVisit["photos"] = [];
+        for (const [subject, dataUrl] of [
+          ["agent", freshPhoto.agent], ["borrower", freshPhoto.borrower],
+          ["object", freshPhoto.object], ["signature", form.signatureUrl],
+        ] as const) {
+          if (dataUrl) photos.push({ subject, blob: await (await fetch(dataUrl)).blob() });
+        }
+        const res = await submitVisit({
+          caseId, caseLabel: caseData?.case_number ?? "this case", capturedAt: serverNow(),
+          body: {
+            ...body,
+            ...photoMeta("agent", form.agentPhotoGps, !!freshPhoto.agent),
+            ...photoMeta("borrower", form.borrowerPhotoGps, !!freshPhoto.borrower),
+            ...photoMeta("object", form.objectPhotoGps, !!freshPhoto.object),
+          },
+          photos, ptp,
+        });
+        if (res.status === "refused") {
+          toast.error(res.message);
+          return;
+        }
+        if (res.status === "sent") {
+          // Best-effort, as before: a finished visit changes position and the done-list.
+          if (form.gpsLat != null && form.gpsLon != null) {
+            await reoptimizeBeat(form.gpsLat, form.gpsLon).catch(() => {});
+          }
+          await refreshBeat();
+        }
+        if (caseId) clearDraft(caseId);
+        setVisitDone({ outcomeLabel: sel?.label, queued: res.status === "queued" });
+        return;
+      }
+
+      // ── Payment: live only, never queued (the borrower's OTP must reach the
+      // server). Idempotent by its submission ids, so a retry after a lost
+      // response returns the visit and promise already stored.
+      const [agentResult, borrowerResult, objectResult, signatureResult] = await Promise.all([
+        uploadGeoPhoto(freshPhoto.agent, "agent"),
+        uploadGeoPhoto(freshPhoto.borrower, "borrower"),
+        uploadGeoPhoto(freshPhoto.object, "object"),
+        uploadGeoPhoto(form.signatureUrl, "signature"),
+      ]);
+
+      const visitRes = await recordVisit(caseId, {
+        ...body,
+        ...photoMeta("agent", form.agentPhotoGps, !!agentResult),
+        ...photoMeta("borrower", form.borrowerPhotoGps, !!borrowerResult),
+        ...photoMeta("object", form.objectPhotoGps, !!objectResult),
+        agent_photo_key: agentResult?.key,
+        agent_photo_sha256: agentResult?.sha256,
+        borrower_photo_key: borrowerResult?.key,
+        borrower_photo_sha256: borrowerResult?.sha256,
+        object_photo_key: objectResult?.key,
+        object_photo_sha256: objectResult?.sha256,
         signature_key: signatureResult?.key,
+        client_submission_id: liveSubmission.current.visit,
       });
 
       // Recordings uploaded above (agentRecKey/borrowerRecKey) are never
@@ -1139,7 +1208,7 @@ export default function RecordVisitPage() {
       }
 
       let receiptData: PaymentReceiptData | null = null;
-      if (sel?.needsPayment && form.amount) {
+      if (form.amount) {
         const maskedAcct = loan?.loan_account_masked ?? ("XXXX" + (loan?.loan_account_number ?? "").slice(-4));
         const res = await collectPayment(caseId, {
           amount: amountNum,
@@ -1168,12 +1237,8 @@ export default function RecordVisitPage() {
         };
       }
 
-      if (sel?.needsPTP && form.ptpAmount && form.ptpDate) {
-        await setPTP(caseId, {
-          committed_amount: Number(form.ptpAmount),
-          committed_date: form.ptpDate,
-          customer_reason: form.ptpReason || undefined,
-        });
+      if (ptp) {
+        await setPTP(caseId, { ...ptp, client_submission_id: liveSubmission.current.ptp });
       }
 
       // Auto-reoptimize from here — a visit just finished, so position and the
@@ -1204,7 +1269,7 @@ export default function RecordVisitPage() {
         setVisitDone({ outcomeLabel: sel?.label });
       }
     } catch (err) {
-      toast.error(errorDetail(err, "Failed to submit. Please retry."));
+      toast.error(err instanceof OutboxFullError ? err.message : errorDetail(err, "Failed to submit. Please retry."));
     } finally {
       setSubmitting(false);
     }
@@ -1231,6 +1296,8 @@ export default function RecordVisitPage() {
           caseNumber={caseData?.case_number}
           customerName={customer?.full_name}
           outcomeLabel={visitDone.outcomeLabel}
+          queued={visitDone.queued}
+          autoCloseMs={visitDone.queued ? 4000 : undefined}
           onClose={() => navigate(`/agent/cases/${caseId}`, { replace: true })}
         />
       )}
@@ -2262,7 +2329,9 @@ export default function RecordVisitPage() {
             )}
             {!isOnline && (
               <div className="text-[11px] text-slate-600 bg-slate-100 border border-slate-200 rounded px-2 py-1.5 mb-2">
-                You are offline. Notes are kept on this device; reconnect to submit.
+                {sel?.needsPayment
+                  ? "Needs signal: the borrower's OTP must reach the server. Payments are never saved on the phone."
+                  : "You are offline. Submitting saves this visit on the phone; it sends by itself when signal returns."}
               </div>
             )}
             <div className="flex items-center justify-between text-xs text-slate-400 mb-2">
@@ -2279,11 +2348,11 @@ export default function RecordVisitPage() {
               {canSubmit ? <CheckCircle className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
               {submitting
                 ? "Submitting…"
-                : !isOnline
-                  ? "Offline — reconnect to submit"
+                : !isOnline && sel?.needsPayment
+                  ? "Payments need signal"
                   : !locationReady
                     ? (locationCaptured ? `Move within 100m (${distanceM}m away)` : "Waiting for GPS…")
-                    : "Submit Visit Record"}
+                    : isOnline ? "Submit Visit Record" : "Save visit on phone"}
             </Button>
           </div>
         </div>

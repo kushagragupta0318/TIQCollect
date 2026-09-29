@@ -26,7 +26,13 @@
 //   them — not the other way round.
 // ──────────────────────────────────────────────────────────────────────────
 import api from "./axios";
+import { beatKey, cachedRead, caseKey } from "@/lib/readCache";
+import { currentUserId, installReadCacheInvalidation, noteServed, readStore } from "@/lib/readCacheRuntime";
+import { installServerClock } from "@/lib/serverClock";
 import type { Case } from "@/types";
+
+installReadCacheInvalidation(api);
+installServerClock(api);
 
 export async function getHomeSummary(): Promise<{
   cases_today: number;
@@ -56,8 +62,14 @@ export async function checkIn(latitude: number, longitude: number): Promise<{ st
 }
 
 export async function getBeat() {
-  const { data } = await api.get("/agent/beat");
-  return data;
+  // I02: offline, today's beat as last fetched (lib/readCache.ts).
+  const userId = currentUserId();
+  const served = await cachedRead(readStore(), userId, userId && beatKey(userId), async () => {
+    const { data } = await api.get("/agent/beat");
+    return data;
+  });
+  noteServed(served.cachedAt);
+  return served.data;
 }
 
 export async function reoptimizeBeat(lat: number, lon: number): Promise<{
@@ -87,8 +99,14 @@ export async function getRankedCases(): Promise<RankedCase[]> {
 }
 
 export async function getCaseDetail(caseId: string) {
-  const { data } = await api.get(`/agent/cases/${caseId}`);
-  return data;
+  // I02: offline, the case as last fetched today (lib/readCache.ts).
+  const userId = currentUserId();
+  const served = await cachedRead(readStore(), userId, userId && caseKey(userId, caseId), async () => {
+    const { data } = await api.get(`/agent/cases/${caseId}`);
+    return data;
+  });
+  noteServed(served.cachedAt);
+  return served.data;
 }
 
 // Path and parameter style both have to match the backend exactly: it serves
@@ -96,8 +114,16 @@ export async function getCaseDetail(caseId: string) {
 // (endpoints/agent.py). This used to post to /photos/upload-url with a JSON
 // body, which 404'd on every call — and because the caller swallows the error,
 // photos, signatures and the customer signature silently never reached MinIO.
-export async function getPhotoUploadUrl(caseId: string, subject: "agent" | "borrower" | "object" | "signature"): Promise<{ upload_url: string; key: string }> {
-  const { data } = await api.post(`/agent/cases/${caseId}/photo-upload-url`, null, { params: { subject } });
+// I02: an outbox upload names its visit's capture, so the server judges it like
+// the visit and keys the object by the submission (a retry overwrites it).
+export async function getPhotoUploadUrl(
+  caseId: string, subject: "agent" | "borrower" | "object" | "signature", capture?: OutboxCapture,
+): Promise<{ upload_url: string; key: string }> {
+  // The phone's id goes as capture_device_ref: `device_id` on a route means agent_devices.id.
+  const { device_id: captureDeviceRef, ...rest } = capture ?? {};
+  const { data } = await api.post(`/agent/cases/${caseId}/photo-upload-url`, null, {
+    params: { subject, ...rest, capture_device_ref: captureDeviceRef },
+  });
   return data;
 }
 
@@ -180,7 +206,18 @@ export async function extractVisitFields(caseId: string, transcript: string): Pr
   return data as VisitExtraction;
 }
 
-export async function recordVisit(caseId: string, payload: {
+/**
+ * I02 offline outbox (lib/outbox.ts, docs/adr/0011-offline-outbox.md). All
+ * absent = a live submit, judged at receipt exactly as before.
+ */
+export interface OutboxCapture {
+  client_submission_id: string;
+  captured_at: string;
+  device_seq: number;
+  device_id: string;
+}
+
+export interface VisitPayload {
   check_in_latitude: number;
   check_in_longitude: number;
   customer_met: boolean;
@@ -225,7 +262,9 @@ export async function recordVisit(caseId: string, payload: {
   agent_recording_key?: string;
   borrower_recording_key?: string;
   signature_key?: string;
-}) {
+}
+
+export async function recordVisit(caseId: string, payload: VisitPayload & Partial<OutboxCapture>) {
   const { data } = await api.post(`/agent/cases/${caseId}/visit`, payload);
   return data;
 }
@@ -307,12 +346,14 @@ export async function verifyPaymentOtp(caseId: string, payload: {
   return data;
 }
 
-export async function setPTP(caseId: string, payload: {
+export interface PtpPayload {
   committed_amount: number;
   committed_date: string;
   customer_reason?: string;
   agent_notes?: string;
-}) {
+}
+
+export async function setPTP(caseId: string, payload: PtpPayload & Partial<OutboxCapture>) {
   const { data } = await api.post(`/agent/cases/${caseId}/ptp`, payload);
   return data;
 }
@@ -397,7 +438,7 @@ export interface LogCallPayload {
   borrower_disposition?: string;
 }
 
-export async function logCall(caseId: string, payload: LogCallPayload): Promise<{ id: string; called_at: string; outcome: string }> {
+export async function logCall(caseId: string, payload: LogCallPayload & Partial<OutboxCapture>): Promise<{ id: string; called_at: string; outcome: string }> {
   const { data } = await api.post(`/agent/cases/${caseId}/call-log`, payload);
   return data;
 }

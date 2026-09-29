@@ -40,8 +40,10 @@ from datetime import datetime, timedelta, timezone
 import structlog
 
 from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
+from app.core.errors import AppException, ErrorCode
 from app.core.events import publish_event
 from app.core.geo import GEO_FENCE_METRES, IST, RBI_CONTACT_END, RBI_CONTACT_START, is_within_contact_hours, within_geo_fence
 from app.models.audit_log import AuditAction, AuditLog
@@ -55,6 +57,9 @@ from app.services.scope import agent_case_or_404, sync_assignee
 from app.services.ai_report_service import AIReportService
 from app.services.brand import brand_for
 from app.services.borrower_stance import check_visit_stance
+from app.services.capture_time import (
+    Capture, as_utc, judge_capture, moves_case, note_delivered, same_ist_month,
+)
 from app.services.notification_service import NotificationService
 
 logger = structlog.get_logger()
@@ -89,7 +94,8 @@ class VisitService:
     def __init__(self, db: Session):
         self.db = db
 
-    def record_visit(self, agent: Agent, case_id: str, req: RecordVisitRequest) -> dict:
+    def record_visit(self, agent: Agent, case_id: str, req: RecordVisitRequest, *,
+                     token_device_id: str | None = None) -> dict:
         """Record a field visit: geo/contact-hours checks, case status transition,
         AI audit-note generation, and the post-visit SMS/WhatsApp notification.
 
@@ -104,24 +110,35 @@ class VisitService:
           6. Notify the customer by SMS/WhatsApp for non-payment outcomes
              (payment outcomes are notified by collect_payment instead).
         """
+        now_utc = datetime.now(timezone.utc)
+        # I02: a replayed offline visit returns the row it already made, then is
+        # judged at its capture time (ADR 0011). A live submit has no key.
+        csid = getattr(req, "client_submission_id", None)
+        if csid:
+            stored = self._by_submission(agent, csid)
+            if stored is not None:
+                return self._repeat(stored, case_id)
+        capture = judge_capture(self.db, agent, captured_at=getattr(req, "captured_at", None),
+                                device_seq=getattr(req, "device_seq", None),
+                                item_device_id=getattr(req, "device_id", None),
+                                token_device_id=token_device_id, now=now_utc)
         # 2026-09-24 (A03): the one access rule. The old copy here granted any
         # unassigned case in any tenant and then RE-ASSIGNED it to the caller,
         # so recording a visit took the case over. A stale assignee is synced
         # only for a case on the caller's beat today, inside their agency.
         case = agent_case_or_404(self.db, agent, case_id,
-                                 options=(joinedload(Case.customer), joinedload(Case.loan)))
+                                 options=(joinedload(Case.customer), joinedload(Case.loan)),
+                                 on_day=capture.day if capture.late else None)
 
         if case.customer.do_not_contact:
-            raise HTTPException(status_code=403, detail="Customer is marked Do Not Contact")
+            raise AppException(403, ErrorCode.DO_NOT_CONTACT, "Customer is marked Do Not Contact")
 
         # ML-1: a stance is the borrower's, so only a visit that met them may
         # carry one. Before anything is written.
         check_visit_stance(req.borrower_disposition, customer_met=req.customer_met, person_met=req.person_met)
 
-        now_utc = datetime.now(timezone.utc)
-
-        # Idempotency guard — see _DUPLICATE_SUBMIT_WINDOW_SECONDS above.
-        recent_duplicate = (
+        # Idempotency guard for a keyless submit — see _DUPLICATE_SUBMIT_WINDOW_SECONDS above.
+        recent_duplicate = None if csid else (
             self.db.query(Visit)
             .filter(
                 Visit.case_id == case.id,
@@ -135,7 +152,7 @@ class VisitService:
         if recent_duplicate:
             return self._to_response(recent_duplicate)
 
-        within_hours = is_within_contact_hours(now_utc)
+        within_hours = is_within_contact_hours(capture.at)
         distance_m, geo_ok = within_geo_fence(
             req.check_in_latitude, req.check_in_longitude,
             case.customer.latitude, case.customer.longitude,
@@ -158,7 +175,7 @@ class VisitService:
             # user_id is the AGENT'S user, which is what tenant-scopes it: the
             # manager's audit query reads user_id IN (their agents' users).
             # success=False, because the attempted action did not happen.
-            self._audit_contact_hour_violation(agent, case, now_utc, req)
+            self._audit_contact_hour_violation(agent, case, capture.at, req, capture=capture)
             raise HTTPException(
                 status_code=403,
                 detail=(
@@ -184,7 +201,9 @@ class VisitService:
         # Every refusal is behind us: only now may a same-day handover move the
         # case to the caller (scope.sync_assignee — never at the read, because
         # the contact-hours refusal above commits its audit row).
-        sync_assignee(case, agent)
+        # A replay never takes a case over: its grant may be yesterday's beat.
+        if not capture.late:
+            sync_assignee(case, agent)
 
         visit_num = case.visit_count + 1
         visit = Visit(
@@ -192,7 +211,9 @@ class VisitService:
             agent_id=agent.id,
             check_in_latitude=req.check_in_latitude,
             check_in_longitude=req.check_in_longitude,
-            check_in_time=now_utc,
+            check_in_time=capture.at,
+            client_submission_id=csid,
+            agent_device_id=capture.device.id if capture.device is not None else None,
             distance_from_customer_metres=round(distance_m, 1),
             geo_verified=geo_ok,
             within_contact_hours=within_hours,
@@ -239,15 +260,37 @@ class VisitService:
         self.db.add(visit)
         case.visit_count = visit_num
 
-        self._apply_outcome_transition(case, req, now_utc)
+        if moves_case(self.db, case, capture):
+            self._apply_outcome_transition(case, req, capture.at)
+        else:
+            logger.info("visit.late_transition_skipped", case_id=case.id, captured_at=capture.at.isoformat())
+            if req.outcome == VisitOutcome.DECEASED:
+                # The case has moved on since, but a death report stops contact
+                # regardless (fail safe).
+                case.customer.do_not_contact = True
+                case.customer.tags = list(set(case.customer.tags or []) | {CUSTOMER_TAG_DECEASED})
 
-        agent.last_known_latitude = req.check_in_latitude
-        agent.last_known_longitude = req.check_in_longitude
-        agent.last_location_update = now_utc
-        agent.current_month_visits += 1
+        last_seen = agent.last_location_update
+        if last_seen is None or capture.at > as_utc(last_seen):
+            agent.last_known_latitude = req.check_in_latitude
+            agent.last_known_longitude = req.check_in_longitude
+            agent.last_location_update = capture.at
+        if same_ist_month(capture.at, now_utc):
+            agent.current_month_visits += 1
+        note_delivered(capture)
 
-        self.db.commit()
+        try:
+            self.db.commit()
+        except IntegrityError:
+            # Two deliveries of one key raced and the other landed first.
+            self.db.rollback()
+            stored = self._by_submission(agent, csid) if csid else None
+            if stored is None:
+                raise
+            return self._repeat(stored, case_id)
         self.db.refresh(visit)
+        offline = {"captured_at": capture.at.isoformat(), "lag_s": capture.lag_seconds,
+                   "offline": capture.late}
 
         # 2026-09-11 — VISIT_RECORDED, declared since the first schema and
         # written by nothing. After the commit, on its own commit, so a
@@ -259,7 +302,7 @@ class VisitService:
                      "agent_id": agent.id, "outcome": str(getattr(visit.outcome, "value", visit.outcome)),
                      "customer_met": bool(visit.customer_met),
                      "geo_verified": bool(visit.geo_verified),
-                     "distance_m": visit.distance_from_customer_metres},
+                     "distance_m": visit.distance_from_customer_metres, **offline},
         )
         # 2026-09-24 — the live event, same post-commit contract as the audit row.
         publish_event("visit.recorded", agent=agent, data={
@@ -267,7 +310,7 @@ class VisitService:
             "outcome": str(getattr(visit.outcome, "value", visit.outcome)),
             "customer_met": bool(visit.customer_met),
             "geo_verified": bool(visit.geo_verified),
-            "lat": visit.check_in_latitude, "lon": visit.check_in_longitude,
+            "lat": visit.check_in_latitude, "lon": visit.check_in_longitude, **offline,
         })
 
         # Generate AI audit report in the background — saved back to visit
@@ -279,12 +322,16 @@ class VisitService:
         # Send visit completion message for non-payment outcomes (payment
         # outcomes are handled by collect_payment)
         if self._should_send_visit_notice(req.outcome, case.customer, case):
-            self._notify_visit_completed(agent, case, now_utc)
+            if self._notice_still_timely(capture, now_utc):
+                self._notify_visit_completed(agent, case, now_utc)
+            else:
+                logger.info("visit.notice_skipped", case_id=case.id, reason="late sync")
 
         return self._to_response(visit)
 
     def _audit_contact_hour_violation(self, agent: Agent, case: Case,
-                                      attempted_at: datetime, req: RecordVisitRequest) -> None:
+                                      attempted_at: datetime, req: RecordVisitRequest, *,
+                                      capture: Capture | None = None) -> None:
         """One CONTACT_HOUR_VIOLATION_ATTEMPT row per refused visit.
 
         The refusal is the point; this row is the evidence of it. It must
@@ -311,6 +358,8 @@ class VisitService:
                     "window": f"{RBI_CONTACT_START:02d}:00-{RBI_CONTACT_END:02d}:00 IST",
                     "outcome_attempted": str(getattr(req.outcome, "value", req.outcome)),
                     "channel": "visit",
+                    "offline": bool(capture and capture.late),
+                    "lag_s": capture.lag_seconds if capture else 0,
                 },
                 success=False,
                 failure_reason="outside contact hours",
@@ -321,6 +370,27 @@ class VisitService:
             logger.error("visit.contact_hour_audit_failed", case_id=case.id,
                          agent_id=agent.id, error=str(exc),
                          error_type=type(exc).__name__, exc_info=True)
+
+    def _by_submission(self, agent: Agent, client_submission_id: str) -> Visit | None:
+        return (self.db.query(Visit)
+                .filter(Visit.agent_id == agent.id, Visit.client_submission_id == client_submission_id)
+                .first())
+
+    def _repeat(self, stored: Visit, case_id: str) -> dict:
+        """A used key answers with its visit, but only for the same case: a key
+        reused for another case is a client bug, not a replay."""
+        if str(stored.case_id) != str(case_id):
+            raise AppException(409, ErrorCode.IDEMPOTENCY_KEY_REUSED,
+                               "This submission id was already used for another case.")
+        return self._to_response(stored)
+
+    @staticmethod
+    def _notice_still_timely(capture: Capture, now_utc: datetime) -> bool:
+        """A late visit's borrower notice goes out only inside contact hours on
+        the visit's own IST day: an evening sync must not text anyone at 21:00."""
+        if not capture.late:
+            return True
+        return is_within_contact_hours(now_utc) and now_utc.astimezone(IST).date() == capture.day
 
     def _to_response(self, visit: Visit) -> dict:
         return {

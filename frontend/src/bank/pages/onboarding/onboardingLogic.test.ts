@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { latestMasterLoginInvite, missingRequiredDocs, unverifiedRequiredDocs } from "./onboardingLogic";
+import { latestMasterLoginInvite, missingRequiredDocs, normaliseWebsite, unverifiedRequiredDocs } from "./onboardingLogic";
 import type { AgencyDocument, InviteSummary } from "@/api/bank";
 
 const REQUIRED = ["REGISTRATION_CERT", "AGREEMENT", "INSURANCE", "POLICE_VERIFICATION_POLICY"] as const;
@@ -82,5 +82,48 @@ describe("latestMasterLoginInvite", () => {
       invite({ id: "new", status: "OPEN", created_at: "2026-09-05T00:00:00Z" }),
     ];
     expect(latestMasterLoginInvite(invites, "ag1")?.id).toBe("new");
+  });
+});
+
+describe("normaliseWebsite — owner-reported: type=\"url\" rejected a bare host", () => {
+  it("prefixes https:// onto a bare host", () => {
+    expect(normaliseWebsite("google.com")).toBe("https://google.com");
+  });
+
+  it("leaves an explicit https:// URL alone", () => {
+    expect(normaliseWebsite("https://foo.co")).toBe("https://foo.co");
+  });
+
+  it("prefixes a www subdomain the same as any other bare host", () => {
+    expect(normaliseWebsite("www.foo.in")).toBe("https://www.foo.in");
+  });
+
+  it("preserves a path", () => {
+    expect(normaliseWebsite("foo.com/x")).toBe("https://foo.com/x");
+  });
+
+  it("never upgrades an explicit http:// to https", () => {
+    expect(normaliseWebsite("http://foo.com")).toBe("http://foo.com");
+  });
+
+  it("trims a bare-root trailing slash so foo.com and foo.com/ store the same way", () => {
+    expect(normaliseWebsite("https://foo.com/")).toBe("https://foo.com");
+  });
+
+  it("does not touch a trailing slash on a real path", () => {
+    expect(normaliseWebsite("https://foo.com/x/")).toBe("https://foo.com/x/");
+  });
+
+  it("trims surrounding whitespace", () => {
+    expect(normaliseWebsite("  foo.com  ")).toBe("https://foo.com");
+  });
+
+  it("empty or whitespace-only input is null, not an empty-string website", () => {
+    expect(normaliseWebsite("")).toBeNull();
+    expect(normaliseWebsite("   ")).toBeNull();
+  });
+
+  it("does not strip www — that would change which host is actually named", () => {
+    expect(normaliseWebsite("www.foo.com")).not.toBe(normaliseWebsite("foo.com"));
   });
 });

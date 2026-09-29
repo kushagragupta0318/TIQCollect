@@ -16,9 +16,13 @@ applied to CaseService/VisitService/AuthService.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from app.core.errors import AppException, ErrorCode
+from app.services.capture_time import judge_capture
 from app.services.scope import agent_case_or_404
 from app.core import storage
 from app.core.config import settings
@@ -36,14 +40,35 @@ class MediaService:
     def __init__(self, db: Session):
         self.db = db
 
-    def get_photo_upload_url(self, agent: Agent, case_id: str, subject: str) -> dict:
+    def get_photo_upload_url(self, agent: Agent, case_id: str, subject: str, *,
+                             client_submission_id: str | None = None, captured_at=None,
+                             device_seq: int | None = None, device_id: str | None = None,
+                             token_device_id: str | None = None) -> dict:
         if subject not in self._VALID_SUBJECTS:
             raise HTTPException(status_code=400, detail=f"subject must be one of: {', '.join(self._VALID_SUBJECTS)}")
-        case = agent_case_or_404(self.db, agent, case_id)   # A03: the one rule
+        # I02: an outbox upload names its visit's submission. Judged like the
+        # visit (capture-day access), and keyed by it, so a retried PUT
+        # overwrites its own object rather than orphaning a new one.
+        # INVARIANT: an upload never advances the device's sequence
+        # (no note_delivered). Only the visit that uses the photo is delivered,
+        # so its sequence number is still unspent when it arrives.
+        capture = judge_capture(self.db, agent, captured_at=captured_at, device_seq=device_seq,
+                                item_device_id=device_id, token_device_id=token_device_id,
+                                now=datetime.now(timezone.utc))
+        case = agent_case_or_404(self.db, agent, case_id,   # A03: the one rule
+                                 on_day=capture.day if capture.late else None)
 
         photo_type_str = self._SUBJECT_MAP[subject]
         content_type, ext = self._SUBJECT_CONTENT_TYPE.get(subject, ("image/jpeg", "jpg"))
-        key = storage.photo_key(case_id, photo_type_str, ext=ext)
+        if client_submission_id:
+            # Once its visit is stored the evidence is final: no overwrite after the fact.
+            if (self.db.query(Visit.id).filter(Visit.agent_id == agent.id,
+                                               Visit.client_submission_id == client_submission_id).first()):
+                raise AppException(409, ErrorCode.IDEMPOTENCY_KEY_REUSED,
+                                   "This visit is already recorded; its photos cannot be replaced.")
+            key = storage.submission_photo_key(case.id, photo_type_str, client_submission_id, ext=ext)
+        else:
+            key = storage.photo_key(case_id, photo_type_str, ext=ext)
         upload_url = storage.presigned_upload_url(key, content_type=content_type, expires_minutes=15)
         return {"upload_url": upload_url, "key": key, "photo_type": photo_type_str}
 

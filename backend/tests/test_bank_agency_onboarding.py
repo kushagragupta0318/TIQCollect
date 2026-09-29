@@ -83,6 +83,36 @@ def _draft(db, bank_admin, **overrides) -> dict:
     return agency_service.create_draft(db, bank_admin, **body)
 
 
+# ── website normalisation (owner-reported: type="url" rejected a bare host) ─
+@pytest.mark.parametrize("raw,expected", [
+    ("google.com", "https://google.com"),
+    ("https://foo.co", "https://foo.co"),
+    ("www.foo.in", "https://www.foo.in"),
+    ("foo.com/x", "https://foo.com/x"),
+    ("http://foo.com", "http://foo.com"),          # never silently upgraded to https
+    ("https://foo.com/", "https://foo.com"),       # bare-root trailing slash trimmed
+    ("https://foo.com/x/", "https://foo.com/x/"),  # a real path's trailing slash is untouched
+    ("  foo.com  ", "https://foo.com"),
+    ("", None),
+    ("   ", None),
+    (None, None),
+])
+def test_website_normalises_on_create(w, raw, expected):
+    db, bank_admin = w["db"], w["bank_admin"]
+    out = agency_service.create_draft(db, bank_admin, legal_name="Website Test Agency", website=raw)
+    assert out["website"] == expected
+
+
+def test_website_normalises_on_update_too_so_a_paste_matches_a_typed_value(w):
+    db, bank_admin = w["db"], w["bank_admin"]
+    out = _draft(db, bank_admin)
+    agency_service.update_identity(db, bank_admin, out["agency_id"], website="www.foo.com")
+    assert db.get(Agency, out["agency_id"]).website == "https://www.foo.com"
+
+    agency_service.update_identity(db, bank_admin, out["agency_id"], website="https://foo.com/")
+    assert db.get(Agency, out["agency_id"]).website == "https://foo.com"
+
+
 # ── create_draft ─────────────────────────────────────────────────────────────
 def test_create_draft_creates_a_pending_agency_bound_to_the_bank_admins_bank(w):
     db, bank_admin = w["db"], w["bank_admin"]

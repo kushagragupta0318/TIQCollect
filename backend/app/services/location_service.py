@@ -19,20 +19,21 @@ from app.core.events import publish_event
 from app.core.geo import haversine_metres
 from app.models.agent import Agent
 from app.models.agent_location import AgentLocation, LocationSource
+from app.services.capture_time import LIVE_TOLERANCE_SECONDS, OFFLINE_MAX_AGE_HOURS
 
 # A batch is a flushed offline queue, not a firehose. 500 fixes at the client's
 # 60s ceiling is over eight hours of backlog — more than a full shift.
 MAX_BATCH = 500
 
-# Fixes older than this are dropped. A queue that survived this long is from a
-# previous shift and would draw a misleading trail across a day it does not
-# belong to.
-MAX_AGE_HOURS = 24
+# Fixes older than this are dropped. 2026-09-29 (I02, coordinator-approved):
+# 24 h -> 48 h, the one offline window for visits and the trail alike, so a
+# replayed visit always has the trail it is tested against (ADR 0011).
+MAX_AGE_HOURS = OFFLINE_MAX_AGE_HOURS
 
 # Device clocks drift and can be set wrong outright. Anything beyond this in the
 # future is clamped to now rather than rejected, so a badly-set phone still
 # produces a usable trail instead of a silent gap.
-FUTURE_TOLERANCE_SECONDS = 120
+FUTURE_TOLERANCE_SECONDS = LIVE_TOLERANCE_SECONDS
 
 # Server-side echo of the client distance filter. The client already thins
 # fixes; this catches a stationary phone whose GPS jitters a few metres and
