@@ -42,10 +42,13 @@ AGENCY_ROLES = frozenset({UserRole.AGENCY_ADMIN, UserRole.AGENCY_MANAGER})
 
 
 def tenant_scope(role: UserRole) -> str:
-    """The RLS scope a principal acts in (DATA-MODEL-V2 §8.1). Anything not a
-    platform or bank role is agency-scoped, so an unknown role never widens."""
+    """The RLS scope a principal acts in (DATA-MODEL-V2 §8.1). A field agent is
+    AGENT: its agency still bounds RLS, but the analytics views show it nothing.
+    Anything else not platform or bank is AGENCY, so an unknown role never widens."""
     if role == UserRole.PLATFORM_ADMIN:
         return "PLATFORM"
+    if role == UserRole.FIELD_AGENT:
+        return "AGENT"
     return "BANK" if role in BANK_ROLES else "AGENCY"
 
 

@@ -2947,6 +2947,45 @@ The five views are refreshed `CONCURRENTLY` in the order listed.
 
 ---
 
+### 6.4 As built: B13a (`v2_0007`) and B13b (`v2_0013`, 2026-09-28)
+
+The API reads **only** the `*_scoped` views and `v_*` views, through `dependencies.AnalyticsDb`, which binds the caller's tenant as `get_current_user` does.
+
+| Scoped view | Over | Notes |
+|---|---|---|
+| `portfolio_daily_scoped` | `mv_portfolio_daily` | `is_backfill` is **in the grain**, so a delta can be taken like for like. `contacted_7d_*` is a subset of `placed_*` (a met visit or answered call on a placed loan) |
+| `bucket_transitions_monthly_scoped` | `mv_bucket_transitions_monthly` | `month_end` is the **to**-month. Adds `excluded_missing_pairs`; a missing to-reading is `to_state = 'NO_READING'`. Only complete months (month-end ≤ the bank's latest reading) |
+| `agency_scorecard_monthly_scoped` | `mv_agency_scorecard_monthly` | See the column notes below |
+| `collections_daily_scoped`, `field_activity_daily_scoped` | the B13a MVs | Unchanged columns |
+
+`v_visit_to_pay` (per visit): the VERIFIED payments attributed to it. Each payment goes to the latest visit on its case at or before it, within 7 bank-local **calendar** days; no holiday calendar exists yet (board B13c).
+
+All six API views are `security_barrier` and share one tenant predicate: BANK sees its bank and AGENCY its agency. A field agent (scope AGENT), PLATFORM, or a missing scope or tenant sees nothing.
+
+"Today" is the bank-local `business_date(now())`. `collectible_due` is also NULL when any active placement lacks its opening reading (B13b audit).
+
+**Deviations from the text above, all deliberate.**
+- **The `*_scoped` views are not `security_invoker`.** An invoker view needs the caller to hold `SELECT` on the materialized view beneath it, and `tiq_app` holds none.
+  Each wrapper instead runs as its owner, with the tenant predicate in its own `WHERE`. It returns nothing when no tenant is set.
+  `v_visit_to_pay` is `security_invoker` **and** tenant-filtered, because RLS is not yet enforced for the API.
+- **Scorecard column notes.**
+  - `agent_days_with_visits` replaces `agent_days_present`: there is no attendance table.
+  - Added: `agents_exited`, `agent_leave_days` (ce: attrition and leave rate) and `collectible_due_unread`.
+  - `expected_recovery_inr` is the cohort of placements **placed** in the month.
+  - `verified_collections` excludes `BANK_DIRECT`, which is its own column.
+  - Commission is `verified × commission_pct / 100` via the placement's contract terms, rounded to paise.
+- **NULL means unknown, never zero.**
+  - `collectible_due` is NULL for a (bank, month) with no instalment due in it; the demo fixture windows instalments.
+  - `field_cost` is NULL when any visit in the cell has no `FIELD_VISIT` rate in `strategy.cost_rates`, and that table starts empty.
+- **The region sentinel row is not a total.** Agent-level measures live only there, together with loan-linked measures whose region cannot be resolved. `SUM` over all rows is exact.
+- **The NPA split is not point in time.** `portfolio_state` takes `npa_since` from `lending.loans` (current), since the history row does not carry it.
+
+**Measured on the committed demo fixture** (`fieldops-demo-v2.dump` at v2_0010, upgraded to v2_0013).
+- Portfolio: 0 days mismatched against `loan_dpd_history`.
+- Transitions: 0 months mismatched; every from-reading of a complete pair is a pair, stale or missing.
+- Scorecard: collections, visits, placements, matured and kept PTPs, ended placements and confirmed fraud are all exactly equal to the base tables.
+- Refresh times: 11.5 s (portfolio), 1.6 s (transitions), 23.8 s (scorecard).
+
 ## 7. Partitioning
 
 ### 7.1 Which tables, and how
