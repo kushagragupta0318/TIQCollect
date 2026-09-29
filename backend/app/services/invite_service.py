@@ -299,6 +299,9 @@ def accept_invite(db: Session, token: str, password: str, device_id: str, reques
     # ticket, not a session, exactly as at login.
     from app.services import mfa_service
     _stage_accept(db, inv, user, request)
+    if inv.role == UserRole.AGENCY_ADMIN and inv.agency_id:
+        from app.services.bank.agency_service import _maybe_activate
+        _maybe_activate(db, inv.agency_id)
     gate = mfa_service.enrollment_gate(db, user)
     if gate is not None:
         db.commit()
