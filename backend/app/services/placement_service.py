@@ -134,6 +134,117 @@ def path_covers(covering: str | None, covered: str | None) -> bool:
     return bool(top) and leaf[:len(top)] == top
 
 
+@dataclass(frozen=True)
+class LoanFacts:
+    loan: Loan
+    #: regions.path of the loan's branch; None when the branch has no region.
+    region_path: str | None
+    #: The loan's ACTIVE placement, with any agency.
+    active: Placement | None
+
+
+@dataclass(frozen=True)
+class AgencyFacts:
+    #: The id the caller named (may name nothing, or another bank's agency).
+    agency_id: str | None
+    on: date
+    agency: Agency | None
+    #: The contract in force on `on`; None when the agency is not ACTIVE or has none.
+    contract: AgencyContract | None
+    #: (loan_type, bucket, is_authorised) rows; None = no term rows (unrestricted).
+    terms: tuple | None
+    coverage: tuple[str, ...]
+    placed: int
+
+
+def authorises(terms: tuple | None, loan: Loan) -> bool:
+    if terms is None:
+        return True            # unrestricted by product/bucket — see the changelog
+    bucket = dpd_bucket_for(loan.dpd)
+    return any(t == loan.loan_type and b == bucket and ok for t, b, ok in terms)
+
+
+def covers(coverage: tuple[str, ...], region_path: str | None) -> bool:
+    """Fails closed: no coverage rows, or a branch without a region."""
+    return region_path is not None and any(path_covers(p, region_path) for p in coverage)
+
+
+def judge(lf: LoanFacts, af: AgencyFacts, *, planned: int = 0) -> GateResult:
+    """THE gates, over facts already loaded: no database, so one definition
+    serves a single placement (evaluate) and a whole book (the engine).
+    Every gate is judged even after one fails, so a preview can list all of
+    a loan's problems. The verdict is `ok` / `first_failure`; a gate's own
+    check says nothing about whether the loan was a candidate."""
+    loan, res = lf.loan, GateResult()
+    checks, lan = res.checks, lf.loan.loan_account_number
+
+    if loan.status in PLACEABLE_LOAN_STATUSES:
+        checks["loan"] = GateCheck("loan", True)
+    else:
+        checks["loan"] = GateCheck("loan", False, LOAN_NOT_OPEN, f"loan {lan} is {loan.status.value}")
+
+    existing = lf.active
+    if existing is not None and existing.agency_id != af.agency_id:
+        checks["placement"] = GateCheck("placement", False, PLACED_ELSEWHERE,
+                                        f"loan {lan} is already placed with another agency "
+                                        f"(placement {existing.id})")
+    else:
+        res.existing = existing
+        checks["placement"] = GateCheck("placement", True)
+
+    agency = af.agency
+    if agency is None or agency.bank_id != loan.bank_id:
+        checks["agency"] = GateCheck("agency", False, NO_AGENCY,
+                                     f"agency {af.agency_id} does not work for this loan's bank"
+                                     if af.agency_id else f"loan {lan}: no agency named for placement")
+        agency = None
+    elif agency.status != "ACTIVE":
+        checks["agency"] = GateCheck("agency", False, AGENCY_NOT_ACTIVE, f"agency {agency.code} is {agency.status}")
+    else:
+        checks["agency"] = GateCheck("agency", True)
+    res.agency = agency
+
+    contract = af.contract if agency is not None else None
+    res.contract = contract
+    if agency is None:
+        for g in ("contract", "authorisation", "coverage", "capacity"):
+            checks[g] = GateCheck(g, None, None, "not judged: no agency")
+        return res
+    if contract is None:
+        checks["contract"] = GateCheck("contract", False, NO_CONTRACT_IN_FORCE,
+                                       f"agency {agency.code} has no ACTIVE contract covering {af.on}")
+        for g in ("authorisation", "coverage", "capacity"):
+            checks[g] = GateCheck(g, None, None, "not judged: no contract in force")
+        return res
+    checks["contract"] = GateCheck("contract", True, None, contract.contract_no)
+
+    if authorises(af.terms, loan):
+        checks["authorisation"] = GateCheck("authorisation", True)
+    else:
+        checks["authorisation"] = GateCheck(
+            "authorisation", False, NOT_AUTHORISED,
+            f"contract {contract.contract_no} does not authorise "
+            f"{loan.loan_type.value} / {dpd_bucket_for(loan.dpd).value}")
+
+    if covers(af.coverage, lf.region_path):
+        checks["coverage"] = GateCheck("coverage", True)
+    else:
+        checks["coverage"] = GateCheck(
+            "coverage", False, NOT_COVERED,
+            f"branch {loan.branch_code} has no region" if lf.region_path is None else
+            f"contract {contract.contract_no} does not cover region {lf.region_path}")
+
+    if res.existing is not None or contract.max_placed_cases is None:
+        checks["capacity"] = GateCheck("capacity", True)       # already holds it, or uncapped
+    elif af.placed + planned >= contract.max_placed_cases:
+        checks["capacity"] = GateCheck(
+            "capacity", False, CONTRACT_FULL,
+            f"contract {contract.contract_no} is at its cap of {contract.max_placed_cases} placements")
+    else:
+        checks["capacity"] = GateCheck("capacity", True)
+    return res
+
+
 class PlacementService:
     def __init__(self, db: Session):
         self.db = db
@@ -157,12 +268,7 @@ class PlacementService:
         return q.first()
 
     def is_authorised(self, contract: AgencyContract, loan: Loan) -> bool:
-        terms = (self.db.query(AgencyContractTerm)
-                 .filter(AgencyContractTerm.contract_id == contract.id).all())
-        if not terms:
-            return True        # unrestricted by product/bucket — see the changelog
-        bucket = dpd_bucket_for(loan.dpd)
-        return any(t.loan_type == loan.loan_type and t.dpd_bucket == bucket and t.is_authorised for t in terms)
+        return authorises(self.terms_of(contract), loan)
 
     def coverage_paths(self, contract: AgencyContract) -> tuple[str, ...]:
         """The region paths the contract covers (each covers its subtree)."""
@@ -188,8 +294,7 @@ class PlacementService:
     def is_covered(self, contract: AgencyContract, loan: Loan) -> bool:
         """Fails closed: no coverage rows, or a branch without a region, is
         not covered."""
-        leaf = self.branch_region_path(loan.bank_id, loan.branch_code)
-        return leaf is not None and any(path_covers(p, leaf) for p in self.coverage_paths(contract))
+        return covers(self.coverage_paths(contract), self.branch_region_path(loan.bank_id, loan.branch_code))
 
     def covered_branch_codes(self, contract: AgencyContract) -> list[str]:
         """The bank's active branches whose region the contract covers, sorted:
@@ -221,88 +326,77 @@ class PlacementService:
         return self.db.query(Branch.id).filter(
             Branch.bank_id == bank_id, Branch.branch_code == branch_code).first() is not None
 
+    # ── facts, loaded one at a time or in batch, then judged purely ─────────
+
+    def terms_of(self, contract: AgencyContract) -> tuple | None:
+        """(loan_type, bucket, is_authorised) rows; None when the contract has
+        none (unrestricted by product/bucket, see the changelog)."""
+        rows = (self.db.query(AgencyContractTerm.loan_type, AgencyContractTerm.dpd_bucket,
+                              AgencyContractTerm.is_authorised)
+                .filter(AgencyContractTerm.contract_id == contract.id).all())
+        return tuple((t, b, bool(a)) for t, b, a in rows) or None
+
+    def loan_facts(self, loans: list[Loan]) -> list[LoanFacts]:
+        """Every loan's gate-relevant facts in two queries, whatever the count."""
+        if not loans:
+            return []
+        ids = [l.id for l in loans]
+        active = {p.loan_id: p for p in self.db.query(Placement)
+                  .filter(Placement.loan_id.in_(ids), Placement.status == "ACTIVE")}
+        return [LoanFacts(loan=l, region_path=self.branch_region_path(l.bank_id, l.branch_code),
+                          active=active.get(l.id)) for l in loans]
+
+    def agency_facts(self, agency_id: str | None, on: date, *, lock_contract: bool = False) -> AgencyFacts:
+        agency = self.db.get(Agency, agency_id) if agency_id else None
+        contract = (self.contract_in_force(agency.id, on, for_update=lock_contract)
+                    if agency is not None and agency.status == "ACTIVE" else None)
+        return AgencyFacts(
+            agency_id=agency_id, on=on, agency=agency, contract=contract,
+            terms=self.terms_of(contract) if contract is not None else None,
+            coverage=self.coverage_paths(contract) if contract is not None else (),
+            placed=self.placed_count(contract) if contract is not None else 0)
+
+    def agency_facts_many(self, bank_id: str, on: date) -> dict[str, AgencyFacts]:
+        """Every agency of the bank, for the engine: one query per kind of fact."""
+        agencies = self.db.query(Agency).filter(Agency.bank_id == bank_id).all()
+        contracts = {}
+        for c in (self.db.query(AgencyContract)
+                  .filter(AgencyContract.bank_id == bank_id, AgencyContract.status == "ACTIVE",
+                          AgencyContract.start_date <= on, AgencyContract.end_date >= on)
+                  .order_by(AgencyContract.agency_id, AgencyContract.start_date.desc())):
+            contracts.setdefault(c.agency_id, c)             # the latest-starting, as contract_in_force
+        cids = [c.id for c in contracts.values()]
+        terms: dict[str, list] = {}
+        for cid, t, b, a in (self.db.query(AgencyContractTerm.contract_id, AgencyContractTerm.loan_type,
+                                           AgencyContractTerm.dpd_bucket, AgencyContractTerm.is_authorised)
+                             .filter(AgencyContractTerm.contract_id.in_(cids))):
+            terms.setdefault(cid, []).append((t, b, bool(a)))
+        cover: dict[str, list] = {}
+        for cid, path in (self.db.query(AgencyRegion.contract_id, Region.path)
+                          .join(Region, Region.id == AgencyRegion.region_id)
+                          .filter(AgencyRegion.contract_id.in_(cids), Region.bank_id == bank_id)):
+            cover.setdefault(cid, []).append(path)
+        placed = dict(self.db.query(Placement.contract_id, func.count(Placement.id))
+                      .filter(Placement.contract_id.in_(cids), Placement.status == "ACTIVE")
+                      .group_by(Placement.contract_id).all())
+        out = {}
+        for a in agencies:
+            c = contracts.get(a.id) if a.status == "ACTIVE" else None
+            out[a.id] = AgencyFacts(
+                agency_id=a.id, on=on, agency=a, contract=c,
+                terms=tuple(terms[c.id]) if c is not None and c.id in terms else None,
+                coverage=tuple(sorted(cover.get(c.id, ()))) if c is not None else (),
+                placed=int(placed.get(c.id, 0)) if c is not None else 0)
+        return out
+
     def evaluate(self, loan: Loan, agency_id: str | None, on: date, *, planned: int = 0,
                  lock_contract: bool = False) -> GateResult:
         """Every gate for placing `loan` with `agency_id` on `on`, without
-        raising. `planned` is how many placements the caller has already
-        decided against this agency's contract in the same batch but not yet
-        written, so a preview of 10 loans against 3 free slots passes 3.
-
-        Every gate is judged even after one fails, so a preview can list all
-        of a loan's problems. The verdict is `ok` / `first_failure`; a gate's
-        own check says nothing about whether the loan was a candidate."""
-        res = GateResult()
-        checks = res.checks
-        lan = loan.loan_account_number
-
-        if loan.status in PLACEABLE_LOAN_STATUSES:
-            checks["loan"] = GateCheck("loan", True)
-        else:
-            checks["loan"] = GateCheck("loan", False, LOAN_NOT_OPEN, f"loan {lan} is {loan.status.value}")
-
-        existing = self.active_placement(loan.id)
-        if existing is not None and existing.agency_id != agency_id:
-            checks["placement"] = GateCheck("placement", False, PLACED_ELSEWHERE,
-                                            f"loan {lan} is already placed with another agency "
-                                            f"(placement {existing.id})")
-        else:
-            res.existing = existing
-            checks["placement"] = GateCheck("placement", True)
-
-        agency = self.db.get(Agency, agency_id) if agency_id else None
-        if agency is None or agency.bank_id != loan.bank_id:
-            checks["agency"] = GateCheck("agency", False, NO_AGENCY,
-                                         f"agency {agency_id} does not work for this loan's bank"
-                                         if agency_id else f"loan {lan}: no agency named for placement")
-            agency = None
-        elif agency.status != "ACTIVE":
-            checks["agency"] = GateCheck("agency", False, AGENCY_NOT_ACTIVE, f"agency {agency.code} is {agency.status}")
-        else:
-            checks["agency"] = GateCheck("agency", True)
-        res.agency = agency
-
-        contract = self.contract_in_force(agency.id, on, for_update=lock_contract) if agency is not None else None
-        res.contract = contract
-        if agency is None:
-            for g in ("contract", "authorisation", "coverage", "capacity"):
-                checks[g] = GateCheck(g, None, None, "not judged: no agency")
-            return res
-        if contract is None:
-            checks["contract"] = GateCheck("contract", False, NO_CONTRACT_IN_FORCE,
-                                           f"agency {agency.code} has no ACTIVE contract covering {on}")
-            for g in ("authorisation", "coverage", "capacity"):
-                checks[g] = GateCheck(g, None, None, "not judged: no contract in force")
-            return res
-        checks["contract"] = GateCheck("contract", True, None, contract.contract_no)
-
-        if self.is_authorised(contract, loan):
-            checks["authorisation"] = GateCheck("authorisation", True)
-        else:
-            checks["authorisation"] = GateCheck(
-                "authorisation", False, NOT_AUTHORISED,
-                f"contract {contract.contract_no} does not authorise "
-                f"{loan.loan_type.value} / {dpd_bucket_for(loan.dpd).value}")
-
-        if self.is_covered(contract, loan):
-            checks["coverage"] = GateCheck("coverage", True)
-        else:
-            leaf = self.branch_region_path(loan.bank_id, loan.branch_code)
-            checks["coverage"] = GateCheck(
-                "coverage", False, NOT_COVERED,
-                f"branch {loan.branch_code} has no region" if leaf is None else
-                f"contract {contract.contract_no} does not cover region {leaf}")
-
-        if res.existing is not None or contract.max_placed_cases is None:
-            checks["capacity"] = GateCheck("capacity", True)       # already holds it, or uncapped
-        else:
-            used = self.placed_count(contract) + planned
-            if used >= contract.max_placed_cases:
-                checks["capacity"] = GateCheck(
-                    "capacity", False, CONTRACT_FULL,
-                    f"contract {contract.contract_no} is at its cap of {contract.max_placed_cases} placements")
-            else:
-                checks["capacity"] = GateCheck("capacity", True)
-        return res
+        raising (judge()). `planned` is how many placements the caller has
+        already decided against this agency's contract in the same batch but
+        not yet written, so a preview of 10 loans against 3 free slots passes 3."""
+        return judge(self.loan_facts([loan])[0], self.agency_facts(agency_id, on, lock_contract=lock_contract),
+                     planned=planned)
 
     # ── placing ──────────────────────────────────────────────────────────────
 

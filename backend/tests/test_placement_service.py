@@ -284,3 +284,30 @@ def test_place_new_loan_records_its_run(db):
     p = PlacementService(db).place_new_loan(_loan(db), agency_id=TEST_AGENCY_ID, on=DAY, source="MANUAL",
                                             placement_run_id=run.id)
     assert p.placement_run_id == run.id
+
+
+def test_batch_facts_judge_exactly_as_evaluate_does(db):
+    """The engine loads facts for a whole bank at once (agency_facts_many,
+    loan_facts); the verdicts must be evaluate()'s, gate by gate."""
+    from app.services.placement_service import judge
+    c = _contract(db, cap=2)
+    db.add(AgencyContractTerm(bank_id=TEST_BANK_ID, agency_id=TEST_AGENCY_ID, contract_id=c.id,
+                              loan_type=LoanType.PERSONAL, dpd_bucket=DPDBucket.BUCKET_2, commission_pct=9.5))
+    other = _second_agency(db)
+    _contract(db, agency_id=other.id, no="MTB/FCA/2026-27/015", covered=False)       # covers nothing
+    suspended = Agency(id=test_id("agency:susp"), bank_id=TEST_BANK_ID, code="AGY-S", legal_name="Suspended",
+                       status="SUSPENDED", contacts=[], is_demo=True)
+    db.add(suspended)
+    db.flush()
+    svc = PlacementService(db)
+    svc.place_new_loan(_loan(db, 1), agency_id=TEST_AGENCY_ID, on=DAY, source="FEED")
+    loans = [_loan(db, 2), _loan(db, 3, dpd=120), _loan(db, 4, loan_type=LoanType.HOME), db.get(Loan, test_id("loan:1"))]
+    many = svc.agency_facts_many(TEST_BANK_ID, DAY)
+    assert set(many) == {TEST_AGENCY_ID, other.id, suspended.id}
+    facts = svc.loan_facts(loans)
+    for aid in many:
+        for lf in facts:
+            for planned in (0, 1):
+                batch = judge(lf, many[aid], planned=planned).as_json()
+                single = svc.evaluate(lf.loan, aid, DAY, planned=planned).as_json()
+                assert batch == single, (aid, lf.loan.loan_account_number, planned)
