@@ -3,8 +3,9 @@ place them with an agency within its capacity and coverage, recall one
 placement by hand, and list placements.
 
 Every route is gated by a capability and scoped by RequestContext (bank from
-the user row, never the token or the body). A foreign id answers exactly as
-a missing one does (404). The work is in services/; this file only maps HTTP.
+the user row, never the token or the body), and by the caller's region limit
+(users.scope_region_id) where one is set, on every route alike. A foreign or
+out-of-region id answers exactly as a missing one does (404). The work is in services/; this file only maps HTTP.
 """
 from __future__ import annotations
 
@@ -78,7 +79,9 @@ def list_loans(
                    dpd_min=dpd_min, dpd_max=dpd_max, outstanding_min=outstanding_min,
                    outstanding_max=outstanding_max, placed={"no": False, "yes": True, "any": None}[placed],
                    search=search)
-    return PlacementReadService(db).loans(_bank_id(ctx), f, page=page, page_size=page_size)
+    bank_id = _bank_id(ctx)
+    return PlacementReadService(db).loans(bank_id, f, region_limit=region_limit_path(db, _user),
+                                          page=page, page_size=page_size)
 
 
 @router.get("/agencies")
@@ -91,25 +94,30 @@ def list_agencies(ctx: CurrentContext, db: DbSession, _user: User = require_perm
 @router.post("/preview")
 def preview(body: BatchIn, ctx: CurrentContext, db: DbSession,
             _user: User = require_perm("placement.manual")):
-    out = ManualPlacementService(db).preview(bank_id=_bank_id(ctx), agency_id=body.agency_id,
-                                             loan_ids=list(body.loan_ids), on=access_day())
+    bank_id = _bank_id(ctx)
+    out = ManualPlacementService(db).preview(bank_id=bank_id, agency_id=body.agency_id,
+                                             loan_ids=list(body.loan_ids), on=access_day(),
+                                             region_limit=region_limit_path(db, _user))
     return _batch_out(out)
 
 
 @router.post("")
 def place(body: BatchIn, request: Request, ctx: CurrentContext, db: DbSession,
           _user: User = require_perm("placement.manual")):
-    out = ManualPlacementService(db).apply(bank_id=_bank_id(ctx), actor_id=ctx.user_id, agency_id=body.agency_id,
-                                           loan_ids=list(body.loan_ids), on=access_day(), ip_address=_ip(request))
+    bank_id = _bank_id(ctx)
+    out = ManualPlacementService(db).apply(bank_id=bank_id, actor_id=ctx.user_id, agency_id=body.agency_id,
+                                           loan_ids=list(body.loan_ids), on=access_day(), ip_address=_ip(request),
+                                           region_limit=region_limit_path(db, _user))
     return _batch_out(out)
 
 
 @router.post("/{placement_id}/recall")
 def recall(placement_id: UUIDPath, body: RecallIn, request: Request, ctx: CurrentContext, db: DbSession,
            _user: User = require_perm("placement.recall")):
+    bank_id = _bank_id(ctx)
     placement, closed = ManualPlacementService(db).recall(
-        bank_id=_bank_id(ctx), actor_id=ctx.user_id, placement_id=placement_id, note=body.reason,
-        on=access_day(), ip_address=_ip(request))
+        bank_id=bank_id, actor_id=ctx.user_id, placement_id=placement_id, note=body.reason,
+        on=access_day(), ip_address=_ip(request), region_limit=region_limit_path(db, _user))
     return {"placement_id": placement.id, "status": placement.status, "ended_on": placement.ended_on.isoformat(),
             "end_reason": placement.end_reason, "cases_closed": [c.id for c in closed]}
 

@@ -214,7 +214,11 @@ class PlacementService:
         """Every gate for placing `loan` with `agency_id` on `on`, without
         raising. `planned` is how many placements the caller has already
         decided against this agency's contract in the same batch but not yet
-        written, so a preview of 10 loans against 3 free slots passes 3."""
+        written, so a preview of 10 loans against 3 free slots passes 3.
+
+        Every gate is judged even after one fails, so a preview can list all
+        of a loan's problems. The verdict is `ok` / `first_failure`; a gate's
+        own check says nothing about whether the loan was a candidate."""
         res = GateResult()
         checks = res.checks
         lan = loan.loan_account_number

@@ -10,8 +10,8 @@ from dataclasses import dataclass
 from datetime import date
 from functools import lru_cache
 
-from sqlalchemy import and_, or_
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, exists, false, or_
+from sqlalchemy.orm import Session, aliased
 
 from app.models.customer import Customer
 from app.models.loan import DPDBucket, Loan, LoanType, dpd_bucket_for
@@ -60,9 +60,25 @@ def _like_escape(s: str) -> str:
     return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
-def region_subtree_clause(path: str):
-    """Region.path is `path` or below it, by segment (NORTH.HR never matches NORTH.HRX)."""
-    return or_(Region.path == path, Region.path.like(_like_escape(path) + ".%", escape="\\"))
+def region_subtree_clause(path: str, column=None):
+    """`column` (Region.path) is `path` or below it, by segment (NORTH.HR never matches NORTH.HRX)."""
+    col = Region.path if column is None else column
+    return or_(col == path, col.like(_like_escape(path) + ".%", escape="\\"))
+
+
+def apply_region_limit(q, region_limit):
+    """Narrow a query that selects Loan to the caller's region limit
+    (scope.region_limit_path): None = unlimited, unresolved = nothing."""
+    if region_limit is None:
+        return q
+    if region_limit is REGION_LIMIT_UNRESOLVED:
+        return q.filter(false())
+    # Aliased: a caller's query may already join Branch/Region (loans() does),
+    # and EXISTS would otherwise correlate to those and lose its FROM.
+    b, r = aliased(Branch), aliased(Region)
+    return q.filter(exists().where(
+        b.bank_id == Loan.bank_id, b.branch_code == Loan.branch_code,
+        r.id == b.region_id, r.bank_id == Loan.bank_id, region_subtree_clause(region_limit, r.path)))
 
 
 @dataclass(frozen=True)
@@ -85,7 +101,7 @@ class PlacementReadService:
 
     # ── loans to pick from ──────────────────────────────────────────────────
 
-    def loans(self, bank_id: str, f: LoanFilter, *, page: int = 1, page_size: int = 50) -> dict:
+    def loans(self, bank_id: str, f: LoanFilter, *, region_limit=None, page: int = 1, page_size: int = 50) -> dict:
         page_size = max(1, min(int(page_size), MAX_PAGE_SIZE))
         page = max(1, int(page))
         active = (self.db.query(Placement.loan_id.label("loan_id"), Placement.agency_id.label("agency_id"),
@@ -99,6 +115,7 @@ class PlacementReadService:
              .outerjoin(active, active.c.loan_id == Loan.id)
              .outerjoin(Agency, and_(Agency.id == active.c.agency_id, Agency.bank_id == Loan.bank_id))
              .filter(Loan.bank_id == bank_id, Loan.status.in_(PLACEABLE_LOAN_STATUSES)))
+        q = apply_region_limit(q, region_limit)
         if f.region_id:
             root = self.db.query(Region.path).filter(Region.id == f.region_id, Region.bank_id == bank_id).first()
             if root is None:
@@ -186,12 +203,7 @@ class PlacementReadService:
              .filter(Placement.bank_id == bank_id))
         if agency_id is not None:
             q = q.filter(Placement.agency_id == agency_id)
-        if region_limit is REGION_LIMIT_UNRESOLVED:
-            return {"items": [], "total": 0, "page": page, "page_size": page_size}
-        if region_limit is not None:
-            q = (q.join(Branch, and_(Branch.bank_id == Loan.bank_id, Branch.branch_code == Loan.branch_code))
-                 .join(Region, and_(Region.id == Branch.region_id, Region.bank_id == Loan.bank_id))
-                 .filter(region_subtree_clause(region_limit)))
+        q = apply_region_limit(q, region_limit)
         if filter_agency_id:
             q = q.filter(Placement.agency_id == filter_agency_id)
         if status:

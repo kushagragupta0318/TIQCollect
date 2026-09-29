@@ -25,6 +25,7 @@ from app.models.loan import Loan
 from app.models.placement import Placement
 from app.models.planning import PlacementDecision, PlacementRun
 from app.models.tenancy import Agency
+from app.services.placement_read_service import apply_region_limit
 from app.services.placement_service import GateResult, PlacementService
 
 MAX_BATCH = 500
@@ -84,23 +85,26 @@ class ManualPlacementService:
             raise _not_found("Agency")
         return agency
 
-    def _loans(self, bank_id: str, loan_ids: list[str]) -> list[Loan]:
+    def _loans(self, bank_id: str, loan_ids: list[str], region_limit=None) -> list[Loan]:
         ids = list(dict.fromkeys(loan_ids))                  # de-duplicated, order kept
         if not ids:
             raise AppException(422, ErrorCode.VALIDATION_ERROR, "No loans named")
         if len(ids) > MAX_BATCH:
             raise AppException(422, ErrorCode.VALIDATION_ERROR,
                                f"At most {MAX_BATCH} loans per batch; {len(ids)} named")
-        rows = {l.id: l for l in self.db.query(Loan).filter(Loan.bank_id == bank_id, Loan.id.in_(ids))}
+        # A loan outside the caller's region limit is "not found", like another bank's.
+        rows = {l.id: l for l in apply_region_limit(
+            self.db.query(Loan).filter(Loan.bank_id == bank_id, Loan.id.in_(ids)), region_limit)}
         if len(rows) != len(ids):
             raise _not_found("Loan")
         return [rows[i] for i in ids]
 
     # ── preview: every gate, no writes ──────────────────────────────────────
 
-    def preview(self, *, bank_id: str, agency_id: str, loan_ids: list[str], on: date) -> BatchResult:
+    def preview(self, *, bank_id: str, agency_id: str, loan_ids: list[str], on: date,
+                region_limit=None) -> BatchResult:
         agency = self._agency(bank_id, agency_id)
-        loans = self._loans(bank_id, loan_ids)
+        loans = self._loans(bank_id, loan_ids, region_limit)
         out = BatchResult(agency_id=agency.id, on=on)
         planned = 0
         for loan in loans:
@@ -115,9 +119,9 @@ class ManualPlacementService:
     # ── apply: place what passes, record every verdict, one commit ──────────
 
     def apply(self, *, bank_id: str, actor_id: str, agency_id: str, loan_ids: list[str], on: date,
-              ip_address: str | None = None) -> BatchResult:
+              ip_address: str | None = None, region_limit=None) -> BatchResult:
         agency = self._agency(bank_id, agency_id)
-        loans = self._loans(bank_id, loan_ids)
+        loans = self._loans(bank_id, loan_ids, region_limit)
         now = datetime.now(timezone.utc)
         run = PlacementRun(bank_id=bank_id, plan_date=on, strategy="MANUAL_BATCH", status="APPLIED",
                            simulate=False, exploration_rate=0.0, created_by=actor_id, applied_by=actor_id,
@@ -171,7 +175,7 @@ class ManualPlacementService:
     # ── manual recall of one placement ──────────────────────────────────────
 
     def recall(self, *, bank_id: str, actor_id: str, placement_id: str, note: str, on: date,
-               ip_address: str | None = None) -> tuple[Placement, list]:
+               ip_address: str | None = None, region_limit=None) -> tuple[Placement, list]:
         note = " ".join((note or "").split())
         if not note:
             raise AppException(422, ErrorCode.VALIDATION_ERROR, "A reason is required to recall a placement")
@@ -181,6 +185,10 @@ class ManualPlacementService:
         placement = (self.db.query(Placement)
                      .filter(Placement.id == placement_id, Placement.bank_id == bank_id)
                      .with_for_update().first())
+        if placement is not None and region_limit is not None:
+            in_region = apply_region_limit(self.db.query(Loan.id).filter(
+                Loan.id == placement.loan_id, Loan.bank_id == bank_id), region_limit).first()
+            placement = placement if in_region else None
         if placement is None:
             raise _not_found("Placement")
         if placement.status != "ACTIVE":

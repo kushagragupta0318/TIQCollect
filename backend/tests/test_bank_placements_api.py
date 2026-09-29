@@ -311,3 +311,38 @@ def test_the_placement_list_carries_the_models_synthetic_warning(w):
     body = w["c"].get(BASE, headers=_h(w["ba"])).json()
     assert body["items"][0]["expected_recovery_prob"] == pytest.approx(0.4)
     assert "synthetic" in body["synthetic_warning"].lower()
+
+
+def test_a_region_limited_admin_can_neither_see_nor_place_nor_recall_outside_the_region(w):
+    """Auditor MED (2026-09-29): the region limit applies to the write routes
+    too, with the same 404 as another bank's ids."""
+    from app.models.tenancy import Region
+    db, c = w["db"], w["c"]
+    north = test_id(f"region:{TEST_BANK_ID}:NORTH")
+    hrx = test_id("region:hrx")
+    db.add(Region(id=hrx, bank_id=TEST_BANK_ID, parent_id=north, level="STATE", code="HRX", name="HRX",
+                  path="NORTH.HRX"))
+    db.flush()
+    db.add(Branch(id=test_id("branch:hrx01"), bank_id=TEST_BANK_ID, branch_code="HRX01", name="HRX 01",
+                  region_id=hrx, is_active=True))
+    db.flush()
+    outside = make_loan(db, 9, branch_code="HRX01")
+    db.commit()
+    assert _place(w, w["ba"], [outside], agency=AGENCY1B).status_code == 200      # unlimited admin
+    pid = db.query(Placement).one().id
+
+    limited = _user(db, "ba-hr", UserRole.BANK_ADMIN, bank=TEST_BANK_ID, phone="9800000009")
+    limited.scope_region_id = test_id(f"region:{TEST_BANK_ID}:HR")
+    db.commit()
+    h = _h(limited)
+    seen = c.get(f"{BASE}/loans", params={"placed": "any"}, headers=h).json()
+    assert {r["loan_account_number"] for r in seen["items"]} == {"LN00000001", "LN00000002", "LN00000003"}
+    missing = c.post(f"{BASE}/preview", headers=h, json={"agency_id": TEST_AGENCY_ID, "loan_ids": [MISSING]})
+    for r in (c.post(f"{BASE}/preview", headers=h, json={"agency_id": TEST_AGENCY_ID, "loan_ids": [outside.id]}),
+              c.post(BASE, headers=h, json={"agency_id": TEST_AGENCY_ID, "loan_ids": [outside.id]}),
+              c.post(f"{BASE}/{pid}/recall", headers=h, json={"reason": "moved"})):
+        assert r.status_code == 404 and r.json() == missing.json()
+    assert c.post(f"{BASE}/preview", headers=h,
+                  json={"agency_id": TEST_AGENCY_ID, "loan_ids": [w["a"][0].id]}).status_code == 200
+    db.expire_all()
+    assert db.get(Placement, pid).status == "ACTIVE"
