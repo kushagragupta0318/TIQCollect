@@ -1,5 +1,11 @@
 # Merging this repo back into the Collections platform
 
+> **HISTORICAL since 2026-09-28.** TIQCollect is a standalone product (ADR 0009); nothing is
+> merged into the Collections repo any more. Deploy with [DEPLOY.md](DEPLOY.md). This file is
+> kept as the record of how the platform copy was fed, and for the `fieldops.transorg.ai` host
+> for as long as it runs. Its Command Center parts (`TIQCOLLECT_AGENCY_ACCOUNTS`, the
+> service-login rotation, CC entries in `DEMO_MASTER_KEEP_ACCOUNTS`) apply to that host only.
+
 This repo was extracted from the `Collections` monorepo (`field-ops-stub/`) on
 2026-08-17 with `git subtree split`. Work continues in both places, so the two
 copies drift. This is how to fold this repo's work back into the platform.
@@ -169,7 +175,7 @@ from the environment:
 | `DEMO_MASTER_ACCOUNTS` | three v2 emails, e.g. `ananya.iyer@girivanfinance.test,vikram.malhotra@aravallifs.test,piyush.sharma@aravallifs.test` | the v1 emails no longer exist |
 | `DEMO_MASTER_KEEP_ACCOUNTS` | the new Command Center service-login emails (P1-A) | |
 | `DEMO_EMAIL_DOMAINS` | leave the default (`girivanfinance.test,aravallifs.test`) | `DISABLE_OTHERS` refuses if any account is outside these |
-| `PRODUCT_MODE` | `embedded` (the default) on the platform | `standalone` is for a self-hosted bank portal. Any other value stops start-up |
+| `PRODUCT_MODE` | *(removed 2026-09-28, ADR 0009; ignored if set)* | it was read nowhere |
 | `TOTP_ENC_KEY` | a Fernet key from `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`, kept secret | unset: MFA enrolment is refused (`MFA_NOT_CONFIGURED`). Rotating it forces every enrolled user to re-enrol |
 | `BANK_MFA_REQUIRED` | unset for the demo | `true` blocks every bank user without TOTP, including the demo bank admin |
 | `DEMO_DEVICE_REBIND` | **unset** | it switches device binding off. Start-up is refused without `DEMO_MODE` |

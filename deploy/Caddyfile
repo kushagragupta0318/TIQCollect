@@ -1,0 +1,52 @@
+# TLS and the one proxy in front of TIQCollect (docs/DEPLOY.md).
+# Certificates come from Let's Encrypt for both names; they must resolve here.
+{
+	email {$ACME_EMAIL}
+}
+
+(security_headers) {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# Report-only until the SPA has been checked against it (maps tiles, the
+		# voice SDK, the files domain); then switch to Content-Security-Policy.
+		# img-src/connect-src carry a broad `https:` scheme source today, which
+		# already covers every host below. Named explicitly anyway (maps lane,
+		# 2026-09-29, confirmed by 4d against components/map/baseTiles.ts) so
+		# these survive when this tightens from `https:` to a named allowlist:
+		# tiles load as <img>, so only img-src is needed, not connect-src —
+		# api.mapbox.com (Mapbox raster tiles) and *.tile.openstreetmap.org (the
+		# no-token OSM fallback). data: stays in img-src for the Mapbox wordmark
+		# SVG Vite inlines as a data: URI. events.mapbox.com (mapbox-gl telemetry)
+		# is not used: tiles are plain <img> tags, not the mapbox-gl JS client.
+		Content-Security-Policy-Report-Only "default-src 'self'; img-src 'self' data: blob: https: https://api.mapbox.com https://*.tile.openstreetmap.org; media-src 'self' blob: https:; connect-src 'self' https: wss:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+		-Server
+	}
+}
+
+# The app: the built SPA and /api/v1, one upstream.
+{$APP_DOMAIN} {
+	import security_headers
+	encode zstd gzip
+	# Visit media never passes through here (pre-signed URLs go to FILES_DOMAIN);
+	# the largest body is a voice note to /agent/transcribe-audio.
+	request_body {
+		max_size 20MB
+	}
+	reverse_proxy api:8300
+}
+
+# Visit media: the browser PUTs and GETs pre-signed MinIO URLs here. The Host
+# header is passed through unchanged (Caddy's default), which the signature needs.
+# A pre-signed PUT carries no size limit of its own, so this is the only cap.
+{$FILES_DOMAIN} {
+	import security_headers
+	@admin path /minio/*
+	respond @admin 403
+	request_body {
+		max_size 200MB
+	}
+	reverse_proxy minio:9000
+}

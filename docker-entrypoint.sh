@@ -8,9 +8,7 @@
 # Seeding has to be gated. scripts/seed_data.py is destructive by design — it
 # drops every table, drops every enum type in the public schema with CASCADE,
 # then recreates and repopulates. Running it on each boot would wipe the demo
-# after any restart. The other apps in this platform self-seed idempotently from
-# parquet at import; this is the same idea, done explicitly because the seed
-# itself cannot be made idempotent.
+# after any restart, so it runs only on an empty database.
 #
 # ─── CHANGELOG ───
 # 2026-09-22 — an empty database is now filled from a committed FIXTURE when

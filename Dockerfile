@@ -1,7 +1,7 @@
-# Production image: the built SPA and the FastAPI API in one container. The
-# Collections platform builds this for fieldops.transorg.ai; the same image runs
-# the API, the Celery worker and beat (the role is the command). Local development
-# uses docker-compose.yml + Dockerfile.dev instead.
+# Production image: the built SPA and the FastAPI API in one container. The same
+# image runs the API, the Celery worker and beat (the role is the command).
+# Deployed with docker-compose.prod.yml (docs/DEPLOY.md). Local development uses
+# docker-compose.yml + Dockerfile.dev instead.
 
 # ---- Stage 1: build the TIQCollect React SPA ----
 # Node 22: react-router 8 requires >= 22.22. `npm ci` alone: a lockfile that does
