@@ -60,6 +60,12 @@ def photo_key(case_id: str, photo_type: str, ext: str = "jpg") -> str:
     return f"collections/{d.year}/{d.month:02d}/{case_id[:8]}/{photo_type}_{uuid.uuid4().hex[:12]}.{ext}"
 
 
+def submission_photo_key(case_id: str, photo_type: str, submission_id: str, ext: str = "jpg") -> str:
+    """The same object for every retry of one offline visit's photo (I02).
+    Path: collections/offline/{case_id[:8]}/{submission_id}/{photo_type}.jpg"""
+    return f"collections/offline/{str(case_id)[:8]}/{submission_id}/{photo_type}.{ext}"
+
+
 def agency_document_key(agency_id: str, doc_type: str, ext: str = "pdf") -> str:
     """Generate an object key for an agency onboarding document.
     Path: agencies/{agency_id[:8]}/{doc_type}_{uuid8}.ext

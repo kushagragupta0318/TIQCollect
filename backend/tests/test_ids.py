@@ -110,4 +110,9 @@ def test_every_id_path_parameter_on_the_routers_is_validated():
                 ann = ast.get_source_segment(src, a.annotation)
                 if ann in ("str", "Optional[str]", "str | None"):
                     offenders.append(f"{f.name}:{fn.name}({a.arg}: {ann})")
+                # device_id names agent_devices.id, a UUID, and nothing else. The
+                # phone's own id is a different thing and takes a different name
+                # (capture_device_ref, I02), so this must never be allow-listed.
+                if a.arg == "device_id" and ann not in ("UUIDPath", "UUIDQuery", "UUIDQueryRequired"):
+                    offenders.append(f"{f.name}:{fn.name}(device_id: {ann}) must be a validated UUID")
     assert offenders == []
