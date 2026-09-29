@@ -44,7 +44,9 @@ first gate `evaluate()` fails. The gates exist once, here.
 """
 from __future__ import annotations
 
+import base64
 import re
+import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
@@ -54,12 +56,13 @@ from sqlalchemy.orm import Session
 
 from app.models.case import Case, CaseStatus, priority_for
 from app.models.lending import BankFeedBatch, BankFeedRow
-from app.models.loan import Loan, dpd_bucket_for
+from app.models.loan import Loan, LoanStatus, dpd_bucket_for
 from app.models.placement import PLACEMENT_SOURCES, Placement
 from app.models.tenancy import Agency, AgencyContract, AgencyContractTerm, AgencyRegion, Branch, Region
 
 # Refusal reasons. Stored in bank_feed_rows.dq_errors, so a released row can
 # be re-tried once the reason is fixed (a contract signed, a slab authorised).
+LOAN_NOT_OPEN = "LOAN_NOT_OPEN"
 NO_AGENCY = "NO_AGENCY"
 AGENCY_NOT_ACTIVE = "AGENCY_NOT_ACTIVE"
 NO_CONTRACT_IN_FORCE = "NO_CONTRACT_IN_FORCE"
@@ -68,12 +71,12 @@ NOT_COVERED = "NOT_COVERED"
 CONTRACT_FULL = "CONTRACT_FULL"
 PLACED_ELSEWHERE = "PLACED_ELSEWHERE"
 UNKNOWN_BRANCH = "UNKNOWN_BRANCH"
-REFUSAL_REASONS = (NO_AGENCY, AGENCY_NOT_ACTIVE, NO_CONTRACT_IN_FORCE, NOT_AUTHORISED, NOT_COVERED,
+REFUSAL_REASONS = (LOAN_NOT_OPEN, NO_AGENCY, AGENCY_NOT_ACTIVE, NO_CONTRACT_IN_FORCE, NOT_AUTHORISED, NOT_COVERED,
                    CONTRACT_FULL, PLACED_ELSEWHERE, UNKNOWN_BRANCH)
 
 # The hard gates, in the order a refusal is reported. `place_new_loan` raises
 # the first failure in this order; `evaluate` reports all of them.
-GATES = ("placement", "agency", "contract", "authorisation", "coverage", "capacity")
+GATES = ("loan", "placement", "agency", "contract", "authorisation", "coverage", "capacity")
 
 
 class PlacementRefused(Exception):
@@ -113,6 +116,10 @@ class GateResult:
         """The `placement_decisions.gate_results` shape."""
         return {g: {"passed": c.passed, "reason": c.reason, "detail": c.detail}
                 for g, c in self.checks.items()}
+
+
+# A closed, settled or written-off loan has nothing left for an agency to collect.
+PLACEABLE_LOAN_STATUSES = frozenset({LoanStatus.ACTIVE, LoanStatus.NPA})
 
 
 def _path_parts(path: str | None) -> tuple[str, ...]:
@@ -211,6 +218,11 @@ class PlacementService:
         res = GateResult()
         checks = res.checks
         lan = loan.loan_account_number
+
+        if loan.status in PLACEABLE_LOAN_STATUSES:
+            checks["loan"] = GateCheck("loan", True)
+        else:
+            checks["loan"] = GateCheck("loan", False, LOAN_NOT_OPEN, f"loan {lan} is {loan.status.value}")
 
         existing = self.active_placement(loan.id)
         if existing is not None and existing.agency_id != agency_id:
@@ -329,6 +341,82 @@ class PlacementService:
         self.db.add(case)
         self.db.flush()
         return case
+
+    # ── what a bank-made placement carries ──────────────────────────────────
+
+    @staticmethod
+    def case_number_for(placement: Placement) -> str:
+        """"PL" + yymmdd + 8 base32 characters of the placement id: 16 chars,
+        inside cases.case_number VARCHAR(20); UNIQUE (bank_id, case_number)
+        is the guard. 8, not 6: 30 bits collide at ~1% for 5,000 cases a day."""
+        tag = base64.b32encode(uuid.UUID(str(placement.id)).bytes).decode()[:8]
+        return f"PL{placement.placed_on:%y%m%d}{tag}"
+
+    @staticmethod
+    def case_target_amount(loan: Loan) -> float:
+        """The overdue amount, or the whole outstanding when nothing is overdue
+        (the rule ingest_daily.process_row applies to a feed-opened case)."""
+        overdue = float(loan.overdue_amount or 0.0)
+        return overdue if overdue > 0 else float(loan.total_outstanding or 0.0)
+
+    def recovery_expectation(self, loan: Loan, on: date) -> tuple[float, str, date] | None:
+        """(P(pay), prediction id, as_of) from the loan's newest modelled
+        recovery_risk prediction on or before `on`; None when there is none.
+        Abstains rather than scoring or imputing (ADR 0005). The stored
+        probability is P(bad), so P(pay) is its complement
+        (ml_scoring_service.score_cases)."""
+        from app.ml.pipeline.config import RECOVERY_RISK
+        from app.models.model_prediction import ModelPrediction
+        row = (self.db.query(ModelPrediction.id, ModelPrediction.as_of_date, ModelPrediction.probability)
+               .filter(ModelPrediction.loan_id == loan.id, ModelPrediction.bank_id == loan.bank_id,
+                       ModelPrediction.model_name == RECOVERY_RISK.name,
+                       ModelPrediction.is_modelled.is_(True), ModelPrediction.probability.isnot(None),
+                       ModelPrediction.as_of_date <= on)
+               .order_by(ModelPrediction.as_of_date.desc(), ModelPrediction.scored_at.desc())
+               .first())
+        if row is None:
+            return None
+        return round(1.0 - float(row.probability), 6), row.id, row.as_of_date
+
+    def attach_expectation(self, placement: Placement, loan: Loan) -> None:
+        exp = self.recovery_expectation(loan, placement.placed_on)
+        if exp is None:
+            return
+        p_pay, pred_id, as_of = exp
+        placement.expected_recovery_prob = p_pay
+        # expected_recovery_inr stays NULL: what amount P(pay next cycle) implies
+        # is D06's definition to make (asked 2026-09-29), not this writer's.
+        placement.model_prediction_id, placement.model_prediction_as_of = pred_id, as_of
+
+    # ── ending a placement ──────────────────────────────────────────────────
+
+    def recall(self, placement: Placement, *, on: date, end_reason: str, note: str,
+               ended_by: str | None) -> list[Case]:
+        """End an ACTIVE placement as RECALLED and close its open cases the way
+        a feed recall closes a case (scripts/ingest_daily._close_case_recall):
+        CLOSED, closure_reason RECALLED, notes starting with the prefix the
+        outcome labeller censors on (ml/pipeline/outcomes.RECALL_NOTE_PREFIX)."""
+        from app.ml.pipeline.outcomes import RECALL_NOTE_PREFIX
+        from app.models.case import RESOLVED_STATUSES, ClosureReason
+        if placement.status != "ACTIVE":
+            raise ValueError(f"placement {placement.id} is {placement.status}, not ACTIVE")
+        placement.status = "RECALLED"
+        placement.ended_on = on
+        placement.ended_by = ended_by
+        placement.end_reason = end_reason[:30]
+        closed = []
+        now = datetime.now(timezone.utc)
+        for case in (self.db.query(Case)
+                     .filter(Case.placement_id == placement.id, Case.agency_id == placement.agency_id)):
+            if case.status in RESOLVED_STATUSES:
+                continue
+            case.status = CaseStatus.CLOSED
+            case.resolved_at = now
+            case.closure_reason = ClosureReason.RECALLED.value
+            case.resolution_notes = f"{RECALL_NOTE_PREFIX} on {on}. Reason: {note}".strip()
+            closed.append(case)
+        self.db.flush()
+        return closed
 
     # ── quarantine ───────────────────────────────────────────────────────────
 

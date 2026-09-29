@@ -44,3 +44,25 @@ def cover(db, contract, code: str = "NORTH", *, branch_region: str = "GGN") -> N
     db.add(AgencyRegion(bank_id=contract.bank_id, agency_id=contract.agency_id, contract_id=contract.id,
                         region_id=rid))
     db.flush()
+
+
+def make_loan(db, n: int = 1, *, bank_id: str = TEST_BANK_ID, dpd: int = 47, branch_code: str = "GGN044",
+              loan_type=None, status=None, overdue: float = 24600.0):
+    """One customer + loan in `bank_id` (its branch must exist there)."""
+    from datetime import date
+    from app.models.customer import Customer
+    from app.models.loan import Loan, LoanStatus, LoanType
+    cust = Customer(id=test_id(f"cust:{bank_id}:{n}"), bank_id=bank_id, customer_ref=f"C-{n:05d}",
+                    full_name="Farhan Siddiqui", date_of_birth=date(1988, 6, 14), gender="MALE",
+                    pan_masked="XXXXX4821K", aadhaar_masked="XXXXXXXX3307", phone_primary="9899000101",
+                    address_line1="C-214, Sector 49", city="Gurugram", state="Haryana", pincode="122018",
+                    latitude=28.412, longitude=77.064)
+    loan = Loan(id=test_id(f"loan:{bank_id}:{n}"), bank_id=bank_id, loan_account_number=f"LN{n:08d}",
+                customer_id=cust.id, loan_type=loan_type or LoanType.PERSONAL, branch_code=branch_code,
+                sanctioned_amount=400000.0, disbursed_amount=400000.0, outstanding_principal=260000.0,
+                total_outstanding=281000.0, overdue_amount=overdue, emi_amount=12300.0, dpd=dpd,
+                status=status or LoanStatus.ACTIVE,
+                disbursement_date=date(2024, 2, 1), maturity_date=date(2027, 2, 1), interest_rate=14.25)
+    db.add_all([cust, loan])
+    db.flush()
+    return loan
