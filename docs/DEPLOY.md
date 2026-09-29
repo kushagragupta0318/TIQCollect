@@ -169,6 +169,21 @@ Then re-run the checks in §3. Record in the release notes:
 - the image id (`docker image inspect tiqcollect:<new> --format '{{.Id}}'`);
 - the Alembic head before and after.
 
+### One-time steps after a specific migration
+
+Some migrations fix past data, not just the schema, and need a script run once afterwards.
+Only on an instance that was already running (a fresh install starts clean). Run each once,
+in the release that carries the migration it names, before re-opening the site.
+
+- **`v2_0016`** (placement reconciliation): a bug before this migration could leave a
+  placement ACTIVE with no live case backing it. Preview first, then apply, one bank at a
+  time so the output stays readable:
+  ```bash
+  $C exec api python -m scripts.reconcile_placements --bank <CODE> --dry-run
+  $C exec api python -m scripts.reconcile_placements --bank <CODE>
+  ```
+  Idempotent: running it again on a bank with nothing left to fix does nothing.
+
 ## 6. Backups
 
 **Postgres.** A nightly custom-format dump, kept 14 days, plus one a month for 12 months.
