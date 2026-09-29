@@ -1,9 +1,10 @@
-import { defineConfig, loadEnv } from "vite";
+import { defineConfig, loadEnv, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 import fs from "fs";
 import path from "path";
 import { pwaOptions } from "./src/lib/pwaConfig";
+import { checkMapboxToken } from "./src/lib/mapTiles";
 
 // 2026-09-24 (I01) — PWA: manifest, icons and an app-shell service worker,
 // options in src/lib/pwaConfig.ts (where the test that pins them lives). The
@@ -52,12 +53,28 @@ if (useHttps && !haveCert) {
   );
 }
 
+// The map token is inlined into the bundle (lib/mapTiles.ts). A secret sk.* token must never
+// be, so it stops dev and build alike; a production build without one only warns, since every
+// map then falls back to OpenStreetMap's public server.
+function mapboxTokenCheck(token: string | undefined): Plugin {
+  return {
+    name: "tiq-mapbox-token-check",
+    configResolved(config) {
+      const check = checkMapboxToken(token);
+      if (check.level === "secret") throw new Error(check.message);
+      if (check.level !== "ok" && config.command === "build" && config.mode === "production") {
+        config.logger.warn(`WARNING: ${check.message}`);
+      }
+    },
+  };
+}
+
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, __dirname, "");
   const apiTarget = env.VITE_API_TARGET || "http://localhost:8400";
 
   return {
-    plugins: [react(), VitePWA(pwaOptions)],
+    plugins: [react(), VitePWA(pwaOptions), mapboxTokenCheck(env.VITE_MAPBOX_TOKEN)],
     resolve: {
       alias: {
         "@": path.resolve(__dirname, "./src"),

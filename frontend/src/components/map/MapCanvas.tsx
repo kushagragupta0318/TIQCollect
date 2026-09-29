@@ -9,22 +9,13 @@
  * A fourth copy was about to be written for the agent beat map. One definition,
  * one place — the same rule that ended seven copies of the DPD bucket rule.
  *
- * TILES. OpenStreetMap's public tile server, which is free and needs no key.
- * Its usage policy explicitly rules out heavy or commercial use, so a real
- * deployment must either self-host tiles (the OSRM extract in docker-compose
- * serves the same region) or take a provider. VITE_TILE_URL overrides the host
- * without touching this file.
+ * TILES come from components/map/baseTiles.ts (lib/mapTiles.ts decides the
+ * source: Mapbox with a token, else OpenStreetMap).
  */
 import { useEffect, useRef } from "react";
 import L from "leaflet";
 import { DEFAULT_CENTRE } from "./constants";
-
-const TILE_URL =
-  (import.meta.env.VITE_TILE_URL as string | undefined) ??
-  "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
-
-const ATTRIBUTION =
-  '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
+import { addBaseTiles } from "./baseTiles";
 
 interface MapCanvasProps {
   /** Called once the map exists. Return a cleanup for anything you added. */
@@ -65,7 +56,7 @@ export function MapCanvas({
       zoomControl: true,
       attributionControl: true,
     }).setView(centre, zoom);
-    L.tileLayer(TILE_URL, { maxZoom: 19, attribution: ATTRIBUTION }).addTo(map);
+    addBaseTiles(map);
     mapRef.current = map;
     // See the header: without this the panel can render as grey tiles.
     const t = window.setTimeout(() => map.invalidateSize(), 0);

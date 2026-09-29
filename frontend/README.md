@@ -38,7 +38,10 @@ npm run lint      # eslint; CI fails on errors
 
 Environment variables are read at build time:
 - `VITE_API_TARGET` (the dev proxy target)
-- `VITE_TILE_URL` (the map tile server)
+- `VITE_TILE_URL` (a self-hosted tile server; wins over Mapbox)
+- `VITE_MAPBOX_TOKEN`, `VITE_ALLOWED_MAP_HOSTS` (Mapbox tiles and the hosts
+  that may use them; without a token the maps use OpenStreetMap:
+  `src/lib/mapTiles.ts`)
 - `VITE_ENABLE_SIMULATOR` (the `/simulator` page outside dev)
 
 ## Install the app on a phone (PWA, 2026-09-24)

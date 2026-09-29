@@ -11,6 +11,10 @@ WORKDIR /fe
 COPY frontend/package*.json ./
 RUN npm ci
 COPY frontend/ ./
+# Map tiles (src/lib/mapTiles.ts): the public Mapbox token and the hosts allowed
+# to use it are inlined at build time. Empty is valid: OSM tiles, and a warning.
+ARG VITE_MAPBOX_TOKEN=""
+ARG VITE_ALLOWED_MAP_HOSTS=""
 RUN npm run build
 
 # ---- Stage 2: FastAPI backend serving /api/v1 + the built SPA ----
