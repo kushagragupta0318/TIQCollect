@@ -275,9 +275,9 @@ def test_a_recall_frees_its_slot_for_the_same_run():
 
 def test_the_run_records_one_decision_per_loan_and_counts_kept_placements():
     from app.services.placement_service import PlacementService
-    db, contracts = _world(cap_a=1, cap_b=0)
+    db, contracts = _world(cap_a=1, cap_b=1)
     kept = make_loan(db, 9)
-    PlacementService(db).place_new_loan(kept, agency_id=AG_B, on=DAY, source="FEED")   # SLA not yet due
+    PlacementService(db).place_new_loan(kept, agency_id=AG_B, on=DAY, source="FEED")   # fills B; SLA not yet due
     db.get(Bank, TEST_BANK_ID).is_demo = True
     loans = [make_loan(db, n) for n in (1, 2)]
     db.commit()
