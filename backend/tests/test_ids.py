@@ -92,10 +92,7 @@ def test_every_id_path_parameter_on_the_routers_is_validated():
     handler then does. It exists so the next route added with `case_id: str`
     fails here instead of 500-ing on Postgres."""
     endpoints = pathlib.Path(__file__).resolve().parents[1] / "app" / "api" / "v1" / "endpoints"
-    not_uuid = {"account_id",   # Command Centre's loan account number
-                # The phone's client-generated device id (authStore: "<ms>-<random>"),
-                # compared to the token's claim, never looked up as a row (I02).
-                "device_id"}
+    not_uuid = {"account_id"}   # Command Centre's loan account number
     offenders = []
     for f in sorted(endpoints.glob("*.py")):
         src = f.read_text(encoding="utf-8")
@@ -113,4 +110,9 @@ def test_every_id_path_parameter_on_the_routers_is_validated():
                 ann = ast.get_source_segment(src, a.annotation)
                 if ann in ("str", "Optional[str]", "str | None"):
                     offenders.append(f"{f.name}:{fn.name}({a.arg}: {ann})")
+                # device_id names agent_devices.id, a UUID, and nothing else. The
+                # phone's own id is a different thing and takes a different name
+                # (capture_device_ref, I02), so this must never be allow-listed.
+                if a.arg == "device_id" and ann not in ("UUIDPath", "UUIDQuery", "UUIDQueryRequired"):
+                    offenders.append(f"{f.name}:{fn.name}(device_id: {ann}) must be a validated UUID")
     assert offenders == []

@@ -119,7 +119,11 @@ export async function getCaseDetail(caseId: string) {
 export async function getPhotoUploadUrl(
   caseId: string, subject: "agent" | "borrower" | "object" | "signature", capture?: OutboxCapture,
 ): Promise<{ upload_url: string; key: string }> {
-  const { data } = await api.post(`/agent/cases/${caseId}/photo-upload-url`, null, { params: { subject, ...capture } });
+  // The phone's id goes as capture_device_ref: `device_id` on a route means agent_devices.id.
+  const { device_id: captureDeviceRef, ...rest } = capture ?? {};
+  const { data } = await api.post(`/agent/cases/${caseId}/photo-upload-url`, null, {
+    params: { subject, ...rest, capture_device_ref: captureDeviceRef },
+  });
   return data;
 }
 

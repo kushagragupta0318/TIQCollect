@@ -604,3 +604,31 @@ def test_call_log_to_a_do_not_contact_borrower_is_refused(w, monkeypatch):
         cls_mod.CallLogService(w.db).log_call(w.agent, w.case.id, LogCallRequest(outcome=CallOutcome.NO_ANSWER))
     assert exc.value.status_code == 403 and _code(exc) == ErrorCode.DO_NOT_CONTACT
     assert w.db.query(CallLog).count() == 0
+
+
+def test_photo_url_route_takes_the_phone_id_as_capture_device_ref(w, monkeypatch):
+    monkeypatch.setattr(ms.storage, "presigned_upload_url", lambda key, **k: f"https://minio.test/{key}")
+
+    def override():
+        db = Session()
+        try:
+            yield db
+        finally:
+            db.close()
+    app.dependency_overrides[get_db] = override
+    _freeze(monkeypatch, ist(DAY, 15))
+    user = w.db.get(User, w.agent.user_id)
+    auth = {"Authorization": f"Bearer {create_access_token(user.id, user.role.value, DEVICE)}"}
+    off = _offline(ist(DAY, 12))
+    params = {"subject": "agent", "client_submission_id": off["client_submission_id"],
+              "captured_at": off["captured_at"].isoformat(), "device_seq": 1}
+    try:
+        with TestClient(app) as c:
+            url = f"/api/v1/agent/cases/{w.case.id}/photo-upload-url"
+            ok = c.post(url, params={**params, "capture_device_ref": DEVICE}, headers=auth)
+            assert ok.status_code == 200, ok.text
+            assert off["client_submission_id"] in ok.json()["key"]
+            other = c.post(url, params={**params, "capture_device_ref": "phone-b-0002"}, headers=auth)
+            assert other.status_code == 403
+    finally:
+        app.dependency_overrides.pop(get_db, None)
