@@ -12,7 +12,13 @@
 		Referrer-Policy "strict-origin-when-cross-origin"
 		# Report-only until the SPA has been checked against it (maps tiles, the
 		# voice SDK, the files domain); then switch to Content-Security-Policy.
-		Content-Security-Policy-Report-Only "default-src 'self'; img-src 'self' data: blob: https:; media-src 'self' blob: https:; connect-src 'self' https: wss:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+		# img-src/connect-src carry a broad `https:` scheme source today, which
+		# already covers https://api.mapbox.com (tiles/images) and any wss:/https:
+		# API the frontend calls, including the SSE /events/stream endpoint (same
+		# origin, also under 'self'). api.mapbox.com is named explicitly too, so
+		# when this tightens from `https:` to a named allowlist (maps lane,
+		# 2026-09-29), the maps and events flows are not silently dropped.
+		Content-Security-Policy-Report-Only "default-src 'self'; img-src 'self' data: blob: https: https://api.mapbox.com; media-src 'self' blob: https:; connect-src 'self' https: wss: https://api.mapbox.com https://events.mapbox.com; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 		-Server
 	}
 }
