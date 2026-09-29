@@ -101,7 +101,8 @@ def test_one_admin_plans_another_applies_and_the_book_is_placed(w):
     dec = c.get(f"{BASE}/runs/{run['run_id']}/decisions", headers=_h(w["an"])).json()   # an analyst may read
     assert dec["total"] == 3 and {d["outcome"] for d in dec["items"]} == {"PLACED"}
 
-    assert c.post(f"{BASE}/runs/{run['run_id']}/apply", headers=_h(w["ba"])).status_code == 403   # four eyes
+    own = c.post(f"{BASE}/runs/{run['run_id']}/apply", headers=_h(w["ba"]))
+    assert own.status_code == 409 and "different person" in own.json()["detail"]   # four eyes: a state refusal
     applied = c.post(f"{BASE}/runs/{run['run_id']}/apply", headers=_h(w["ba2"]))
     assert applied.status_code == 200, applied.text
     assert applied.json()["status"] == "APPLIED" and applied.json()["summary"]["apply"]["placed"] == 3
@@ -138,6 +139,7 @@ def test_apply_re_judges_the_gates_and_skips_what_no_longer_passes(w):
     db.commit()
     out = w["c"].post(f"{BASE}/runs/{run['run_id']}/apply", headers=_h(w["ba2"])).json()
     assert out["summary"]["apply"]["placed"] == 0 and out["summary"]["apply"]["skipped_total"] == 3
+    assert len(out["summary"]["apply"]["skipped"]) == 3                      # the full list, not truncated
     assert {s["why"].split(":")[0] for s in out["summary"]["apply"]["skipped"]} == {"NOT_COVERED"}
     db.expire_all()
     assert db.query(Placement).count() == 0
@@ -176,9 +178,35 @@ def test_only_a_bank_admin_can_plan_or_apply(w, who, status):
     assert w["c"].post(f"{BASE}/runs/{run['run_id']}/apply", headers=_h(w[who])).status_code == status
 
 
-def test_an_agency_role_cannot_read_runs(w):
-    _plan(w, w["ba"])
-    assert w["c"].get(f"{BASE}/runs", headers=_h(w["am"])).status_code == 403
+def test_an_agency_sees_only_applied_runs_and_only_its_own_loans_in_them(w):
+    """Audit MAJOR (2026-09-29): agency roles hold placement.read; they read
+    runs the way list_placements scopes placements, never another agency."""
+    c, am = w["c"], w["am"]
+    w["db"].get(Agency, AG_B).status = "SUSPENDED"          # every loan goes to the manager's agency
+    w["db"].commit()
+    planned = _plan(w, w["ba"]).json()
+    assert c.get(f"{BASE}/runs", headers=_h(am)).json()["items"] == []                     # not applied yet
+    assert c.get(f"{BASE}/runs/{planned['run_id']}/decisions", headers=_h(am)).status_code == 404
+    c.post(f"{BASE}/runs/{planned['run_id']}/apply", headers=_h(w["ba2"]))
+    runs = c.get(f"{BASE}/runs", headers=_h(am)).json()["items"]
+    decisions = c.get(f"{BASE}/runs/{planned['run_id']}/decisions", headers=_h(am)).json()
+    mine = [d for d in c.get(f"{BASE}/runs/{planned['run_id']}/decisions", headers=_h(w["ba"])).json()["items"]
+            if d["chosen_agency_id"] == TEST_AGENCY_ID]
+    assert len(mine) == 3
+    assert [r["run_id"] for r in runs] == [planned["run_id"]] and set(runs[0]) == {
+        "run_id", "plan_date", "status", "applied_at"}                                      # no bank-wide figures
+    assert decisions["total"] == 3
+    other = c.get(f"{BASE}/runs", headers=_h(w["other"])).json()["items"]
+    assert other == []
+    amb = _user(w["db"], "amb", UserRole.AGENCY_MANAGER, agency=AG_B, phone="9800000007")
+    w["db"].commit()
+    assert c.get(f"{BASE}/runs", headers=_h(amb)).json()["items"] == []                   # another agency: nothing
+    assert c.get(f"{BASE}/runs/{planned['run_id']}/decisions", headers=_h(amb)).json()["total"] == 0
+    for d in decisions["items"]:
+        assert d["chosen_agency_id"] == TEST_AGENCY_ID
+        assert d["gate_results"] == {} and d["previous_agency_id"] is None
+    assert set(decisions["run"]) == {"run_id", "plan_date", "status", "applied_at"}
+    assert c.post(f"{BASE}/runs/{planned['run_id']}/apply", headers=_h(am)).status_code == 403
 
 
 def test_another_bank_sees_no_run_and_cannot_apply_one(w):

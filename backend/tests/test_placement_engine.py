@@ -330,3 +330,39 @@ def test_exploration_swaps_only_eligible_pairs_keeps_capacity_and_repeats_from_i
 def test_exploration_is_off_at_rate_zero():
     a = {"L1": "A", "L2": "B"}
     assert explore(a, {"L1": _opts("A", "B"), "L2": _opts("A", "B")}, 0.0, 1) == {} and a == {"L1": "A", "L2": "B"}
+
+
+# ── Audit of 46ce3ce (2026-09-29) ────────────────────────────────────────────
+
+def test_two_runs_on_the_same_book_decide_identically():
+    db, _ = _world(cap_a=3, cap_b=2)
+    for n in range(1, 9):
+        make_loan(db, n, overdue=10_000.0)                                  # ties everywhere
+    db.commit()
+    effects = _effects(db, a=1.0, b=1.0)
+    first = build_plan(db, TEST_BANK_ID, DAY, effects=effects, exploration_rate=0.2)
+    second = build_plan(db, TEST_BANK_ID, DAY, effects=effects, exploration_rate=0.2)
+    assert first.assignment == second.assignment and first.exploration == second.exploration
+    assert [c.loan.id for c in first.candidates] == sorted(c.loan.id for c in first.candidates)
+
+
+def test_a_solve_past_the_budget_is_abandoned_and_nothing_is_written(monkeypatch):
+    import time as _time
+    from app.services.bank import placement_engine as eng
+    monkeypatch.setattr(eng, "solve", lambda *a: _time.sleep(2) or {})
+    with pytest.raises(EngineTooSlow):
+        eng.solve_within([], {}, {}, 0.2)
+    with pytest.raises(EngineTooSlow):
+        eng.solve_within([], {}, {}, 0.0)
+
+
+def test_an_unmodelled_loan_with_nothing_overdue_says_why_it_waits():
+    db, _ = _world()
+    zero = make_loan(db, 1, overdue=0.0)
+    db.commit()
+    plan = build_plan(db, TEST_BANK_ID, DAY, effects={})
+    run = record_run(db, plan, bank_id=TEST_BANK_ID, plan_date=DAY, simulate=True, exploration_rate=0.0,
+                     created_by=None)
+    d = db.query(PlacementDecision).filter_by(run_id=run.id, loan_id=zero.id).one()
+    assert d.score_breakdown["zero_value_unmodelled"] is True
+    assert run.summary["time_budget_s"] == 30.0 and "soft" in run.summary["time_budget_note"]

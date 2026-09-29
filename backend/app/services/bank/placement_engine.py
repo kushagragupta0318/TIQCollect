@@ -234,13 +234,16 @@ def build_pool(db: Session, bank_id: str, plan_date: date, recalls: list[RecallV
     as unplaced, with its previous agency excluded."""
     from app.services.bank.expected_recovery import expected_recovery_inr
     recalled = {v.placement.loan_id: v for v in recalls if v.recalled}
-    active_loans = {lid for (lid,) in db.query(Placement.loan_id)
-                    .filter(Placement.bank_id == bank_id, Placement.status == "ACTIVE")}
-    loans = [l for l in (db.query(Loan)
-                         .filter(Loan.bank_id == bank_id, Loan.status.in_(PLACEABLE_LOAN_STATUSES),
-                                 Loan.dpd >= MIN_DPD)
-                         .order_by(Loan.loan_account_number))
-             if l.id not in active_loans or l.id in recalled]
+    placed = (db.query(Placement.id)
+              .filter(Placement.loan_id == Loan.id, Placement.bank_id == bank_id, Placement.status == "ACTIVE")
+              .exists())
+    q = db.query(Loan).filter(Loan.bank_id == bank_id, Loan.status.in_(PLACEABLE_LOAN_STATUSES),
+                              Loan.dpd >= MIN_DPD)
+    unplaced = q.filter(~placed).all()
+    # This run's recalls are placed until apply; they join the pool too.
+    again = q.filter(Loan.id.in_(list(recalled))).all() if recalled else []
+    # Ordered by id: two runs on the same book give identical decisions.
+    loans = sorted({l.id: l for l in [*unplaced, *again]}.values(), key=lambda l: str(l.id))
     branch = {code: (rid, path) for code, rid, path in
               db.query(Branch.branch_code, Branch.region_id, Region.path)
               .outerjoin(Region, and_(Region.id == Branch.region_id, Region.bank_id == Branch.bank_id))
@@ -296,7 +299,7 @@ def solve(candidates: list[Candidate], options: dict[str, list[Option]], capacit
     source → loan (1) → agency (−value) → sink (capacity); loan → UNPLACED (0)."""
     from ortools.graph.python import min_cost_flow
     assignment: dict[str, str | None] = {c.loan.id: None for c in candidates}
-    live = [c for c in candidates if options.get(c.loan.id)]
+    live = sorted((c for c in candidates if options.get(c.loan.id)), key=lambda c: str(c.loan.id))
     if not live:
         return assignment
     smcf = min_cost_flow.SimpleMinCostFlow()
@@ -325,6 +328,25 @@ def solve(candidates: list[Candidate], options: dict[str, list[Option]], capacit
         if smcf.flow(arc) > 0:
             assignment[lid] = aid
     return assignment
+
+
+def solve_within(candidates, options, capacity, seconds: float) -> dict:
+    """solve() under a coarse deadline. SimpleMinCostFlow (ortools 9.11.4210)
+    has no time limit, so it runs in a worker thread; past the deadline the
+    request gets EngineTooSlow and nothing is written. The C++ solve cannot be
+    interrupted: that thread finishes in the background and its result is
+    dropped. So TIME_LIMIT_S is a soft budget for the response, not a CPU cap."""
+    import concurrent.futures as cf
+    if seconds <= 0:
+        raise EngineTooSlow(f"The run took over {TIME_LIMIT_S:.0f} s and was stopped; nothing was written.")
+    pool = cf.ThreadPoolExecutor(max_workers=1, thread_name_prefix="placement-solve")
+    try:
+        return pool.submit(solve, candidates, options, capacity).result(timeout=seconds)
+    except cf.TimeoutError:
+        raise EngineTooSlow(f"The solve passed the {TIME_LIMIT_S:.0f} s budget and was abandoned; "
+                            "nothing was written.") from None
+    finally:
+        pool.shutdown(wait=False)
 
 
 def explore(assignment: dict, options: dict[str, list[Option]], rate: float, seed: int) -> dict[str, dict]:
@@ -397,7 +419,7 @@ def build_plan(db: Session, bank_id: str, plan_date: date, *, effects: dict, exp
     for c in pool:
         options[c.loan.id], refusals[c.loan.id] = options_for(c, agencies, effects)
     check()
-    assignment = solve(pool, options, capacity)
+    assignment = solve_within(pool, options, capacity, TIME_LIMIT_S - (clock() - start))
     seed = int(plan_date.strftime("%Y%m%d"))
     log = explore(assignment, options, exploration_rate, seed)
     check()
@@ -466,6 +488,9 @@ def record_run(db: Session, plan: Plan, *, bank_id: str, plan_date: date, simula
             "commission_pct": opt.commission_pct if opt else None,
             "commission_known": opt.commission_known if opt else None,
             "n_eligible": len(opts), "versions": versions,
+            # An unmodelled loan with nothing overdue is worth 0 to the solve and
+            # waits; say so rather than leave a silent DEFERRED.
+            "zero_value_unmodelled": (not c.is_modelled) and c.expected <= 0,
             **({"replacement": outcome, "recall_rules": c.recall.rules} if c.recall is not None else {}),
             **plan.exploration.get(lid, {"exploration": False}),
         }
@@ -487,7 +512,9 @@ def record_run(db: Session, plan: Plan, *, bank_id: str, plan_date: date, simula
     run.expected_recovery_total = round(gross, 2)
     run.summary = {"counts": counts, "kept": plan.kept, "expected_recovery_gross": round(gross, 2),
                    "value_net_of_commission": round(net, 2), "explored": len(plan.exploration),
-                   "elapsed_s": plan.elapsed_s, "limitations": LIMITATIONS,
+                   "elapsed_s": plan.elapsed_s, "time_budget_s": TIME_LIMIT_S,
+                   "time_budget_note": "soft: the solver cannot be interrupted (ortools 9.11 has no time limit)",
+                   "limitations": LIMITATIONS,
                    "synthetic_warning": " ".join(dict.fromkeys(warnings)) or None}
     db.flush()
     return run
@@ -512,7 +539,7 @@ def apply_run(db: Session, *, bank_id: str, run_id: str, actor_id: str, today: d
     if run.simulate or run.status != "PLANNED":
         raise AppException(409, ErrorCode.CONFLICT, f"Only a PLANNED run can be applied; this one is {run.status}")
     if run.created_by is None or run.created_by == actor_id:
-        raise AppException(403, ErrorCode.FORBIDDEN,
+        raise AppException(409, ErrorCode.CONFLICT,
                            "A placement run must be applied by a different person from the one who planned it")
     if run.plan_date != today:
         raise AppException(409, ErrorCode.CONFLICT,
@@ -563,7 +590,7 @@ def apply_run(db: Session, *, bank_id: str, run_id: str, actor_id: str, today: d
         run.applied_by = actor_id
         run.applied_at = datetime.now(timezone.utc)
         run.summary = {**(run.summary or {}),
-                       "apply": {"placed": len(placed), "recalled": len(recalled), "skipped": skipped[:500],
+                       "apply": {"placed": len(placed), "recalled": len(recalled), "skipped": skipped,
                                  "skipped_total": len(skipped)}}
         db.commit()
     except Exception:
@@ -619,21 +646,40 @@ def run_out(run: PlacementRun) -> dict:
     }
 
 
-def list_runs(db: Session, bank_id: str, *, limit: int = 30) -> list[dict]:
-    rows = (db.query(PlacementRun).filter(PlacementRun.bank_id == bank_id)
-            .order_by(PlacementRun.created_at.desc()).limit(max(1, min(limit, 100))).all())
-    return [run_out(r) for r in rows]
+def agency_run_out(run: PlacementRun) -> dict:
+    """What an agency sees of a run: when it was applied, nothing bank-wide."""
+    return {"run_id": run.id, "plan_date": run.plan_date.isoformat(), "status": run.status,
+            "applied_at": run.applied_at.isoformat() if run.applied_at else None}
 
 
-def run_decisions(db: Session, *, bank_id: str, run_id: str, outcome: str | None, page: int, page_size: int) -> dict:
+def list_runs(db: Session, bank_id: str, *, agency_id: str | None = None, limit: int = 30) -> list[dict]:
+    """The bank's runs; for an agency (agency_id set), only APPLIED runs that
+    placed something with it, without bank-wide figures."""
+    q = db.query(PlacementRun).filter(PlacementRun.bank_id == bank_id)
+    if agency_id is not None:
+        mine = (db.query(PlacementDecision.id)
+                .filter(PlacementDecision.run_id == PlacementRun.id, PlacementDecision.chosen_agency_id == agency_id)
+                .exists())
+        q = q.filter(PlacementRun.status == "APPLIED", mine)
+    rows = q.order_by(PlacementRun.created_at.desc()).limit(max(1, min(limit, 100))).all()
+    return [agency_run_out(r) if agency_id is not None else run_out(r) for r in rows]
+
+
+def run_decisions(db: Session, *, bank_id: str, run_id: str, outcome: str | None, page: int, page_size: int,
+                  agency_id: str | None = None) -> dict:
+    """A run's decisions. For an agency (agency_id set): only an APPLIED run,
+    only the loans it was given, and nothing about other agencies (their
+    names, refusals and the agency a loan was recalled from are withheld)."""
     from app.core.errors import AppException, ErrorCode
     from app.models.tenancy import Agency
     run = db.query(PlacementRun).filter(PlacementRun.id == run_id, PlacementRun.bank_id == bank_id).first()
-    if run is None:
+    if run is None or (agency_id is not None and run.status != "APPLIED"):
         raise AppException(404, ErrorCode.NOT_FOUND, "Not found")
     q = (db.query(PlacementDecision, Loan.loan_account_number)
          .join(Loan, and_(Loan.id == PlacementDecision.loan_id, Loan.bank_id == PlacementDecision.bank_id))
          .filter(PlacementDecision.run_id == run.id, PlacementDecision.bank_id == bank_id))
+    if agency_id is not None:
+        q = q.filter(PlacementDecision.chosen_agency_id == agency_id)
     if outcome:
         q = q.filter(PlacementDecision.outcome == outcome)
     total = q.count()
@@ -648,4 +694,10 @@ def run_decisions(db: Session, *, bank_id: str, run_id: str, outcome: str | None
         "gate_results": {**d.gate_results,
                          "refused": {names.get(a, a): r for a, r in (d.gate_results.get("refused") or {}).items()}},
     } for d, lan in rows]
+    if agency_id is not None:
+        for it in items:
+            it["previous_agency_id"] = it["previous_agency_name"] = None
+            it["gate_results"] = {}
+            it["reason"] = "placed with your agency" if it["outcome"] == "PLACED" else "re-placed with your agency"
+        return {"run": agency_run_out(run), "items": items, "total": total, "page": page, "page_size": page_size}
     return {"run": run_out(run), "items": items, "total": total, "page": page, "page_size": page_size}

@@ -180,10 +180,21 @@ def plan_run(body: RunIn, ctx: CurrentContext, db: DbSession, adb: AnalyticsDb,
     return engine.run_out(run)
 
 
+def _read_scope(ctx: RequestContext) -> tuple[str, str | None]:
+    """(bank_id, own agency or None): bank users read the bank's runs, agency
+    users only what their agency was given (the list_placements split)."""
+    if ctx.bank_id and ctx.scope == "BANK":
+        return ctx.bank_id, None
+    if ctx.bank_id and ctx.scope == "AGENCY" and ctx.agency_id:
+        return ctx.bank_id, ctx.agency_id
+    raise AppException(403, ErrorCode.FORBIDDEN, "A bank or agency user is required")
+
+
 @router.get("/runs")
 def list_runs(ctx: CurrentContext, db: DbSession, _user: User = require_perm("placement.read"),
               limit: int = Query(30, ge=1, le=100)):
-    return {"items": engine.list_runs(db, _bank_id(ctx), limit=limit)}
+    bank_id, agency_id = _read_scope(ctx)
+    return {"items": engine.list_runs(db, bank_id, agency_id=agency_id, limit=limit)}
 
 
 @router.get("/runs/{run_id}/decisions")
@@ -191,8 +202,9 @@ def run_decisions(run_id: UUIDPath, ctx: CurrentContext, db: DbSession,
                   _user: User = require_perm("placement.read"),
                   outcome: Optional[Literal["PLACED", "DEFERRED", "BLOCKED", "RECALLED"]] = None,
                   page: int = Query(1, ge=1, le=100_000), page_size: int = Query(50, ge=1, le=MAX_PAGE_SIZE)):
-    return engine.run_decisions(db, bank_id=_bank_id(ctx), run_id=run_id, outcome=outcome, page=page,
-                                page_size=page_size)
+    bank_id, agency_id = _read_scope(ctx)
+    return engine.run_decisions(db, bank_id=bank_id, run_id=run_id, outcome=outcome, page=page,
+                                page_size=page_size, agency_id=agency_id)
 
 
 @router.post("/runs/{run_id}/apply")
