@@ -18,3 +18,4 @@ source-file CHANGELOG headers (ADR 0006). Commit messages carry the per-change m
 | [0007](0007-retraining-and-promotion.md) | Retraining is automatic up to a human approval; promotion needs four eyes | Accepted, 2026-09-09/10 |
 | [0008](0008-recovery-risk-2-2-0-champion.md) | recovery_risk 2.2.0 (a GAM) is champion; its known limits | Accepted, 2026-09-16 |
 | [0009](0009-standalone-product.md) | TIQCollect is a standalone product; `PRODUCT_MODE` is removed | Accepted, 2026-09-28 |
+| [0010](0010-object-storage-image.md) | Object storage after `minio/minio` stopped being published: pin and mirror the `pgsty/minio` fork | **Proposed**, 2026-09-29 |
