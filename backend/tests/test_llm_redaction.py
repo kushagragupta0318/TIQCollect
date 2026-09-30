@@ -208,7 +208,14 @@ def test_every_call_site_declares_the_names_it_embeds():
             func = node.func
             name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
             if name != "complete":
-                continue
+                # complete() is also HANDED to something else to call — the
+                # extraction path submits it to a thread pool. Seen as an
+                # argument, that call is the one that must carry names=.
+                handed = any(
+                    (a.attr if isinstance(a, ast.Attribute) else getattr(a, "id", "")) == "complete"
+                    for a in node.args)
+                if not handed:
+                    continue
             # llm.complete(...) called directly, or handed to an executor.
             where = f"{path.relative_to(app_dir).as_posix()}:{node.lineno}"
             if where in ALLOWED_WITHOUT_NAMES:
