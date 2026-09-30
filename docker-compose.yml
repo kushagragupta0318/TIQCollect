@@ -117,7 +117,11 @@ services:
 
   # ─── MinIO (visit photos, signatures, recordings) ─────────────────────────
   minio:
-    image: minio/minio:latest
+    # Pinned by digest, not `latest`: minio/minio stopped being published, so a
+    # floating tag here only works until something prunes the local cache, and
+    # then dev stops starting too. Same public ghcr mirror prod uses (ADR 0012),
+    # verified byte-identical to the upstream image. amd64 only.
+    image: ${MINIO_IMAGE:-ghcr.io/kushagragupta0318/minio@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2}
     container_name: fieldops_dev_minio
     restart: unless-stopped
     command: server /data --console-address ":9001"

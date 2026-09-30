@@ -128,3 +128,15 @@ def test_the_field_activity_copy_is_v2_0007_s_and_changes_only_consent(mig):
     changed = [(a, b) for a, b in zip(mig.FIELD_ACTIVITY_V2_0007.splitlines(), mig.FIELD_ACTIVITY.splitlines()) if a != b]
     assert len(changed) == 1 and "x.customer_met AND x.consent_given IS NOT TRUE" in changed[0][1]
     assert mig.CONSENT_MISSING == "customer_met AND consent_given IS NOT TRUE"
+
+
+
+def test_v2_0017_attributes_through_the_visits_table_and_restores_v2_0013_exactly(mig):
+    """d4's perf defect: the LATERAL scanned the twice-referenced CTE per payment, for every bank."""
+    spec = importlib.util.spec_from_file_location("v2_0017", PATH.parent / "v2_0017_visit_to_pay_perf.py")
+    fix = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fix)
+    assert "FROM collections.visits x" in fix.VISIT_TO_PAY and "FROM vis x" not in fix.VISIT_TO_PAY
+    assert fix.P_TENANT in fix.VISIT_TO_PAY                      # payments are tenant-filtered before the LATERAL
+    old = mig.VISIT_TO_PAY.strip().replace("CREATE VIEW", "CREATE OR REPLACE VIEW", 1)
+    assert fix.VISIT_TO_PAY_V2_0013.strip() == old

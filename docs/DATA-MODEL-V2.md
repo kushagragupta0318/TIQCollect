@@ -3770,8 +3770,9 @@ The case-mix-adjusted ranking (H01) is scored against this truth.
 | every agent | FIELD_AGENT | `<first>.<last>@<agency domain>`; v1 agents keep their names (e.g. `piyush.sharma@aravallifs.test`) |
 
 Passwords: superseded 2026-09-24 by the owner's decision — one master password
-from the private setting `DEMO_MASTER_PASSWORD`, for the three accounts listed
-in `DEMO_MASTER_ACCOUNTS` (a bank user, an agency manager, a field agent);
+from the private setting `DEMO_MASTER_PASSWORD`, for the accounts listed
+in `DEMO_MASTER_ACCOUNTS` (a bank user, an agency manager, a field agent, and
+from 2026-09-30 a second BANK_ADMIN for the four-eyes placement apply);
 every other seeded user has an unusable hash. There is no UI shortcut (plan
 §3.1). *(This said "one per role, documented only in fixtures/README.md".)* The v1 `admin@tiqcollect.in` becomes
 Ananya Iyer's account (Q1).
