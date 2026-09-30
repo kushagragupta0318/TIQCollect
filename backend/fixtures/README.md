@@ -34,7 +34,7 @@ uploads the agencies' specimen documents to object storage
 | People | **199 users**, every hash unusable · **165 field agents**, 47 of them women, each with a DRA certificate (11 expired at the anchor date, for the compliance tile) |
 | Book | 13,114 customers · 13,214 loans · 110,086 instalments (windowed, see below) · 333,265 DPD-history rows · 10,107 placements · 10,434 cases · 41,431 visits · 63,095 call logs · 22,382 payments (10,380 paid to the bank directly) · 6,165 PTPs · 1,532 settlement offers · 698 disputes · 105 complaints · 1,563 audit rows. The 78,809 allocation decisions and 34,241 model predictions are Aravalli's, from v1 |
 | Analytics | all five materialized views refreshed in the dump: `mv_portfolio_daily` 27,011 rows · `mv_bucket_transitions_monthly` 12,774 · `mv_agency_scorecard_monthly` 239 · `mv_collections_daily` 2,082 · `mv_field_activity_daily` 34,512. The bank Overview reads them only through their `*_scoped` views |
-| Passwords | **none usable.** Every hash is `core.security.disabled_password_hash()`. The master login below sets the three demo accounts' passwords at boot |
+| Passwords | **none usable.** Every hash is `core.security.disabled_password_hash()`. The master login below sets the four demo accounts' passwords at boot |
 | Size / sha256 | 52.7 MB · `ad6e70143b674e17…` (first 16; `sha256sum` to verify). The agreed ceiling is 60 MB, enforced by `tests/test_demo_fixture_files.py` |
 | Not in it | beat_stops, attendance, case_assignments, escalations, bank_actions (no model yet, or not generated) · agent_performance for the generated agencies (the monthly task fills it on the 1st) · beats and allocation history for the generated agencies · device bindings (agents bind on first login) · visit photos (no evidence objects; a met visit carries only the selfie's coordinates) |
 
@@ -141,11 +141,12 @@ pg test re-measures it.
 
 ### The demo master login (v2)
 
-One password, three accounts: one bank user, one agency manager and one field
-agent (the owner's decision; `scripts/apply_demo_logins.py` checks the roles).
+One password, four accounts, in this order: a bank user, an agency manager, a
+field agent, and a second BANK_ADMIN (the owner's decisions, the fourth on
+2026-09-30; `scripts/apply_demo_logins.py` checks each slot's role).
 
 ```
-DEMO_MASTER_ACCOUNTS=ananya.iyer@girivanfinance.test,vikram.malhotra@aravallifs.test,piyush.sharma@aravallifs.test
+DEMO_MASTER_ACCOUNTS=ananya.iyer@girivanfinance.test,vikram.malhotra@aravallifs.test,piyush.sharma@aravallifs.test,kavya.reddy@girivanfinance.test
 DEMO_MASTER_PASSWORD=          # ask the team; at least 16 characters; never in a committed file
 DEMO_MODE=true
 ```
@@ -155,6 +156,7 @@ DEMO_MODE=true
 | BANK_ADMIN | `ananya.iyer@girivanfinance.test` | the bank portal |
 | AGENCY_MANAGER | `vikram.malhotra@aravallifs.test` | the manager app (17 agents: his 15, plus Shreya Chaudhary and Kiran Bhatia) |
 | FIELD_AGENT | `piyush.sharma@aravallifs.test` | the agent app |
+| BANK_ADMIN | `kavya.reddy@girivanfinance.test` | the bank portal; applies a placement run Ananya planned |
 
 Every other login in the book is `<first>.<last>@<its domain>`, and none is
 usable. The domains are girivanfinance.test and kumaonfinance.test, plus one
@@ -165,10 +167,10 @@ almorarecovery.test. `settings.DEMO_EMAIL_DOMAINS` derives from the roster,
 and `apply_demo_logins.FIXTURE_USER_COUNT` is 199; those two are the guards
 for `DEMO_MASTER_DISABLE_OTHERS`. Girivan Finance has a second BANK_ADMIN,
 Kavya Reddy (`kavya.reddy@girivanfinance.test`), so the placement engine's
-four-eyes apply step (ADR 0010) can be demonstrated end to end. She is
-**not** a master login: a 4th master account needs the owner's yes, still
-pending, and adding her to `DEMO_MASTER_ACCOUNTS` is the only change that
-step needs when it comes.
+four-eyes apply step (ADR 0010) can be demonstrated end to end: one plans,
+the other applies. The owner approved her as the fourth master login on
+2026-09-30. A box whose `DEMO_MASTER_ACCOUNTS` still names three accounts
+refuses on boot (logged, nothing changed) until the fourth is added.
 
 **Verified 2026-09-28** by booting an empty database through
 `docker-entrypoint.sh`, with the branch's entrypoint and code in throwaway
@@ -187,7 +189,7 @@ From a checkout of `standalone-p1`:
    in it (16+ characters; the file is gitignored).
 2. `docker compose -p tiq-v2 -f docker-compose.yml -f docker-compose.v2preview.yml up -d --build`
 3. Open http://localhost:5474 (API :8401, Postgres :15433) and sign in as one
-   of the three accounts above.
+   of the four accounts above.
 
 The preview stack has its own project, containers, image tag, ports and
 volumes, so the v1 stack (:5473 / :8400) is untouched. Stop it with the same

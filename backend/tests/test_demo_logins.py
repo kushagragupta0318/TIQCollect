@@ -10,6 +10,10 @@ Center's service logins) are never touched; retiring the others needs a second
 opt-in, DEMO_MASTER_DISABLE_OTHERS, and refuses on a box with any non-demo
 account or more users than the demo fixture — DEMO_MODE alone cannot tell a
 demo box from a real one.
+
+2026-09-30 (lane L6, owner-approved): a fourth master account, a second
+BANK_ADMIN, for the placement engine's four-eyes apply. Role slots are
+positional now; first-match grouping refused two bank users.
 """
 from __future__ import annotations
 
@@ -35,18 +39,22 @@ engine = make_engine()
 Session = make_session_factory(bind=engine, autoflush=False)
 
 MASTER = "correct-horse-battery-staple-2026"          # a test value, 33 chars
-ACCOUNTS = "admin@tiqcollect.in, manager1@tiqcollect.in ,AGENT002@tiqcollect.in"
+ACCOUNTS = "admin@tiqcollect.in, manager1@tiqcollect.in ,AGENT002@tiqcollect.in, Admin2@tiqcollect.in"
 # The seed's published passwords — the ones this retires.
-SEED = {UserRole.BANK_ADMIN: "Admin@123", UserRole.AGENCY_MANAGER: "Manager@123", UserRole.FIELD_AGENT: "Agent@123"}
+SEED = {UserRole.BANK_ADMIN: "Admin@123", UserRole.BANK_ANALYST: "Analyst@123",
+        UserRole.AGENCY_MANAGER: "Manager@123", UserRole.FIELD_AGENT: "Agent@123"}
 PEOPLE = [
     ("admin@tiqcollect.in", UserRole.BANK_ADMIN),
+    ("admin2@tiqcollect.in", UserRole.BANK_ADMIN),
+    ("analyst@tiqcollect.in", UserRole.BANK_ANALYST),
     ("manager1@tiqcollect.in", UserRole.AGENCY_MANAGER),
     ("manager2@tiqcollect.in", UserRole.AGENCY_MANAGER),
     ("agent001@tiqcollect.in", UserRole.FIELD_AGENT),
     ("agent002@tiqcollect.in", UserRole.FIELD_AGENT),
     ("agent003@tiqcollect.in", UserRole.FIELD_AGENT),
 ]
-MASTER_EMAILS = {"admin@tiqcollect.in", "manager1@tiqcollect.in", "agent002@tiqcollect.in"}
+MASTER_EMAILS = {"admin@tiqcollect.in", "manager1@tiqcollect.in", "agent002@tiqcollect.in", "admin2@tiqcollect.in"}
+N_OTHERS = len(PEOPLE) - len(MASTER_EMAILS)
 CC_ACCOUNT = "manager2@tiqcollect.in"                   # stands in for a Command Center service login
 
 
@@ -73,7 +81,7 @@ def db():
         u = User(id=str(uuid.uuid4()), email=email, phone=f"90000002{i:02d}", full_name=f"Person {i}",
                  hashed_password=hash_password(SEED[role]),
                  role=role, is_active=True, is_verified=True, bank_id=TEST_BANK_ID,
-                 agency_id=None if role == UserRole.BANK_ADMIN else TEST_AGENCY_ID)
+                 agency_id=None if role.value.startswith("BANK_") else TEST_AGENCY_ID)
         s.add(u)
         s.flush()
         s.add(_live_session(u, "old-refresh"))    # v2: a live session in place of v1's hashed_refresh_token
@@ -104,10 +112,10 @@ def _apply(db, password=MASTER, accounts=ACCOUNTS, demo_mode=True, **kw):
 
 
 # ── the rule ─────────────────────────────────────────────────────────────────
-def test_the_three_accounts_take_the_master_password_and_nobody_else_can_log_in(db):
+def test_the_four_accounts_take_the_master_password_and_nobody_else_can_log_in(db):
     out = _apply(db)
     assert out.applied and sorted(out.master_set) == sorted(MASTER_EMAILS)
-    assert out.disabled == len(PEOPLE) - 3
+    assert out.disabled == N_OTHERS
     for u in db.query(User).all():
         if u.email in MASTER_EMAILS:
             assert verify_password(MASTER, u.hashed_password)
@@ -124,7 +132,7 @@ def test_a_second_boot_changes_nothing_and_does_not_rehash(db):
     before = _hashes(db)
     out = _apply(db)
     assert out.applied and out.master_set == [] and sorted(out.master_unchanged) == sorted(MASTER_EMAILS)
-    assert out.disabled == 0 and out.already_disabled == len(PEOPLE) - 3
+    assert out.disabled == 0 and out.already_disabled == N_OTHERS
     assert _hashes(db) == before
 
 
@@ -145,18 +153,38 @@ def test_a_new_master_password_rehashes_and_revokes(db):
 @pytest.mark.parametrize("kwargs,reason", [
     ({"password": "short-but-15-ch"}, "shorter than 16"),
     ({"demo_mode": False}, "DEMO_MODE is off"),
-    ({"accounts": "admin@tiqcollect.in,manager1@tiqcollect.in"}, "exactly 3"),
-    ({"accounts": "admin@tiqcollect.in,manager1@tiqcollect.in,manager1@tiqcollect.in"}, "exactly 3"),
-    ({"accounts": "admin@tiqcollect.in,manager1@tiqcollect.in,nobody@tiqcollect.in"}, "unknown accounts"),
+    # the v2 three, without the fourth slot
+    ({"accounts": "admin@tiqcollect.in,manager1@tiqcollect.in,agent002@tiqcollect.in"}, "exactly 4"),
+    ({"accounts": ACCOUNTS + ",agent001@tiqcollect.in"}, "exactly 4"),
+    ({"accounts": "admin@tiqcollect.in,manager1@tiqcollect.in,agent002@tiqcollect.in,ADMIN@tiqcollect.in"},
+     "exactly 4"),
+    ({"accounts": "admin@tiqcollect.in,manager1@tiqcollect.in,agent002@tiqcollect.in,nobody@tiqcollect.in"},
+     "unknown accounts"),
     ({"keep_raw": "nobody@tiqcollect.in"}, "unknown accounts"),
-    ({"keep_raw": "MANAGER1@tiqcollect.in"}, "both master and keep"),
-    ({"accounts": "admin@tiqcollect.in,manager1@tiqcollect.in,manager2@tiqcollect.in"}, "must be one"),
+    ({"keep_raw": "ADMIN2@tiqcollect.in"}, "both master and keep"),
+    # the wrong set of roles
+    ({"accounts": "admin@tiqcollect.in,manager1@tiqcollect.in,manager2@tiqcollect.in,admin2@tiqcollect.in"},
+     "#3 manager2@tiqcollect.in is AGENCY_MANAGER"),
+    # the right roles in the wrong slots: positional, not first-match
+    ({"accounts": "manager1@tiqcollect.in,admin@tiqcollect.in,agent002@tiqcollect.in,admin2@tiqcollect.in"},
+     "in this order"),
+    # slot 4 must be able to apply a placement run: a BANK_ANALYST cannot
+    ({"accounts": "admin@tiqcollect.in,manager1@tiqcollect.in,agent002@tiqcollect.in,analyst@tiqcollect.in"},
+     "#4 analyst@tiqcollect.in is BANK_ANALYST"),
 ])
 def test_a_refusal_changes_nothing(db, kwargs, reason):
     before = _hashes(db)
     out = _apply(db, **kwargs)
     assert not out.applied and reason in out.reason
     assert _hashes(db) == before
+
+
+def test_two_bank_admins_are_accepted_and_slot_one_still_takes_any_bank_role(db):
+    """The four-eyes pair: first-match grouping put both bank users in slot 1
+    and refused them. Slot 1 keeps the v2 rule (any BANK_* role)."""
+    assert _apply(db).applied
+    out = _apply(db, accounts="analyst@tiqcollect.in,manager1@tiqcollect.in,agent002@tiqcollect.in,admin2@tiqcollect.in")
+    assert out.applied and "analyst@tiqcollect.in" in out.master_set
 
 
 @pytest.mark.parametrize("password", [None, "", "   ", "${DEMO_MASTER_PASSWORD}"])
@@ -194,7 +222,7 @@ def _login(client, email, password):
     return client.post("/api/v1/auth/login", json={"email": email, "password": password, "device_id": "test-device-0001"})
 
 
-def test_the_login_route_admits_the_three_and_refuses_the_published_passwords(db, client):
+def test_the_login_route_admits_the_four_and_refuses_the_published_passwords(db, client):
     _apply(db)
     for email, role in PEOPLE:
         r = _login(client, email, MASTER)
@@ -256,15 +284,15 @@ def test_a_kept_account_is_never_touched(db):
     assert out.applied and out.kept == 1
     assert _hashes(db)[CC_ACCOUNT] == before[CC_ACCOUNT]           # password AND session untouched
     assert verify_password(SEED[UserRole.AGENCY_MANAGER], db.query(User).filter(User.email == CC_ACCOUNT).one().hashed_password)
-    assert out.disabled == len(PEOPLE) - 3 - 1
+    assert out.disabled == N_OTHERS - 1
 
 
 def test_without_the_second_opt_in_other_accounts_are_left_alone(db):
     """DEMO_MODE cannot tell demo from real, so the master password alone sets
-    three accounts and retires nobody."""
+    the master accounts and retires nobody."""
     before = _hashes(db)
     out = _apply(db, disable_others=False)
-    assert out.applied and out.disabled == 0 and out.left_alone == len(PEOPLE) - 3
+    assert out.applied and out.disabled == 0 and out.left_alone == N_OTHERS
     after = _hashes(db)
     for email, _role in PEOPLE:
         if email not in MASTER_EMAILS:

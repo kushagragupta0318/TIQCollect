@@ -18,6 +18,11 @@
 #       FIELD_AGENT — one account per group. FIXTURE_USER_COUNT and the
 #       default demo domain below are still the v1 book's; B16/B18 replace
 #       them with the v2 roster's.)*
+#       *(2026-09-30, lane L6, owner-approved: a FOURTH account, a second
+#       BANK_ADMIN, so the placement engine's four-eyes apply (ADR 0010) can
+#       be demoed by two people. Slots are now POSITIONAL: the Nth email must
+#       hold a role of the Nth group. First-match grouping put two bank users
+#       in group 0 and refused the pair.)*
 #     - accounts in DEMO_MASTER_KEEP_ACCOUNTS are NEVER touched: the Collections
 #       Command Center logs in here as agency managers with its own passwords
 #       (its TIQCOLLECT_AGENCY_ACCOUNTS), and changing theirs 502s every
@@ -71,18 +76,16 @@ def _end_sessions(db: Session, user: User) -> None:
 
 
 MIN_PASSWORD_LENGTH = 16
-# One account per group, in this order (v2, owner's decision): a bank-side
-# user, an agency manager, a field agent.
+# One account per slot, positionally: DEMO_MASTER_ACCOUNTS' Nth email must
+# hold a role of the Nth slot (owner's decisions, v2 and 2026-09-30).
 REQUIRED_ROLE_GROUPS: tuple[tuple[str, frozenset[UserRole]], ...] = (
     ("a bank user (BANK_ADMIN / BANK_ANALYST / BANK_TECHOPS)",
      frozenset({UserRole.BANK_ADMIN, UserRole.BANK_ANALYST, UserRole.BANK_TECHOPS})),
     ("an AGENCY_MANAGER", frozenset({UserRole.AGENCY_MANAGER})),
     ("a FIELD_AGENT", frozenset({UserRole.FIELD_AGENT})),
+    # placement.run is BANK_ADMIN-only and apply needs a second person.
+    ("a second bank user, for the four-eyes demo (BANK_ADMIN)", frozenset({UserRole.BANK_ADMIN})),
 )
-
-
-def _group_of(role: UserRole) -> int | None:
-    return next((i for i, (_, roles) in enumerate(REQUIRED_ROLE_GROUPS) if role in roles), None)
 
 
 # The committed demo book: backend/fixtures/fieldops-demo-v2.dump (B16-B18,
@@ -131,7 +134,7 @@ def _domain(email: str) -> str:
 def apply(db: Session, *, password: str | None, accounts_raw: str | None, demo_mode: bool,
           keep_raw: str | None = "", disable_others: bool = False,
           demo_domains: str | None = None, max_users: int = FIXTURE_USER_COUNT) -> Outcome:
-    """Give the three named accounts the master password; with disable_others,
+    """Give the named accounts the master password; with disable_others,
     retire every other demo account's password. Changes nothing unless every
     precondition holds."""
     if not _real(password):
@@ -167,11 +170,13 @@ def apply(db: Session, *, password: str | None, accounts_raw: str | None, demo_m
     missing = [e for e in [*emails, *sorted(keep)] if e not in users]
     if missing:
         return Outcome(applied=False, reason=f"unknown accounts: {', '.join(missing)}")
-    groups = sorted((g for g in (_group_of(users[e].role) for e in emails) if g is not None))
-    if groups != list(range(len(REQUIRED_ROLE_GROUPS))):
-        roles = sorted(users[e].role.value for e in emails)
+    wrong = [f"#{i + 1} {e} is {users[e].role.value}, wanted {name}"
+             for i, (e, (name, roles)) in enumerate(zip(emails, REQUIRED_ROLE_GROUPS))
+             if users[e].role not in roles]
+    if wrong:
         wanted = ", ".join(name for name, _ in REQUIRED_ROLE_GROUPS)
-        return Outcome(applied=False, reason=f"DEMO_MASTER_ACCOUNTS must be one each of: {wanted}; got {roles}")
+        return Outcome(applied=False, reason=(f"DEMO_MASTER_ACCOUNTS must be, in this order: {wanted}; "
+                                              + "; ".join(wrong)))
 
     master = set(emails)
     others = [e for e in users if e not in master and e not in keep]
