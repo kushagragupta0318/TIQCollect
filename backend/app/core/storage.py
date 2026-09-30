@@ -68,15 +68,17 @@ def submission_photo_key(case_id: str, photo_type: str, submission_id: str, ext:
 
 
 def is_case_evidence_key(case_id: str, key: str) -> bool:
-    """Is `key` one that photo_key / submission_photo_key could have issued for this case?
+    """Is `key` one that photo_key / submission_photo_key / recording_key could have issued for this case?
 
     A client names its evidence by key; unchecked, it could name another case's
-    object and be handed a download link to it. Shape only: the 12-hex random
-    part is what keeps a key secret, and a key is not proven to exist here."""
+    object and be handed a download link to it. Shape only: the random part is
+    what keeps a key secret, and a key is not proven to exist here."""
     if ".." in key.split("/"):
         return False
     case8 = re.escape(str(case_id)[:8])
-    return re.fullmatch(rf"collections/(?:\d{{4}}/\d{{2}}|offline)/{case8}/[\w./-]+", key) is not None
+    full = re.escape(str(case_id))
+    return (re.fullmatch(rf"collections/(?:\d{{4}}/\d{{2}}|offline)/{case8}/[\w./-]+", key) is not None
+            or re.fullmatch(rf"recordings/{full}/(?:agent|borrower)/[\w.-]+", key) is not None)
 
 
 def agency_document_key(agency_id: str, doc_type: str, ext: str = "pdf") -> str:

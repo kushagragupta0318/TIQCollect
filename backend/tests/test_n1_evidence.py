@@ -19,11 +19,15 @@ from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from app.core import storage
+from app.core.database import get_db
 from app.core.errors import AppException, ErrorCode
 from app.core.geo import IST
+from app.core.security import create_access_token
+from app.main import app
 from app.models.agent import Agent, AgentSpecialization, AgentStatus, AgentTier
 from app.models.case import Case, CaseStatus
 from app.models.customer import Customer
@@ -177,6 +181,15 @@ def test_keys_no_upload_route_issued_are_not_evidence_keys(w, key):
     assert storage.is_case_evidence_key(w.case.id, key) is False
 
 
+def test_recording_keys_are_the_cases_own_and_from_a_known_recorder(w):
+    own = storage.recording_key(w.case.id, "borrower", "webm")
+    assert storage.is_case_evidence_key(w.case.id, own)
+    assert not storage.is_case_evidence_key(w.other.id, own)
+    assert not storage.is_case_evidence_key(w.case.id, f"recordings/{w.case.id}/someone/x.webm")
+    assert not storage.is_case_evidence_key(w.case.id, f"recordings/{w.case.id}/agent/../../x.webm")
+    assert not storage.is_case_evidence_key(w.case.id, f"recordings/{w.case.id}/agent/x.webm\n")
+
+
 def test_a_key_cannot_walk_out_of_its_case_prefix(w):
     case8 = str(w.case.id)[:8]
     assert storage.is_case_evidence_key(w.case.id, f"collections/2026/09/{case8}/RECEIPT_abc.jpg")
@@ -269,6 +282,57 @@ def test_a_visit_from_an_older_client_carries_none_of_it(w):
 # 2b. The same rule for a document: this case's own object, or nothing is written
 # ═══════════════════════════════════════════════════════════════════════════
 
+def _foreign_key_for(w, field: str) -> str:
+    """A well-formed key for a DIFFERENT case of the same agent, as the upload route would issue it."""
+    svc = ms.MediaService(w.db)
+    subject = {"agent_photo_key": "agent", "borrower_photo_key": "borrower", "object_photo_key": "object",
+               "signature_key": "signature", "selfie_photo_key": "agent"}.get(field)
+    if subject:
+        return svc.get_photo_upload_url(w.agent, w.other.id, subject)["key"]
+    return storage.recording_key(w.other.id, "agent" if field == "agent_recording_key" else "borrower", "webm")
+
+
+def _own_key_for(w, field: str) -> str:
+    svc = ms.MediaService(w.db)
+    subject = {"agent_photo_key": "agent", "borrower_photo_key": "borrower", "object_photo_key": "object",
+               "signature_key": "signature", "selfie_photo_key": "agent"}.get(field)
+    if subject:
+        return svc.get_photo_upload_url(w.agent, w.case.id, subject)["key"]
+    return storage.recording_key(w.case.id, "agent" if field == "agent_recording_key" else "borrower", "webm")
+
+
+EVIDENCE_FIELDS = ["agent_photo_key", "borrower_photo_key", "object_photo_key", "signature_key",
+                   "selfie_photo_key", "agent_recording_key", "borrower_recording_key"]
+
+
+@pytest.mark.parametrize("field", EVIDENCE_FIELDS)
+def test_a_visit_naming_another_cases_object_is_refused_for_every_evidence_field(w, field):
+    with pytest.raises(AppException) as exc:
+        _record(w, _visit(**{field: _foreign_key_for(w, field)}))
+    assert exc.value.status_code == 422 and exc.value.code == ErrorCode.EVIDENCE_KEY_INVALID
+    w.db.expire_all()
+    assert w.db.query(Visit).filter(Visit.case_id == w.case.id).count() == 0
+    assert not w.db.get(Case, w.case.id).is_escalated                  # the transition did not run
+
+
+def test_a_visit_naming_only_its_own_objects_records_them_all(w):
+    keys = {f: _own_key_for(w, f) for f in EVIDENCE_FIELDS}
+    v = _stored(w, _record(w, _visit(**keys)))
+    assert {f: getattr(v, f) for f in EVIDENCE_FIELDS} == keys
+
+
+def test_an_out_of_hours_visit_with_a_bad_key_still_gets_the_hours_refusal_and_its_audit_row(w, monkeypatch):
+    """The key check comes after the contact-hours refusal, so the compliance row is never skipped."""
+    from app.models.audit_log import AuditAction, AuditLog
+    monkeypatch.setattr(vs, "is_within_contact_hours", lambda *a, **k: False)
+    with pytest.raises(HTTPException) as exc:
+        _record(w, _visit(agent_photo_key=_foreign_key_for(w, "agent_photo_key")))
+    assert exc.value.status_code == 403
+    rows = (w.db.query(AuditLog).filter(AuditLog.action == AuditAction.CONTACT_HOUR_VIOLATION_ATTEMPT,
+                                        AuditLog.entity_id == w.case.id).all())
+    assert len(rows) == 1
+
+
 def test_a_visit_naming_another_cases_document_is_refused_and_writes_nothing(w):
     foreign = _doc(w, case=w.other)
     with pytest.raises(AppException) as exc:
@@ -356,3 +420,75 @@ def test_the_client_lists_the_same_document_categories():
 
 def test_the_client_lists_the_same_document_file_types():
     assert sorted(_client_list("DOCUMENT_CONTENT_TYPES")) == sorted(ms.MediaService._DOCUMENT_CONTENT_TYPES)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 5. What the APIs hand back
+# ═══════════════════════════════════════════════════════════════════════════
+
+@pytest.fixture()
+def http(w):
+    """The real routes, on this module's database, as the agent."""
+    def override():
+        db = Session()
+        try:
+            yield db
+        finally:
+            db.close()
+    app.dependency_overrides[get_db] = override
+    user = w.db.get(User, w.agent.user_id)
+    headers = {"Authorization": "Bearer " + create_access_token(user.id, user.role.value, "phone-e")}
+    try:
+        yield TestClient(app), headers
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+
+def _kept(w):
+    doc = _doc(w)
+    _record(w, _visit(outcome=VisitOutcome.RTP, escalation_notes="Refused at the door", witness_present=True,
+                      witness_name="Neighbour, flat 4", documents=[doc]))
+    return doc
+
+
+def test_the_agent_case_detail_returns_what_the_visit_kept(w, http):
+    client, headers = http
+    doc = _kept(w)
+    r = client.get(f"/api/v1/agent/cases/{w.case.id}", headers=headers)
+    assert r.status_code == 200, r.text
+    [v] = r.json()["visits"]
+    assert (v["escalation_notes"], v["witness_present"], v["witness_name"]) == \
+        ("Refused at the door", True, "Neighbour, flat 4")
+    assert v["documents"] == [{"category": "ID_PROOF", "content_type": "application/pdf",
+                               "view_url": "https://minio.test/get/" + doc["key"]}]
+    assert "key" not in v["documents"][0]                                   # no storage key on the wire
+
+
+def test_a_visit_with_none_of_it_returns_empty_fields_not_missing_ones(w, http):
+    client, headers = http
+    _record(w, _visit(outcome=VisitOutcome.NOT_AVAILABLE, customer_met=False, person_met=None))
+    [v] = client.get(f"/api/v1/agent/cases/{w.case.id}", headers=headers).json()["visits"]
+    assert (v["escalation_notes"], v["witness_present"], v["witness_name"], v["documents"]) == (None, None, None, [])
+
+
+def test_the_manager_case_detail_returns_them_too(w):
+    from app.api.v1.endpoints import manager as manager_ep
+    tag = uuid.uuid4().hex[:8]
+    mgr = User(id=_uid(), email=f"m{tag}@t.io", phone="97" + str(int(tag, 16))[:8].ljust(8, "0"),
+               full_name="Team Manager", hashed_password="x", role=UserRole.AGENCY_MANAGER,
+               is_active=True, is_verified=True)
+    w.db.add(mgr)
+    w.db.flush()
+    w.agent.manager_user_id = mgr.id
+    w.db.commit()
+    doc = _kept(w)
+    db = Session()        # a request's own session: Case.visits is lazy=noload and only a fresh load fills it
+    try:
+        out = manager_ep.get_case_detail(w.case.id, mgr, db)
+    finally:
+        db.close()
+    [v] = out["visits"]
+    assert (v["escalation_notes"], v["witness_present"], v["witness_name"]) == \
+        ("Refused at the door", True, "Neighbour, flat 4")
+    assert v["documents"] == [{"category": "ID_PROOF", "content_type": "application/pdf",
+                               "view_url": "https://minio.test/get/" + doc["key"]}]

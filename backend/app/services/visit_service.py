@@ -96,6 +96,26 @@ def _typed(text: str | None) -> str | None:
     return (text or "").strip() or None
 
 
+# The request fields that name an uploaded object, as the agent would call them.
+_EVIDENCE_KEY_FIELDS = (
+    ("agent_photo_key", "The agent photo"), ("borrower_photo_key", "The borrower photo"),
+    ("object_photo_key", "The premises photo"), ("signature_key", "The signature"),
+    ("selfie_photo_key", "The selfie"),
+    ("agent_recording_key", "The agent recording"), ("borrower_recording_key", "The borrower recording"),
+)
+
+
+def _check_evidence_keys(case_id: str, req) -> None:
+    """Every object a visit names must be one this case's upload routes could have issued,
+    else 422 before anything is written (N1). Shape only: see storage.is_case_evidence_key."""
+    named = [(label, getattr(req, field, None)) for field, label in _EVIDENCE_KEY_FIELDS]
+    named += [(f"The {d.category} document", d.key) for d in getattr(req, "documents", None) or []]
+    for label, key in named:
+        if key and not storage.is_case_evidence_key(case_id, key):
+            raise AppException(422, ErrorCode.EVIDENCE_KEY_INVALID,
+                               f"{label} attached to this visit was not taken for this case. Take it again.")
+
+
 class VisitService:
     def __init__(self, db: Session):
         self.db = db
@@ -143,14 +163,8 @@ class VisitService:
         # carry one. Before anything is written.
         check_visit_stance(req.borrower_disposition, customer_met=req.customer_met, person_met=req.person_met)
 
-        # N1: a document is named by the key its upload route issued for THIS case.
         # getattr: some callers hand in a bare namespace (see csid above).
         documents = getattr(req, "documents", None) or []
-        for d in documents:
-            if not storage.is_case_evidence_key(case.id, d.key):
-                raise AppException(422, ErrorCode.EVIDENCE_KEY_INVALID,
-                                   "A document attached to this visit was not collected for this case. "
-                                   "Attach it again.")
 
         # Idempotency guard for a keyless submit — see _DUPLICATE_SUBMIT_WINDOW_SECONDS above.
         recent_duplicate = None if csid else (
@@ -212,6 +226,10 @@ class VisitService:
                     f"If the address itself is wrong, select 'Address Issue' as the outcome instead."
                 ),
             )
+
+        # After the contact-hours and geo-fence refusals, so an out-of-hours attempt still
+        # leaves its audit row, and before anything is written or taken over.
+        _check_evidence_keys(case.id, req)
 
         # Every refusal is behind us: only now may a same-day handover move the
         # case to the caller (scope.sync_assignee — never at the read, because
