@@ -20,6 +20,7 @@ import { createPortal } from "react-dom";
 import { toast } from "react-hot-toast";
 import { decideLeave, markAgentLeave, type LeaveRequest, type LeaveType } from "@/api/manager";
 import { errorDetail } from "@/lib/apiError";
+import { todayIso } from "@/lib/today";
 import { useModalA11y } from "@/hooks/useModalA11y";
 import { LEAVE_QUERY_KEY, useLeaveRequests } from "./leaveQueries";
 
@@ -33,7 +34,7 @@ export function LeavePanel() {
   const [showHistory, setShowHistory] = useState(false);
   const rows = q.data?.requests ?? [];
   const pending = rows.filter((r) => r.status === "REQUESTED");
-  const upcoming = rows.filter((r) => r.status === "APPROVED" && r.to_date >= new Date().toISOString().slice(0, 10));
+  const upcoming = rows.filter((r) => r.status === "APPROVED" && r.to_date >= todayIso());
   const history = rows.filter((r) => r.status === "REJECTED" || r.status === "CANCELLED" || (r.status === "APPROVED" && !upcoming.includes(r)));
 
   async function decide(r: LeaveRequest, decision: "approve" | "reject" | "revoke") {
@@ -133,7 +134,7 @@ export function MarkLeaveModal({ agentId, agentName, onClose }: { agentId: strin
   const qc = useQueryClient();
   const ref = useRef<HTMLDivElement>(null);
   useModalA11y(true, ref, onClose);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayIso();
   const [from, setFrom] = useState(today);
   const [to, setTo] = useState(today);
   const [type, setType] = useState<LeaveType>("CASUAL_LEAVE");

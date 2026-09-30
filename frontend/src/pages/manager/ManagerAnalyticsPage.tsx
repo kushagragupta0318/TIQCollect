@@ -12,6 +12,7 @@ import { useIsBelowLg, useMediaQuery } from "@/hooks/useMediaQuery";
 import { TrendingUp, BarChart2, IndianRupee, Users, Calendar, X } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { shortAmount, shortMoney } from "@/lib/money";
+import { todayIso, todayMonthIso } from "@/lib/today";
 import {
   AreaChart, Area, LineChart as RLineChart, Line,
   XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
@@ -1184,7 +1185,7 @@ function DPDBreakdownCard({ rows, loading, barReady, agentName, selMonth }: {
 const DOW_TEAM = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 function AgencyDutyOverview({ months }: { months: string[] }) {
-  const defaultMonth = months[months.length - 1] ?? new Date().toISOString().slice(0, 7);
+  const defaultMonth = months[months.length - 1] ?? todayMonthIso();
   const [visibleMonth, setVisibleMonth] = useState(defaultMonth);
   const [attendance, setAttendance] = useState<TeamAttendance | null>(null);
 
@@ -1197,7 +1198,7 @@ function AgencyDutyOverview({ months }: { months: string[] }) {
   const canPrev  = monthIdx > 0;
   const canNext  = monthIdx < months.length - 1;
 
-  const today = new Date().toISOString().split("T")[0];
+  const today = todayIso();
   const [year, mo] = visibleMonth ? visibleMonth.split("-").map(Number) : [0, 0];
   const lastDay    = year ? new Date(year, mo, 0).getDate() : 0;
   const firstDow   = year ? new Date(year, mo - 1, 1).getDay() : 1;

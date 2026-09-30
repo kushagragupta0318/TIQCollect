@@ -44,6 +44,7 @@ import { useEffect, useState } from "react";
 import { getAuditLog, exportAuditLog, getCompliance, getFraudAlerts, reviewFraudAlert } from "@/api/manager";
 import type { AuditLogPage, ComplianceMetrics, FraudFinding, FraudReport } from "@/api/manager";
 import { toast } from "react-hot-toast";
+import { todayIso } from "@/lib/today";
 
 const EASE = "cubic-bezier(0.16,1,0.3,1)";
 
@@ -70,7 +71,6 @@ type RuleDetail = string | ((m: ComplianceMetrics | null) => string);
 // relabel, with what closes each:
 //   Collections confirmed by borrower OTP   partial  -> make OTP mandatory (remove the PENDING_VERIFICATION path)
 //   Payment receipt to the borrower         partial  -> delivery status back to agent + borrower; retry
-//   Agent ID card carries a signed token    partial  -> render the QR on the agent profile / card
 //   Immutable audit trail                   partial  -> BEFORE UPDATE/DELETE trigger on audit_logs (migration)
 //   No contact on Sundays                   absent   -> weekday check beside is_within_contact_hours, visit + OTP
 //   Automated PTP follow-up reminders       absent   -> the 09:00 task must actually send (needs SMS provider)
@@ -93,12 +93,12 @@ const RBI_RULES: { rule: string; state: RuleState; detail: RuleDetail }[] = [
     detail: "A code to the borrower's registered phone promotes a payment to VERIFIED. Optional: with no signal the payment is recorded PENDING_VERIFICATION and confirmed later." },
   { rule: "Payment receipt to the borrower", state: "enforced",
     detail: "SMS and WhatsApp on every collection — best-effort. A delivery failure is logged at ERROR and never blocks the payment; nothing tells the agent or the borrower it failed." },
-  // 2026-09-11 — this read "no public endpoint validates it yet, so a borrower
-  // cannot check it". GET /verify-agent now exists. Still Partial, for a
-  // verified reason: agent_service imports the token minter and never calls
-  // it, so no screen carries the QR yet — the check exists before the card.
+  // 2026-09-30 (G05) — this read "no screen renders the QR, so a borrower has
+  // nothing to scan": AgentIDCard's back face drew a deterministic pseudo-QR
+  // over an unsigned string, not the minted token. GET /agent/profile now
+  // mints one on every fetch and the card renders it as a real, scannable QR.
   { rule: "Agent ID card carries a signed token", state: "enforced",
-    detail: "Signed verification tokens are supported, and GET /verify-agent is public — no login — validating the signature and the agent_verify token type. It returns only the agent's name, employee code, agency and active status; an invalid, expired, wrong-type or unknown token gets the same 404. Not yet on the card: no screen renders the QR, so a borrower has nothing to scan." },
+    detail: "Signed verification tokens are supported, and GET /verify-agent is public — no login — validating the signature and the agent_verify token type. It returns only the agent's name, employee code, agency and active status; an invalid, expired, wrong-type or unknown token gets the same 404. The agent's profile card renders this token as a real QR linking straight to that endpoint." },
   { rule: "Immutable audit trail", state: "enforced",
     // Observed data, named as such. "Implemented" cannot be derived at runtime
     // (a source reference is not a write), so the page never claims it.
@@ -338,7 +338,7 @@ function AuditTrail() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `audit_log_${new Date().toISOString().slice(0, 10)}.csv`;
+      a.download = `audit_log_${todayIso()}.csv`;
       document.body.appendChild(a);
       a.click();
       a.remove();

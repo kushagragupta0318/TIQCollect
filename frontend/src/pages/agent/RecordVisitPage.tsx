@@ -113,6 +113,7 @@ import type { VisitPayload } from "@/api/agent";
 import { OutboxFullError, type NewVisit } from "@/lib/outbox";
 import { submitVisit } from "@/lib/outboxRunner";
 import { serverNow } from "@/lib/serverClock";
+import { todayIso } from "@/lib/today";
 import { getCaseDetail, recordVisit, collectPayment, setPTP, getPhotoUploadUrl, getCasePhotos, getRecordingUploadUrl, reoptimizeBeat, transcribeAudio, queueVisitTranscription, sendPaymentOtp, verifyPaymentOtp, getUpiConfig } from "@/api/agent";
 import { useQuery } from "@tanstack/react-query";
 import { DEMO_UPI_REFERENCE_PREFIX, demoUpiAutoconfirmEnabled, demoUpiReference, paymentReferenceOk, upiQrValue, upiReferenceOk } from "./upiPayment";
@@ -2058,7 +2059,7 @@ export default function RecordVisitPage() {
                   </div>
                   <div className="space-y-3">
                     <Input label="Amount Customer Commits to Pay (₹) *" type="number" placeholder={`Up to ₹${remainingAfterPayment.toLocaleString("en-IN")}`} value={form.ptpAmount} onChange={(e) => upd({ ptpAmount: e.target.value })} leftIcon={<IndianRupee className="w-4 h-4" />} />
-                    <Input label="Commitment Date *" type="date" value={form.ptpDate} min={new Date().toISOString().split("T")[0]} onChange={(e) => upd({ ptpDate: e.target.value })} leftIcon={<Calendar className="w-4 h-4" />} />
+                    <Input label="Commitment Date *" type="date" value={form.ptpDate} min={todayIso()} onChange={(e) => upd({ ptpDate: e.target.value })} leftIcon={<Calendar className="w-4 h-4" />} />
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1.5">Customer's Reason (optional)</label>
                       <textarea className="w-full rounded-xl border border-slate-200 bg-white text-sm p-3 focus:outline-none focus:ring-2 focus:ring-brand-300 resize-none placeholder-slate-400" placeholder="Why can't they pay today?" rows={2} value={form.ptpReason} onChange={(e) => upd({ ptpReason: e.target.value })} />

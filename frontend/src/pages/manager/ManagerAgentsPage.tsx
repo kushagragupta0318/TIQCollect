@@ -39,6 +39,7 @@ import { AiBadge } from "@/components/ui/AiBadge";
 import { getAgents, getAgentInsight, getReallocationPlan, updateAgentStatus, acknowledgeAgentSos, resetAgentLogin, reactivateAgent } from "@/api/manager";
 import type { AgentInsight, ReallocationPlan } from "@/api/manager";
 import { errorDetail } from "@/lib/apiError";
+import { todayIso } from "@/lib/today";
 import { Input } from "@/components/ui/Input";
 import { TierBadge } from "@/components/ui/Badge";
 import { useModalA11y } from "@/hooks/useModalA11y";
@@ -761,7 +762,7 @@ function AgentRow({
                 const sixMonths = new Date();
                 sixMonths.setMonth(sixMonths.getMonth() - 6);
                 const dateFrom = sixMonths.toISOString().slice(0, 10);
-                const dateTo   = new Date().toISOString().slice(0, 10);
+                const dateTo   = todayIso();
                 navigate(`/manager/cases?agent_id=${agent.id}&agent_name=${encodeURIComponent(agent.full_name)}&date_from=${dateFrom}&date_to=${dateTo}`);
               }}
               className="tap-target text-xs px-3 py-1.5 rounded-xl font-semibold transition hover:brightness-95 inline-flex items-center justify-center"
