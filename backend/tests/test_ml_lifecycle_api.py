@@ -22,6 +22,7 @@ from app.ml.pipeline.outcomes import OUTCOME_DEFINITION_VERSION, OutcomeStatus
 from app.models.audit_log import AuditAction, AuditLog
 from app.models.model_candidate import CandidateState, ModelCandidate
 from app.models.model_prediction import ModelPrediction
+from app.models.user import User, UserRole
 
 from tests.test_planner_service import (  # noqa: F401
     client, db_session, setup_db, test_data,
@@ -35,10 +36,23 @@ SERVING = serving_version()
 
 
 @pytest.fixture
-def auth(test_data):
-    mgr = test_data["manager"]
+def techops(db_session, test_data):
+    """F12 (2026-09-30): the ML lifecycle is BANK_TECHOPS-only. It used to run
+    as the agency manager these tests seeded, which is the hole F12 closed."""
+    user = User(
+        id=str(uuid.uuid4()), email="techops_ml@tiqcollect.in", phone="9800000099",
+        full_name="TechOps Meera", hashed_password="hash", role=UserRole.BANK_TECHOPS,
+        is_active=True, is_verified=True,
+    )
+    db_session.add(user)
+    db_session.commit()
+    return user
+
+
+@pytest.fixture
+def auth(techops):
     return {"Authorization": f"Bearer {create_access_token(
-        user_id=mgr.id, role=mgr.role.value, device_id='ml-lifecycle')}"}
+        user_id=techops.id, role=techops.role.value, device_id='ml-lifecycle')}"}
 
 
 @pytest.fixture
@@ -233,13 +247,13 @@ def test_the_detail_route_shows_whether_the_candidate_has_gone_stale(
 
 
 def test_approval_over_http_records_a_person_and_an_audit_row(
-        client, auth, db_session, test_data, champion_guard):
+        client, auth, techops, db_session, test_data, champion_guard):
     cand = _candidate(db_session)
     r = client.post(f"/api/v1/manager/ml/candidates/{cand.id}/approve",
                     headers=auth)
     assert r.status_code == 200, r.text
     assert r.json()["state"] == "APPROVED"
-    assert r.json()["decided_by_id"] == test_data["manager"].id
+    assert r.json()["decided_by_id"] == techops.id
 
     row = (db_session.query(AuditLog)
            .filter(AuditLog.action == AuditAction.MODEL_CANDIDATE_APPROVED)
@@ -274,7 +288,7 @@ def test_a_rejected_candidate_cannot_be_promoted_over_http(
 
 
 def test_the_same_manager_cannot_approve_and_then_promote_over_http(
-        client, auth, db_session, champion_guard, test_data):
+        client, auth, techops, db_session, champion_guard, test_data):
     """Four eyes, at the surface a person actually uses.
 
     Approve and promote are separate endpoints, so before 2026-09-10 one manager
@@ -287,7 +301,7 @@ def test_the_same_manager_cannot_approve_and_then_promote_over_http(
     ok = client.post(f"/api/v1/manager/ml/candidates/{cand.id}/approve",
                      headers=auth, json={"note": "looks good"})
     assert ok.status_code == 200, ok.text
-    assert ok.json()["decided_by_id"] == test_data["manager"].id
+    assert ok.json()["decided_by_id"] == techops.id
 
     r = client.post(f"/api/v1/manager/ml/candidates/{cand.id}/promote",
                     headers=auth)
@@ -385,3 +399,71 @@ def test_the_ml_routes_return_no_tenant_identifiers(client, auth, db_session,
     assert not any(isinstance(v, list) and v and isinstance(v[0], dict)
                    and ("case_id" in v[0] or "loan_id" in v[0])
                    for v in mon.values())
+
+
+# ── F12: who may read and who may move the live model (2026-09-30) ──────────
+# Measured on a running stack before the fix (tiqcollect-62): an AGENCY_MANAGER
+# got 200 on /ml/candidates and /ml/health, and 409 on /promote — and that 409
+# was the demo-login safety net, not authorisation. On a deployment without the
+# shared demo login the promote would have gone through. These assert the
+# capability gate itself, by its own status and body.
+
+def _as(db_session, role, *, email, phone):
+    user = User(id=str(uuid.uuid4()), email=email, phone=phone, full_name=f"{role.value} user",
+                hashed_password="hash", role=role, is_active=True, is_verified=True)
+    db_session.add(user)
+    db_session.commit()
+    return {"Authorization": f"Bearer {create_access_token(
+        user_id=user.id, role=user.role.value, device_id='ml-authz')}"}
+
+
+ML_READS = ("/api/v1/manager/ml/health", "/api/v1/manager/ml/candidates")
+ML_WRITES = ("approve", "reject", "promote")
+
+
+@pytest.mark.parametrize("role,email,phone", [
+    (UserRole.AGENCY_MANAGER, "authz_mgr@tiqcollect.in", "9800000101"),
+    (UserRole.AGENCY_ADMIN, "authz_admin@tiqcollect.in", "9800000102"),
+    (UserRole.FIELD_AGENT, "authz_agent@tiqcollect.in", "9800000103"),
+])
+def test_an_agency_role_can_neither_read_the_model_nor_move_it(client, db_session, test_data,
+                                                               role, email, phone):
+    headers = _as(db_session, role, email=email, phone=phone)
+    for url in ML_READS:
+        r = client.get(url, headers=headers)
+        assert r.status_code == 403, f"{url} -> {r.status_code} {r.text[:120]}"
+        # The capability's own refusal, not the demo-login net (which is a 409).
+        assert "Required capability" in r.text
+    for action in ML_WRITES:
+        r = client.post(f"/api/v1/manager/ml/candidates/{uuid.uuid4()}/{action}", headers=headers)
+        assert r.status_code == 403, f"{action} -> {r.status_code} {r.text[:120]}"
+        assert "Required capability" in r.text
+
+
+def test_tech_ops_still_reaches_every_one_of_them(client, db_session, test_data, techops, auth):
+    for url in ML_READS:
+        assert client.get(url, headers=auth).status_code == 200
+    for action in ML_WRITES:
+        r = client.post(f"/api/v1/manager/ml/candidates/{uuid.uuid4()}/{action}", headers=auth)
+        # Past the gate: a missing candidate is 404 (or 409 where a mode check
+        # runs first). Never 403 — that would mean tech ops lost its own console.
+        assert r.status_code in (404, 409), f"{action} -> {r.status_code} {r.text[:120]}"
+
+
+def test_a_bank_admin_reads_the_console_but_cannot_move_the_model(client, db_session, test_data):
+    headers = _as(db_session, UserRole.BANK_ADMIN, email="authz_ba@tiqcollect.in", phone="9800000104")
+    for url in ML_READS:
+        assert client.get(url, headers=headers).status_code == 200
+    for action in ML_WRITES:
+        r = client.post(f"/api/v1/manager/ml/candidates/{uuid.uuid4()}/{action}", headers=headers)
+        assert r.status_code == 403, f"{action} -> {r.status_code} {r.text[:120]}"
+
+
+def test_the_model_internals_are_not_readable_by_a_tenant(client, db_session, test_data, auth):
+    """/ml/health hands out the artifact SHA-256, the feature names, the
+    calibration and the serving host:pid. An agency tenant must not see it."""
+    body = client.get("/api/v1/manager/ml/health", headers=auth).text
+    assert "artifact_sha256" in body or "champion" in body        # it does carry internals
+    tenant = _as(db_session, UserRole.AGENCY_MANAGER, email="authz_leak@tiqcollect.in",
+                 phone="9800000105")
+    assert client.get("/api/v1/manager/ml/health", headers=tenant).status_code == 403

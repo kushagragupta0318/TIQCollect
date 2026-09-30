@@ -629,16 +629,32 @@ def _mgr_hdr(world):
     return {"Authorization": f"Bearer {create_access_token(world['mgr'].id, 'AGENCY_MANAGER', 'dev')}"}
 
 
+def _techops_hdr(world):
+    """F12 (2026-09-30): the ML lifecycle is BANK_TECHOPS-only, so the demo
+    gate below can only be reached by that role. Driven as a manager, these
+    tests would now measure the capability gate instead of the demo one."""
+    db = world["db"]
+    user = db.query(User).filter(User.email == "techops.hotfix@girivanfinance.test").first()
+    if user is None:
+        user = User(id=test_id("hotfix:user:techops"), email="techops.hotfix@girivanfinance.test",
+                    phone="9000000197", full_name="Meera Khanna", hashed_password="x",
+                    role=UserRole.BANK_TECHOPS, is_active=True, is_verified=True,
+                    bank_id=world["mgr"].bank_id)
+        db.add(user)
+        db.commit()
+    return {"Authorization": f"Bearer {create_access_token(user.id, 'BANK_TECHOPS', 'dev')}"}
+
+
 @pytest.mark.parametrize("step", ["approve", "promote"])
 def test_model_approval_and_promotion_are_refused_while_the_master_login_is_on(client, world, master_login_on, step):
     cid = str(uuid.uuid4())
     before = _count(world, AuditAction.ROLE_VIOLATION_ATTEMPT)
-    r = client.post(f"/api/v1/manager/ml/candidates/{cid}/{step}", headers=_mgr_hdr(world))
+    r = client.post(f"/api/v1/manager/ml/candidates/{cid}/{step}", headers=_techops_hdr(world))
     assert r.status_code == 409
     rows = _rows(world, AuditAction.ROLE_VIOLATION_ATTEMPT)
     assert len(rows) == before + 1
     assert rows[-1].entity_type == "ModelCandidate" and rows[-1].entity_id == cid
-    assert rows[-1].user_id == world["mgr"].id
+    assert rows[-1].user_id == test_id("hotfix:user:techops")
 
 
 @pytest.mark.parametrize("value", ["", "${DEMO_MASTER_PASSWORD}"])
@@ -648,7 +664,7 @@ def test_without_the_master_login_the_ml_gate_is_not_the_refusal(client, world, 
     id that does not exist), not the demo refusal."""
     monkeypatch.setattr(settings, "DEMO_MASTER_PASSWORD", value)
     before = _count(world, AuditAction.ROLE_VIOLATION_ATTEMPT)
-    r = client.post(f"/api/v1/manager/ml/candidates/{uuid.uuid4()}/{step}", headers=_mgr_hdr(world))
+    r = client.post(f"/api/v1/manager/ml/candidates/{uuid.uuid4()}/{step}", headers=_techops_hdr(world))
     assert r.status_code == 404
     assert _count(world, AuditAction.ROLE_VIOLATION_ATTEMPT) == before
 

@@ -51,6 +51,7 @@ from app.ml.recovery_scorecard import (
 )
 from app.models.payment import Payment, PaymentMode, PaymentStatus
 from app.models.ptp import PTP, PTPStatus
+from app.core.permissions import require_perm
 from app.models.user import User
 from app.models.visit import Visit, VisitOutcome
 from app.services.brand import brand_for
@@ -1753,7 +1754,7 @@ def ai_health(current_user: ManagerOnly):
 # healthy and deliberately not in use, and those are different states.
 
 @router.get("/ml/health")
-def ml_health(current_user: ManagerOnly, db: DbSession):
+def ml_health(db: DbSession, current_user: User = require_perm("ml.read")):
     from app.ml.pipeline.engine import DecisionEngine, health_all
 
     out = health_all()
@@ -1884,9 +1885,9 @@ def _ml_monitoring_block(db, model_name: str = "recovery_risk") -> dict:
 # code path from the nightly job to `champion.txt`.
 
 @router.get("/ml/candidates")
-def ml_candidates(current_user: ManagerOnly, db: DbSession,
-                  model: str = "recovery_risk", limit: int = 25,
-                  state: Optional[str] = None):
+def ml_candidates(db: DbSession, model: str = "recovery_risk", limit: int = 25,
+                  state: Optional[str] = None,
+                  current_user: User = require_perm("ml.read")):
     """Every retraining attempt, newest first — the durable retraining report.
 
     Deliberately NOT tenant-scoped: a model is one global object, not a
@@ -1904,7 +1905,8 @@ def ml_candidates(current_user: ManagerOnly, db: DbSession,
 
 
 @router.get("/ml/candidates/{candidate_id}")
-def ml_candidate_detail(candidate_id: UUIDPath, current_user: ManagerOnly, db: DbSession):
+def ml_candidate_detail(candidate_id: UUIDPath, db: DbSession,
+                        current_user: User = require_perm("ml.read")):
     from app.ml.pipeline import registry
     from app.models.model_candidate import ModelCandidate
 
@@ -1922,8 +1924,8 @@ def ml_candidate_detail(candidate_id: UUIDPath, current_user: ManagerOnly, db: D
 
 
 @router.post("/ml/candidates/{candidate_id}/approve")
-def ml_approve_candidate(candidate_id: UUIDPath, current_user: ManagerOnly,
-                         db: DbSession, note: Optional[str] = None):
+def ml_approve_candidate(candidate_id: UUIDPath, db: DbSession, note: Optional[str] = None,
+                         current_user: User = require_perm("ml.approve")):
     """Record a person's decision to accept the challenger. Does NOT promote."""
     from app.ml.pipeline.lifecycle import ApprovalRefused, approve
 
@@ -1947,8 +1949,8 @@ def ml_approve_candidate(candidate_id: UUIDPath, current_user: ManagerOnly,
 
 
 @router.post("/ml/candidates/{candidate_id}/reject")
-def ml_reject_candidate(candidate_id: UUIDPath, current_user: ManagerOnly,
-                        db: DbSession, note: Optional[str] = None):
+def ml_reject_candidate(candidate_id: UUIDPath, db: DbSession, note: Optional[str] = None,
+                        current_user: User = require_perm("ml.approve")):
     from app.ml.pipeline.lifecycle import ApprovalRefused, reject
 
     try:
@@ -1970,8 +1972,8 @@ def ml_reject_candidate(candidate_id: UUIDPath, current_user: ManagerOnly,
 
 
 @router.post("/ml/candidates/{candidate_id}/promote")
-def ml_promote_candidate(candidate_id: UUIDPath, current_user: ManagerOnly,
-                         db: DbSession):
+def ml_promote_candidate(candidate_id: UUIDPath, db: DbSession,
+                         current_user: User = require_perm("ml.promote")):
     """The one write in this codebase that changes what borrowers are scored by.
 
     Separate from `/approve` on purpose: approval records a judgement, promotion
