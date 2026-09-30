@@ -23,6 +23,9 @@ from app.core.request_context import CurrentContext, RequestContext
 from app.models.loan import DPDBucket, LoanType
 from app.models.placement import PLACEMENT_STATUSES
 from app.models.user import User
+from app.schemas.placements import (
+    AgencyDecisionsOut, AgencyRunsOut, BankDecisionsOut, BankRunsOut, DecisionsOut, PlacementsPageOut, RunsOut,
+)
 from app.services.bank import placement_engine as engine
 from app.services.manual_placement_service import MAX_BATCH, MAX_RECALL_NOTE, BatchResult, ManualPlacementService
 from app.services.placement_read_service import MAX_PAGE_SIZE, LoanFilter, PlacementReadService
@@ -124,7 +127,7 @@ def recall(placement_id: UUIDPath, body: RecallIn, request: Request, ctx: Curren
             "end_reason": placement.end_reason, "cases_closed": [c.id for c in closed]}
 
 
-@router.get("")
+@router.get("", response_model=PlacementsPageOut)
 def list_placements(
     ctx: CurrentContext, db: DbSession,
     _user: User = require_perm("placement.read"),
@@ -190,21 +193,23 @@ def _read_scope(ctx: RequestContext) -> tuple[str, str | None]:
     raise AppException(403, ErrorCode.FORBIDDEN, "A bank or agency user is required")
 
 
-@router.get("/runs")
+@router.get("/runs", response_model=RunsOut)
 def list_runs(ctx: CurrentContext, db: DbSession, _user: User = require_perm("placement.read"),
               limit: int = Query(30, ge=1, le=100)):
     bank_id, agency_id = _read_scope(ctx)
-    return {"items": engine.list_runs(db, bank_id, agency_id=agency_id, limit=limit)}
+    items = engine.list_runs(db, bank_id, agency_id=agency_id, limit=limit)
+    return AgencyRunsOut(items=items) if agency_id is not None else BankRunsOut(items=items)
 
 
-@router.get("/runs/{run_id}/decisions")
+@router.get("/runs/{run_id}/decisions", response_model=DecisionsOut)
 def run_decisions(run_id: UUIDPath, ctx: CurrentContext, db: DbSession,
                   _user: User = require_perm("placement.read"),
                   outcome: Optional[Literal["PLACED", "DEFERRED", "BLOCKED", "RECALLED"]] = None,
                   page: int = Query(1, ge=1, le=100_000), page_size: int = Query(50, ge=1, le=MAX_PAGE_SIZE)):
     bank_id, agency_id = _read_scope(ctx)
-    return engine.run_decisions(db, bank_id=bank_id, run_id=run_id, outcome=outcome, page=page,
-                                page_size=page_size, agency_id=agency_id)
+    out = engine.run_decisions(db, bank_id=bank_id, run_id=run_id, outcome=outcome, page=page,
+                               page_size=page_size, agency_id=agency_id)
+    return AgencyDecisionsOut(**out) if agency_id is not None else BankDecisionsOut(**out)
 
 
 @router.post("/runs/{run_id}/apply")
