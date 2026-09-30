@@ -44,6 +44,16 @@ Merge a branch when its backend-pg goes green. If one passes 35 min, THEN it's a
 - Where to keep an off-repo master copy of the v1 demo dump (removed from tree).
 - Payment REVERSAL path (PaymentStatus.REVERSED has no writer) — product decision.
 
+## CI backend-pg IS BROKEN (corrected — read this)
+backend-pg does NOT finish in 30min — it HANGS ~6h and is killed at GitHub's job limit, on EVERY
+branch, NOT fixed by v2_0017 (L8's evidence: fixture restore completes, then a query never returns;
+-q + no per-test timeout meant nothing named it). So backend-pg has NEVER gone green in CI and
+cannot be used as a merge gate as-is. I added --timeout=900 -v --durations=20 + timeout-minutes:45
+to ci.yml (7c045d5) so the NEXT run names the hanging test in ~45min instead of burning 6h.
+ON RESUME: (1) read the newest backend-pg run — it will name the stuck pg test; fix that test.
+(2) Until then, merge gate = backend + frontend + docker green PLUS the lane's LOCAL pg run
+(--timeout=900) passing. L8's branches have local pg evidence: S1a 6+17, S1b 62, all pass as tiq_app.
+
 ## RESUME SEQUENCE
 1. Check .claude/fullsuite.lock — if L6's stale, clear it. Check no orphan containers.
 2. Merge every branch whose backend-pg is green (l3-redaction first — unblocks safe AI use).
