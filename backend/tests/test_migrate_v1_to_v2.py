@@ -22,13 +22,15 @@ def test_the_roster_email_is_first_dot_last_on_the_agency_domain():
         m.email_for("  ", m.AGENCY_DOMAIN)
 
 
-def test_the_three_master_accounts_are_one_bank_user_one_manager_one_agent():
-    """The owner's decision; apply_demo_logins' role groups refuse anything else."""
+def test_the_master_accounts_are_bank_user_manager_agent_and_a_second_bank_admin():
+    """The owner's decisions (v2; the 4th on 2026-09-30); apply_demo_logins'
+    positional role slots refuse anything else."""
     assert m.MASTER_ACCOUNTS == ("ananya.iyer@girivanfinance.test", "vikram.malhotra@aravallifs.test",
-                                 "piyush.sharma@aravallifs.test")
+                                 "piyush.sharma@aravallifs.test", "kavya.reddy@girivanfinance.test")
     roles = {f"{l}@{m.BANK_DOMAIN}": r for l, _, r, _ in m.BANK_USERS}
     roles.update({f"{l}@{m.AGENCY_DOMAIN}": r for l, _, r in m.V1_STAFF.values()})
-    assert [roles.get(e, "FIELD_AGENT") for e in m.MASTER_ACCOUNTS] == ["BANK_ADMIN", "AGENCY_MANAGER", "FIELD_AGENT"]
+    wanted = ["BANK_ADMIN", "AGENCY_MANAGER", "FIELD_AGENT", "BANK_ADMIN"]
+    assert [roles.get(e, "FIELD_AGENT") for e in m.MASTER_ACCOUNTS] == wanted
 
 
 def test_new_ids_are_deterministic_and_distinct():

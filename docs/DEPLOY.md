@@ -290,12 +290,12 @@ are no real people in it. In `deploy/.env.prod`:
 SEED_FROM_FIXTURE=true
 DEMO_MODE=true
 DEMO_MASTER_PASSWORD=<16+ characters>
-DEMO_MASTER_ACCOUNTS=ananya.iyer@girivanfinance.test,vikram.malhotra@aravallifs.test,piyush.sharma@aravallifs.test
+DEMO_MASTER_ACCOUNTS=ananya.iyer@girivanfinance.test,vikram.malhotra@aravallifs.test,piyush.sharma@aravallifs.test,kavya.reddy@girivanfinance.test
 DEMO_MASTER_DISABLE_OTHERS=true
 ```
 
-- **First start.** The demo book is restored in one transaction, and the three accounts get
-  the master password. Every other account keeps an unusable hash.
+- **First start.** The demo book is restored in one transaction, and the four accounts get
+  the master password (in this order; the script checks each slot's role). Every other account keeps an unusable hash.
 - **Keep off on any host outside the team:**
   - `DEMO_OTP_ECHO` hands the borrower's OTP to the agent;
   - `DEMO_DEVICE_REBIND` switches device binding off.
