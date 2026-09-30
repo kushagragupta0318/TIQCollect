@@ -1,7 +1,7 @@
 // Pure helpers for the agency directory page (D05) — kept out of
 // AgencyDirectoryPage.tsx so they run without React or Leaflet, same split
 // as onboardingLogic.ts next door.
-import type { AgencyDirectoryRow } from "@/api/bank";
+import type { AgencyDirectoryRow, PerformanceIndex } from "@/api/bank";
 import { LOAN_TYPE_LABELS, labelFor } from "../../lib/labels";
 import { pyDate } from "../../theme/format";
 
@@ -92,4 +92,29 @@ export function contractSummary(endDate: string, today: Date): ContractSummary {
 /** Product codes as a bank user reads them; an unknown code shows as itself. */
 export function productLabels(codes: string[]): string {
   return codes.map((c) => labelFor(LOAN_TYPE_LABELS, c)).join(", ");
+}
+
+/**
+ * The directory's Performance cell, from the leaderboard's rows (one per
+ * agency and region, latest month). With a region picked: that region's index
+ * or why there is none. Without: how many of the agency's regions are scored.
+ * Never one number across regions: averaging regions of very different
+ * placement volume would be a statistic nobody defined (tiqcollect-06).
+ */
+export type PerformanceCell =
+  | { kind: "scored"; index: number; n: number }
+  | { kind: "insufficient" }
+  | { kind: "not_scored_here" }
+  | { kind: "regions"; scored: number; total: number };
+
+export function performanceCell(rows: PerformanceIndex[], agencyId: string, regionId: string | null): PerformanceCell {
+  const mine = rows.filter((r) => r.agency_id === agencyId);
+  if (regionId) {
+    const row = mine.find((r) => r.region_id === regionId);
+    if (!row) return { kind: "not_scored_here" };
+    return row.index == null ? { kind: "insufficient" } : { kind: "scored", index: row.index, n: row.n };
+  }
+  const regions = new Set(mine.map((r) => r.region_id ?? ""));
+  const scored = new Set(mine.filter((r) => r.index != null).map((r) => r.region_id ?? ""));
+  return { kind: "regions", scored: scored.size, total: regions.size };
 }

@@ -2,10 +2,9 @@
 // contract status and authorised products, filterable server-side. Replaces
 // the placeholder at /bank/agencies/directory.
 //
-// SCORE. Agency Performance Index is D06, not built yet — the backend row
-// (agency_service.list_agency_directory) does not return a `score` key at
-// all, on purpose (see its docblock). This page renders that column as
-// "Pending", never a computed stand-in — see the Score cell below.
+// PERFORMANCE. The Agency Performance Index (D06) comes from the leaderboard,
+// one row per agency AND region (directoryLogic.performanceCell). No single
+// cross-region number is shown: nobody has defined one (tiqcollect-06).
 //
 // FILTERING IS SERVER-SIDE. region_id, status, loan_type and
 // contract_expiring_before are query params on GET /bank/agencies-directory;
@@ -30,12 +29,16 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { MapCanvas } from "@/components/map/MapCanvas";
 import { DEFAULT_CENTRE } from "@/components/map/constants";
 import {
-  listAgencyDirectory, listRegions, AGENCY_STATUSES, LOAN_TYPES,
+  listAgencyDirectory, listAgencyLeaderboard, listRegions, AGENCY_STATUSES, LOAN_TYPES,
   type AgencyDirectoryFilters, type AgencyDirectoryRow,
 } from "@/api/bank";
+import { formatIndex, indexEvidenceCaption } from "../performance/performanceLogic";
 import { errorDetail } from "@/lib/apiError";
 import { AGENCY_STATUS_LABELS, CONTRACT_STATUS_LABELS, LOAN_TYPE_LABELS, labelFor } from "../../lib/labels";
-import { contractSummary, productLabels, regionMarkersFromAgencies, summariseCoveredRegions } from "./directoryLogic";
+import {
+  contractSummary, performanceCell, productLabels, regionMarkersFromAgencies, summariseCoveredRegions,
+  type PerformanceCell,
+} from "./directoryLogic";
 
 const AGENCY_STATUS_BADGE: Record<string, NonNullable<BadgeProps["variant"]>> = {
   PENDING: "warning",
@@ -76,6 +79,34 @@ function ContractCell({ contract }: { contract: NonNullable<AgencyDirectoryRow["
   );
 }
 
+function PerformanceCellView({ cell, onOpen }: { cell: PerformanceCell; onOpen: () => void }) {
+  switch (cell.kind) {
+    case "scored":
+      return (
+        <div>
+          <div className="font-semibold text-foreground tabular-nums">{formatIndex(cell.index)}</div>
+          <div className="text-[11px] text-muted-foreground">{indexEvidenceCaption(cell.n)}</div>
+        </div>
+      );
+    case "insufficient":
+      return <Badge variant="outline" className="text-muted-foreground">Not enough data</Badge>;
+    case "not_scored_here":
+      return <span className="text-[12px] text-muted-foreground">No score in this region</span>;
+    case "regions":
+      if (cell.total === 0) return <span className="text-[12px] text-muted-foreground">No scored placements yet</span>;
+      return (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onOpen(); }}
+          className="text-left text-[12px] font-medium text-primary hover:underline"
+          title="Open this agency's scorecard"
+        >
+          Scored in {cell.scored} of {cell.total} region{cell.total === 1 ? "" : "s"}
+        </button>
+      );
+  }
+}
+
 export default function AgencyDirectoryPage() {
   const navigate = useNavigate();
   const [status, setStatus] = useState("");
@@ -96,6 +127,12 @@ export default function AgencyDirectoryPage() {
   const directoryQuery = useQuery({
     queryKey: ["bank-agency-directory", filters],
     queryFn: () => listAgencyDirectory(filters),
+  });
+
+  // Same key as the performance page's leaderboard, so the two share a cache.
+  const leaderboardQuery = useQuery({
+    queryKey: ["bank-agencies-leaderboard", regionId],
+    queryFn: () => listAgencyLeaderboard(regionId ? { region_id: regionId } : {}),
   });
 
   const rows = useMemo(() => directoryQuery.data ?? [], [directoryQuery.data]);
@@ -232,7 +269,7 @@ export default function AgencyDirectoryPage() {
                   <TableHead>Contract</TableHead>
                   <TableHead>Covered regions</TableHead>
                   <TableHead>Authorised products</TableHead>
-                  <TableHead>Score</TableHead>
+                  <TableHead title="Agency Performance Index, latest month">Performance</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -276,9 +313,16 @@ export default function AgencyDirectoryPage() {
                         )}
                       </TableCell>
                       <TableCell>
-                        <Badge variant="outline" className="text-muted-foreground" title="Agency Performance Index — D06, not built yet">
-                          Pending
-                        </Badge>
+                        {leaderboardQuery.isPending ? (
+                          <span className="text-[12px] text-muted-foreground">…</span>
+                        ) : leaderboardQuery.isError ? (
+                          <span className="text-[12px] text-muted-foreground" title={errorDetail(leaderboardQuery.error, "Performance could not be loaded.")}>—</span>
+                        ) : (
+                          <PerformanceCellView
+                            cell={performanceCell(leaderboardQuery.data, row.agency_id, regionId || null)}
+                            onOpen={() => navigate(`/bank/agencies/performance?agency=${encodeURIComponent(row.agency_id)}`)}
+                          />
+                        )}
                       </TableCell>
                     </TableRow>
                   );

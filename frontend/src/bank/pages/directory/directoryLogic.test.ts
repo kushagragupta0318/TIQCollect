@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { CONTRACT_EXPIRY_WARN_DAYS, contractSummary, productLabels, regionMarkersFromAgencies, summariseCoveredRegions } from "./directoryLogic";
-import type { AgencyDirectoryRow } from "@/api/bank";
+import { CONTRACT_EXPIRY_WARN_DAYS, contractSummary, performanceCell, productLabels, regionMarkersFromAgencies, summariseCoveredRegions } from "./directoryLogic";
+import type { AgencyDirectoryRow, PerformanceIndex } from "@/api/bank";
 
 function row(overrides: Partial<AgencyDirectoryRow>): AgencyDirectoryRow {
   return {
-    agency_id: "a1", code: "AG-001", legal_name: "Konkan Recovery Services LLP", trade_name: null,
+    agency_id: "a1", code: "AG-001", legal_name: "Sarthak Recovery Services LLP", trade_name: null,
     entity_type: null, cin: null, rbi_registration_no: null, pan: null, gstin: null,
     registered_address: null, hq_city: null, website: null, contacts: null,
     contact_name: null, contact_email: null, contact_phone: null,
@@ -29,25 +29,25 @@ describe("regionMarkersFromAgencies — the coverage map's data source", () => {
   });
 
   it("one marker per region, tagged with the covering agency's name", () => {
-    const rows = [row({ legal_name: "Konkan Recovery Services LLP", covered_regions: [NCR] })];
+    const rows = [row({ legal_name: "Sarthak Recovery Services LLP", covered_regions: [NCR] })];
     const markers = regionMarkersFromAgencies(rows);
     expect(markers).toHaveLength(1);
-    expect(markers[0]).toMatchObject({ region_id: "r-ncr", latitude: 28.5, longitude: 77.1, agencyNames: ["Konkan Recovery Services LLP"] });
+    expect(markers[0]).toMatchObject({ region_id: "r-ncr", latitude: 28.5, longitude: 77.1, agencyNames: ["Sarthak Recovery Services LLP"] });
   });
 
   it("prefers trade_name over legal_name for the marker label", () => {
-    const rows = [row({ legal_name: "Konkan Recovery Services LLP", trade_name: "Konkan Recovery", covered_regions: [NCR] })];
-    expect(regionMarkersFromAgencies(rows)[0].agencyNames).toEqual(["Konkan Recovery"]);
+    const rows = [row({ legal_name: "Sarthak Recovery Services LLP", trade_name: "Sarthak Recovery Services", covered_regions: [NCR] })];
+    expect(regionMarkersFromAgencies(rows)[0].agencyNames).toEqual(["Sarthak Recovery Services"]);
   });
 
   it("two agencies covering the same region collapse into one marker with both names", () => {
     const rows = [
-      row({ agency_id: "a1", legal_name: "Konkan Recovery Services LLP", covered_regions: [NCR] }),
-      row({ agency_id: "a2", legal_name: "Meridian Debt Solutions Pvt Ltd", covered_regions: [NCR] }),
+      row({ agency_id: "a1", legal_name: "Sarthak Recovery Services LLP", covered_regions: [NCR] }),
+      row({ agency_id: "a2", legal_name: "Awadh Field Collections Pvt. Ltd.", covered_regions: [NCR] }),
     ];
     const markers = regionMarkersFromAgencies(rows);
     expect(markers).toHaveLength(1);
-    expect(markers[0].agencyNames).toEqual(["Konkan Recovery Services LLP", "Meridian Debt Solutions Pvt Ltd"]);
+    expect(markers[0].agencyNames).toEqual(["Sarthak Recovery Services LLP", "Awadh Field Collections Pvt. Ltd."]);
   });
 
   it("distinct regions produce distinct markers", () => {
@@ -107,5 +107,31 @@ describe("productLabels", () => {
   it("reads codes as labels and keeps an unknown code as itself", () => {
     expect(productLabels(["PERSONAL", "CREDIT_CARD", "LEASE"])).toBe("Personal loan, Credit card, LEASE");
     expect(productLabels([])).toBe("");
+  });
+});
+
+describe("performanceCell", () => {
+  const idx = (agency_id: string, region_id: string | null, index: number | null, n = 12): PerformanceIndex => ({
+    agency_id, region_id, month_start: "2026-08-01", months: 1, n, months_unread: 0, raw_rate: null, peer_rate: null,
+    shrunk_rate: null, index, multiplier: 1, version: "agency-effect-1",
+  });
+  const rows = [idx("a1", "delhi", 71.6, 14), idx("a1", "noida", null, 2), idx("a1", "gurugram", 64, 9), idx("a2", "delhi", 55)];
+
+  it("with a region picked: that region's index and its evidence", () => {
+    expect(performanceCell(rows, "a1", "delhi")).toEqual({ kind: "scored", index: 71.6, n: 14 });
+  });
+
+  it("with a region picked: 'not enough data' is kept apart from 'no score here'", () => {
+    expect(performanceCell(rows, "a1", "noida")).toEqual({ kind: "insufficient" });
+    expect(performanceCell(rows, "a1", "jaipur")).toEqual({ kind: "not_scored_here" });
+  });
+
+  it("without a region: counts scored regions, never averages them", () => {
+    expect(performanceCell(rows, "a1", null)).toEqual({ kind: "regions", scored: 2, total: 3 });
+    expect(performanceCell(rows, "a3", null)).toEqual({ kind: "regions", scored: 0, total: 0 });
+  });
+
+  it("never reads another agency's row", () => {
+    expect(performanceCell(rows, "a2", "noida")).toEqual({ kind: "not_scored_here" });
   });
 });
