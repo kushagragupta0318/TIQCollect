@@ -22,7 +22,7 @@ Files: [`docker-compose.prod.yml`](../docker-compose.prod.yml),
 > | **No load test** (B21) | Worker counts and pool sizes are estimates, not measurements | STANDALONE-TASKS B21, RESTRUCTURE-PLAN step 1.7 |
 > | **No offline field app** | An agent cannot record a visit without signal | PILOT-PLAN (offline outbox) |
 > | **No SMS provider with DLT registration** | Borrower OTPs, receipts and the post-visit message need an Indian DLT-registered sender. Twilio stays unset | PILOT-PLAN N06 / ECONOMICS §0 |
-> | **The MinIO image cannot be pulled** | `minio/minio` is refused by Docker Hub and quay.io (checked 2026-09-28). A host with no cached copy cannot start the stack as written | an owner decision, proposed in [ADR 0012](adr/0012-object-storage-image.md): the `pgsty/minio` community fork, pinned and mirrored. `MINIO_IMAGE` names whichever image is used |
+> | **The MinIO image exists only in this machine's Docker cache** | `minio/minio` is refused by Docker Hub and quay.io; the pinned digest is present locally and nowhere else, so `docker system prune -a` would leave both stacks unstartable. Decided in [ADR 0012](adr/0012-object-storage-image.md) (Accepted): keep the pinned digest, mirror it to ghcr. **The mirror is not pushed yet** — it needs a `write:packages` token from the owner | the owner pushing the mirror (recipe in ADR 0012) |
 > | **Road routing is straight-line** unless you self-host OSRM | Travel-time estimates are straight-line estimates | [Routing](#routing) below |
 >
 > A demo host with the invented demo book is fine today: see [Demo host](#demo-host).
