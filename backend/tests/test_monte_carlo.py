@@ -194,6 +194,62 @@ def test_no_strategy_module_spells_a_state_name_or_the_dpd_ladder_itself():
     assert ladder == [], f"states.py restates a DPD boundary: {ladder}"
 
 
+def _one_segment(pairs: dict[tuple[int, int], float]) -> SegmentMatrices:
+    counts = np.zeros((1, N_STATES, N_STATES))
+    for (i, j), v in pairs.items():
+        counts[0, i, j] = v
+    return SegmentMatrices(("seg",), counts, loan_types=("PERSONAL",))
+
+
+def test_a_transition_the_state_space_forbids_cannot_reach_the_posterior_or_a_path():
+    """mc-1.2.0. 50 observed NPA_SUB -> SMA_1 (impossible: RBI upgrades an NPA
+    only to CURRENT) put 2,654 of 3,200 account-slots in SMA_1 before the mask."""
+    m = _one_segment({(NPA_SUB, NPA_SUB): 50.0, (NPA_SUB, SMA_1): 50.0})
+    assert not REACHABLE[NPA_SUB, SMA_1]
+    alpha, _ = m.dirichlet_alpha(EngineConfig())
+    assert alpha[0, NPA_SUB, SMA_1] == 0.0
+    assert m.posterior_mean()[0, NPA_SUB, SMA_1] == 0.0
+    n = 200
+    book = Portfolio(segment=np.zeros(n, dtype=np.int32), state=np.full(n, NPA_SUB, dtype=np.int8),
+                     balance=np.full(n, 100_000.0), npa_age_months=np.zeros(n))
+    run = mc.simulate(book, m, horizon_months=3, n_paths=4, seed=7)
+    ends = run.paths.seg_state_count[:, -1, 0, :]
+    assert ends[:, SMA_1].sum() == 0 and ends[:, SMA_0].sum() == 0 and ends[:, SMA_2].sum() == 0
+    # ... and the mass is REPORTED rather than silently dropped.
+    discarded = run.diagnostics["impossible_transitions_discarded"]
+    assert discarded == [{"segment": "seg", "from_state": "NPA_SUB", "to_state": "SMA_1", "accounts": 50.0}]
+
+
+def test_the_mask_keeps_every_reachable_count_and_names_the_two_npa_cases_apart():
+    """The forbidden DOUBTFUL -> SUB is discarded; the legal SUB -> DOUBTFUL is
+    kept and reported as a fold, because the age rule decides that move."""
+    m = _one_segment({(NPA_SUB, NPA_SUB): 10.0, (NPA_SUB, NPA_DOUBTFUL): 8.0,
+                      (NPA_DOUBTFUL, NPA_SUB): 7.0, (CURRENT, CURRENT): 100.0})
+    alpha, _ = m.dirichlet_alpha(EngineConfig())
+    assert alpha[0, NPA_DOUBTFUL, NPA_SUB] == 0.0          # impossible: masked
+    assert alpha[0, NPA_SUB, NPA_DOUBTFUL] >= 8.0          # legal: kept
+    assert m.impossible_cells() == [{"segment": "seg", "from_state": "NPA_DOUBTFUL",
+                                     "to_state": "NPA_SUB", "accounts": 7.0}]
+    assert m.age_rule_folded_cells() == [{"segment": "seg", "from_state": "NPA_SUB",
+                                         "to_state": "NPA_DOUBTFUL", "accounts": 8.0}]
+    # A clean book reports neither.
+    clean = _one_segment({(CURRENT, CURRENT): 90.0, (CURRENT, SMA_0): 10.0, (SMA_0, CURRENT): 5.0})
+    assert clean.impossible_cells() == [] and clean.age_rule_folded_cells() == []
+    assert clean.dirichlet_alpha(EngineConfig())[0][0, CURRENT, SMA_0] >= 10.0
+
+
+def test_the_sampler_refuses_a_structural_zero_mask_that_has_been_opened_up(monkeypatch):
+    """Mutation check on the mask itself: if REACHABLE is widened to admit a cell
+    the state space forbids, the guard must fail rather than sample it."""
+    m = _one_segment({(NPA_SUB, NPA_SUB): 50.0, (NPA_SUB, SMA_1): 50.0})
+    opened = REACHABLE.copy()
+    opened[NPA_SUB, SMA_1] = True
+    monkeypatch.setattr(mc, "REACHABLE", opened)
+    alpha, _ = m.dirichlet_alpha(EngineConfig())
+    assert alpha[0, NPA_SUB, SMA_1] > 0, "the mask is not actually consulted"
+    assert m.impossible_cells() == [], "impossible_cells must read the same mask"
+
+
 # ── Core invariants ───────────────────────────────────────────────────────────
 
 
@@ -417,26 +473,31 @@ def test_cure_then_reenter_gets_a_fresh_npa_entry_month():
     # special case for a first-ever entry versus a later one, and this is
     # what checks that the overwrite actually happens at runtime.
     #
-    # A matrix that lets an NPA_SUB account cure 15%/month and a CURRENT
-    # account relapse 30%/month is not deterministic account-by-account, but
-    # every account starts life with a real "first entry" (month 0, whose
-    # naive promotion date would be month 12) — so ANY account that cures,
-    # relapses, and then holds Sub-standard for a full 12 months after the
-    # SECOND entry is a witness: it must promote exactly 12 months after the
-    # re-entry, and it must not have been promoted at month 12 (the first
-    # entry's date) instead. With 200 independent accounts (their own segment
-    # each, so per-account trajectories are readable off the aggregate
-    # counts) over 30 months, this happens often enough to check on every run.
+    # The relapse must walk the LADDER: DPD rises by at most ~31 days a month, so
+    # CURRENT -> NPA_SUB in one step is impossible (states.REACHABLE), and since
+    # mc-1.2.0 the posterior masks it — this fixture used to buy its re-entries
+    # with exactly that impossible step, and the mask is what exposed it.
+    # Re-entry is therefore SMA_2 -> NPA_SUB, four months of ladder after a cure.
+    # Every account starts life with a real "first entry" (month 0, naive
+    # promotion date month 12), so ANY account that cures, walks back up and then
+    # holds Sub-standard a full 12 months is a witness: it must promote exactly 12
+    # months after the RE-entry and not at month 12. 200 independent accounts (a
+    # segment each, so trajectories are readable off the aggregate counts) over 44
+    # months produce these often enough to check on every run.
     S = 200
     counts = np.zeros((S, N_STATES, N_STATES))
-    counts[:, NPA_SUB, NPA_SUB], counts[:, NPA_SUB, CURRENT] = 850.0, 150.0
-    counts[:, CURRENT, CURRENT], counts[:, CURRENT, NPA_SUB] = 700.0, 300.0
+    counts[:, NPA_SUB, NPA_SUB], counts[:, NPA_SUB, CURRENT] = 820.0, 180.0
+    counts[:, CURRENT, CURRENT], counts[:, CURRENT, SMA_0] = 300.0, 700.0
+    counts[:, SMA_0, SMA_0], counts[:, SMA_0, SMA_1] = 250.0, 750.0
+    counts[:, SMA_1, SMA_1], counts[:, SMA_1, SMA_2] = 250.0, 750.0
+    counts[:, SMA_2, SMA_2], counts[:, SMA_2, NPA_SUB] = 250.0, 750.0
     mx = SegmentMatrices(tuple(f"seg{i}" for i in range(S)), counts)
+    assert mx.impossible_cells() == [], "the fixture itself must be a possible book"
     pf = Portfolio(state=np.full(S, NPA_SUB), balance=np.full(S, 1e5),
                    segment=np.arange(S, dtype=int), npa_age_months=np.zeros(S))
     cfg = EngineConfig(prior_strength=0.0, prior_floor=0.0, parameter_uncertainty=False,
                        shock_sigma=0.0, n_workers=2)
-    P, T = 5, 30
+    P, T = 5, 44
     res = simulate(pf, mx, n_paths=P, horizon_months=T, seed=42, config=cfg)
     states_ts = np.argmax(res.paths.seg_state_count, axis=-1)  # (P, T+1, S): the one account's state
 
@@ -445,8 +506,8 @@ def test_cure_then_reenter_gets_a_fresh_npa_entry_month():
         for s in range(S):
             seq = states_ts[p, :, s]
             for k2 in range(1, T + 1):
-                if not (seq[k2 - 1] == CURRENT and seq[k2] == NPA_SUB):
-                    continue                          # not a re-entry (CURRENT -> NPA_SUB) event
+                if seq[k2 - 1] in (NPA_SUB, NPA_DOUBTFUL) or seq[k2] != NPA_SUB:
+                    continue                          # not an entry into NPA from outside it
                 if k2 + 12 > T or not np.all(seq[k2:k2 + 12] == NPA_SUB):
                     continue                           # no clean 12-month hold to check after it
                 if seq[k2 + 12] != NPA_DOUBTFUL:

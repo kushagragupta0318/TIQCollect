@@ -242,7 +242,7 @@ from app.strategy.states import (
     RESOLVED, SMA_0, SMA_1, SMA_2, STATE_INDEX, STATES, WRITTEN_OFF,
 )
 
-ENGINE_VERSION = "mc-1.1.0"  # mc-1.0.0 = daadc17; see CHANGELOG for what moved
+ENGINE_VERSION = "mc-1.2.0"  # mc-1.0.0 = daadc17; see CHANGELOG for what moved
 PERCENTILES = (5, 10, 50, 90, 95)
 _N_OUT = N_STATES + 1  # 8 states + SETTLED (a ninth outcome that lands in RESOLVED)
 _SETTLED = N_STATES
@@ -715,6 +715,32 @@ class SegmentMatrices:
         except KeyError as e:
             raise ValueError(f"unknown segment key {e.args[0]!r}") from None
 
+    def impossible_cells(self) -> list[dict]:
+        """Observed counts in cells the state space FORBIDS: a data defect.
+
+        Not a rare event — a corrected classification or a mis-stamped npa_since
+        records an NPA moving to an SMA bucket, which RBI's upgrade rule and
+        states.REACHABLE both exclude. dirichlet_alpha masks these out; they are
+        listed here so a bank is told what its book contains rather than having
+        it silently dropped. Distinct from age_rule_folded_cells below, which is
+        legal data the age rule reinterprets.
+        """
+        rows = np.nonzero(self.counts * ~REACHABLE)
+        return [{"segment": self.keys[s], "from_state": STATES[i], "to_state": STATES[j],
+                 "accounts": float(self.counts[s, i, j])}
+                for s, i, j in zip(*rows)]
+
+    def age_rule_folded_cells(self) -> list[dict]:
+        """Observed NPA_SUB -> NPA_DOUBTFUL counts, which are LEGAL but not used
+        as a hazard: the 12-month age rule decides that move (states.py), so the
+        engine folds this mass into staying put. It is kept, not discarded — but
+        it inflates measured NPA persistence, so it is reported separately. A
+        bias, not a violation; conflating the two would make each read wrongly.
+        """
+        return [{"segment": self.keys[s], "from_state": STATES[NPA_SUB], "to_state": STATES[NPA_DOUBTFUL],
+                 "accounts": float(self.counts[s, NPA_SUB, NPA_DOUBTFUL])}
+                for s in range(self.n_segments) if self.counts[s, NPA_SUB, NPA_DOUBTFUL] > 0]
+
     def dirichlet_alpha(self, config: EngineConfig) -> tuple[np.ndarray, np.ndarray]:
         """Posterior Dirichlet parameters and the rows no data describes.
 
@@ -722,8 +748,14 @@ class SegmentMatrices:
                       + prior_floor on reachable cells the whole book never saw.
         A live row with no evidence in the segment OR the book is returned as
         identity ("held in place") and flagged, never invented.
+
+        Counts are MASKED by states.REACHABLE together with the prior, so no draw
+        can place mass in a cell the state space forbids. Before mc-1.2.0 only the
+        prior was masked: 50 observed NPA_SUB -> SMA_1 transitions (impossible
+        under RBI's upgrade rule) put 83% of a 3-month run in SMA_1. What the mask
+        drops is counted by forbidden_mass().
         """
-        c = self.counts
+        c = self.counts * REACHABLE
         pooled = c.sum(axis=0)
         prow = pooled.sum(axis=1, keepdims=True)
         pooled_p = np.divide(pooled, prow, out=np.zeros_like(pooled), where=prow > 0)
@@ -1545,6 +1577,10 @@ def simulate(
             "npa_sub_reclassified_doubtful_at_start": int(sub_aged.sum()),
             "npa_doubtful_age_raised_to_12_at_start": int(doubtful_young.sum()),
             "rows_held_in_place": rows_held_in_place,
+            # Masked out of the posterior (mc-1.2.0): impossible per states.REACHABLE.
+            "impossible_transitions_discarded": matrices.impossible_cells(),
+            # Kept, but read as "still an NPA" by the age rule: inflates persistence.
+            "npa_age_rule_folded": matrices.age_rule_folded_cells(),
             "segments_without_loan_type": [matrices.keys[s] for s, lt in enumerate(loan_types) if lt is None],
             "macro_shift_by_segment": dict(zip(matrices.keys, mu.round(6).tolist())),
             "lever_log_odds_by_state": dict(zip(STATES, ctx.better.round(6).tolist())),

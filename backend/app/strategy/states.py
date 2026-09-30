@@ -120,8 +120,11 @@ DIRECTION.setflags(write=False)
 def _reachable_matrix() -> np.ndarray:
     """Cells a month-end-to-month-end transition can plausibly take.
 
-    Used ONLY to place the Dirichlet prior's floor mass; observed counts in any
-    cell are always kept. DPD rises by at most ~31 days a month, so forward
+    Enforced on the posterior, not merely suggested: since mc-1.2.0
+    `SegmentMatrices.dirichlet_alpha` masks observed counts by this matrix as well
+    as the prior's floor, so no draw can put mass in a cell forbidden here. What
+    the mask drops is reported (`impossible_cells`), never silently discarded.
+    DPD rises by at most ~31 days a month, so forward
     moves are one rung; a performing-side improvement can jump any distance
     (a borrower can clear all arrears at once); RESOLVED is reachable from
     every live state; WRITTEN_OFF only from NPA.
