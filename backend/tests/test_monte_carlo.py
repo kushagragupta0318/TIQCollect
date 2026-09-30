@@ -173,25 +173,26 @@ def test_no_strategy_module_spells_a_state_name_or_the_dpd_ladder_itself():
     Docstrings are exempt — they describe the space, they do not define it."""
     import ast
     import pathlib
+    state_names, ladder_values = frozenset(STATES), (30.0, 60.0, 90.0)
+    holder = (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
     package = pathlib.Path(mc.__file__).parent
     spelled: dict[str, list[str]] = {}
     for path in sorted(package.glob("*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        docstrings = {ast.get_docstring(n, clean=False) for n in ast.walk(tree)
-                      if isinstance(n, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
-        names = sorted({n.value for n in ast.walk(tree)
-                        if isinstance(n, ast.Constant) and isinstance(n.value, str)
-                        and n.value in set(STATES) and n.value not in docstrings})
+        nodes = list(ast.walk(ast.parse(path.read_text(encoding="utf-8"))))
+        docstrings = {ast.get_docstring(n, clean=False) for n in nodes if isinstance(n, holder)}
+        constants = [n.value for n in nodes if isinstance(n, ast.Constant)]
+        names = sorted({v for v in constants
+                        if isinstance(v, str) and v in state_names and v not in docstrings})
         if names:
             spelled[path.name] = names
+        # 30/60/90 live in models/loan.dpd_bucket_for. states.py derives and holds
+        # none of them; the other modules legitimately carry a 90 (a percentile,
+        # and the legal-action lever's default DPD), so only states.py is checked.
+        if path.name == "states.py":
+            ladder = sorted(v for v in constants if isinstance(v, (int, float))
+                            and not isinstance(v, bool) and float(v) in ladder_values)
+            assert ladder == [], f"states.py restates a DPD boundary: {ladder}"
     assert spelled == {}, f"state names spelled instead of imported from states: {spelled}"
-    # 30/60/90 live in models/loan.dpd_bucket_for. states.py derives and holds none
-    # of them; the other modules legitimately carry a 90 (a percentile, and the
-    # legal-action lever's default DPD), which is why this half is scoped here.
-    ladder = sorted(n.value for n in ast.walk(ast.parse((package / "states.py").read_text(encoding="utf-8")))
-                    if isinstance(n, ast.Constant) and not isinstance(n.value, bool)
-                    and isinstance(n.value, (int, float)) and float(n.value) in (30.0, 60.0, 90.0))
-    assert ladder == [], f"states.py restates a DPD boundary: {ladder}"
 
 
 def _one_segment(pairs: dict[tuple[int, int], float]) -> SegmentMatrices:
