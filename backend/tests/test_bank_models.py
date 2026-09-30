@@ -123,8 +123,12 @@ def test_the_six_layers_and_only_the_trained_one_is_modelled(w):
     assert layers["recovery_risk"]["kind"] == "TRAINED_MODEL" and layers["recovery_risk"]["version"] == SERVING
     assert layers["repayment_scorecard"]["version"] == ms.SCORECARD_VERSION
     assert "not a model" in layers["repayment_scorecard"]["evidence"]
+    # Every figure in the copy is the constant the engine applies, not a restated
+    # one: a wrong number here is a claim a bank's analyst checks (ADR 0001).
+    from app.ml.empirical_bayes import MULTIPLIER_BOUNDS
     from app.services.global_allocator import GlobalAllocator
     assert f"{GlobalAllocator.PRIORITY_UPLIFT:.0%} extra weight" in layers["visit_priority"]["acts_on"]
+    assert f"({MULTIPLIER_BOUNDS[0]} to {MULTIPLIER_BOUNDS[1]})" in layers["agent_competency"]["acts_on"]
     assert "{" not in "".join(l["acts_on"] for l in body["layers"])            # every placeholder filled
 
 
