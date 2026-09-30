@@ -189,7 +189,7 @@ class Settings(BaseSettings):
     # by scripts/apply_demo_logins.py at boot; never logged, printed or
     # defaulted. Unset = nothing changes. See that script for the rules.
     DEMO_MASTER_PASSWORD: str = ""
-    DEMO_MASTER_ACCOUNTS: str = ""        # three emails, comma-separated: one admin, one manager, one agent
+    DEMO_MASTER_ACCOUNTS: str = ""        # four emails, in order: bank user, manager, agent, 2nd BANK_ADMIN
     # Never touched by the script: accounts that must keep their own password
     # (service logins), comma-separated emails.
     DEMO_MASTER_KEEP_ACCOUNTS: str = ""
