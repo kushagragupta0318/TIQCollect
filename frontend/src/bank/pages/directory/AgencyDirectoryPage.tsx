@@ -2,10 +2,9 @@
 // contract status and authorised products, filterable server-side. Replaces
 // the placeholder at /bank/agencies/directory.
 //
-// SCORE. Agency Performance Index is D06, not built yet — the backend row
-// (agency_service.list_agency_directory) does not return a `score` key at
-// all, on purpose (see its docblock). This page renders that column as
-// "Pending", never a computed stand-in — see the Score cell below.
+// PERFORMANCE. The Agency Performance Index (D06) comes from the leaderboard,
+// one row per agency AND region (directoryLogic.performanceCell). No single
+// cross-region number is shown: nobody has defined one (tiqcollect-06).
 //
 // FILTERING IS SERVER-SIDE. region_id, status, loan_type and
 // contract_expiring_before are query params on GET /bank/agencies-directory;
@@ -30,11 +29,16 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { MapCanvas } from "@/components/map/MapCanvas";
 import { DEFAULT_CENTRE } from "@/components/map/constants";
 import {
-  listAgencyDirectory, listRegions, AGENCY_STATUSES, LOAN_TYPES,
+  listAgencyDirectory, listAgencyLeaderboard, listRegions, AGENCY_STATUSES, LOAN_TYPES,
   type AgencyDirectoryFilters, type AgencyDirectoryRow,
 } from "@/api/bank";
+import { formatIndex, indexEvidenceCaption } from "../performance/performanceLogic";
 import { errorDetail } from "@/lib/apiError";
-import { regionMarkersFromAgencies, summariseCoveredRegions } from "./directoryLogic";
+import { AGENCY_STATUS_LABELS, CONTRACT_STATUS_LABELS, LOAN_TYPE_LABELS, labelFor } from "../../lib/labels";
+import {
+  contractSummary, performanceCell, productLabels, regionMarkersFromAgencies, summariseCoveredRegions,
+  type PerformanceCell,
+} from "./directoryLogic";
 
 const AGENCY_STATUS_BADGE: Record<string, NonNullable<BadgeProps["variant"]>> = {
   PENDING: "warning",
@@ -49,6 +53,59 @@ const CONTRACT_STATUS_BADGE: Record<string, NonNullable<BadgeProps["variant"]>> 
   EXPIRED: "warning",
   TERMINATED: "destructive",
 };
+
+const CONTRACT_TONE_CLASS = {
+  normal: "text-muted-foreground",
+  soon: "font-medium text-warning",
+  past: "font-medium text-destructive",
+} as const;
+
+/** The contract number, a status badge only when it is not simply Active,
+ *  and the end date — called out inside the renewal window or once passed. */
+function ContractCell({ contract }: { contract: NonNullable<AgencyDirectoryRow["contract"]> }) {
+  const summary = contractSummary(contract.end_date, new Date());
+  const days = summary.daysLeft;
+  return (
+    <div className="space-y-1">
+      <div className="text-[12px] font-medium text-foreground tabular-nums">{contract.contract_no}</div>
+      {contract.status !== "ACTIVE" && (
+        <Badge variant={CONTRACT_STATUS_BADGE[contract.status] ?? "outline"}>{labelFor(CONTRACT_STATUS_LABELS, contract.status)}</Badge>
+      )}
+      <div className={`text-[11px] ${CONTRACT_TONE_CLASS[summary.tone]}`}>
+        {summary.ends}
+        {summary.tone === "soon" && days != null && ` · ${days === 0 ? "today" : `in ${days} day${days === 1 ? "" : "s"}`}`}
+      </div>
+    </div>
+  );
+}
+
+function PerformanceCellView({ cell, onOpen }: { cell: PerformanceCell; onOpen: () => void }) {
+  switch (cell.kind) {
+    case "scored":
+      return (
+        <div>
+          <div className="font-semibold text-foreground tabular-nums">{formatIndex(cell.index)}</div>
+          <div className="text-[11px] text-muted-foreground">{indexEvidenceCaption(cell.n)}</div>
+        </div>
+      );
+    case "insufficient":
+      return <Badge variant="outline" className="text-muted-foreground">Not enough data</Badge>;
+    case "not_scored_here":
+      return <span className="text-[12px] text-muted-foreground">No score in this region</span>;
+    case "regions":
+      if (cell.total === 0) return <span className="text-[12px] text-muted-foreground">No scored placements yet</span>;
+      return (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onOpen(); }}
+          className="text-left text-[12px] font-medium text-primary hover:underline"
+          title="Open this agency's scorecard"
+        >
+          Scored in {cell.scored} of {cell.total} region{cell.total === 1 ? "" : "s"}
+        </button>
+      );
+  }
+}
 
 export default function AgencyDirectoryPage() {
   const navigate = useNavigate();
@@ -70,6 +127,12 @@ export default function AgencyDirectoryPage() {
   const directoryQuery = useQuery({
     queryKey: ["bank-agency-directory", filters],
     queryFn: () => listAgencyDirectory(filters),
+  });
+
+  // Same key as the performance page's leaderboard, so the two share a cache.
+  const leaderboardQuery = useQuery({
+    queryKey: ["bank-agencies-leaderboard", regionId],
+    queryFn: () => listAgencyLeaderboard(regionId ? { region_id: regionId } : {}),
   });
 
   const rows = useMemo(() => directoryQuery.data ?? [], [directoryQuery.data]);
@@ -138,7 +201,7 @@ export default function AgencyDirectoryPage() {
             <Label htmlFor="dir-status">Status</Label>
             <Select id="dir-status" value={status} onChange={(e) => setStatus(e.target.value)} className="mt-1.5">
               <option value="">All statuses</option>
-              {AGENCY_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+              {AGENCY_STATUSES.map((s) => <option key={s} value={s}>{AGENCY_STATUS_LABELS[s]}</option>)}
             </Select>
           </div>
           <div>
@@ -155,7 +218,7 @@ export default function AgencyDirectoryPage() {
             <Label htmlFor="dir-product">Product</Label>
             <Select id="dir-product" value={loanType} onChange={(e) => setLoanType(e.target.value)} className="mt-1.5">
               <option value="">All products</option>
-              {LOAN_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+              {LOAN_TYPES.map((t) => <option key={t} value={t}>{LOAN_TYPE_LABELS[t]}</option>)}
             </Select>
           </div>
           <div>
@@ -182,7 +245,7 @@ export default function AgencyDirectoryPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <MapCanvas onReady={drawMarkers} deps={[markers]} centre={DEFAULT_CENTRE} className="h-72 w-full rounded-inner overflow-hidden" />
+          <MapCanvas onReady={drawMarkers} deps={[markers]} centre={DEFAULT_CENTRE} className="h-80 w-full rounded-inner overflow-hidden" />
         </CardContent>
       </Card>
 
@@ -206,7 +269,7 @@ export default function AgencyDirectoryPage() {
                   <TableHead>Contract</TableHead>
                   <TableHead>Covered regions</TableHead>
                   <TableHead>Authorised products</TableHead>
-                  <TableHead>Score</TableHead>
+                  <TableHead title="Agency Performance Index, latest month">Performance</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -226,14 +289,11 @@ export default function AgencyDirectoryPage() {
                         <div className="text-[11px] text-muted-foreground">{row.code}</div>
                       </TableCell>
                       <TableCell>
-                        <Badge variant={AGENCY_STATUS_BADGE[row.status] ?? "outline"}>{row.status}</Badge>
+                        <Badge variant={AGENCY_STATUS_BADGE[row.status] ?? "outline"}>{labelFor(AGENCY_STATUS_LABELS, row.status)}</Badge>
                       </TableCell>
                       <TableCell>
                         {row.contract ? (
-                          <div className="space-y-1">
-                            <Badge variant={CONTRACT_STATUS_BADGE[row.contract.status] ?? "outline"}>{row.contract.status}</Badge>
-                            <div className="text-[11px] text-muted-foreground">Ends {row.contract.end_date}</div>
-                          </div>
+                          <ContractCell contract={row.contract} />
                         ) : (
                           <span className="text-[12px] text-muted-foreground">No contract yet</span>
                         )}
@@ -249,13 +309,20 @@ export default function AgencyDirectoryPage() {
                         {row.authorised_products.length === 0 ? (
                           <span className="text-[12px] text-muted-foreground">None</span>
                         ) : (
-                          row.authorised_products.join(", ")
+                          productLabels(row.authorised_products)
                         )}
                       </TableCell>
                       <TableCell>
-                        <Badge variant="outline" className="text-muted-foreground" title="Agency Performance Index — D06, not built yet">
-                          Pending
-                        </Badge>
+                        {leaderboardQuery.isPending ? (
+                          <span className="text-[12px] text-muted-foreground">…</span>
+                        ) : leaderboardQuery.isError ? (
+                          <span className="text-[12px] text-muted-foreground" title={errorDetail(leaderboardQuery.error, "Performance could not be loaded.")}>—</span>
+                        ) : (
+                          <PerformanceCellView
+                            cell={performanceCell(leaderboardQuery.data, row.agency_id, regionId || null)}
+                            onOpen={() => navigate(`/bank/agencies/performance?agency=${encodeURIComponent(row.agency_id)}`)}
+                          />
+                        )}
                       </TableCell>
                     </TableRow>
                   );
