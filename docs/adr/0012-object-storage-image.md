@@ -10,23 +10,23 @@ This supersedes the recommendation this file carried while it was *Proposed* (th
 decision was taken against, and because the fork is still the first thing to reach for if the
 accepted option's one real risk (below) ever bites.
 
-> ### How exposed we are today, measured 2026-09-30
+> ### Mirrored and verified, 2026-09-30 — with one step still open
 >
-> **There is exactly one copy of this image in the world that we can reach: this laptop's
-> Docker image store. `docker system prune -a` would make both stacks unstartable with no
-> recovery path.**
+> The single-copy problem this ADR exists to fix is **fixed**: the image now lives in a second
+> place we control, and the prod stack pulls it from there. What is still open is the package's
+> **visibility**.
 >
 > ```
-> local store    minio/minio@sha256:14cea493…   PRESENT, 241 MB, held only by the tag `latest`
-> Docker Hub     docker manifest inspect        NOT resolvable
-> ghcr mirror    docker manifest inspect        absent (not pushed: no write:packages scope)
+> local store   minio/minio@sha256:14cea493…              PRESENT, 241 MB (was the only copy)
+> Docker Hub    docker manifest inspect                    NOT resolvable
+> ghcr mirror   ghcr.io/kushagragupta0318/minio            PUSHED, digest sha256:a1a8bd4a…
+> in use        tiq-localprod's minio container            running FROM the ghcr digest
+> visibility    gh api user/packages/container/minio       private  <-- needs an owner click
 > ```
 >
-> Two things make it sharper than "it is cached". The one local reference is the *floating*
-> tag `minio/minio:latest`, so nothing on disk records which release it is; and because the
-> upstream repository no longer serves it, that tag can never be re-fetched. Pushing the
-> mirror below is therefore the highest-value single action in this ADR, and it needs the
-> owner.
+> Before this, one `docker system prune -a` would have left both stacks unstartable with no
+> recovery path, and the only local reference was the *floating* tag `minio/minio:latest`, so
+> nothing on disk even recorded which release it was.
 
 ## Context
 
@@ -52,12 +52,11 @@ accepted option's one real risk (below) ever bites.
 
 ## Decision
 
-1. **`MINIO_IMAGE` is the pinned digest, served from our own mirror.** One image, by digest,
-   in both compose files:
-   `ghcr.io/kushagragupta0318/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e`
-   (MinIO `RELEASE.2025-09-07T16-13-09Z`, the copy validated by the probe below). A digest
-   pin means the mirror cannot serve us a different image than the one we tested, whoever
-   controls the registry.
+1. **`MINIO_IMAGE` is the pinned digest, served from our own mirror.**
+   `ghcr.io/kushagragupta0318/minio@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2`
+   (MinIO `RELEASE.2025-09-07T16-13-09Z`, the copy validated by the probe below; see the digest
+   note above for why this is not the Hub digest). A digest pin means the mirror cannot serve
+   us a different image than the one we tested, whoever controls the registry.
 2. **The dev stack is pinned to the same digest.** `docker-compose.yml` used
    `minio/minio:latest` — a floating tag against a repository that no longer publishes. That
    works only until something prunes the local cache, and then the dev stack stops starting
@@ -68,10 +67,60 @@ accepted option's one real risk (below) ever bites.
 
 ## The mirror
 
-**Not yet pushed.** The `gh` token on this machine carries `gist, read:org, repo, workflow` —
-no `write:packages`, so nothing in this lane can push to ghcr.io. Recorded as blocked rather
-than described as done: until the owner runs the push (or grants the scope), the only copy of
-this image is still this laptop's Docker cache, and the ADR's whole point is not yet in force.
+**Pushed 2026-09-30**, after the owner granted `write:packages` and chose a public package.
+
+### The digest changed on push, and that is expected
+
+```
+pushed:  sha256:14cea493…  ->  sha256:a1a8bd4a…
+docker:  "Not all multiplatform-content is present and only the available
+          single-platform image was pushed"
+```
+
+The Docker Hub reference was a **multi-architecture manifest list**; this machine only ever
+held the `linux/amd64` member of it, so the push produced a single-platform manifest, which
+hashes differently. **The digest in the pins below is therefore the ghcr one
+(`a1a8bd4a…`), not the Hub one** — pinning the Hub digest against ghcr would simply not
+resolve. Checking this was the difference between a mirror and a mirror-shaped hole.
+
+**The content is byte-identical**, which is the claim that actually matters:
+
+| | Hub original (cached) | ghcr mirror |
+|---|---|---|
+| platform | amd64/linux | amd64/linux |
+| layer count | 9 | 9 |
+| sha256 of the layer diff-ID list | `e49b4a61091b…` | `e49b4a61091b…` |
+| entrypoint / cmd | `docker-entrypoint.sh` / `minio` | identical |
+| `minio --version` inside | — | `RELEASE.2025-09-07T16-13-09Z` |
+
+The layer diff-ID list hashing the same means the filesystem is the same content; the manifest
+digest differs only in its multi-arch wrapper. **Verified as the live path, not just in
+theory:** after removing the Docker Hub override, `tiq-localprod`'s MinIO container came up
+from `ghcr.io/kushagragupta0318/minio@sha256:a1a8bd4a…` and the stack passed its checks.
+
+**One consequence: the mirror is amd64-only.** The multi-arch list was not reproduced, because
+only that one platform existed locally. An arm64 host (Apple Silicon) cannot use this mirror
+and would need its own push from an arm64 machine, or an upstream source that still serves the
+list. Fine for this laptop and any x86 server; a genuine limitation to know before assuming it
+is portable.
+
+### Still open: the package is private
+
+`gh api user/packages/container/minio` reports `"visibility": "private"`. **The REST API has no
+endpoint to change it** — `PATCH user/packages/container/minio -f visibility=public` returns
+404 — so this is a UI action only, at
+`github.com/users/kushagragupta0318/packages/container/package/minio` → *Package settings* →
+*Change visibility* → **Public**.
+
+It is not costing anything in the meantime, and the arithmetic matters more than the
+reassurance: the free personal tier is 500 MB storage and 1 GB/month transfer, nothing is
+charged until a cap is exceeded, and there is no per-push fee. At 241 MB the image is under the
+storage cap even if it sat private indefinitely. **The transfer cap is the real exposure** — a
+handful of 241 MB pulls a month clears 1 GB — and making it public removes metering entirely.
+Two smaller things also wait on the flip: a host that is not already `docker login`-ed to ghcr
+cannot pull a private package, and that is why the **dev** stack is deliberately still pinned
+to the Hub digest (it resolves from the local cache with no auth) rather than to the mirror,
+since five other lanes run that stack.
 
 **Owner action, once:**
 
@@ -184,9 +233,10 @@ rediscovers it.
 
 - `MINIO_IMAGE` points at the mirror digest in `docker-compose.prod.yml`,
   `deploy/.env.prod.example` and `docker-compose.yml`. Both setups run one pinned image.
-- **Until the owner pushes the mirror, one machine's Docker cache is the only copy.** That is
-  the single largest operational risk in the local-prod setup and is listed as such in
-  `docs/LOCAL-PROD.md`.
+- The mirror is pushed and is the live path for prod. **The package still needs flipping to
+  public**; until then a fresh host must `docker login ghcr.io`, and the dev stack stays on the
+  Hub digest for that reason.
+- **The mirror is amd64-only**, so it does not serve an arm64 host.
 - `docs/DEPLOY.md`'s "State today" row for this changes from "an owner decision, proposed" to
   the accepted decision plus the unpushed-mirror caveat.
 - Nothing about the image changes, so no volume migration, no re-probe, and the dev stack's
