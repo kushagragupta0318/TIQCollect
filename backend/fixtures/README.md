@@ -337,8 +337,8 @@ A deploy that retires the published passwords, in order:
 4. Sign in to one Command Center `/field/*` page.
 
 The script also refuses, and changes nothing, if `DEMO_MODE` is off, the
-password is under 16 characters, or the three accounts are not one of each
-role. While the master login is on, model approval and promotion answer 409:
+password is under 16 characters, or the accounts do not hold their slots'
+roles, in order (v1 had three slots, one per role; v2 has four, above). While the master login is on, model approval and promotion answer 409:
 one password that opens both an admin and a manager would let one person
 supply both halves of the four-eyes check. A retired account's quick-login
 links stop working as well.

@@ -144,6 +144,10 @@ def apply(db: Session, *, password: str | None, accounts_raw: str | None, demo_m
     if len(password) < MIN_PASSWORD_LENGTH:
         return Outcome(applied=False, reason=f"DEMO_MASTER_PASSWORD is shorter than {MIN_PASSWORD_LENGTH} characters")
 
+    # parse_accounts drops a ${VAR} entry, so "a,b,c,d,${X}" would pass the
+    # count; an unresolved variable is a broken setting, refuse it (L6 audit).
+    if "${" in (accounts_raw or ""):
+        return Outcome(applied=False, reason="DEMO_MASTER_ACCOUNTS holds an unresolved ${...}")
     emails = parse_accounts(accounts_raw)
     if len(emails) != len(REQUIRED_ROLE_GROUPS) or len(set(emails)) != len(emails):
         return Outcome(applied=False, reason=f"DEMO_MASTER_ACCOUNTS must name exactly {len(REQUIRED_ROLE_GROUPS)} distinct emails")

@@ -29,7 +29,8 @@ def test_the_master_accounts_are_bank_user_manager_agent_and_a_second_bank_admin
                                  "piyush.sharma@aravallifs.test", "kavya.reddy@girivanfinance.test")
     roles = {f"{l}@{m.BANK_DOMAIN}": r for l, _, r, _ in m.BANK_USERS}
     roles.update({f"{l}@{m.AGENCY_DOMAIN}": r for l, _, r in m.V1_STAFF.values()})
-    assert [roles.get(e, "FIELD_AGENT") for e in m.MASTER_ACCOUNTS] ==         ["BANK_ADMIN", "AGENCY_MANAGER", "FIELD_AGENT", "BANK_ADMIN"]
+    wanted = ["BANK_ADMIN", "AGENCY_MANAGER", "FIELD_AGENT", "BANK_ADMIN"]
+    assert [roles.get(e, "FIELD_AGENT") for e in m.MASTER_ACCOUNTS] == wanted
 
 
 def test_new_ids_are_deterministic_and_distinct():

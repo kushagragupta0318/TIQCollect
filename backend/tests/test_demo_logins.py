@@ -160,6 +160,8 @@ def test_a_new_master_password_rehashes_and_revokes(db):
      "exactly 4"),
     ({"accounts": "admin@tiqcollect.in,manager1@tiqcollect.in,agent002@tiqcollect.in,nobody@tiqcollect.in"},
      "unknown accounts"),
+    ({"accounts": ACCOUNTS + ",${DEMO_EXTRA}"}, "unresolved"),     # four real emails and a broken fifth
+    ({"accounts": "${DEMO_MASTER_ACCOUNTS}"}, "unresolved"),
     ({"keep_raw": "nobody@tiqcollect.in"}, "unknown accounts"),
     ({"keep_raw": "ADMIN2@tiqcollect.in"}, "both master and keep"),
     # the wrong set of roles

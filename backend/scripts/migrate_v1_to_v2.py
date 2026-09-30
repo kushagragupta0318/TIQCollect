@@ -32,7 +32,7 @@ after every table; aborts on any value it cannot convert exactly (no
 truncation, no silent default).
 
 Every password is UNUSABLE (core.security.disabled_password_hash): the
-master login (scripts.apply_demo_logins) sets the three demo accounts' at
+master login (scripts.apply_demo_logins) sets the demo accounts' at
 boot. The fixture holds no usable hash.
 """
 from __future__ import annotations
