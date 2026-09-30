@@ -81,9 +81,11 @@ services:
 
   minio:
     # minio/minio is no longer pullable from Docker Hub or quay.io (checked
-    # 2026-09-28): see docs/DEPLOY.md, State today. MINIO_IMAGE names the image
-    # you have; pin it to a release you have tested.
-    image: ${MINIO_IMAGE:-minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e}
+    # 2026-09-28), so we serve a pinned digest from our own mirror (ADR 0012).
+    # The mirror is NOT pushed yet: until it is, set MINIO_IMAGE to the Docker
+    # Hub digest, which resolves from a machine's local cache
+    # (deploy/.env.prod.example carries that line ready to use).
+    image: ${MINIO_IMAGE:-ghcr.io/kushagragupta0318/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e}
     restart: unless-stopped
     command: server /data
     environment:
@@ -100,7 +102,7 @@ services:
 
   # One-shot: the bucket exists and is private (no anonymous access), every start.
   minio-init:
-    image: ${MINIO_IMAGE:-minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e}
+    image: ${MINIO_IMAGE:-ghcr.io/kushagragupta0318/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e}
     restart: "no"
     entrypoint: ["sh", "-c"]
     command:
