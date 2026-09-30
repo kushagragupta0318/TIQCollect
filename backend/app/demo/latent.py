@@ -81,6 +81,26 @@ CONTACT_HOUR = {
     "call_missed": (12.5, 2.6),
 }
 
+#: The Indian collections calendar, as shifts on the ledger's payment
+#: log-odds. For the demo books it REPLACES the ledger's generic sine, whose
+#: phase ran from each agency's onboarding date, so payments were flat by
+#: calendar month. By month: January's post-bonus cash, a March year-end
+#: drive, the April slump after it, rabi-harvest cash in May-June, the
+#: monsoon dip in July-August, festival spending in October-November.
+#: Roughly zero-mean over a year, so the book's overall payment rate holds.
+CALENDAR_SEASON = {1: 0.10, 2: 0.00, 3: 0.35, 4: -0.15, 5: 0.10, 6: 0.12,
+                   7: -0.12, 8: -0.20, 9: -0.05, 10: -0.10, 11: -0.25, 12: 0.05}
+#: Within a month: salary credit lifts the first week (and a little after);
+#: the rest of the month gives it back, so the monthly mean is ~0.
+SALARY_DAYS = ((1, 7, 0.15), (8, 10, 0.05), (11, 31, -0.055))
+
+
+def calendar_season(day: date) -> float:
+    """The demo books' payment log-odds shift on a calendar day."""
+    within = next(v for lo, hi, v in SALARY_DAYS if lo <= day.day <= hi)
+    return CALENDAR_SEASON[day.month] + within
+
+
 #: Complaints (disputes.kind = COMPLAINT) per placed case over its life, and
 #: the share about agent conduct; scaled up for an agency with a breach story.
 COMPLAINT_RATE = 0.012

@@ -196,6 +196,14 @@ class LedgerSimulator:
         self.cfg = cfg or LedgerConfig()
         self.rng = np.random.default_rng(self.cfg.seed)
 
+    # ── the calendar ────────────────────────────────────────────────────────
+    def _season(self, t: int, month: int) -> float:
+        """Additive shift on day t's payment log-odds. A hook so the demo
+        generator (app/demo/books.DemoLedgerSimulator) can tie it to the
+        calendar; this default is the ledger's own sine, byte-identical to the
+        inline term it replaced (tests/test_demo_generator.py)."""
+        return self.cfg.seasonality_amplitude * np.sin(2 * np.pi * month / 12.0)
+
     # ── static draws ────────────────────────────────────────────────────────
     def _make_agents(self) -> pd.DataFrame:
         c, rng = self.cfg, self.rng
@@ -798,7 +806,7 @@ class LedgerSimulator:
                            & (vc_paid < vc_need))
                 vc_live[vc_idx[live_vc]] = True
 
-            season = c.seasonality_amplitude * np.sin(2 * np.pi * month / 12.0)
+            season = self._season(t, month)
             shock = c.shock_magnitude if month == c.shock_month_index else 0.0
 
             # ── CONCEPT DRIFT ───────────────────────────────────────────────

@@ -34,7 +34,7 @@ from sqlalchemy import create_engine
 from app.core.config import settings
 from app.demo import roster as R
 from app.demo.books import EMAIL_DOMAINS, INSTALMENT_WINDOW, generate_book, require_rbi_window
-from app.demo.latent import AGENCY_LATENT, CONTACT_HOUR
+from app.demo.latent import AGENCY_LATENT, CALENDAR_SEASON, CONTACT_HOUR, SALARY_DAYS
 from app.demo.performing import generate_performing
 from app.demo.world import T, build_world, insert
 
@@ -213,6 +213,9 @@ def run(engine, profile_name: str, manifest_path: str | None, seed: int = 202609
         "anchor_date": R.ANCHOR_DATE.isoformat(),
         "contact_window": [settings.CONTACT_HOUR_START, settings.CONTACT_HOUR_END],
         "contact_hour_model": CONTACT_HOUR,
+        # The ledger fingerprint does not cover this: the demo books replace
+        # the ledger's sine with it (books.DemoLedgerSimulator._season).
+        "calendar_season": {"by_month": CALENDAR_SEASON, "salary_days": SALARY_DAYS},
         "agencies": {
             key: {"latent": AGENCY_LATENT[key].to_dict(), "ledger_fingerprint": t.ledger_fingerprint,
                   "ledger_seed": t.seed, "agent_skill": t.agent_skill, "agent_gender": t.agent_gender,

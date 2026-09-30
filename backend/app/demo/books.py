@@ -40,7 +40,7 @@ from app.core.config import settings
 from app.core.geo import is_within_contact_hours, within_geo_fence
 from app.demo import roster as R
 from app.demo.latent import (AGENCY_LATENT, COMPLAINT_RATE, COMPLAINT_RATE_BREACHING, CONTACT_HOUR,
-                             SETTLEMENT_DECLINE_BEFORE_ACCEPT, AgencyLatent)
+                             SETTLEMENT_DECLINE_BEFORE_ACCEPT, AgencyLatent, calendar_season)
 from app.demo.world import IST, AgencyWorld, insert, jitter
 from app.ml.simulation.ledger.config import LedgerConfig
 from app.ml.simulation.ledger.materialise import loan_state_at, payment_status_at, ptp_status_at
@@ -81,11 +81,21 @@ def history_dates(start: date) -> list[date]:
 class DemoLedgerSimulator(LedgerSimulator):
     """The ledger with an agency's latent skill. Same draws, same order, as
     LedgerSimulator._make_agents — only the normal's mean and spread differ —
-    so everything downstream of the agent table is the ledger's own logic."""
+    so everything downstream of the agent table is the ledger's own logic.
 
-    def __init__(self, cfg: LedgerConfig, latent: AgencyLatent):
+    2026-09-30 (L6): and the Indian calendar's seasonality in place of the
+    ledger's sine (latent.calendar_season). No extra draw is taken, so with
+    `calendar=False` the book is the ledger's own again."""
+
+    def __init__(self, cfg: LedgerConfig, latent: AgencyLatent, *, calendar: bool = True):
         super().__init__(cfg)
         self.latent = latent
+        self.calendar = calendar
+
+    def _season(self, t: int, month: int) -> float:
+        if not self.calendar:
+            return super()._season(t, month)
+        return calendar_season(self.cfg.start_date + timedelta(days=int(t)))
 
     def _make_agents(self) -> pd.DataFrame:
         c, rng = self.cfg, self.rng
