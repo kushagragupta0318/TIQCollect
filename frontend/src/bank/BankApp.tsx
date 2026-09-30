@@ -20,6 +20,7 @@ import { BankPlaceholderPage } from "./pages/BankPlaceholderPage";
 import OnboardAgencyWizardPage from "./pages/onboarding/OnboardAgencyWizardPage";
 import AgencyDirectoryPage from "./pages/directory/AgencyDirectoryPage";
 import AgencyPerformancePage from "./pages/performance/AgencyPerformancePage";
+import ModelsPage from "./pages/models/ModelsPage";
 
 /** The nav items with a real page instead of the generic placeholder
  *  (D01-D03, D05, D06). Kept out of the BANK_NAV_ITEMS.map() below so their
@@ -30,7 +31,9 @@ const AGENCY_DIRECTORY_PATH = "agencies/directory";
 const AGENCY_PERFORMANCE_PATH = "agencies/performance";
 
 // Screens that are built; every other nav item renders its placeholder.
-const BUILT_PAGES: Record<string, ComponentType> = { overview: BankOverviewPage, "agencies/placement": BankPlacementPage };
+const BUILT_PAGES: Record<string, ComponentType> = {
+  overview: BankOverviewPage, "agencies/placement": BankPlacementPage, "governance/models": ModelsPage,
+};
 
 
 export default function BankApp() {

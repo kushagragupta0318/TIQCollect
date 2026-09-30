@@ -20,6 +20,7 @@ import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { Select } from "../ui/select";
 import { Textarea } from "../ui/textarea";
+import { LoanExplanationDialog } from "./models/LoanExplanationDialog";
 import {
   DPD_BUCKETS, EMPTY_FILTERS, LOAN_TYPES, MAX_BATCH, blockedByReason, headroomLabel, loanQuery, pageSelection,
   recallReasonError, regionOptions, selectable, toggle, togglePage, verdictText,
@@ -55,6 +56,8 @@ function PlaceLoans() {
   const [filters, setFilters] = useState<LoanFilters>(EMPTY_FILTERS);
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // AI showcase: the loan whose recovery-risk score is being explained.
+  const [explain, setExplain] = useState<{ id: string; label: string } | null>(null);
   const [agencyId, setAgencyId] = useState("");
   const [preview, setPreview] = useState<BatchResult | null>(null);
   const [result, setResult] = useState<BatchResult | null>(null);
@@ -119,6 +122,15 @@ function PlaceLoans() {
     {
       key: "placed", header: "Placed with",
       render: (l) => l.placed_with_agency_name ?? <span className="text-muted-foreground">Unplaced</span>,
+    },
+    {
+      key: "score", header: "Model score",
+      render: (l) => (
+        <button type="button" className="text-[11px] font-medium text-primary hover:underline"
+                onClick={() => setExplain({ id: l.loan_id, label: l.loan_account_number })}>
+          Why this score
+        </button>
+      ),
     },
   ];
 
@@ -226,6 +238,8 @@ function PlaceLoans() {
       </Panel>
 
       {result && <BatchSummary title="Placed" result={result} onClose={() => setResult(null)} />}
+
+      <LoanExplanationDialog loanId={explain?.id ?? null} loanLabel={explain?.label ?? ""} onClose={() => setExplain(null)} />
 
       <Dialog open={preview !== null} onOpenChange={(o) => { if (!o) setPreview(null); }}>
         <DialogContent className="max-w-[720px]">
