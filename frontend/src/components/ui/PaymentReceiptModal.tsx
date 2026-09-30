@@ -22,6 +22,8 @@ export interface PaymentReceiptData {
   timestamp: string;
   upiRef?: string;
   verified?: boolean;   // borrower confirmed the amount via OTP
+  /** Evidence the agent chose to record without (N1): shown to the agent, not on the shared receipt text. */
+  missingEvidence?: string[];
 }
 
 interface Props {
@@ -81,6 +83,12 @@ export default function PaymentReceiptModal({ receipt: r, onClose }: Props) {
             TIQCollect · RBI Compliant · {verified ? "Borrower-verified (OTP)" : "Awaiting borrower OTP"}
           </div>
         </div>
+
+        {r.missingEvidence && r.missingEvidence.length > 0 && (
+          <p className="mx-5 mb-3 rounded-lg bg-warning-50 px-3 py-2 text-center text-xs font-medium text-warning-700">
+            Recorded without: {r.missingEvidence.join(", ")}.
+          </p>
+        )}
 
         {/* Actions */}
         <div className="px-5 pb-5 flex gap-2">
