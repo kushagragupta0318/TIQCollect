@@ -51,10 +51,16 @@ function ModelCard({ data }: { data: ModelsOverview }) {
       <CardHeader>
         <CardTitle className="flex items-center gap-2"><ShieldCheck className="size-5 text-primary" />Recovery risk: model card</CardTitle>
         <CardDescription>
-          Version {m.serving_version ?? "unknown"}. {m.method}
+          Version {m.serving_version ?? m.configured_version ?? "unknown"}. {m.method}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
+        {!m.artifact_loaded && (
+          <p role="alert" className="rounded-[12px] border border-destructive/40 bg-destructive/5 px-4 py-3 text-[12.5px] font-medium text-destructive">
+            The serving artifact could not be loaded on this deployment.
+            {m.configured_version ? ` champion.txt names ${m.configured_version}, but nothing is serving it, so scoring is falling back to the non-model path.` : " No champion is recorded."}
+          </p>
+        )}
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <Tile label="Gini, on the data the product records" value={fixed(live?.gini, 3)}
                 sub={live ? `Out of time, synthetic · measured ${live.measured_on}` : "No such figure for this version"} />
@@ -158,7 +164,7 @@ export default function ModelsPage() {
   const header = (
     <ExecutiveHeader
       title="Models"
-      meta={["Governance", q.data ? `recovery_risk ${q.data.recovery_risk.serving_version ?? "?"}` : "Loading…"]}
+      meta={["Governance", q.data ? `recovery_risk ${q.data.recovery_risk.serving_version ?? q.data.recovery_risk.configured_version ?? "?"}` : "Loading…"]}
       scopeNote="What scores your book, what each layer is, and what it cannot yet tell you."
     />
   );

@@ -139,6 +139,16 @@ def test_the_model_card_quotes_the_live_equivalent_beside_the_artifact(w):
     assert card["stance"]["related_features"] == ["latest_disposition", "disposition_recency_class"]
 
 
+def test_an_artifact_that_will_not_load_is_reported_not_hidden(w, monkeypatch):
+    """A deployment whose champion will not load still has one. Saying "unknown"
+    would hide an operational fault on the page a bank reads for assurance."""
+    monkeypatch.setattr(ms, "serving_version", lambda _model: None)
+    card = w["c"].get("/api/v1/bank/models", headers=_h(w["ba"])).json()["recovery_risk"]
+    assert card["serving_version"] is None
+    assert card["configured_version"] == SERVING and card["artifact_loaded"] is False
+    assert card["artifact_metrics"]["gini"] == 0.5122          # still read from the named artifact
+
+
 def test_the_synthetic_warning_travels_with_the_page(w):
     body = w["c"].get("/api/v1/bank/models", headers=_h(w["ba"])).json()
     assert "synthetic" in body["synthetic_warning"].lower()
@@ -223,17 +233,17 @@ def test_an_unscored_loan_has_no_prediction(w):
     assert body["prediction"] is None and body["serving_version"] == SERVING
 
 
-def test_a_prediction_row_carrying_another_tenant_is_never_served(w):
-    """Defence in depth: the loan is bank-checked first, so this can only arise
-    from a bad write or a restored row. The prediction query is scoped too, and
-    a row whose bank is not the caller's is not served for their own loan."""
+def test_a_prediction_cannot_even_be_written_with_a_tenant_its_loan_does_not_share(w):
+    """The ORM refuses the row this service's bank filter defends against, so
+    that filter only ever matters for a write that bypasses the ORM (raw SQL, a
+    restored dump). Pinned here because the filter alone cannot prove itself:
+    dropping it leaves every test green."""
+    from app.models.tenancy_listener import TenantMismatchError
     db, loan = w["db"], w["loans"][0]
-    _pred(db, loan, bank=BANK2, p=0.11, band="A")          # wrong tenant, right loan
-    db.commit()
-    assert _explain(w, w["ba"], loan.id).json()["prediction"] is None
-    _pred(db, loan, p=0.70)
-    db.commit()
-    assert _explain(w, w["ba"], loan.id).json()["prediction"]["p_no_payment"] == 0.70
+    _pred(db, loan, bank=BANK2)                              # BANK2's row, this bank's loan
+    with pytest.raises(TenantMismatchError):
+        db.flush()
+    db.rollback()
 
 
 def test_another_banks_loan_is_the_same_404_as_a_missing_one(w):

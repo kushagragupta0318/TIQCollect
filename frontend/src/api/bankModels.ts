@@ -21,7 +21,11 @@ export interface ScoringLayer {
 }
 
 export interface RecoveryRiskCard {
+  /** null when the artifact could not be loaded on this deployment. */
   serving_version: string | null;
+  /** What champion.txt names, whether or not it loads. */
+  configured_version: string | null;
+  artifact_loaded: boolean;
   artifact_sha256: string | null;
   method: string;
   features: { code: string; label: string }[];

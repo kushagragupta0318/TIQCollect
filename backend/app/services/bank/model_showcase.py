@@ -24,7 +24,7 @@ from app.core.errors import AppException, ErrorCode
 from app.ml.empirical_bayes import MULTIPLIER_BOUNDS as EB_BOUNDS
 from app.ml.pipeline.engine import MIN_FEATURE_COVERAGE
 from app.ml.pipeline.monitor import MIN_MATURED_FOR_MONITORING, readiness, serving_version
-from app.ml.pipeline.registry import version_dir
+from app.ml.pipeline.registry import resolve_version, version_dir
 from app.ml.recovery_scorecard import RECOVERY_SCORECARD_VERSION
 from app.ml.repayment_scorecard import SCORECARD_VERSION
 from app.ml.visit_priority import SCORE_VERSION as VISIT_PRIORITY_VERSION
@@ -178,9 +178,22 @@ def _first_scored(db: Session, bank_id: str, version: str | None) -> date | None
     return row[0] if row else None
 
 
+def configured_version() -> str | None:
+    """What champion.txt names, whether or not the artifact loads."""
+    try:
+        return resolve_version(TRAINED_MODEL)
+    except (FileNotFoundError, OSError):
+        return None
+
+
 def models_overview(db: Session, ctx) -> dict:
     bank_id = _bank_id(ctx)
-    version = serving_version(TRAINED_MODEL)
+    # Two different questions: which version is pointed at, and whether it is
+    # actually serving. A deployment whose artifact will not load still has a
+    # champion, and saying "unknown" would hide an operational fault.
+    configured = configured_version()
+    serving = serving_version(TRAINED_MODEL)
+    version = serving or configured
     meta = _read_metadata(version) if version else {}
     oot = (meta.get("metrics") or {}).get("oot") or {}
     labels = (meta.get("reason_codes") or {}).get("labels") or {}
@@ -216,7 +229,9 @@ def models_overview(db: Session, ctx) -> dict:
         "scoring_enabled": bool(settings.ML_SCORING_ENABLED),
         "layers": layers,
         "recovery_risk": {
-            "serving_version": version,
+            "serving_version": serving,
+            "configured_version": configured,
+            "artifact_loaded": serving is not None,
             "artifact_sha256": meta.get("artifact_sha256"),
             "method": "Additive model (GAM): boosted single-feature shape functions, one declared interaction, "
                       "monotone where a direction is declared, calibrated on validation months.",
@@ -300,6 +315,9 @@ def loan_explanation(db: Session, ctx, loan_id: str, *, region_limit=None) -> di
     if apply_region_limit(q, region_limit).first() is None:
         raise AppException(404, ErrorCode.NOT_FOUND, "Not found")
 
+    # bank_id as well as loan_id: the ORM already refuses a prediction whose bank
+    # disagrees with its loan's (models/tenancy_listener), so this only bites on a
+    # row written around the ORM — a raw statement, or a restored dump.
     pred = (db.query(ModelPrediction)
             .filter(ModelPrediction.bank_id == bank_id, ModelPrediction.loan_id == loan_id,
                     ModelPrediction.model_name == TRAINED_MODEL)

@@ -84,7 +84,11 @@ class Governance(BaseModel):
 
 
 class RecoveryRiskCard(BaseModel):
+    #: None when the artifact could not be loaded on this deployment.
     serving_version: Optional[str] = None
+    #: What champion.txt names, whether or not it loads.
+    configured_version: Optional[str] = None
+    artifact_loaded: bool = True
     artifact_sha256: Optional[str] = None
     method: str
     features: list[FeatureLabel]
