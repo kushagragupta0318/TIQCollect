@@ -9,6 +9,8 @@
 #       stress  every agency, 6x the agents — scalability only, NEVER committed
 #   The ground-truth manifest (latent quality, every agent's skill and gender,
 #   every injected breach) is written to --manifest, never to a product table.
+# 2026-09-30 (lane L6) — each profile also writes the banks' PERFORMING books
+#   (app/demo/performing.py) after the agency books; counts go in the manifest.
 # ────────────────────────────────────────────────────────────────────────────
 """Generate the demo tenants and their books into a v2 database that already
 holds B15's transformed Aravalli book.
@@ -31,8 +33,9 @@ from sqlalchemy import create_engine
 
 from app.core.config import settings
 from app.demo import roster as R
-from app.demo.books import INSTALMENT_WINDOW, generate_book, require_rbi_window
-from app.demo.latent import AGENCY_LATENT, CONTACT_HOUR
+from app.demo.books import EMAIL_DOMAINS, INSTALMENT_WINDOW, generate_book, require_rbi_window
+from app.demo.latent import AGENCY_LATENT, CALENDAR_SEASON, CONTACT_HOUR, SALARY_DAYS
+from app.demo.performing import generate_performing
 from app.demo.world import T, build_world, insert
 
 
@@ -42,12 +45,17 @@ class Profile:
     slots_per_agent: float        # ledger borrower slots per agent (~2.1 placed loans each)
     agents_cap: int | None = None
     agents_scale: float = 1.0
+    performing: tuple = ()         # (bank key, never-delinquent loans), written after the agency books
 
 
 PROFILES = {
-    "dev": Profile(agencies=("ARAVALLI", "SAHYADRI", "DECCAN", "AWADH"), slots_per_agent=30, agents_cap=10),
-    "demo": Profile(agencies=tuple(a.key for a in R.AGENCIES), slots_per_agent=38),
-    "stress": Profile(agencies=tuple(a.key for a in R.AGENCIES), slots_per_agent=100, agents_scale=6.0),
+    "dev": Profile(agencies=("ARAVALLI", "SAHYADRI", "DECCAN", "AWADH"), slots_per_agent=30, agents_cap=10,
+                   performing=(("GIRIVAN", 600),)),
+    # performing: sized to the 60 MB dump budget (fixtures/README.md), measured on the built dump
+    "demo": Profile(agencies=tuple(a.key for a in R.AGENCIES), slots_per_agent=38,
+                    performing=(("GIRIVAN", 14_000), ("KUMAON", 700))),
+    "stress": Profile(agencies=tuple(a.key for a in R.AGENCIES), slots_per_agent=100, agents_scale=6.0,
+                      performing=(("GIRIVAN", 40_000), ("KUMAON", 2_000))),
 }
 
 
@@ -141,6 +149,25 @@ def rederive_aravalli_visit_flags(conn) -> dict:
             "distance_changed_over_1m": moved}
 
 
+def rehome_borrower_emails(conn) -> dict:
+    """v1's seed drew borrower emails with Faker, which can name a real
+    provider's domain: an invented address a real person may own. Every
+    borrower email moves to a reserved .test domain (the local part is kept,
+    the domain chosen by it, so the move is deterministic). Visible
+    correction, like DATA-R; nothing else about the customer changes."""
+    import zlib
+    cu = T["customers"]
+    moved = 0
+    for cid, email in conn.execute(sa.select(cu.c.id, cu.c.email).where(cu.c.email.is_not(None))).all():
+        local, _, domain = email.partition("@")
+        if domain.endswith(".test"):
+            continue
+        new = f"{local}@{EMAIL_DOMAINS[zlib.crc32(local.encode()) % len(EMAIL_DOMAINS)]}"
+        conn.execute(cu.update().where(cu.c.id == cid).values(email=new))
+        moved += 1
+    return {"moved_to_test_domains": moved}
+
+
 def run(engine, profile_name: str, manifest_path: str | None, seed: int = 20260922) -> dict:
     require_rbi_window()
     prof = PROFILES[profile_name]
@@ -158,6 +185,7 @@ def run(engine, profile_name: str, manifest_path: str | None, seed: int = 202609
             counts["aravalli loan_instalments (GENERATED)"] = aravalli_instalments(conn)
             counts["aravalli visit flags re-derived (DATA-R)"] = rederive_aravalli_visit_flags(conn)
             counts["aravalli anchor history (TRANSFORM_CURRENT)"] = aravalli_anchor_history(conn)
+            counts["aravalli borrower emails (reserved domains)"] = rehome_borrower_emails(conn)
         truths = {}
         for i, (key, w) in enumerate(sorted(world.agencies.items(), key=lambda kv: kv[1].number)):
             if not w.agents:
@@ -166,6 +194,17 @@ def run(engine, profile_name: str, manifest_path: str | None, seed: int = 202609
                               bank_admin_id=world.bank_admin[w.roster.bank_key])
             truths[key] = t
             print(f"[generate_demo_v2] {key:11s} {dict(t.counts)}", flush=True)
+        performing = {}
+        for i, (bank_key, n_loans) in enumerate(prof.performing):
+            roster = {a.key: a for a in R.AGENCIES}
+            starts = [roster[k].onboarded for k in truths if roster[k].bank_key == bank_key]
+            if not starts:
+                continue                      # this profile generated no book for the bank
+            p = generate_performing(conn, bank_key=bank_key, n_loans=n_loans, seed=seed + 7001 + i,
+                                    history_from=min(starts))
+            performing[bank_key] = p.__dict__
+            print(f"[generate_demo_v2] performing {bank_key}: {p.loans} loans, {p.history_rows} history rows",
+                  flush=True)
     manifest = {
         "SYNTHETIC_WARNING": "Every borrower, loan, agent and event in this book is synthetic; every "
                              "organisation and person is fictional (docs/DATA-MODEL-V2.md Appendix C).",
@@ -174,6 +213,9 @@ def run(engine, profile_name: str, manifest_path: str | None, seed: int = 202609
         "anchor_date": R.ANCHOR_DATE.isoformat(),
         "contact_window": [settings.CONTACT_HOUR_START, settings.CONTACT_HOUR_END],
         "contact_hour_model": CONTACT_HOUR,
+        # The ledger fingerprint does not cover this: the demo books replace
+        # the ledger's sine with it (books.DemoLedgerSimulator._season).
+        "calendar_season": {"by_month": CALENDAR_SEASON, "salary_days": SALARY_DAYS},
         "agencies": {
             key: {"latent": AGENCY_LATENT[key].to_dict(), "ledger_fingerprint": t.ledger_fingerprint,
                   "ledger_seed": t.seed, "agent_skill": t.agent_skill, "agent_gender": t.agent_gender,
@@ -182,6 +224,7 @@ def run(engine, profile_name: str, manifest_path: str | None, seed: int = 202609
                   "counts": dict(t.counts), "measured": t.rates}
             for key, t in truths.items()},
         "not_generated": {"ARAVALLI": "v1's book via the B15 transform; carries no injected truth"},
+        "performing": performing,
         "world_and_corrections": counts,
         "seconds": round(time.time() - t0, 1),
     }
