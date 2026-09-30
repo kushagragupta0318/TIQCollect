@@ -39,6 +39,11 @@ export interface MapPoint {
   label: string;
 }
 
+// A fixed margin, not a fraction of the bounds: pad(0.25) grew an all-India
+// point set by half again, which forced zoom 3 (Africa to Japan) on the
+// directory's wide, short panel.
+export const FIT_PADDING_PX = 32;
+
 const POINT_STYLE: L.CircleMarkerOptions = { radius: 7, color: "#1677FF", weight: 2, fillColor: "#1677FF", fillOpacity: 0.5 };
 
 /** Plots labelled points, fits the view to them, and returns a remover (MapCanvas onReady). */
@@ -51,7 +56,8 @@ export function drawPoints(map: L.Map, points: readonly MapPoint[], maxZoom = 10
   else layers.forEach((l) => group.addLayer(l));
   group.addTo(map);
   if (points.length) {
-    map.fitBounds(L.latLngBounds(points.map((p) => [p.lat, p.lon] as [number, number])).pad(0.25), { maxZoom });
+    map.fitBounds(L.latLngBounds(points.map((p) => [p.lat, p.lon] as [number, number])),
+                  { maxZoom, padding: [FIT_PADDING_PX, FIT_PADDING_PX] });
   }
   return () => {
     group.remove();

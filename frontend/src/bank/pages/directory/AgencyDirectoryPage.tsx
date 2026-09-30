@@ -34,7 +34,8 @@ import {
   type AgencyDirectoryFilters, type AgencyDirectoryRow,
 } from "@/api/bank";
 import { errorDetail } from "@/lib/apiError";
-import { regionMarkersFromAgencies, summariseCoveredRegions } from "./directoryLogic";
+import { AGENCY_STATUS_LABELS, CONTRACT_STATUS_LABELS, LOAN_TYPE_LABELS, labelFor } from "../../lib/labels";
+import { contractSummary, productLabels, regionMarkersFromAgencies, summariseCoveredRegions } from "./directoryLogic";
 
 const AGENCY_STATUS_BADGE: Record<string, NonNullable<BadgeProps["variant"]>> = {
   PENDING: "warning",
@@ -49,6 +50,31 @@ const CONTRACT_STATUS_BADGE: Record<string, NonNullable<BadgeProps["variant"]>> 
   EXPIRED: "warning",
   TERMINATED: "destructive",
 };
+
+const CONTRACT_TONE_CLASS = {
+  normal: "text-muted-foreground",
+  soon: "font-medium text-warning",
+  past: "font-medium text-destructive",
+} as const;
+
+/** The contract number, a status badge only when it is not simply Active,
+ *  and the end date — called out inside the renewal window or once passed. */
+function ContractCell({ contract }: { contract: NonNullable<AgencyDirectoryRow["contract"]> }) {
+  const summary = contractSummary(contract.end_date, new Date());
+  const days = summary.daysLeft;
+  return (
+    <div className="space-y-1">
+      <div className="text-[12px] font-medium text-foreground tabular-nums">{contract.contract_no}</div>
+      {contract.status !== "ACTIVE" && (
+        <Badge variant={CONTRACT_STATUS_BADGE[contract.status] ?? "outline"}>{labelFor(CONTRACT_STATUS_LABELS, contract.status)}</Badge>
+      )}
+      <div className={`text-[11px] ${CONTRACT_TONE_CLASS[summary.tone]}`}>
+        {summary.ends}
+        {summary.tone === "soon" && days != null && ` · ${days === 0 ? "today" : `in ${days} day${days === 1 ? "" : "s"}`}`}
+      </div>
+    </div>
+  );
+}
 
 export default function AgencyDirectoryPage() {
   const navigate = useNavigate();
@@ -138,7 +164,7 @@ export default function AgencyDirectoryPage() {
             <Label htmlFor="dir-status">Status</Label>
             <Select id="dir-status" value={status} onChange={(e) => setStatus(e.target.value)} className="mt-1.5">
               <option value="">All statuses</option>
-              {AGENCY_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+              {AGENCY_STATUSES.map((s) => <option key={s} value={s}>{AGENCY_STATUS_LABELS[s]}</option>)}
             </Select>
           </div>
           <div>
@@ -155,7 +181,7 @@ export default function AgencyDirectoryPage() {
             <Label htmlFor="dir-product">Product</Label>
             <Select id="dir-product" value={loanType} onChange={(e) => setLoanType(e.target.value)} className="mt-1.5">
               <option value="">All products</option>
-              {LOAN_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+              {LOAN_TYPES.map((t) => <option key={t} value={t}>{LOAN_TYPE_LABELS[t]}</option>)}
             </Select>
           </div>
           <div>
@@ -182,7 +208,7 @@ export default function AgencyDirectoryPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <MapCanvas onReady={drawMarkers} deps={[markers]} centre={DEFAULT_CENTRE} className="h-72 w-full rounded-inner overflow-hidden" />
+          <MapCanvas onReady={drawMarkers} deps={[markers]} centre={DEFAULT_CENTRE} className="h-80 w-full rounded-inner overflow-hidden" />
         </CardContent>
       </Card>
 
@@ -226,14 +252,11 @@ export default function AgencyDirectoryPage() {
                         <div className="text-[11px] text-muted-foreground">{row.code}</div>
                       </TableCell>
                       <TableCell>
-                        <Badge variant={AGENCY_STATUS_BADGE[row.status] ?? "outline"}>{row.status}</Badge>
+                        <Badge variant={AGENCY_STATUS_BADGE[row.status] ?? "outline"}>{labelFor(AGENCY_STATUS_LABELS, row.status)}</Badge>
                       </TableCell>
                       <TableCell>
                         {row.contract ? (
-                          <div className="space-y-1">
-                            <Badge variant={CONTRACT_STATUS_BADGE[row.contract.status] ?? "outline"}>{row.contract.status}</Badge>
-                            <div className="text-[11px] text-muted-foreground">Ends {row.contract.end_date}</div>
-                          </div>
+                          <ContractCell contract={row.contract} />
                         ) : (
                           <span className="text-[12px] text-muted-foreground">No contract yet</span>
                         )}
@@ -249,7 +272,7 @@ export default function AgencyDirectoryPage() {
                         {row.authorised_products.length === 0 ? (
                           <span className="text-[12px] text-muted-foreground">None</span>
                         ) : (
-                          row.authorised_products.join(", ")
+                          productLabels(row.authorised_products)
                         )}
                       </TableCell>
                       <TableCell>

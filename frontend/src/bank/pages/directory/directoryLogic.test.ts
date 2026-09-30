@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { regionMarkersFromAgencies, summariseCoveredRegions } from "./directoryLogic";
+import { CONTRACT_EXPIRY_WARN_DAYS, contractSummary, productLabels, regionMarkersFromAgencies, summariseCoveredRegions } from "./directoryLogic";
 import type { AgencyDirectoryRow } from "@/api/bank";
 
 function row(overrides: Partial<AgencyDirectoryRow>): AgencyDirectoryRow {
@@ -73,5 +73,39 @@ describe("summariseCoveredRegions — the table's covered-regions cell", () => {
     expect(result.shown).toBe("NCR, Mumbai +2 more");
     expect(result.full).toBe("NCR, Mumbai, Pune, Nashik");
     expect(result.count).toBe(4);
+  });
+});
+
+describe("contractSummary", () => {
+  const today = new Date(2026, 8, 30);      // 30 Sep 2026, local
+
+  it("formats the end date and counts whole days to it", () => {
+    expect(contractSummary("2027-03-31", today)).toEqual({ ends: "Ends 31 Mar 2027", daysLeft: 182, tone: "normal" });
+  });
+
+  it("calls out a contract ending inside the warning window, boundary included", () => {
+    const edge = new Date(2026, 8, 30 + CONTRACT_EXPIRY_WARN_DAYS);
+    const iso = `${edge.getFullYear()}-${String(edge.getMonth() + 1).padStart(2, "0")}-${String(edge.getDate()).padStart(2, "0")}`;
+    expect(contractSummary(iso, today)).toMatchObject({ daysLeft: CONTRACT_EXPIRY_WARN_DAYS, tone: "soon" });
+    expect(contractSummary("2026-09-30", today)).toMatchObject({ daysLeft: 0, tone: "soon", ends: "Ends 30 Sep 2026" });
+  });
+
+  it("says Ended once the date has passed", () => {
+    expect(contractSummary("2026-09-29", today)).toEqual({ ends: "Ended 29 Sep 2026", daysLeft: -1, tone: "past" });
+  });
+
+  it("does not shift the day for a viewer west of UTC (the date is a calendar date, not an instant)", () => {
+    expect(contractSummary("2027-01-01", new Date(2026, 11, 31, 23, 59)).daysLeft).toBe(1);
+  });
+
+  it("shows a non-date value as it came", () => {
+    expect(contractSummary("open-ended", today)).toEqual({ ends: "Ends open-ended", daysLeft: null, tone: "normal" });
+  });
+});
+
+describe("productLabels", () => {
+  it("reads codes as labels and keeps an unknown code as itself", () => {
+    expect(productLabels(["PERSONAL", "CREDIT_CARD", "LEASE"])).toBe("Personal loan, Credit card, LEASE");
+    expect(productLabels([])).toBe("");
   });
 });
