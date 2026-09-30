@@ -525,7 +525,7 @@ const TIMELINE = [
 ];
 
 const AGENT_FEATURES = [
-  "Selfie attendance check-in with liveness detection",
+  "Selfie and GPS check-in at the start of the day",
   "Geo-optimised beat map with Google Maps navigation",
   "Customer detail: loan info, DPD, visit history, active PTP",
   "6-step visit recording: outcome → payment → PTP → photos",

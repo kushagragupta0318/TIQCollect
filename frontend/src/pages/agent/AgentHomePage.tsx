@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { shortMoney } from "@/lib/money";
 import type { NavigateFunction } from "react-router";
-import { Briefcase, CheckCircle, IndianRupee, Calendar, MapPin, Clock, Camera, X, ShieldCheck } from "lucide-react";
+import { Briefcase, CheckCircle, IndianRupee, Calendar, MapPin, Clock, Camera, X } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { checkIn as apiCheckIn } from "@/api/agent";
 import { StatCard } from "@/components/ui/Card";
@@ -11,6 +11,7 @@ import { useAuthStore } from "@/store/authStore";
 import { useBeat } from "@/contexts/useBeat";
 import { useAnimatedValue, useCountUp } from "@/hooks/useAnimatedValue";
 import { geo, geoAvailable } from "@/lib/deviceLocation";
+import { describeFix, fixFromPosition, type CheckInFix } from "@/lib/checkIn";
 
 export default function AgentHomePage() {
   const { user } = useAuthStore();
@@ -20,7 +21,8 @@ export default function AgentHomePage() {
   const [checkingIn, setCheckingIn] = useState(false);
   const [selfieModal, setSelfieModal] = useState(false);
   const [capturedSelfie, setCapturedSelfie] = useState<string | null>(null);
-  const [checkInCoords, setCheckInCoords] = useState<{ lat: number; lon: number } | null>(null);
+  const [checkInFix, setCheckInFix] = useState<CheckInFix | null>(null);
+  const [cameraError, setCameraError] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -42,13 +44,14 @@ export default function AgentHomePage() {
 
   async function startSelfieCapture() {
     setSelfieModal(true);
-    // Get GPS coords when modal opens. No fix means no coordinates, never a
-    // default point: a check-in is evidence of where the agent was.
-    setCheckInCoords(null);
+    setCameraError(false);
+    // No fix means no coordinates, never a default point: a check-in is
+    // evidence of where the agent was.
+    setCheckInFix(null);
     if (geoAvailable()) {
       geo.getCurrentPosition(
-        (p) => setCheckInCoords({ lat: p.coords.latitude, lon: p.coords.longitude }),
-        () => setCheckInCoords(null)
+        (p) => setCheckInFix(fixFromPosition(p)),
+        () => setCheckInFix(null)
       );
     }
     try {
@@ -56,9 +59,8 @@ export default function AgentHomePage() {
       streamRef.current = stream;
       if (videoRef.current) videoRef.current.srcObject = stream;
     } catch {
-      setTimeout(() => {
-        setCapturedSelfie("data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48Y2lyY2xlIGN4PSI1MCIgY3k9IjUwIiByPSI1MCIgZmlsbD0iIzNiODJmNiIvPjx0ZXh0IHg9IjUwIiB5PSI1OCIgZm9udC1zaXplPSIzMCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZmlsbD0id2hpdGUiPvCfkYs8L3RleHQ+PC9zdmc+");
-      }, 500);
+      // Not a stand-in picture: a selfie that was never taken must not look taken.
+      setCameraError(true);
     }
   }
 
@@ -76,17 +78,18 @@ export default function AgentHomePage() {
     streamRef.current?.getTracks().forEach((t) => t.stop());
     setSelfieModal(false);
     setCapturedSelfie(null);
+    setCameraError(false);
   }
 
   async function confirmCheckIn() {
-    const coords = checkInCoords;
-    if (!coords) {
+    const fix = checkInFix;
+    if (!fix) {
       toast.error("Location unavailable. Turn on location, then try checking in again.");
       return;
     }
     setCheckingIn(true);
     try {
-      await apiCheckIn(coords.lat, coords.lon);
+      await apiCheckIn(fix.lat, fix.lon);
       closeSelfie();
       patch({ check_in_status: "ON_DUTY" });
       patchSummary({ check_in_status: "ON_DUTY" });
@@ -224,7 +227,16 @@ export default function AgentHomePage() {
             </div>
 
             <div className="p-4 space-y-4">
-              {!capturedSelfie ? (
+              {!capturedSelfie && cameraError ? (
+                <>
+                  <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-600 space-y-1">
+                    <p className="font-medium text-slate-800">Camera unavailable</p>
+                    <p>Allow camera access for this app in your browser settings to take a selfie.</p>
+                  </div>
+                  <p className="flex items-center gap-1.5 text-xs text-slate-600"><MapPin className="w-3.5 h-3.5 text-slate-400" /> GPS fix: {describeFix(checkInFix)}</p>
+                  <Button fullWidth onClick={confirmCheckIn} loading={checkingIn}>Check in without a selfie</Button>
+                </>
+              ) : !capturedSelfie ? (
                 <>
                   <div className="relative bg-black rounded-xl overflow-hidden aspect-square">
                     <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
@@ -234,6 +246,7 @@ export default function AgentHomePage() {
                     </div>
                   </div>
                   <p className="text-xs text-center text-slate-500">Align your face with the circle and take selfie for attendance</p>
+                  <p className="flex items-center justify-center gap-1.5 text-xs text-slate-600"><MapPin className="w-3.5 h-3.5 text-slate-400" /> GPS fix: {describeFix(checkInFix)}</p>
                   <Button fullWidth onClick={captureSelfie}>
                     <Camera className="w-4 h-4" /> Capture Selfie
                   </Button>
@@ -245,9 +258,8 @@ export default function AgentHomePage() {
                     <div className="absolute top-2 right-2 bg-success-500 text-white text-xs px-2 py-1 rounded-full font-medium">✓ Captured</div>
                   </div>
                   <div className="bg-slate-50 rounded-lg p-3 text-xs text-slate-600 space-y-1">
-                    <p className="flex items-center gap-1.5"><MapPin className="w-3.5 h-3.5 text-slate-400" /> Location: Mumbai, Maharashtra</p>
+                    <p className="flex items-center gap-1.5"><MapPin className="w-3.5 h-3.5 text-slate-400" /> GPS fix: {describeFix(checkInFix)}</p>
                     <p className="flex items-center gap-1.5"><Clock className="w-3.5 h-3.5 text-slate-400" /> Time: {new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}</p>
-                    <p className="flex items-center gap-1.5"><ShieldCheck className="w-3.5 h-3.5 text-success-500" /> Liveness check: Passed</p>
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <Button variant="secondary" onClick={() => setCapturedSelfie(null)}>Retake</Button>
