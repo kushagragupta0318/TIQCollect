@@ -188,6 +188,27 @@ def today_beat_cases(db: Session, agent, *, options=()):
     return beat, [rows[i] for i in ids if i in rows]
 
 
+def platform_acts_in_bank(db: Session, principal, bank_id) -> str:
+    """A PLATFORM_ADMIN acting inside ONE named bank for the rest of this
+    request: onboarding its first admin, resetting a BANK_ADMIN's credentials.
+    Under RLS the operation then sees that bank and nothing else, so a query
+    that forgot its filter cannot reach another bank. It adds no power the API
+    lacks (the tenant is the app's to set); it narrows PLATFORM to one bank.
+
+    Call it only AFTER the operation's own permission check has passed.
+    Refuses (PermissionError) any principal but PLATFORM_ADMIN; a malformed
+    bank id is the usual 404. Returns the canonical bank id."""
+    from app.core.database import apply_tenant_context
+    from app.models.user import UserRole
+    if getattr(principal, "role", None) != UserRole.PLATFORM_ADMIN:
+        raise PermissionError("platform_acts_in_bank is for PLATFORM_ADMIN only")
+    bid = parse_uuid(bank_id)
+    if bid is None:
+        raise AppException(404, ErrorCode.NOT_FOUND, "Bank not found")
+    apply_tenant_context(db, bank_id=bid, agency_id=None, scope="BANK", user_id=principal.id)
+    return bid
+
+
 def agencies_in_scope(db: Session, principal):
     """A Query of the agencies `principal` (a User) may see. Additive to
     agents_in_scope/cases_in_scope above (2026-09-28, D02), not a change to

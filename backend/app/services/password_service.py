@@ -121,6 +121,23 @@ def can_manage(db: Session, admin: User, target: User) -> bool:
     return False
 
 
+def credential_target(db: Session, admin: User, target_id) -> User | None:
+    """The user an admin resets a credential for. A PLATFORM_ADMIN's own
+    session sees no bank (RLS), so its rule (can_manage: a BANK_ADMIN only) is
+    judged on the target's resolved role FIRST, and only then does this
+    request act inside that one bank (scope.platform_acts_in_bank)."""
+    if admin.role == UserRole.PLATFORM_ADMIN:
+        from types import SimpleNamespace
+        from app.core import preauth
+        from app.services.scope import platform_acts_in_bank
+        found = preauth.by_user_id(db, target_id)
+        if (found is None or found.bank_id is None
+                or not can_manage(db, admin, SimpleNamespace(id=found.user_id, role=found.role))):
+            return None
+        platform_acts_in_bank(db, admin, found.bank_id)
+    return db.get(User, target_id)
+
+
 # ── tokens ──────────────────────────────────────────────────────────────────
 def _issue(db: Session, user: User, kind: str, ttl: timedelta, *, issued_by: str | None = None,
            otp_verified: bool = False, request: Request | None = None) -> str:
@@ -153,7 +170,7 @@ def admin_reset(db: Session, admin: User, target_id: str, *, request: Request | 
     audit MED): an admin holding a working link could take over any account
     without a second factor. Returns only whether it was sent and when it
     expires."""
-    target = db.get(User, target_id)
+    target = credential_target(db, admin, target_id)
     if target is None or not can_manage(db, admin, target):
         raise AppException(404, ErrorCode.NOT_FOUND, "User not found")
     return _issue_and_text(
@@ -234,7 +251,8 @@ def _issue_and_text(db: Session, admin: User, target: User, *, kind: str, ttl: t
         from app.services import auth_service
         auth_service.revoke_user_sessions(db, target.id, "ADMIN_REVOKED", by=admin.id)
     stage_audit(db, action=AuditAction.PASSWORD_RESET_ISSUED, user_id=admin.id, entity_type="User",
-                entity_id=target.id, ip_address=_client_ip(request),
+                entity_id=target.id, bank_id=target.bank_id, agency_id=target.agency_id,
+                ip_address=_client_ip(request),
                 details={"kind": audit_kind, "channel": "SMS"})
     db.commit()
     from app.services.notification_service import NotificationService
@@ -250,7 +268,7 @@ def reset_with_token(db: Session, token: str, new_password: str, *, request: Req
     if (row is None or row.used_at is not None or utc(row.expires_at) <= now()
             or (row.kind == "SELF_SERVICE" and row.otp_verified_at is None)):
         raise AppException(400, ErrorCode.RESET_INVALID, _INVALID_LINK)
-    user = db.get(User, row.user_id)
+    user = _bound_user(db, row.user_id)
     if user is None or not user.is_active:
         raise AppException(400, ErrorCode.RESET_INVALID, _INVALID_LINK)
     require_good_password(new_password, email=user.email)
@@ -309,15 +327,30 @@ def change_password(db: Session, user: User, current_password: str, new_password
 
 # ── self-service by SMS OTP ─────────────────────────────────────────────────
 def _find_user(db: Session, identifier: str) -> User | None:
+    """Resolve the tenant, bind it, then read the row under RLS (A13b S1b)."""
+    from app.core import preauth
     ident = (identifier or "").strip()
     if not ident:
         return None
     if "@" in ident:
-        return db.query(User).filter(User.email == ident.lower()).first()
-    digits = "".join(c for c in ident if c.isdigit())
-    if len(digits) < 10:
+        principal = preauth.by_email(db, ident.lower())
+    else:
+        digits = "".join(c for c in ident if c.isdigit())
+        principal = preauth.by_phone(db, [digits, digits[-10:]]) if len(digits) >= 10 else None
+    if principal is None:
         return None
-    return db.query(User).filter(User.phone.in_(sorted({digits, digits[-10:]}))).first()
+    preauth.bind(db, principal)
+    return db.get(User, principal.user_id)
+
+
+def _bound_user(db: Session, user_id) -> User | None:
+    """The user a token or code names, with its tenant bound first (A13b S1b)."""
+    from app.core import preauth
+    principal = preauth.by_user_id(db, user_id)
+    if principal is None:
+        return None
+    preauth.bind(db, principal)
+    return db.get(User, principal.user_id)
 
 
 def _hash_code(request_sha: str, code: str) -> str:
@@ -349,7 +382,11 @@ def forgot(db: Session, identifier: str, *, request: Request | None = None) -> d
     # would answer the question the identical body refuses to. The send and
     # its audit row run on their own session.
     factory = sessionmaker(bind=db.get_bind())
-    _dispatch(lambda: _send_reset_code(factory, user.id, user.phone, code, _client_ip(request)))
+    # Plain values, not the row: the thread outlives this request's session.
+    from app.models.user import tenant_scope
+    tenant = {"bank_id": user.bank_id, "agency_id": user.agency_id,
+              "scope": tenant_scope(user.role, user.agency_id), "user_id": user.id}
+    _dispatch(lambda: _send_reset_code(factory, tenant, user.phone, code, _client_ip(request)))
     return out
 
 
@@ -360,9 +397,13 @@ def _dispatch(fn) -> None:
     threading.Thread(target=fn, name="pwreset-sms", daemon=True).start()
 
 
-def _send_reset_code(factory, user_id: str, phone: str, code: str, ip: str | None) -> None:
+def _send_reset_code(factory, tenant: dict, phone: str, code: str, ip: str | None) -> None:
+    from app.core.database import apply_tenant_context
     from app.services.notification_service import NotificationService
+    user_id = tenant["user_id"]
     db = factory()
+    # A fresh session carries no tenant: bind the user's, or RLS refuses the row below.
+    apply_tenant_context(db, **tenant)
     try:
         NotificationService.send_sms(
             "+" + NotificationService.normalize_phone(phone),
@@ -391,7 +432,7 @@ def verify_code(db: Session, request_id: str, code: str, *, request: Request | N
     if not hmac.compare_digest(data.get("code", ""), _hash_code(request_sha, (code or "").strip())):
         raise AppException(400, ErrorCode.RESET_INVALID, _BAD_CODE)
     store.delete(key)                               # single-use
-    user = db.get(User, data["user_id"])
+    user = _bound_user(db, data["user_id"])
     if user is None or not user.is_active:
         raise AppException(400, ErrorCode.RESET_INVALID, _BAD_CODE)
     token = _issue(db, user, "SELF_SERVICE", SELF_SERVICE_TTL, otp_verified=True, request=request)
