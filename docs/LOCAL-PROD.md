@@ -5,8 +5,8 @@ target the owner asked for: **every feature working locally first, deployed publ
 it is market-ready.** For a real public deployment, read [DEPLOY.md](DEPLOY.md) — this file is
 the same stack with local TLS and local names.
 
-Verified end to end on 2026-09-30 (Windows 11, Docker Desktop, 16 GB). What broke is in
-[§5](#5-defects-found), and it is the part worth reading first.
+Verified end to end on 2026-09-30 (Windows 11, Docker Desktop, 16 GB), at Alembic `v2_0017`.
+What broke is in [§5](#5-defects-found), and it is the part worth reading first.
 
 ---
 
@@ -147,34 +147,46 @@ switches device binding off, so **never set it on anything real**; start-up refu
 Measured on the stack above with the demo book loaded. **Breaks** means a user hits an error;
 **degrades** means a feature falls back and says so.
 
-### P0 — the bank portal's landing page returns 500
+### ~~P0 — the bank portal's landing page returns 500~~ — FIXED by `v2_0017`, verified
+
+**Resolved.** Measured first on a stack at `v2_0016`, which predates tiqcollect-de's perf fix
+for exactly this view. On the old view body:
 
 ```
-GET /api/v1/bank/overview   ->  500   after 16.8s (repeatable)
-api log: psycopg2.errors.QueryCanceled: canceling statement due to statement timeout
+GET /api/v1/bank/overview   ->  500   after 16.8-19.3s (repeatable)
+api log: psycopg2.errors.QueryCanceled: canceling statement due to statement timeout   (15s)
 ```
 
-`API_STATEMENT_TIMEOUT_MS` is 15 000, so the request is cancelled mid-query and surfaces as a
-raw 500 with no useful message. **This is the first screen a bank user sees.**
+The statement running when it died, captured three times from `pg_stat_activity` at 3.0 s,
+8.3 s and 12.2 s, was the **`visit_to_pay` KPI** against `analytics.v_visit_to_pay`. The cause
+de diagnosed: v2_0013's view referenced its `vis` CTE twice, so Postgres materialised it
+unindexed and the attribution LATERAL scanned that temp result once per payment across every
+bank's verified payments — O(payments x visits).
 
-The statement that is running when it dies, captured three times from `pg_stat_activity` at
-3.0 s, 8.3 s and 12.2 s:
+`v2_0017` reads `collections.visits` directly through `ix_visit_case` and tenant-filters the
+payments before the LATERAL. **Applied to this stack and re-measured on the real endpoint with
+the tenant bound:**
 
-```sql
-SELECT AVG(CASE WHEN paid_within_7d THEN 1.0 ELSE 0.0 END), COUNT(*)
-FROM analytics.v_visit_to_pay
-WHERE bank_id = '…' AND customer_met AND visit_date BETWEEN '2026-09-01' AND '2026-09-15'
-```
+| | before (`v2_0016`) | after (`v2_0017`) |
+|---|---|---|
+| `GET /bank/overview` | **500** after 16.8-19.3 s | **200** in 3.8 s cold, then 1.17 s / 1.20 s |
+| KPIs returned | — (request died) | 12 of 12 |
+| `visit_to_pay` value | — | `30.7%` of 1,343 matured met visits |
 
-That is the **`visit_to_pay` KPI**. The `analytics` schema has five materialized views
-(`mv_*`), all populated, and eleven of the twelve overview KPIs read them and return in
-milliseconds. **`v_visit_to_pay` is a plain `VIEW`**, so that one KPI aggregates live across
-41,431 visits joined to payments and spends the whole request's budget. Materialising it beside
-its five siblings is the obvious fix.
+So it is a **fix, not a reprieve**: roughly 14x faster, thirteen seconds inside the budget, and
+the KPI computes a real figure rather than degrading to empty.
 
-*Limit on this diagnosis:* the slow plan could not be reproduced in `psql`, because the
-`analytics` views are tenant-scoped and return zero rows without the app's `app.bank_id`
-binding. The statement and the view type are measured; the query plan is not.
+*An earlier draft of this document proposed materialising the view beside its five `mv_*`
+siblings. That is withdrawn — it is unnecessary at these timings, and it would have added a
+seventh materialized view to refresh, with the staleness and ownership cost that carries. The
+RLS lane's H3 finding is the sharp end of that cost: under `FORCE ROW LEVEL SECURITY`, an owner
+refreshing an MV with no tenant bound would `REFRESH ... CONCURRENTLY` it to empty, silently.*
+
+*Limit on the original diagnosis, kept because it is the reason the report was trustworthy: the
+slow plan could not be reproduced in `psql`, because the `analytics` views are tenant-scoped
+and return zero rows without the app's `app.bank_id` binding. My first timing harness measured
+that unbound path and misreported 0.00 s for all twelve KPIs. The statement and the view type
+were measured; the plan was not.*
 
 ### P1 (security) — an agency manager can reach model-promotion routes (F12)
 
@@ -202,8 +214,8 @@ capability intends. Two things follow:
 
 | Endpoint | Time | Note |
 |---|---|---|
-| `bank/overview` | 16.8–19.3 s | fails, above |
-| `bank/placements` | 4.9 s | the next one to break if the timeout tightens |
+| `bank/placements` | 4.9 s | now the slowest bank endpoint; the next to break if the timeout tightens |
+| `bank/overview` | 1.17 s | was 16.8 s and a 500 before `v2_0017` |
 | `bank/agencies` | 1.5 s | |
 | `bank/agencies-directory` | 1.3 s | |
 
@@ -235,8 +247,9 @@ labelled rather than presented as AI.
 
 In the order I would fix them:
 
-1. **`bank/overview` 500** (§5). The bank portal's front page fails on a realistic book.
-2. **F12 route guard** (§5). One tenant can read and reach another's model machinery.
+1. **F12 route guard** (§5). One tenant can read and reach another's model machinery.
+2. **`bank/placements` at 4.9 s** (§5) is the slowest surviving endpoint and has had no
+   equivalent of the `v2_0017` treatment.
 3. **Row-level security is not enforced.** The policies exist (`v2_0012`) but the API connects
    as the tables' owner, which bypasses them; tenant isolation rests on application scoping
    alone. Step 2 of DATA-MODEL-V2 §8.6 moves the API onto `tiq_app`.
