@@ -199,7 +199,7 @@ THE MODEL, month by month, for every account on every path
     RESOLVED at (1 - discount) of the balance.
     NPA_SUB -> NPA_DOUBTFUL is NOT in the matrix: every account's NPA entry
     month is tracked on every path and the move happens at exactly 12 months
-    (the RBI rule, states.DOUBTFUL_AFTER_MONTHS). Matrix mass between the two
+    (the RBI rule, states.NPA_DOUBTFUL_AFTER_MONTHS). Matrix mass between the two
     NPA states is folded into staying put; a new NPA always enters as Sub.
 
 4.  Each account draws its next state by inverse CDF. The lookup is a
@@ -237,9 +237,9 @@ from typing import Callable, Mapping, Sequence
 import numpy as np
 
 from app.strategy.states import (
-    ABSORBING, CURRENT, DEFAULT_STATES, DELINQUENT, DIRECTION, DOUBTFUL_AFTER_MONTHS,
+    ABSORBING, CURRENT, DEFAULT_STATES, DELINQUENT, DIRECTION, NPA_DOUBTFUL_AFTER_MONTHS,
     DPD_RANGE, IFRS9_STAGE, LIVE, N_STATES, NPA, NPA_DOUBTFUL, NPA_SUB, REACHABLE,
-    RESOLVED, STATE_INDEX, STATES, WRITTEN_OFF,
+    RESOLVED, SMA_0, SMA_1, SMA_2, STATE_INDEX, STATES, WRITTEN_OFF,
 )
 
 ENGINE_VERSION = "mc-1.1.0"  # mc-1.0.0 = daadc17; see CHANGELOG for what moved
@@ -313,7 +313,8 @@ def macro_shift(scenario: MacroScenario, loan_type: str | None, scale: float = 1
 # FROM — the unit of agency_contract_terms.commission_pct (DATA-MODEL-V2).
 # ASSUMPTION: a typical Indian slab, rising with the bucket.
 DEFAULT_COMMISSION_PCT: dict[str, float] = {
-    "SMA_0": 5.0, "SMA_1": 8.0, "SMA_2": 10.0, "NPA_SUB": 15.0, "NPA_DOUBTFUL": 20.0,
+    STATES[SMA_0]: 5.0, STATES[SMA_1]: 8.0, STATES[SMA_2]: 10.0,
+    STATES[NPA_SUB]: 15.0, STATES[NPA_DOUBTFUL]: 20.0,
 }
 
 
@@ -395,8 +396,10 @@ def fit_beta_moments(fractions: Sequence[float] | np.ndarray) -> tuple[float, fl
 # book (~3-4% of outstanding each); a resolution from early buckets is a
 # closure at close to the full balance, from NPA a negotiated or legal
 # recovery. Replace with fit_beta_moments on the book's own payments.
-_DEFAULT_CURE_MEAN = {"SMA_0": 0.04, "SMA_1": 0.08, "SMA_2": 0.12, "NPA_SUB": 0.20, "NPA_DOUBTFUL": 0.30}
-_DEFAULT_RESOLVE_MEAN = {"SMA_0": 0.95, "SMA_1": 0.90, "SMA_2": 0.85, "NPA_SUB": 0.60, "NPA_DOUBTFUL": 0.40}
+_DEFAULT_CURE_MEAN = {STATES[SMA_0]: 0.04, STATES[SMA_1]: 0.08, STATES[SMA_2]: 0.12,
+                      STATES[NPA_SUB]: 0.20, STATES[NPA_DOUBTFUL]: 0.30}
+_DEFAULT_RESOLVE_MEAN = {STATES[SMA_0]: 0.95, STATES[SMA_1]: 0.90, STATES[SMA_2]: 0.85,
+                         STATES[NPA_SUB]: 0.60, STATES[NPA_DOUBTFUL]: 0.40}
 
 
 @dataclass(frozen=True)
@@ -1248,7 +1251,7 @@ def _run_chunk(ctx: _Context, p0: int, p1: int, ss: np.random.SeedSequence, out:
     # account turns Doubtful (entry + 12), or _NEVER — one equality test a
     # month finds exactly the accounts due, instead of re-deriving every age.
     entry = np.tile(-ctx.age0, (pc, 1)).astype(np.int16)
-    promote = np.where(state == NPA_SUB, entry + DOUBTFUL_AFTER_MONTHS, _NEVER).astype(np.int16)
+    promote = np.where(state == NPA_SUB, entry + NPA_DOUBTFUL_AFTER_MONTHS, _NEVER).astype(np.int16)
     state_f, idxk_f = state.reshape(-1), idxk.reshape(-1)
     entry_f, promote_f = entry.reshape(-1), promote.reshape(-1)
     buf = _Buffers((pc, n))
@@ -1284,7 +1287,7 @@ def _run_chunk(ctx: _Context, p0: int, p1: int, ss: np.random.SeedSequence, out:
         if entering.any():
             fe = flat[entering]
             entry_f[fe] = t + 1
-            promote_f[fe] = t + 1 + DOUBTFUL_AFTER_MONTHS
+            promote_f[fe] = t + 1 + NPA_DOUBTFUL_AFTER_MONTHS
 
         ev = _EVENTS.take(s_from * np.int8(_N_OUT) + outcome)
         e = np.flatnonzero(ev)
@@ -1429,10 +1432,10 @@ def simulate(
     state0 = book.state.copy()
     raw = np.full(book.n, -1.0) if book.npa_age_months is None else np.nan_to_num(book.npa_age_months, nan=-1.0)
     known = raw >= 0
-    sub_aged = (state0 == NPA_SUB) & known & (raw >= DOUBTFUL_AFTER_MONTHS)
-    doubtful_young = (state0 == NPA_DOUBTFUL) & known & (raw < DOUBTFUL_AFTER_MONTHS)
+    sub_aged = (state0 == NPA_SUB) & known & (raw >= NPA_DOUBTFUL_AFTER_MONTHS)
+    doubtful_young = (state0 == NPA_DOUBTFUL) & known & (raw < NPA_DOUBTFUL_AFTER_MONTHS)
     state0[sub_aged] = NPA_DOUBTFUL
-    lower = np.where(state0 == NPA_DOUBTFUL, DOUBTFUL_AFTER_MONTHS, 0)
+    lower = np.where(state0 == NPA_DOUBTFUL, NPA_DOUBTFUL_AFTER_MONTHS, 0)
     age0 = np.where(known, np.maximum(raw, lower), lower)
     age0 = np.where(np.isin(state0, NPA), age0, 0).astype(np.int16)
 

@@ -123,8 +123,8 @@ def test_an_npa_status_wins_over_the_bucket_until_regularised():
 
 
 def test_dpd_range_agrees_with_dpd_bucket_for():
-    # DPD_RANGE restates 30/60/90 because importing models.loan would pull the
-    # DB engine into a DB-free package; this is what keeps the copy honest.
+    # DPD_RANGE is swept off dpd_bucket_for, not restated; this pins what the
+    # sweep produces, and the two tests below pin that it really is a sweep.
     # Extended 2026-09-24 (audit of 66f3bb9) to negative DPD, a real input
     # shape (e.g. a payment posted after the as-of date can leave a loan's
     # DPD computed as negative): dpd_bucket_for clamps it to CURRENT, and so
@@ -142,6 +142,56 @@ def test_dpd_range_agrees_with_dpd_bucket_for():
             assert hits == [] and d <= 0, d
         else:
             assert s == NPA_SUB and hits == [] and d >= DPD_RANGE[NPA_SUB][0], d
+
+
+def test_the_dpd_ladder_is_derived_from_dpd_bucket_for_and_not_copied(monkeypatch):
+    """Mutation check on the dedupe: move dpd_bucket_for's boundaries and the
+    strategy package's ladder must move with them. A restated copy would not."""
+    from app.models.loan import DPDBucket, NPA_DOUBTFUL_AFTER_MONTHS
+    from app.strategy import states as st
+
+    def shifted(dpd):
+        d = int(dpd or 0)
+        for limit, bucket in ((0, DPDBucket.CURRENT), (15, DPDBucket.BUCKET_1),
+                              (45, DPDBucket.BUCKET_2), (100, DPDBucket.BUCKET_3)):
+            if d <= limit:
+                return bucket
+        return DPDBucket.NPA
+
+    monkeypatch.setattr(st, "dpd_bucket_for", shifted)
+    moved = st._dpd_range()
+    assert (moved[SMA_0], moved[SMA_1], moved[SMA_2]) == ((1.0, 15.0), (16.0, 45.0), (46.0, 100.0))
+    assert moved[NPA_SUB][0] == 101.0                    # the NPA floor follows the ladder too
+    assert moved[NPA_SUB][1] - moved[NPA_SUB][0] == NPA_DOUBTFUL_AFTER_MONTHS / 12.0 * 365.0
+    assert moved[NPA_DOUBTFUL] == (moved[NPA_SUB][1], float("inf"))
+    assert DPD_RANGE[SMA_0] == (1.0, 30.0)               # the shipped table is the unshifted sweep
+
+
+def test_no_strategy_module_spells_a_state_name_or_the_dpd_ladder_itself():
+    """The dedupe tripwire. Source text deliberately: a second copy of a name is
+    a textual fact, and no behavioural test can see one that is not wired up yet.
+    Docstrings are exempt — they describe the space, they do not define it."""
+    import ast
+    import pathlib
+    package = pathlib.Path(mc.__file__).parent
+    spelled: dict[str, list[str]] = {}
+    for path in sorted(package.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        docstrings = {ast.get_docstring(n, clean=False) for n in ast.walk(tree)
+                      if isinstance(n, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
+        names = sorted({n.value for n in ast.walk(tree)
+                        if isinstance(n, ast.Constant) and isinstance(n.value, str)
+                        and n.value in set(STATES) and n.value not in docstrings})
+        if names:
+            spelled[path.name] = names
+    assert spelled == {}, f"state names spelled instead of imported from states: {spelled}"
+    # 30/60/90 live in models/loan.dpd_bucket_for. states.py derives and holds none
+    # of them; the other modules legitimately carry a 90 (a percentile, and the
+    # legal-action lever's default DPD), which is why this half is scoped here.
+    ladder = sorted(n.value for n in ast.walk(ast.parse((package / "states.py").read_text(encoding="utf-8")))
+                    if isinstance(n, ast.Constant) and not isinstance(n.value, bool)
+                    and isinstance(n.value, (int, float)) and float(n.value) in (30.0, 60.0, 90.0))
+    assert ladder == [], f"states.py restates a DPD boundary: {ladder}"
 
 
 # ── Core invariants ───────────────────────────────────────────────────────────

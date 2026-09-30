@@ -7,7 +7,7 @@
 #   (models/stress_simulator_data.py:21-116) with one deliberate change:
 #   CC rolls 30% of Sub-standard into Doubtful EVERY MONTH (:91, "a rough
 #   proxy"), which empties Sub-standard in ~3 months. Doubtful is a 12-month
-#   age rule (states.DOUBTFUL_AFTER_MONTHS), so the monthly hazard here is
+#   age rule (states.NPA_DOUBTFUL_AFTER_MONTHS), so the monthly hazard here is
 #   1/12. And unlike CC, what comes out is COUNTS drawn from those rows —
 #   the engine's input is evidence, and a thin segment has to look thin.
 #

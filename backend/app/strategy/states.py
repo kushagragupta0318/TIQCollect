@@ -19,12 +19,9 @@
 #   definition: the SQL function should be generated from it, not written
 #   beside it (CLAUDE.md, "one definition, one place").
 #
-#   It deliberately does NOT import `app.models.loan`. The data layer is being
-#   rewritten on another branch and this package must stay importable without
-#   the ORM. The bucket and status spellings are matched by VALUE (both enums
-#   are `str` enums, so `DPDBucket.NPA == "NPA"`), and
-#   tests/test_monte_carlo.py asserts every member of both enums maps here, so
-#   a renamed or added member fails a test instead of falling through quietly.
+#   The rule, the state space and the 12-month constant are IMPORTED from
+#   `app.models.loan`, the one definition. Every table below is DERIVED from it
+#   at import, so a renamed or added enum member changes them with it.
 #
 # 2026-09-24 (later) — Four corrections from the coordinator's audit of daadc17.
 #
@@ -46,12 +43,12 @@
 #   3. LoanStatus.NPA WINS over the bucket. A part-paid NPA whose DPD fell to
 #      45 mapped to SMA_1; the bank still carries it as an NPA until it is
 #      regularised, so it is NPA_SUB / NPA_DOUBTFUL by npa_since.
-#   4. DPD_RANGE restates 30/60/90 — an eighth copy of the DPD -> bucket rule.
-#      It cannot import models/loan.dpd_bucket_for: importing app.models runs
-#      app.core.database, which builds the SQLAlchemy engine from Settings and
-#      needs the DB env and driver, and this package must stay DB-free. So it
-#      is pinned instead: test_dpd_range_agrees_with_dpd_bucket_for checks
-#      agreement over 0..400 DPD.
+#   4. DPD_RANGE restated 30/60/90 — an eighth copy of the DPD -> bucket rule.
+#      It is now SWEPT off models/loan.dpd_bucket_for, so the boundaries live
+#      only there. The old reason for the copy ("importing app.models needs the
+#      DB") was wrong on the part that mattered: it builds a lazy Engine and
+#      opens no connection. It does need the app's settings env, which every
+#      caller of this package (the API, a Celery task, pytest) already has.
 # ───────────────────────────────────────────────────────────────────────────
 """The 8-state portfolio space used by the Monte Carlo engine and the backtest.
 
@@ -73,10 +70,12 @@ from typing import Iterable, Sequence
 
 import numpy as np
 
-STATES: tuple[str, ...] = (
-    "CURRENT", "SMA_0", "SMA_1", "SMA_2",
-    "NPA_SUB", "NPA_DOUBTFUL", "WRITTEN_OFF", "RESOLVED",
+from app.models.loan import (
+    NPA_DOUBTFUL_AFTER_MONTHS, PORTFOLIO_STATES, DPDBucket, LoanStatus, dpd_bucket_for,
+    portfolio_state as _loan_portfolio_state,
 )
+
+STATES: tuple[str, ...] = PORTFOLIO_STATES
 N_STATES = len(STATES)
 CURRENT, SMA_0, SMA_1, SMA_2, NPA_SUB, NPA_DOUBTFUL, WRITTEN_OFF, RESOLVED = range(N_STATES)
 STATE_INDEX: dict[str, int] = {code: i for i, code in enumerate(STATES)}
@@ -93,24 +92,9 @@ DEFAULT_STATES = (NPA_SUB, NPA_DOUBTFUL, WRITTEN_OFF)
 # loss line. (WRITTEN_OFF read stage 3 until 2026-09-24, see CHANGELOG 1.)
 IFRS9_STAGE: tuple[int, ...] = (1, 1, 2, 2, 3, 3, 0, 0)
 
-# NPA -> DOUBTFUL after this many months as an NPA (RBI Master Circular on
-# IRAC norms: "remained in the sub-standard category for a period of 12
-# months"). REGULATORY, not an assumption — and applied as a rule, at exactly
-# this age, by the engine; never as a monthly probability.
-DOUBTFUL_AFTER_MONTHS = 12
-
-# DPD range per delinquent state, used by the legal-threshold lever to ask how
-# much of a state's DPD range lies beyond the threshold. NPA_SUB spans 91 DPD
-# to 91 + 12 months; NPA_DOUBTFUL is open-ended.
-# THIS RESTATES models/loan.dpd_bucket_for's 30/60/90 (see CHANGELOG 4); the
-# two are held together by test_dpd_range_agrees_with_dpd_bucket_for.
-DPD_RANGE: dict[int, tuple[float, float]] = {
-    SMA_0: (1.0, 30.0),
-    SMA_1: (31.0, 60.0),
-    SMA_2: (61.0, 90.0),
-    NPA_SUB: (91.0, 91.0 + 365.0),
-    NPA_DOUBTFUL: (456.0, float("inf")),
-}
+# NPA -> DOUBTFUL after this many months as an NPA is REGULATORY (RBI IRAC
+# norms) and lives in models/loan. Applied by the engine as a rule at exactly
+# this age, never as a monthly probability.
 
 
 def _direction_matrix() -> np.ndarray:
@@ -166,25 +150,68 @@ def _reachable_matrix() -> np.ndarray:
 REACHABLE = _reachable_matrix()
 REACHABLE.setflags(write=False)
 
-# ── Mapping from the repo's own enums ────────────────────────────────────────
-# Matched by value. app.models.loan.DPDBucket and LoanStatus are str enums.
-BUCKET_TO_STATE: dict[str, int] = {
-    "CURRENT": CURRENT,
-    "BUCKET_1": SMA_0,
-    "BUCKET_2": SMA_1,
-    "BUCKET_3": SMA_2,
-    "NPA": NPA_SUB,  # split into DOUBTFUL by NPA age, below
-}
-# Terminal statuses win over the bucket (a written-off loan keeps its last DPD).
-TERMINAL_STATUS_TO_STATE: dict[str, int] = {
-    "WRITTEN_OFF": WRITTEN_OFF,
-    "CLOSED": RESOLVED,
-    "SETTLED": RESOLVED,
-}
-# An NPA status also wins over the bucket: the account stays an NPA until it
-# is regularised, whatever its DPD has fallen to (CHANGELOG 3).
-NPA_STATUS = "NPA"
-NON_TERMINAL_STATUSES: frozenset[str] = frozenset({"ACTIVE", NPA_STATUS})
+# ── Read off the one definition, never restated ──────────────────────────────
+# Every table here is what models/loan.portfolio_state answers when probed, so
+# an added or renamed enum member moves them instead of going unnoticed.
+NPA_STATUS = LoanStatus.NPA.value
+# Any date: no probe below passes an npa_since, and as_of is read only with one.
+_PROBE_DAY = date(2000, 1, 1)
+
+
+def _bucket_to_state() -> dict[str, int]:
+    return {b.value: STATE_INDEX[_loan_portfolio_state(b.value, LoanStatus.ACTIVE.value, None, _PROBE_DAY)]
+            for b in DPDBucket}
+
+
+def _status_maps() -> tuple[dict[str, int], frozenset[str]]:
+    """Terminal statuses win over the bucket; the rest leave it to the bucket
+    (an NPA status reads NPA_SUB here, and wins over the bucket downstream)."""
+    terminal: dict[str, int] = {}
+    non_terminal: set[str] = set()
+    for st in LoanStatus:
+        state = _loan_portfolio_state(DPDBucket.CURRENT.value, st.value, None, _PROBE_DAY)
+        if state == STATES[CURRENT] or STATE_INDEX[state] in NPA:
+            non_terminal.add(st.value)
+        else:
+            terminal[st.value] = STATE_INDEX[state]
+    return terminal, frozenset(non_terminal)
+
+
+BUCKET_TO_STATE: dict[str, int] = _bucket_to_state()
+TERMINAL_STATUS_TO_STATE, NON_TERMINAL_STATUSES = _status_maps()
+
+
+_SWEEP_CEILING = 10_000     # a DPD no bucket rule would run past; a bad rule fails loudly
+_DAYS_PER_YEAR = 365.0      # the NPA_SUB span in days, not a DPD boundary
+
+
+def _dpd_range() -> dict[int, tuple[float, float]]:
+    """Each delinquent state's DPD span, SWEPT off dpd_bucket_for.
+
+    Used by the legal-threshold lever to ask how much of a state's span lies
+    beyond a threshold. The 30/60/90 boundaries stay in models/loan; NPA_SUB
+    ends where the 12-month age rule promotes it, which is a question about NPA
+    age rather than DPD, and NPA_DOUBTFUL is open-ended.
+    """
+    lo: dict[int, float] = {}
+    hi: dict[int, float] = {}
+    d = 1
+    while BUCKET_TO_STATE[dpd_bucket_for(d).value] != NPA_SUB:
+        state = BUCKET_TO_STATE[dpd_bucket_for(d).value]
+        lo.setdefault(state, float(d))
+        hi[state] = float(d)
+        d += 1
+        if d > _SWEEP_CEILING:
+            raise AssertionError(f"dpd_bucket_for reaches no NPA below {_SWEEP_CEILING} DPD")
+    npa_lo = float(d)
+    npa_span = NPA_DOUBTFUL_AFTER_MONTHS / 12.0 * _DAYS_PER_YEAR
+    spans = {state: (lo[state], hi[state]) for state in lo}
+    spans[NPA_SUB] = (npa_lo, npa_lo + npa_span)
+    spans[NPA_DOUBTFUL] = (npa_lo + npa_span, float("inf"))
+    return spans
+
+
+DPD_RANGE: dict[int, tuple[float, float]] = _dpd_range()
 
 
 def _value(x) -> str | None:
@@ -213,33 +240,30 @@ def months_between(start: date, end: date) -> int:
 
 def portfolio_state(dpd_bucket, loan_status=None, npa_since: date | None = None,
                     as_of: date | None = None) -> str:
-    """The 8-state code for one loan. The single definition (see CHANGELOG).
+    """models/loan.portfolio_state — the one definition — made strict.
 
-    - A terminal `loan_status` wins: WRITTEN_OFF -> WRITTEN_OFF,
-      CLOSED / SETTLED -> RESOLVED.
-    - An NPA `loan_status` wins over the bucket: a part-paid NPA stays an NPA
-      until regularised (RBI), whatever its DPD now reads.
-    - Otherwise the DPD bucket decides. NPA splits at 12 whole months of
-      `npa_since` (REGULATORY). With no `npa_since` an NPA reads as
-      NPA_SUB — a lower bound, the same one DATA-MODEL-V2 §9.5 records for
-      loans whose NPA spell starts at the earliest observation.
+    It decides: a terminal `loan_status` wins (WRITTEN_OFF; CLOSED / SETTLED ->
+    RESOLVED); an NPA status wins over the bucket, since a part-paid NPA stays
+    an NPA until regularised (RBI); otherwise the bucket decides, and NPA splits
+    at `NPA_DOUBTFUL_AFTER_MONTHS` of `npa_since` (with none, NPA_SUB — the
+    lower bound DATA-MODEL-V2 §9.5 records).
+
+    Strict because the engine INDEXES arrays by state: an unknown bucket or
+    status raises here, where loan.py returns its "UNKNOWN" for an ORM reader to
+    surface. "UNKNOWN" is not in STATES and has no index.
     """
-    status = _value(loan_status)
-    if status is not None:
-        if status in TERMINAL_STATUS_TO_STATE:
-            return STATES[TERMINAL_STATUS_TO_STATE[status]]
-        if status not in NON_TERMINAL_STATUSES:
-            raise ValueError(f"unknown loan_status {status!r}")
-    bucket = _value(dpd_bucket)
+    bucket, status = _value(dpd_bucket), _value(loan_status)
     if bucket not in BUCKET_TO_STATE:
         raise ValueError(f"unknown dpd_bucket {bucket!r}")
-    state = NPA_SUB if status == NPA_STATUS else BUCKET_TO_STATE[bucket]
-    if state == NPA_SUB and npa_since is not None:
-        if as_of is None:
-            raise ValueError("npa_since given without as_of")
-        if months_between(npa_since, as_of) >= DOUBTFUL_AFTER_MONTHS:
-            state = NPA_DOUBTFUL
-    return STATES[state]
+    if status is not None and status not in TERMINAL_STATUS_TO_STATE and status not in NON_TERMINAL_STATUSES:
+        raise ValueError(f"unknown loan_status {status!r}")
+    if npa_since is not None and as_of is None:
+        raise ValueError("npa_since given without as_of")
+    state = _loan_portfolio_state(bucket, status if status is not None else LoanStatus.ACTIVE.value,
+                                  npa_since, as_of if as_of is not None else _PROBE_DAY)
+    if state not in STATE_INDEX:
+        raise ValueError(f"models/loan.portfolio_state returned {state!r}, which is not one of STATES")
+    return state
 
 
 def states_from_buckets(dpd_buckets: Iterable, npa_age_months: Sequence | np.ndarray | None = None,
@@ -272,7 +296,7 @@ def states_from_buckets(dpd_buckets: Iterable, npa_age_months: Sequence | np.nda
         age = np.asarray(npa_age_months, dtype=float)
         if age.shape != (n,):
             raise ValueError("npa_age_months must have one entry per account")
-        doubtful = (out == NPA_SUB) & (np.nan_to_num(age, nan=-1.0) >= DOUBTFUL_AFTER_MONTHS)
+        doubtful = (out == NPA_SUB) & (np.nan_to_num(age, nan=-1.0) >= NPA_DOUBTFUL_AFTER_MONTHS)
         out[doubtful] = NPA_DOUBTFUL
     if status is not None:
         for code, s in TERMINAL_STATUS_TO_STATE.items():
