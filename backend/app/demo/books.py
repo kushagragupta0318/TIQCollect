@@ -27,6 +27,7 @@ cases → visits / calls / promises / payments → offers / disputes)."""
 from __future__ import annotations
 
 import math
+import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time, timedelta, timezone
@@ -125,6 +126,41 @@ def _moment(start: date, day: int, hour: float) -> datetime:
 def _offset(lat: float, lon: float, metres: float, bearing: float) -> tuple[float, float]:
     return (lat + metres * math.cos(bearing) / 111_320,
             lon + metres * math.sin(bearing) / (111_320 * math.cos(math.radians(lat))))
+
+
+def city_geography() -> tuple[dict, dict]:
+    """City code -> display name, and city code -> state name, for every
+    roster city (both banks). A customer's `city` / `state` columns carry these."""
+    city_names = {c: nm for (lv, c, nm, *_x) in R.REGIONS + R.GIRIVAN_REGIONS_EXTRA + R.KUMAON_REGIONS if lv == "CITY"}
+    state_names = {"HR": "Haryana", "DL": "Delhi", "UP": "Uttar Pradesh", "UP-C": "Uttar Pradesh",
+                   "RJ": "Rajasthan", "MH": "Maharashtra", "GJ": "Gujarat", "TG": "Telangana",
+                   "KA": "Karnataka", "TN": "Tamil Nadu", "WB": "West Bengal", "OD": "Odisha"}
+    state_of_city = {c: state_names[p] for (lv, c, _n, p, *_x) in R.REGIONS + R.GIRIVAN_REGIONS_EXTRA if lv == "CITY"}
+    state_of_city["PUNE"] = "Maharashtra"
+    return city_names, state_of_city
+
+
+#: Borrower email domains: the reserved .test TLD, so no invented address can
+#: be a real person's mailbox (outbound is suppressed for demo tenants too).
+EMAIL_DOMAINS = ("dakmail.test", "inboxmail.test", "mailbox.test")
+LANDMARKS = ("Near Shiv Mandir", "Opp. Govt. Senior Secondary School", "Behind Community Centre",
+             "Near Metro Gate 2", "Opp. Municipal Park", "Near Water Tank", "Above Chemist Shop",
+             "Near Gurudwara", "Opp. Petrol Pump", "Behind Sabzi Mandi", "Near Post Office",
+             "Near Bus Stand", "Opp. Primary Health Centre", "Near Hanuman Mandir")
+FLOORS = ("Ground Floor", "1st Floor", "2nd Floor", "3rd Floor", "Flat 102", "Flat 304", "Flat 507")
+
+
+def borrower_detail(rng: np.random.Generator, full_name: str, alternate_phone: str, *,
+                    alt_share: float = 0.35, email_share: float = 0.45) -> dict:
+    """The contact detail a bank's KYC carries beyond the mandatory columns.
+    Drawn from its own stream so the book's other draws are unchanged."""
+    parts = [re.sub(r"[^a-z]", "", p) for p in full_name.lower().split()]
+    parts = [p for p in parts if p] or ["borrower"]
+    has_alt, has_email = rng.random() < alt_share, rng.random() < email_share
+    email = (f"{parts[0]}.{parts[-1]}{int(rng.integers(10, 99))}@{EMAIL_DOMAINS[int(rng.integers(len(EMAIL_DOMAINS)))]}"
+             if has_email else None)
+    line2 = f"{FLOORS[int(rng.integers(len(FLOORS)))]}, {LANDMARKS[int(rng.integers(len(LANDMARKS)))]}"
+    return dict(phone_alternate=(alternate_phone if has_alt else None), email=email, address_line2=line2)
 
 
 def require_rbi_window() -> None:
@@ -228,6 +264,7 @@ def generate_book(conn: Connection, w: AgencyWorld, *, slots_per_agent: float, s
     borrowers = led.borrowers.set_index("borrower_id")
     loans_of = loans.groupby("borrower_id").loan_id.apply(list).to_dict()
     cust_rows, cust_pos = [], {}
+    rng_detail = np.random.default_rng(seed + 2)           # borrower detail only (L6 realism pack)
     hostile_by = set()
     if len(led.flags):
         f = led.flags[(led.flags.flag == "HOSTILE") & (led.flags.day < end_day)]
@@ -237,12 +274,7 @@ def generate_book(conn: Connection, w: AgencyWorld, *, slots_per_agent: float, s
     latest_cibil = (pulls.sort_values("day").groupby("loan_id").cibil_score.last() if len(pulls)
                     else pd.Series(dtype=float))
     opening_cibil = dict(zip(loans.loan_id, loans.opening_cibil))
-    city_names = {c: nm for (lv, c, nm, *_x) in R.REGIONS + R.GIRIVAN_REGIONS_EXTRA + R.KUMAON_REGIONS if lv == "CITY"}
-    state_names = {"HR": "Haryana", "DL": "Delhi", "UP": "Uttar Pradesh", "UP-C": "Uttar Pradesh",
-                   "RJ": "Rajasthan", "MH": "Maharashtra", "GJ": "Gujarat", "TG": "Telangana",
-                   "KA": "Karnataka", "TN": "Tamil Nadu", "WB": "West Bengal", "OD": "Odisha"}
-    state_of_city = {c: state_names[p] for (lv, c, _n, p, *_x) in R.REGIONS + R.GIRIVAN_REGIONS_EXTRA if lv == "CITY"}
-    state_of_city["PUNE"] = "Maharashtra"
+    city_names, state_of_city = city_geography()
     for seq, (bid, lids) in enumerate(sorted(loans_of.items())):
         b = borrowers.loc[bid]
         placed_lids = [x for x in lids if x in placed_on]
@@ -274,7 +306,8 @@ def generate_book(conn: Connection, w: AgencyWorld, *, slots_per_agent: float, s
             is_hostile=any(x in hostile_by for x in lids),
             requires_female_agent=bool(female and rng.random() < 0.10),
             do_not_contact=bool(rng.random() < 0.004), fraud_flag=bool(getattr(b, "fraud_flag", 0)),
-            complaints_raised=0, tags=tags))
+            complaints_raised=0, tags=tags,
+            **borrower_detail(rng_detail, name, f"6{n:02d}{seq:07d}")))
     cust_idx = {r["id"]: i for i, r in enumerate(cust_rows)}
 
     # ── loans, state at the anchor ──────────────────────────────────────────
@@ -641,6 +674,11 @@ def generate_book(conn: Connection, w: AgencyWorld, *, slots_per_agent: float, s
                 placement_id=(lid("placement", k) if placed else None),
                 is_month_end=(d + timedelta(days=1)).day == 1,
                 source="LEDGER", is_backfill=False, observed_pit=True))
+
+    # Loan-major, so each loan's daily rows in the current month's partition
+    # sit together: pg_dump compresses them ~4x better than date-major.
+    loan_pos = {lid("loan", k): i for i, k in enumerate(loans.loan_id)}
+    hist_rows.sort(key=lambda r: (loan_pos[r["loan_id"]], r["as_of_date"]))
 
     # ── write ───────────────────────────────────────────────────────────────
     for table, rows in (("customers", cust_rows), ("loans", loan_rows), ("placements", place_rows),

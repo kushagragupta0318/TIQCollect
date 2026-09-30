@@ -9,6 +9,8 @@
 #       stress  every agency, 6x the agents — scalability only, NEVER committed
 #   The ground-truth manifest (latent quality, every agent's skill and gender,
 #   every injected breach) is written to --manifest, never to a product table.
+# 2026-09-30 (lane L6) — each profile also writes the banks' PERFORMING books
+#   (app/demo/performing.py) after the agency books; counts go in the manifest.
 # ────────────────────────────────────────────────────────────────────────────
 """Generate the demo tenants and their books into a v2 database that already
 holds B15's transformed Aravalli book.
@@ -33,6 +35,7 @@ from app.core.config import settings
 from app.demo import roster as R
 from app.demo.books import INSTALMENT_WINDOW, generate_book, require_rbi_window
 from app.demo.latent import AGENCY_LATENT, CONTACT_HOUR
+from app.demo.performing import generate_performing
 from app.demo.world import T, build_world, insert
 
 
@@ -42,12 +45,17 @@ class Profile:
     slots_per_agent: float        # ledger borrower slots per agent (~2.1 placed loans each)
     agents_cap: int | None = None
     agents_scale: float = 1.0
+    performing: tuple = ()         # (bank key, never-delinquent loans), written after the agency books
 
 
 PROFILES = {
-    "dev": Profile(agencies=("ARAVALLI", "SAHYADRI", "DECCAN", "AWADH"), slots_per_agent=30, agents_cap=10),
-    "demo": Profile(agencies=tuple(a.key for a in R.AGENCIES), slots_per_agent=38),
-    "stress": Profile(agencies=tuple(a.key for a in R.AGENCIES), slots_per_agent=100, agents_scale=6.0),
+    "dev": Profile(agencies=("ARAVALLI", "SAHYADRI", "DECCAN", "AWADH"), slots_per_agent=30, agents_cap=10,
+                   performing=(("GIRIVAN", 600),)),
+    # performing: sized to the 60 MB dump budget (fixtures/README.md), measured on the built dump
+    "demo": Profile(agencies=tuple(a.key for a in R.AGENCIES), slots_per_agent=38,
+                    performing=(("GIRIVAN", 14_000), ("KUMAON", 700))),
+    "stress": Profile(agencies=tuple(a.key for a in R.AGENCIES), slots_per_agent=100, agents_scale=6.0,
+                      performing=(("GIRIVAN", 40_000), ("KUMAON", 2_000))),
 }
 
 
@@ -166,6 +174,17 @@ def run(engine, profile_name: str, manifest_path: str | None, seed: int = 202609
                               bank_admin_id=world.bank_admin[w.roster.bank_key])
             truths[key] = t
             print(f"[generate_demo_v2] {key:11s} {dict(t.counts)}", flush=True)
+        performing = {}
+        for i, (bank_key, n_loans) in enumerate(prof.performing):
+            roster = {a.key: a for a in R.AGENCIES}
+            starts = [roster[k].onboarded for k in truths if roster[k].bank_key == bank_key]
+            if not starts:
+                continue                      # this profile generated no book for the bank
+            p = generate_performing(conn, bank_key=bank_key, n_loans=n_loans, seed=seed + 7001 + i,
+                                    history_from=min(starts))
+            performing[bank_key] = p.__dict__
+            print(f"[generate_demo_v2] performing {bank_key}: {p.loans} loans, {p.history_rows} history rows",
+                  flush=True)
     manifest = {
         "SYNTHETIC_WARNING": "Every borrower, loan, agent and event in this book is synthetic; every "
                              "organisation and person is fictional (docs/DATA-MODEL-V2.md Appendix C).",
@@ -182,6 +201,7 @@ def run(engine, profile_name: str, manifest_path: str | None, seed: int = 202609
                   "counts": dict(t.counts), "measured": t.rates}
             for key, t in truths.items()},
         "not_generated": {"ARAVALLI": "v1's book via the B15 transform; carries no injected truth"},
+        "performing": performing,
         "world_and_corrections": counts,
         "seconds": round(time.time() - t0, 1),
     }
