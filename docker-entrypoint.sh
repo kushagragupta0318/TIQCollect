@@ -249,7 +249,7 @@ else
 fi
 unset PGPASSWORD
 # 2026-09-24 (hotfix DEMO-LOGIN) — on EVERY boot of the API (and of the seed
-# container, after it seeds): the three DEMO_MASTER_ACCOUNTS log in with
+# container, after it seeds): the DEMO_MASTER_ACCOUNTS log in with
 # DEMO_MASTER_PASSWORD and every other account's password becomes unusable,
 # which retires the published seed passwords. OUTSIDE the RUN_SEED gate on
 # purpose: the dev compose runs the api with RUN_SEED=false (only the one-shot

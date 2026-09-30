@@ -123,6 +123,7 @@ class Payment(Base, UUIDPrimaryKey, TimestampMixin):
         CheckConstraint("mode <> 'BANK_DIRECT' OR agent_id IS NULL", name="bank_direct_unattributed"),
         CheckConstraint("mode <> 'ONLINE'", name="no_online"),
         Index("ix_payment_case_status", "case_id", "status"),
+        Index("ix_payment_case_date", "case_id", "payment_date"),   # v2_0017: visit-to-pay attribution
         Index("ix_payment_agent_date", "agent_id", "payment_date"),
         Index("ix_payment_agent_status", "agent_id", "status"),
         Index(None, "agency_id", "status", "payment_date"),

@@ -109,9 +109,9 @@ def test_no_usable_password_and_every_login_on_a_demo_domain(db):
     assert one(db, "select count(*) from tenancy.user_sessions") == 0
     role = {e: r for e, _h, r in users}
     from app.demo.roster import MASTER_ACCOUNTS
-    groups = [next(i for i, (_n, rs) in enumerate(REQUIRED_ROLE_GROUPS) if role[m] in {x.value for x in rs})
-              for m in MASTER_ACCOUNTS]
-    assert sorted(groups) == list(range(len(REQUIRED_ROLE_GROUPS)))
+    assert len(MASTER_ACCOUNTS) == len(REQUIRED_ROLE_GROUPS)
+    for m, (_n, rs) in zip(MASTER_ACCOUNTS, REQUIRED_ROLE_GROUPS):   # positional slots
+        assert role[m] in {x.value for x in rs}, m
 
 
 def test_the_documents_match_the_roster_specimens(db):

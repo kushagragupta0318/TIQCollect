@@ -1,7 +1,9 @@
 // Pure helpers for the agency directory page (D05) — kept out of
 // AgencyDirectoryPage.tsx so they run without React or Leaflet, same split
 // as onboardingLogic.ts next door.
-import type { AgencyDirectoryRow } from "@/api/bank";
+import type { AgencyDirectoryRow, PerformanceIndex } from "@/api/bank";
+import { LOAN_TYPE_LABELS, labelFor } from "../../lib/labels";
+import { pyDate } from "../../theme/format";
 
 export interface DirectoryRegionMarker {
   region_id: string;
@@ -58,4 +60,61 @@ export function summariseCoveredRegions(
   const names = regions.map((r) => r.name);
   const shown = names.length <= limit ? names.join(", ") : `${names.slice(0, limit).join(", ")} +${names.length - limit} more`;
   return { shown, full: names.join(", "), count: names.length };
+}
+
+/** "2027-03-31" → a local calendar date, never shifted by the UTC parse of Date("…"). */
+function calendarDate(iso: string): Date | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : null;
+}
+
+/** Contracts ending within this many days are called out in the table. */
+export const CONTRACT_EXPIRY_WARN_DAYS = 90;
+
+export interface ContractSummary {
+  /** "Ends 31 Mar 2027", or the raw value when it is not a date. */
+  ends: string;
+  /** Whole days from `today` to the end date; negative once it has passed. */
+  daysLeft: number | null;
+  tone: "normal" | "soon" | "past";
+}
+
+/** The contract cell's second line. `today` is the viewer's calendar day. */
+export function contractSummary(endDate: string, today: Date): ContractSummary {
+  const end = calendarDate(endDate);
+  if (!end) return { ends: `Ends ${endDate}`, daysLeft: null, tone: "normal" };
+  const start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const daysLeft = Math.round((end.getTime() - start.getTime()) / 86_400_000);
+  const tone = daysLeft < 0 ? "past" : daysLeft <= CONTRACT_EXPIRY_WARN_DAYS ? "soon" : "normal";
+  return { ends: `${daysLeft < 0 ? "Ended" : "Ends"} ${pyDate(end)}`, daysLeft, tone };
+}
+
+/** Product codes as a bank user reads them; an unknown code shows as itself. */
+export function productLabels(codes: string[]): string {
+  return codes.map((c) => labelFor(LOAN_TYPE_LABELS, c)).join(", ");
+}
+
+/**
+ * The directory's Performance cell, from the leaderboard's rows (one per
+ * agency and region, latest month). With a region picked: that region's index
+ * or why there is none. Without: how many of the agency's regions are scored.
+ * Never one number across regions: averaging regions of very different
+ * placement volume would be a statistic nobody defined (tiqcollect-06).
+ */
+export type PerformanceCell =
+  | { kind: "scored"; index: number; n: number }
+  | { kind: "insufficient" }
+  | { kind: "not_scored_here" }
+  | { kind: "regions"; scored: number; total: number };
+
+export function performanceCell(rows: PerformanceIndex[], agencyId: string, regionId: string | null): PerformanceCell {
+  const mine = rows.filter((r) => r.agency_id === agencyId);
+  if (regionId) {
+    const row = mine.find((r) => r.region_id === regionId);
+    if (!row) return { kind: "not_scored_here" };
+    return row.index == null ? { kind: "insufficient" } : { kind: "scored", index: row.index, n: row.n };
+  }
+  const regions = new Set(mine.map((r) => r.region_id ?? ""));
+  const scored = new Set(mine.filter((r) => r.index != null).map((r) => r.region_id ?? ""));
+  return { kind: "regions", scored: scored.size, total: regions.size };
 }
