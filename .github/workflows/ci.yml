@@ -4,7 +4,7 @@ name: CI
 # June history, so a trigger on main alone never ran for this repo.
 on:
   push:
-    branches: [TIQCollect-app, "standalone-*", "lead-*", "hotfix/**"]
+    branches: [TIQCollect-app, "standalone-*", "lead-*", "hotfix/**", "l[0-9]-*", "p[0-9]-*", "view-*", "d[0-9][0-9]-*", "b[0-9][0-9]*"]
   pull_request:
   workflow_dispatch:
 
