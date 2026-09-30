@@ -124,6 +124,7 @@ import structlog
 
 from app.core.dependencies import DbSession, AgentOnly, TokenPayload
 from app.core import llm
+from app.core.prompting import DATA_RULE, fence
 from app.core.config import settings
 from app.core.ids import UUIDPath, UUIDQuery
 from app.models.agent import Agent, AgentStatus
@@ -933,11 +934,11 @@ def get_visit_strategy(case_id: UUIDPath, current_user: AgentOnly, db: DbSession
         if v.not_met_reason:
             line += f" | Not met reason: {v.not_met_reason.value.replace('_', ' ')}"
         if v.agent_recording_transcript:
-            line += f"\n     Agent note: \"{v.agent_recording_transcript[:300]}\""
+            line += "\n" + fence("agent note", v.agent_recording_transcript, limit=300)
         if v.borrower_recording_transcript:
-            line += f"\n     Customer said: \"{v.borrower_recording_transcript[:200]}\""
+            line += "\n" + fence("customer said", v.borrower_recording_transcript, limit=200)
         if v.ai_visit_note:
-            line += f"\n     AI summary: \"{v.ai_visit_note[:250]}\""
+            line += "\n" + fence("earlier ai summary", v.ai_visit_note, limit=250)
         visit_lines.append(line)
 
     call_lines = []
@@ -948,9 +949,9 @@ def get_visit_strategy(case_id: UUIDPath, current_user: AgentOnly, db: DbSession
             f" ({cl.duration_seconds or 0}s)"
         )
         if cl.customer_response_notes:
-            line += f"\n     Agent call note: \"{cl.customer_response_notes[:200]}\""
+            line += "\n" + fence("agent call note", cl.customer_response_notes, limit=200)
         if cl.best_time_to_visit:
-            line += f"\n     Best time to visit: {cl.best_time_to_visit}"
+            line += "\n" + fence("best time to visit", cl.best_time_to_visit, limit=120)
         if cl.blocked_until_date:
             line += f"\n     BLOCKED until: {cl.blocked_until_date.strftime('%d %b %Y')}"
         if cl.payment_intent_signalled:
@@ -976,6 +977,8 @@ def get_visit_strategy(case_id: UUIDPath, current_user: AgentOnly, db: DbSession
     prompt = f"""You are a collections intelligence assistant at a financial recovery agency in India.
 Generate a structured visit strategy brief for a field agent about to visit this NPA customer.
 
+{DATA_RULE}
+
 --- CASE CONTEXT ---
 Customer: {customer.full_name} ({customer.customer_segment or 'Unknown'}, {customer.city})
 Language: {customer.language_preference}
@@ -995,7 +998,7 @@ Collection stage: {case.collection_stage or 'FIELD'} | Visit {case.visit_count +
 {chr(10).join('  • ' + f for f in flags) if flags else '  None'}
 
 --- BANK REMARKS ---
-{case.bank_agent_remarks or 'None on file.'}
+{fence('bank remarks', case.bank_agent_remarks) or 'None on file.'}
 
 Based on all the above, generate a visit strategy brief. Respond ONLY with a valid JSON object — no markdown, no explanation — using exactly these fields:
 {{

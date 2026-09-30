@@ -113,3 +113,31 @@ def test_the_borrowers_name_is_still_declared_for_redaction(sent):
     """The privacy fix and this one have to hold at the same time."""
     ai_report_service.AIReportService.generate_visit_report(_visit(), _case())
     assert sent["kwargs"]["names"] == ["Farhan Siddiqui"]
+
+
+# ── The rest of the family: the other two prompts that quote people ─────────
+# Same helper, same rule (team rule 17: close the class, not one instance).
+
+def test_the_visit_strategy_prompt_fences_every_field_a_person_wrote():
+    """agent.py inlined a borrower's recorded words and an agent's call note.
+    Asserted on the source, because the route needs a whole case fixture and
+    the property under test is how the prompt is BUILT."""
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parents[1]
+           / "app" / "api" / "v1" / "endpoints" / "agent.py").read_text(encoding="utf-8")
+    for field in ("v.agent_recording_transcript", "v.borrower_recording_transcript",
+                  "v.ai_visit_note", "cl.customer_response_notes", "cl.best_time_to_visit",
+                  "case.bank_agent_remarks"):
+        assert f"fence(" in src and field in src
+        # None of them may still be interpolated straight into the f-string.
+        assert f'{{{field}[' not in src and f'{{{field}}}' not in src, field
+    assert "DATA_RULE" in src
+
+
+def test_the_case_ranking_prompt_fences_the_call_note():
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parents[1]
+           / "app" / "services" / "case_service.py").read_text(encoding="utf-8")
+    assert "fence(f\"call note for case {i}\"" in src
+    assert "signals.append(call.customer_response_notes[:60])" not in src
+    assert "DATA_RULE" in src

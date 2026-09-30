@@ -40,6 +40,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from app.core import llm
+from app.core.prompting import DATA_RULE, fence
 from app.core.config import settings
 from app.core.routing import optimize_route
 from app.models.agent import Agent
@@ -439,6 +440,7 @@ class CaseService:
                 eligible = [r for r in pending_active if r["rank_score"] > -999][:8]
                 if eligible:
                     lines = []
+                    notes: list[str] = []      # free text, fenced (core/prompting)
                     for i, r in enumerate(eligible, 1):
                         call = call_map.get(r["id"])
                         visit = visit_map.get(r["id"])
@@ -451,9 +453,13 @@ class CaseService:
                             if call.verbal_payment_date == eff_day:
                                 signals.append("verbal pay date today")
                             if call.best_time_to_visit:
-                                signals.append(f"best time: {call.best_time_to_visit}")
+                                notes.append(fence(f"best time to visit, case {i}",
+                                                   call.best_time_to_visit, limit=120))
                             if call.customer_response_notes:
-                                signals.append(call.customer_response_notes[:60])
+                                # The agent's own words about this borrower: quoted
+                                # below the list, not inlined as another "signal".
+                                notes.append(fence(f"call note for case {i}",
+                                                   call.customer_response_notes, limit=200))
                         if visit:
                             signals.append(f"last visit: {visit.outcome}")
                         dpd = r.get("loan", {}).get("dpd", 0)
@@ -461,7 +467,9 @@ class CaseService:
 
                     result = llm.complete(
                         "Generate a one-line visit priority reason (max 10 words, specific, actionable) for each case. "
-                        "Return ONLY JSON mapping number to reason.\n\nCases:\n" + "\n".join(lines) +
+                        "Return ONLY JSON mapping number to reason.\n\n" + DATA_RULE +
+                        "\n\nCases:\n" + "\n".join(lines) +
+                        ("\n\n" + "\n".join(notes) if notes else "") +
                         '\n\nFormat: {"1": "reason", "2": "reason", ...}',
                         purpose="case_ranking", json_mode=True,
                         max_tokens=900, temperature=0.3,
