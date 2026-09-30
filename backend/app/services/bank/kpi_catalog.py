@@ -143,11 +143,20 @@ KPIS: tuple[KpiDef, ...] = (
     KpiDef(
         "collection_efficiency", "Collection Efficiency", "outcome", "pct", True,
         "Collections verified through agencies divided by collectible due, month to date. Payments made to "
-        "the bank directly are shown beside it, not in it (DATA-MODEL-V2 Q23). Not available for a month in "
-        "which any part of the placed book has no opening reading.",
+        "the bank directly are shown beside it, not in it (DATA-MODEL-V2 Q23). An agency or region with no "
+        "opening reading that month is left out of both sides, not zeroed; a selection narrowed to only such "
+        "an agency or region is itself unavailable, never a guess.",
         "recovery", "month", (SCORECARD,),
-        f"""SELECT CASE WHEN COUNT(*) FILTER (WHERE region_id IS NOT NULL AND collectible_due IS NULL) > 0 THEN NULL
-                        ELSE SUM(verified_collections) / NULLIF(SUM(collectible_due), 0) END AS value,
+        # L6, 2026-09-30: was a single blanket guard — ANY row anywhere in the
+        # selection lacking a reading nulled the WHOLE value, so Aravalli's
+        # permanent pre-anchor gap (fixtures/README.md) blanked this KPI for
+        # every other agency too. FILTER excludes an unread row from BOTH
+        # sums consistently: the bank-wide read is real (fewer agencies, same
+        # abstain-don't-impute rule, ADR 0005), and a selection narrowed to
+        # just an unread agency sums zero rows on both sides -> NULL, exactly
+        # like the ordinary "no reading" path.
+        f"""SELECT SUM(verified_collections) FILTER (WHERE collectible_due IS NOT NULL)
+                  / NULLIF(SUM(collectible_due) FILTER (WHERE collectible_due IS NOT NULL), 0) AS value,
                    SUM(bank_direct_collections) AS aux
             FROM analytics.{SCORECARD} WHERE bank_id = :bank AND month_start BETWEEN :m0 AND :m1""",
         lambda r: f"{money(float(r['aux'] or 0))} more paid to the bank directly"),
