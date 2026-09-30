@@ -11,6 +11,7 @@ manager/command-centre), via OpenAI.
 from __future__ import annotations
 
 from app.core import llm
+from app.core.prompting import DATA_RULE, fence
 from app.models.case import Case
 from app.models.visit import Visit
 
@@ -38,6 +39,9 @@ class AIReportService:
                 "DECEASED": "Customer deceased",
                 "REVISIT": "Revisit required",
             }
+            # Facts the product itself wrote go in ctx_parts; anything a PERSON
+            # typed or said goes in `quoted`, fenced (core/prompting).
+            quoted: list[str] = []
             ctx_parts = [
                 f"Agent visit #{visit.visit_number} to collect overdue loan.",
                 f"Customer: {case.customer.full_name} | Loan: {case.loan.loan_type.replace('_',' ')} with {case.loan.bank_name} | DPD: {case.loan.dpd} days | Bucket: {case.loan.dpd_bucket}.",
@@ -52,7 +56,7 @@ class AIReportService:
             if visit.not_met_reason:
                 ctx_parts.append(f"Not met reason: {visit.not_met_reason.replace('_',' ')}.")
             if visit.notes:
-                ctx_parts.append(f"Agent field notes: {visit.notes}")
+                quoted.append(fence("agent field notes", visit.notes))
             if visit.geo_verified:
                 ctx_parts.append("GPS geo-fence verified (agent was within 100m of customer address).")
             if not visit.within_contact_hours:
@@ -66,9 +70,12 @@ class AIReportService:
             if visit.business_running is not None:
                 ctx_parts.append(f"Business/commerce activity observed: {'Yes' if visit.business_running else 'No'}.")
             if visit.agent_recording_transcript:
-                ctx_parts.append(f"Agent visit note: {visit.agent_recording_transcript}")
+                # A doorstep recording: the agent's words and the borrower's.
+                quoted.append(fence("visit recording transcript", visit.agent_recording_transcript))
             if visit.ai_visit_note:
-                ctx_parts.append(f"AI visit note: {visit.ai_visit_note}")
+                # An earlier model's output, fed back in. Fenced too, or an
+                # injection that once landed keeps arriving as instructions.
+                quoted.append(fence("earlier ai visit note", visit.ai_visit_note))
 
             # Document uploads
             docs = []
@@ -88,7 +95,7 @@ class AIReportService:
                 reason = case.escalation_reason.replace("_", " ") if case.escalation_reason else "unspecified"
                 ctx_parts.append(f"Case has been ESCALATED — reason: {reason}.")
                 if case.escalation_notes:
-                    ctx_parts.append(f"Escalation details: {case.escalation_notes}")
+                    quoted.append(fence("escalation details", case.escalation_notes))
 
             context = " ".join(ctx_parts)
             prompt = (
@@ -97,7 +104,8 @@ class AIReportService:
                 f"Cover every relevant detail: outcome, who was met, payments/PTP if any, escalation if raised, "
                 f"field observations (property/vehicle/business), documents uploaded, and a brief next-step recommendation. "
                 f"Exclude irrelevant or redundant details. Do NOT use headings or bullet points — "
-                f"write a single continuous paragraph.\n\nData: {context}"
+                f"write a single continuous paragraph.\n\n{DATA_RULE}\n\nData: {context}"
+                + ("\n\n" + "\n".join(quoted) if quoted else "")
             )
             result = llm.complete(
                 prompt, purpose="visit_report", max_tokens=250, temperature=0.4,
