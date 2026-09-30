@@ -21,7 +21,7 @@ accepted option's one real risk (below) ever bites.
 > Docker Hub    docker manifest inspect                    NOT resolvable
 > ghcr mirror   ghcr.io/kushagragupta0318/minio            PUSHED, digest sha256:a1a8bd4a…
 > in use        tiq-localprod's minio container            running FROM the ghcr digest
-> visibility    gh api user/packages/container/minio       private  <-- needs an owner click
+> visibility    anonymous inspect, logged out of ghcr      PUBLIC (owner flipped it, verified)
 > ```
 >
 > Before this, one `docker system prune -a` would have left both stacks unstartable with no
@@ -104,61 +104,21 @@ and would need its own push from an arm64 machine, or an upstream source that st
 list. Fine for this laptop and any x86 server; a genuine limitation to know before assuming it
 is portable.
 
-### Still open: the package is private
+### Visibility: public, verified
 
-`gh api user/packages/container/minio` reports `"visibility": "private"`. **The REST API has no
-endpoint to change it** — `PATCH user/packages/container/minio -f visibility=public` returns
-404 — so this is a UI action only, at
-`github.com/users/kushagragupta0318/packages/container/package/minio` → *Package settings* →
-*Change visibility* → **Public**.
+The owner made the package public on 2026-09-30. Verified rather than taken on trust: after
+`docker logout ghcr.io`, an anonymous `docker manifest inspect` of the pinned digest succeeds,
+so a fresh host needs no credentials to pull it.
 
-It is not costing anything in the meantime, and the arithmetic matters more than the
-reassurance: the free personal tier is 500 MB storage and 1 GB/month transfer, nothing is
-charged until a cap is exceeded, and there is no per-push fee. At 241 MB the image is under the
-storage cap even if it sat private indefinitely. **The transfer cap is the real exposure** — a
-handful of 241 MB pulls a month clears 1 GB — and making it public removes metering entirely.
-Two smaller things also wait on the flip: a host that is not already `docker login`-ed to ghcr
-cannot pull a private package, and that is why the **dev** stack is deliberately still pinned
-to the Hub digest (it resolves from the local cache with no auth) rather than to the mirror,
-since five other lanes run that stack.
+Public was chosen on cost. The free personal tier is 500 MB storage and 1 GB/month transfer,
+nothing is charged until a cap is exceeded, and there is no per-push fee — but at 241 MB an
+image clears 1 GB of transfer in four or five pulls, so a private package would have started
+metering in normal use, against the owner's standing "nothing billable" rule. Public is
+unmetered, and redistributing an *unmodified* AGPL-3.0 image is clean with attribution and an
+upstream source pointer (`github.com/minio/minio`) in the package description.
 
-**Owner action, once:**
-
-```bash
-# A classic PAT with write:packages (github.com/settings/tokens), or
-#   gh auth refresh -h github.com -s write:packages
-echo "$CR_PAT" | docker login ghcr.io -u kushagragupta0318 --password-stdin
-
-D=sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
-docker tag minio/minio@$D ghcr.io/kushagragupta0318/minio:RELEASE.2025-09-07T16-13-09Z
-docker push ghcr.io/kushagragupta0318/minio:RELEASE.2025-09-07T16-13-09Z
-
-# Confirm the digest survived the round trip: this must print the same $D.
-docker buildx imagetools inspect \
-  ghcr.io/kushagragupta0318/minio:RELEASE.2025-09-07T16-13-09Z --format '{{.Manifest.Digest}}'
-```
-
-A push re-computes the manifest digest, so **verify it matches before trusting the pin above**;
-if ghcr normalises anything, take the digest it reports and update `MINIO_IMAGE` to that.
-
-**Public or private package — the owner's call, and it is a cost question.** ghcr.io is free
-either way, with a catch on each side:
-
-| | Free-tier terms | The catch |
-|---|---|---|
-| **Public** (recommended) | Unlimited storage and transfer, never metered | It republishes an AGPL-3.0 binary. Fine, and normal, for an *unmodified* upstream image, provided it is attributed and points at upstream source (`github.com/minio/minio`). Put both in the package description |
-| Private | 500 MB storage, 1 GB transfer/month on a free personal account | The image is ~220 MB, so storage fits but a handful of pulls a month approaches the transfer cap. Exceeding it is billable — against the owner's "nothing billable" constraint |
-
-Public avoids metering entirely and carries no licence problem for an unmodified
-redistribution. Private is the choice if he would rather not publish anything under his
-account at all, and then pulls have to be counted.
-
-**Pulling it needs no special config.** A digest reference against ghcr.io needs no
-pull-through cache and no registry mirror setting: a public package pulls anonymously, and a
-private one needs `docker login ghcr.io` once on the host (a read-only PAT with
-`read:packages`). There is deliberately no `registry-mirrors` entry in the daemon config —
-that would redirect *all* Docker Hub traffic and is a far larger change than this problem
-needs.
+Both compose files now point at the mirror: prod, and dev too, since a public package needs no
+`docker login` on the machines other lanes run the dev stack on.
 
 ## Why this over the fork
 
