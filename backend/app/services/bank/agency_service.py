@@ -554,6 +554,7 @@ def _maybe_activate(db: Session, agency_id: str) -> bool:
     agency.status = "ACTIVE"
     agency.activated_at = datetime.now(timezone.utc)
     stage_audit(db, action=AuditAction.AGENCY_ACTIVATED, user_id=None, entity_type="Agency", entity_id=agency.id,
+               bank_id=agency.bank_id, agency_id=agency.id,
                details={"required_docs_verified": sorted(REQUIRED_DOC_TYPES)})
     return True
 

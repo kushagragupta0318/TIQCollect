@@ -59,7 +59,7 @@ def get_current_user(
 
 def _bind_principal(db: Session, user: User) -> None:
     apply_tenant_context(db, bank_id=user.bank_id, agency_id=user.agency_id,
-                         scope=tenant_scope(user.role), user_id=user.id)
+                         scope=tenant_scope(user.role, user.agency_id), user_id=user.id)
 
 
 CurrentUser = Annotated[User, Depends(get_current_user)]

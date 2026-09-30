@@ -107,6 +107,25 @@ def test_cases_in_scope_never_crosses_an_agency_and_managers_see_their_own_pool(
     assert _ids(cases_in_scope(s, p["bank"])) == c("mine", "peer", "pool", "other", "other_pool")
 
 
+def test_a_service_account_is_bank_wide_only_when_it_names_no_agency(db):
+    """tenant_scope is the one definition of bank-wide. SERVICE may carry an
+    agency (ck_users_role_scope); such an account is never widened to the bank,
+    and scope.py gives it nothing (no agency-side SERVICE feature exists)."""
+    from app.services.scope import agencies_in_scope
+    s, _ = db
+    svc = User(id=test_id("u:svc"), email="svc@scope.test", phone="9719900001", full_name="Feed Service",
+               hashed_password="x", role=UserRole.SERVICE, bank_id=TEST_BANK_ID, agency_id=None)
+    svc_ag = User(id=test_id("u:svc_ag"), email="svc_ag@scope.test", phone="9719900002", full_name="Agency Service",
+                  hashed_password="x", role=UserRole.SERVICE, bank_id=TEST_BANK_ID, agency_id=TEST_AGENCY_ID)
+    s.add_all([svc, svc_ag])
+    s.commit()
+    assert _ids(agents_in_scope(s, svc)) == {test_id("ag:a1"), test_id("ag:a2"), test_id("ag:o1")}
+    assert len(_ids(cases_in_scope(s, svc))) == 5
+    assert _ids(agencies_in_scope(s, svc)) == {TEST_AGENCY_ID, OTHER}
+    for q in (agents_in_scope(s, svc_ag), cases_in_scope(s, svc_ag), agencies_in_scope(s, svc_ag)):
+        assert _ids(q) == set()
+
+
 def test_revoke_user_sessions_ends_every_live_session_but_the_one_kept(db):
     s, p = db
     user = p["mgr"]
