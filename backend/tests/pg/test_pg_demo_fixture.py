@@ -167,6 +167,32 @@ def test_the_awadh_suspension_quotes_the_book(db):
     assert f"{round(share[True])}% of August visits" in reason and f"against {round(share[False])}%" in reason
 
 
+def test_september_compliance_figure_matches_the_book(db):
+    """The README's Compliance & Integrity score for September Girivan
+    (fixtures/README.md, "Consent is only asked..."): a hand-computed
+    narrative number, not something the product stores, so this is its only
+    guard against silent drift (lane L6, 2026-09-30 after seasonality)."""
+    from app.demo.roster import BANK
+    row = rows(db, """
+        select count(*) filter (where within_contact_hours is false) as ooh,
+               count(*) filter (where geo_verified is false) as geofence,
+               count(*) filter (where customer_met) as met,
+               count(*) filter (where customer_met and consent_given is not true) as consent_missing,
+               count(*) as total
+        from collections.visits v join tenancy.agencies a on a.id = v.agency_id
+        where a.bank_id = :bank and v.check_in_time >= '2026-09-01' and v.check_in_time < '2026-10-01'
+    """, bank=BANK["id"])[0]
+    ooh, geofence, met, consent_missing, total = row
+    fraud = one(db, """
+        select count(*) from collections.fraud_reviews f
+        join collections.visits v on v.id = f.visit_id join tenancy.agencies a on a.id = v.agency_id
+        where a.bank_id = :bank and f.verdict = 'CONFIRMED'
+          and v.check_in_time >= '2026-09-01' and v.check_in_time < '2026-10-01'
+    """, bank=BANK["id"])
+    score = round(100 - (ooh + geofence + fraud + consent_missing) / total * 100, 1)
+    assert (total, met, consent_missing, ooh, geofence, fraud, score) == (4214, 2284, 705, 106, 166, 0, 76.8)
+
+
 def test_the_injected_breaches_are_where_the_manifest_says(db):
     truth = json.loads(MANIFEST.read_text(encoding="utf-8"))
     for key, t in truth["agencies"].items():
