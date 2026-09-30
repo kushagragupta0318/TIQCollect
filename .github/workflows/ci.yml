@@ -51,6 +51,7 @@ jobs:
   # tests/pg skips everywhere TIQ_PG_TEST_URL is unset (the job above).
   backend-pg:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     services:
       postgres:
         image: postgres:16
@@ -76,7 +77,7 @@ jobs:
       - name: Postgres suite
         env:
           TIQ_PG_TEST_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/postgres
-        run: python -m pytest tests/pg -q -p no:cacheprovider
+        run: python -m pytest tests/pg -q -p no:cacheprovider --timeout=900 -v --durations=20
 
   frontend:
     runs-on: ubuntu-latest
