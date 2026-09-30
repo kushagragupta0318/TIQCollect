@@ -63,6 +63,10 @@ class ErrorCode(str, Enum):
     # for a replayed visit (coordinator, ADR 0011 decision 5); the code lets the
     # outbox explain that to the agent. The 403 and its detail are unchanged.
     DO_NOT_CONTACT = "DO_NOT_CONTACT"
+    # E01 (ADR 0013): too few complete months of transition history to estimate
+    # how a bank's book migrates. An ABSTENTION, not a failure — the caller
+    # records it as an ABSTAINED run (strategy/transitions.py).
+    INSUFFICIENT_HISTORY = "INSUFFICIENT_HISTORY"
 
 
 class AppException(HTTPException):
