@@ -160,12 +160,12 @@ export default function AgentCaseDetailPage() {
   // Body scroll lock, focus trap, focus restore and Escape for the call modal.
   useModalA11y(showCallModal, callModalRef, closeCallModal);
 
-  const requestLocation = useCallback((): number | undefined => {
-    if (!geoAvailable()) {
-      setGeoError("This device/browser does not support location.");
-      return undefined;
-    }
-    setGeoError(null);
+  // Whether the device HAS geolocation is a fact read during render, not an
+  // error the page recorded — so starting the watch sets no state up front and
+  // the mount effect below stays free of a synchronous setState.
+  const geoSupported = geoAvailable();
+  const startLocationWatch = useCallback((): number | undefined => {
+    if (!geoSupported) return undefined;
     const onPos = (p: GeolocationPosition) => { setUserLoc({ lat: p.coords.latitude, lon: p.coords.longitude }); setGeoError(null); };
     const onErr = (e: GeolocationPositionError) => {
       setGeoError(
@@ -184,12 +184,22 @@ export default function AgentCaseDetailPage() {
     return geo.watchPosition(onPos, onErr, {
       enableHighAccuracy: true, timeout: 10000, maximumAge: 5000,
     });
-  }, []);
+  }, [geoSupported]);
+
+  // Retry is an event, so clearing the last error here is not a cascading render.
+  const requestLocation = useCallback(() => {
+    setGeoError(null);
+    startLocationWatch();
+  }, [startLocationWatch]);
+
+  // What the geo-fence banner shows: the unsupported case is derived, the rest
+  // arrives from the position callbacks.
+  const shownGeoError = geoSupported ? geoError : "This device/browser does not support location.";
 
   useEffect(() => {
-    const watchId = requestLocation();
+    const watchId = startLocationWatch();
     return () => { if (watchId !== undefined) geo.clearWatch(watchId); };
-  }, [requestLocation]);
+  }, [startLocationWatch]);
 
   const reloadCase = useCallback(async () => {
     if (!id) return;
@@ -1148,11 +1158,11 @@ export default function AgentCaseDetailPage() {
         <div className="max-w-md md:max-w-none mx-auto md:mx-0 pointer-events-auto tiq-glass-bar border-t border-slate-100/70 safe-bottom">
           {/* Geo-fence status bar */}
           {canRecordVisit && (
-            <div className={`flex items-center justify-between gap-2 px-4 py-2 text-xs font-medium border-b ${withinFence ? "bg-success-50 border-success-100 text-success-700" : (geoError && distanceM === null) ? "bg-danger-50 border-danger-100 text-danger-700" : distanceM === null ? "bg-slate-50 border-slate-100 text-slate-500" : "bg-danger-50 border-danger-100 text-danger-700"}`}>
+            <div className={`flex items-center justify-between gap-2 px-4 py-2 text-xs font-medium border-b ${withinFence ? "bg-success-50 border-success-100 text-success-700" : (shownGeoError && distanceM === null) ? "bg-danger-50 border-danger-100 text-danger-700" : distanceM === null ? "bg-slate-50 border-slate-100 text-slate-500" : "bg-danger-50 border-danger-100 text-danger-700"}`}>
               <div className="flex items-center gap-1.5">
                 {withinFence ? <Unlock className="w-3.5 h-3.5 flex-shrink-0" /> : <Lock className="w-3.5 h-3.5 flex-shrink-0" />}
-                {geoError && distanceM === null
-                  ? geoError
+                {shownGeoError && distanceM === null
+                  ? shownGeoError
                   : distanceM === null
                     ? "Getting your location…"
                     : withinFence
@@ -1171,7 +1181,7 @@ export default function AgentCaseDetailPage() {
                   <Button fullWidth onClick={() => navigate(`/agent/visit/${c.id}`)}>
                     <Unlock className="w-4 h-4" /> Record Visit
                   </Button>
-                ) : (geoError && distanceM === null) ? (
+                ) : (shownGeoError && distanceM === null) ? (
                   // Location blocked/denied/unavailable → let the agent re-request.
                   <Button fullWidth variant="secondary" onClick={() => requestLocation()}>
                     <MapPin className="w-4 h-4" /> Retry location
