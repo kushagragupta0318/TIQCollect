@@ -465,6 +465,7 @@ class CaseService:
                         '\n\nFormat: {"1": "reason", "2": "reason", ...}',
                         purpose="case_ranking", json_mode=True,
                         max_tokens=900, temperature=0.3,
+                        names=[r["customer"]["full_name"] for r in eligible],
                     )
                     if result.ai_generated:
                         for i, r in enumerate(eligible, 1):

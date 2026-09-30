@@ -101,6 +101,7 @@ class AIReportService:
             )
             result = llm.complete(
                 prompt, purpose="visit_report", max_tokens=250, temperature=0.4,
+                names=[case.customer.full_name],
             )
             return result.text if result.ai_generated and result.text else None
         except Exception:

@@ -872,7 +872,10 @@ def extract_visit_fields(case_id: UUIDPath, body: VisitExtractionRequest, curren
         raise HTTPException(status_code=404, detail="Case not found")
     # The same figure PaymentService.set_ptp clamps a promise to.
     remaining = max(0.0, (case.target_amount or 0.0) - (case.collected_amount or 0.0))
-    return visit_report_extraction.extract(body.transcript, remaining_amount=remaining).as_dict()
+    return visit_report_extraction.extract(
+        body.transcript, remaining_amount=remaining,
+        names=[c.full_name] if (c := getattr(case, "customer", None)) else [],
+    ).as_dict()
 
 
 # ---------------------------------------------------------------------------
@@ -1014,6 +1017,9 @@ Based on all the above, generate a visit strategy brief. Respond ONLY with a val
     _llm = llm.complete(
         prompt, purpose="visit_strategy", json_mode=True,
         temperature=0.4, max_tokens=1500,
+        # The one name this prompt embeds. No pattern can find a person's
+        # name, so the seam is told; it puts it back in the answer.
+        names=[customer.full_name],
     )
     if _llm.ai_generated:
         strategy = _llm.data
