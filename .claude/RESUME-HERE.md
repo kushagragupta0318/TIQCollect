@@ -29,6 +29,17 @@ Merge a branch when its backend-pg goes green. If one passes 35 min, THEN it's a
 - ON RESUME: once hotfix merges + L6 confirms dump green (30/30), RESTORE the new book into
   fieldops_dev_postgres/fieldops_v2 so owner sees agencies+logins+KPIs on localhost:5473. Owner pre-approved.
 
+
+## DEMO BOOK READY (added after checkpoint)
+- L6 dump + logins doc + staff mechanism all pushed: personal/l6-rebuild @ 70508d3.
+  f4c1b2d=fixture (56.2MB, perf book+seasonality, Awadh 30%/4%, Compliance 76.8),
+  b4f5b4f=apply_agency_staff() (off by default), 70508d3=docs/DEMO-LOGINS.md + generator.
+- 8 sections (bank + 7 agencies), unique emails, real per-agency + per-agent perf, shared demo password.
+- Aravalli shows collection_efficiency 'not available' honestly; other figures real.
+- RESTORE NOT DONE (laptop went offline mid-session — did not risk a mid-write). On resume:
+  merge hotfix/collection-efficiency-scope first, L6 merges it into l6-rebuild for genuine 30/30,
+  THEN restore l6-rebuild's dump into fieldops_dev_postgres/fieldops_v2. Owner pre-approved.
+
 ## Owner's open decisions (in .claude/owner-tasks.md)
 - Where to keep an off-repo master copy of the v1 demo dump (removed from tree).
 - Payment REVERSAL path (PaymentStatus.REVERSED has no writer) — product decision.
