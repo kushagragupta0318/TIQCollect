@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import timedelta
 from functools import lru_cache
@@ -64,6 +65,18 @@ def submission_photo_key(case_id: str, photo_type: str, submission_id: str, ext:
     """The same object for every retry of one offline visit's photo (I02).
     Path: collections/offline/{case_id[:8]}/{submission_id}/{photo_type}.jpg"""
     return f"collections/offline/{str(case_id)[:8]}/{submission_id}/{photo_type}.{ext}"
+
+
+def is_case_evidence_key(case_id: str, key: str) -> bool:
+    """Is `key` one that photo_key / submission_photo_key could have issued for this case?
+
+    A client names its evidence by key; unchecked, it could name another case's
+    object and be handed a download link to it. Shape only: the 12-hex random
+    part is what keeps a key secret, and a key is not proven to exist here."""
+    if ".." in key.split("/"):
+        return False
+    case8 = re.escape(str(case_id)[:8])
+    return re.fullmatch(rf"collections/(?:\d{{4}}/\d{{2}}|offline)/{case8}/[\w./-]+", key) is not None
 
 
 def agency_document_key(agency_id: str, doc_type: str, ext: str = "pdf") -> str:

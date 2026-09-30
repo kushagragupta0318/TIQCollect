@@ -1522,6 +1522,8 @@ def get_case_detail(case_id: UUIDPath, current_user: ManagerOnly, db: DbSession)
         )
         visit_agent_names = {r[0]: r[1] for r in rows}
 
+    from app.services.media_service import MediaService
+
     base["visits"] = [
         {
             "id": v.id,
@@ -1563,6 +1565,11 @@ def get_case_detail(case_id: UUIDPath, current_user: ManagerOnly, db: DbSession)
             "borrower_recording_transcript": v.borrower_recording_transcript,
             # AI-generated audit report
             "ai_visit_note": v.ai_visit_note,
+            # N1: what the agent typed and collected, which used to be dropped on submit
+            "escalation_notes": v.escalation_notes,
+            "witness_present": v.witness_present,
+            "witness_name": v.witness_name,
+            "documents": MediaService.document_entries(v),
         }
         # Most recent visit first — opening a case should show what happened
         # last, not the oldest attempt. The datetime.min fallback keeps visits
@@ -1614,9 +1621,6 @@ def get_case_detail(case_id: UUIDPath, current_user: ManagerOnly, db: DbSession)
     # Photos — actual presigned URLs for manager review
     # from app.api.v1.endpoints.agent import _photos_from_visits
     # base["photos"] = _photos_from_visits(case.visits)
-
-
-    from app.services.media_service import MediaService
 
     base["photos"] = MediaService.photos_from_visits(case.visits)
     return base

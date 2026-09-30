@@ -43,6 +43,7 @@ from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
+from app.core import storage
 from app.core.errors import AppException, ErrorCode
 from app.core.events import publish_event
 from app.core.geo import GEO_FENCE_METRES, IST, RBI_CONTACT_END, RBI_CONTACT_START, is_within_contact_hours, within_geo_fence
@@ -88,6 +89,11 @@ def _parse_dt(s: str | None) -> datetime | None:
         return datetime.fromisoformat(s)
     except ValueError:
         return None
+
+
+def _typed(text: str | None) -> str | None:
+    """What the agent typed, trimmed; None when it is blank (N1)."""
+    return (text or "").strip() or None
 
 
 class VisitService:
@@ -136,6 +142,15 @@ class VisitService:
         # ML-1: a stance is the borrower's, so only a visit that met them may
         # carry one. Before anything is written.
         check_visit_stance(req.borrower_disposition, customer_met=req.customer_met, person_met=req.person_met)
+
+        # N1: a document is named by the key its upload route issued for THIS case.
+        # getattr: some callers hand in a bare namespace (see csid above).
+        documents = getattr(req, "documents", None) or []
+        for d in documents:
+            if not storage.is_case_evidence_key(case.id, d.key):
+                raise AppException(422, ErrorCode.EVIDENCE_KEY_INVALID,
+                                   "A document attached to this visit was not collected for this case. "
+                                   "Attach it again.")
 
         # Idempotency guard for a keyless submit — see _DUPLICATE_SUBMIT_WINDOW_SECONDS above.
         recent_duplicate = None if csid else (
@@ -256,6 +271,10 @@ class VisitService:
             occupancy_status=req.occupancy_status,
             vehicle_present=req.vehicle_present,
             business_running=req.business_running,
+            escalation_notes=_typed(getattr(req, "escalation_notes", None)),
+            witness_present=getattr(req, "witness_present", None),
+            witness_name=_typed(getattr(req, "witness_name", None)) if getattr(req, "witness_present", None) else None,
+            documents=[d.model_dump(exclude_none=True) for d in documents] or None,
         )
         self.db.add(visit)
         case.visit_count = visit_num
@@ -429,7 +448,10 @@ class VisitService:
             # getattr keeps the original intent if the request ever gains the
             # field; notes is what the client actually sends today, and
             # RecordVisitPage already folds the customer statement into it.
-            escalation_detail = getattr(req, "agent_recording_transcript", None) or req.notes
+            # N1: what the agent typed in the escalation box comes first. Only a dispute
+            # writes the case's field (as before): ai_report_service inlines it in a prompt.
+            escalation_detail = (_typed(getattr(req, "escalation_notes", None))
+                                 or getattr(req, "agent_recording_transcript", None) or req.notes)
             if escalation_detail:
                 case.escalation_notes = escalation_detail
 

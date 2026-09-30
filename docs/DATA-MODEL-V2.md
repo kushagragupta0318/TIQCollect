@@ -1544,6 +1544,11 @@ per-run `allocation_decisions`.
 - **Other v1 → v2 changes:** `beat_stop_id` and `agent_device_id` are added;
   FKs become explicit RESTRICT; `ix_visits_agent_id` and `ix_visits_case_id`
   are dropped as prefix duplicates.
+- **Added after this design (`v2_0017`, N1):** `escalation_notes` TEXT,
+  `witness_present` BOOL, `witness_name` VARCHAR(200) and `documents` JSONB
+  (category, key, sha256, content type; one per category), all nullable. The
+  visit form captured all four and sent none. B23 moves `documents` to
+  `visit_media` and the escalation columns to `escalations`.
 - **Readers that move to `visit.media`:**
   - visit_service (28 references), manager.py (19), media_service (15),
     ai_report_service (8), fraud_service (6), transcription (6),

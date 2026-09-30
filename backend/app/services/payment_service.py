@@ -43,6 +43,7 @@ from datetime import datetime, timezone, timedelta
 
 from sqlalchemy.exc import IntegrityError
 
+from app.core import storage
 from app.core.config import settings
 from app.core.errors import AppException, ErrorCode
 from app.core.events import publish_event
@@ -163,6 +164,10 @@ class PaymentService:
         if problem:
             raise AppException(422, problem[0], problem[1])
         case = self._get_accessible_case(agent, case_id)
+        if req.receipt_photo_key and not storage.is_case_evidence_key(case.id, req.receipt_photo_key):
+            raise AppException(422, ErrorCode.EVIDENCE_KEY_INVALID,
+                               "The photo attached to this payment is not one taken for this case. "
+                               "Take it again.")
 
         existing = self._find_recent_duplicate(case.id, agent.id, req)
         if existing:

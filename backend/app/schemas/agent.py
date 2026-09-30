@@ -40,10 +40,10 @@
 # ───────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 from app.core.ids import UUIDStr
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 from datetime import date, datetime
 from typing import Optional
-from app.models.visit import VisitOutcome, PersonMet, DefaultReason, NotMetReason
+from app.models.visit import VISIT_DOCUMENT_CATEGORIES, VisitOutcome, PersonMet, DefaultReason, NotMetReason
 from app.models.payment import PaymentMode, PaymentStatus
 from app.models.ptp import PTPStatus
 from app.models.case import CaseStatus, CasePriority, EscalationReason
@@ -71,6 +71,23 @@ class OfflineCapture(BaseModel):
     device_seq: Optional[int] = Field(default=None, ge=1, le=2**62)
     # The device the item was captured on (for a visit: also the photos' device).
     device_id: Optional[str] = Field(default=None, max_length=200)
+
+
+class VisitDocument(BaseModel):
+    """One document the agent collected: its category and the object its upload
+    route issued (media_service, subject "document"). No file name: it is the
+    borrower's paperwork, and a name like aadhaar_<borrower>.pdf is personal data."""
+    category: str
+    key: str = Field(max_length=500)
+    sha256: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    content_type: Optional[str] = Field(default=None, max_length=100)
+
+    @field_validator("category")
+    @classmethod
+    def _known_category(cls, v: str) -> str:
+        if v not in VISIT_DOCUMENT_CATEGORIES:
+            raise ValueError(f"category must be one of: {', '.join(VISIT_DOCUMENT_CATEGORIES)}")
+        return v
 
 
 class RecordVisitRequest(OfflineCapture):
@@ -121,6 +138,19 @@ class RecordVisitRequest(OfflineCapture):
     # Consent
     consent_given: Optional[bool] = None
     signature_key: Optional[str] = None
+    # N1: what the agent typed on an escalating visit, and the documents collected.
+    # All optional: an older client, or a replay queued before this, sends none.
+    escalation_notes: Optional[str] = Field(default=None, max_length=4000)
+    witness_present: Optional[bool] = None
+    witness_name: Optional[str] = Field(default=None, max_length=200)
+    documents: Optional[list[VisitDocument]] = Field(default=None, max_length=len(VISIT_DOCUMENT_CATEGORIES))
+
+    @field_validator("documents")
+    @classmethod
+    def _one_per_category(cls, docs: Optional[list[VisitDocument]]) -> Optional[list[VisitDocument]]:
+        if docs and len({d.category for d in docs}) != len(docs):
+            raise ValueError("at most one document per category")
+        return docs
 
 
 class CollectPaymentRequest(BaseModel):
@@ -466,6 +496,12 @@ class BeatCaseItemResponse(CaseSummaryResponse):
     ptp_due_today: bool
 
 
+class VisitDocumentView(BaseModel):
+    category: str
+    content_type: Optional[str] = None
+    view_url: Optional[str] = None     # presigned, short-lived; None when it could not be signed
+
+
 class CaseVisitHistoryItem(BaseModel):
     id: str
     visit_number: int
@@ -488,6 +524,11 @@ class CaseVisitHistoryItem(BaseModel):
     business_running: Optional[bool] = None
     agent_recording_transcript: Optional[str] = None
     borrower_recording_transcript: Optional[str] = None
+    # N1: saved from the visit form (they used to be dropped on submit).
+    escalation_notes: Optional[str] = None
+    witness_present: Optional[bool] = None
+    witness_name: Optional[str] = None
+    documents: list[VisitDocumentView] = Field(default_factory=list)
 
 
 class CasePhotoItem(BaseModel):

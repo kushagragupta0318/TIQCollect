@@ -63,6 +63,9 @@ class ErrorCode(str, Enum):
     # for a replayed visit (coordinator, ADR 0011 decision 5); the code lets the
     # outbox explain that to the agent. The 403 and its detail are unchanged.
     DO_NOT_CONTACT = "DO_NOT_CONTACT"
+    # N1: a payment or visit names evidence (a photo, a document) that is not one
+    # this case's upload route issued. Permanent: the client uploads it again.
+    EVIDENCE_KEY_INVALID = "EVIDENCE_KEY_INVALID"
 
 
 class AppException(HTTPException):

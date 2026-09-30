@@ -22,8 +22,12 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from app.models.base import PUBLIC, Base, TimestampMixin, UUIDPrimaryKey, UUIDType, uuid_fk
+from app.models.base import PUBLIC, Base, JsonDoc, TimestampMixin, UUIDPrimaryKey, UUIDType, uuid_fk
 from app.models.call_log import BORROWER_DISPOSITION_SQL, BorrowerDisposition
+
+# What an agent can mark "collected" at a visit. One definition: the request
+# schema, the upload route and the client's parity test (test_n1_evidence) read it.
+VISIT_DOCUMENT_CATEGORIES = ("BANK_STMT", "ID_PROOF", "INCOME_PROOF", "MEDICAL_SUPPORT")
 
 
 class VisitOutcome(str, enum.Enum):
@@ -177,6 +181,14 @@ class Visit(Base, UUIDPrimaryKey, TimestampMixin):
     # Customer consent for the visit/data collection, and their signature image key
     consent_given: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     signature_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    # N1 (v2_0017): what the agent typed and collected on an escalating visit. The
+    # page captured all of it and sent none. They move to escalations / visit_media with B23.
+    escalation_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    witness_present: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    witness_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # [{category, key, sha256, content_type}], one per category.
+    documents: Mapped[list | None] = mapped_column(JsonDoc, nullable=True)
 
     case: Mapped["Case"] = relationship(  # type: ignore[name-defined]  # noqa: F821
         "Case", back_populates="visits", primaryjoin="Visit.case_id == Case.id", foreign_keys="[Visit.case_id]")

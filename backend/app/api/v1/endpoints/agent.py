@@ -739,7 +739,7 @@ def flag_customer(customer_id: UUIDPath, req: CustomerFlagRequest, current_user:
 # ---------------------------------------------------------------------------
 # POST /agent/cases/{case_id}/photo-upload-url
 # Returns a pre-signed MinIO PUT URL so the app can upload a geo-tagged photo.
-# subject: "agent" | "borrower" | "object" | "signature"
+# subject: "agent" | "borrower" | "object" | "signature" | "receipt"
 # ---------------------------------------------------------------------------
 
 @router.post("/cases/{case_id}/photo-upload-url")
@@ -748,17 +748,21 @@ def get_photo_upload_url(case_id: UUIDPath, subject: str, current_user: AgentOnl
                          client_submission_id: UUIDQuery = None,
                          captured_at: Optional[datetime] = None,
                          device_seq: Optional[int] = Query(default=None, ge=1, le=2**62),
-                         capture_device_ref: Optional[str] = Query(default=None, max_length=200)):
-    """The four optional query params are an I02 outbox upload's visit
+                         capture_device_ref: Optional[str] = Query(default=None, max_length=200),
+                         category: Optional[str] = Query(default=None, max_length=30),
+                         content_type: Optional[str] = Query(default=None, max_length=100)):
+    """The four optional query params above are an I02 outbox upload's visit
     (docs/adr/0011-offline-outbox.md); absent, it is a live upload as before.
     capture_device_ref is the phone's own device id (authStore, not a UUID);
-    deliberately not named device_id, which elsewhere means agent_devices.id."""
+    deliberately not named device_id, which elsewhere means agent_devices.id.
+    category and content_type go with subject=document (N1)."""
     if captured_at is not None and captured_at.tzinfo is None:
         raise HTTPException(status_code=422, detail="captured_at must carry a timezone")
     agent = _get_agent_or_404(current_user, db)
     return MediaService(db).get_photo_upload_url(
         agent, case_id, subject, client_submission_id=client_submission_id, captured_at=captured_at,
-        device_seq=device_seq, device_id=capture_device_ref, token_device_id=payload.get("device_id"))
+        device_seq=device_seq, device_id=capture_device_ref, token_device_id=payload.get("device_id"),
+        category=category, content_type=content_type)
 
 
 @router.get("/cases/{case_id}/photos")
