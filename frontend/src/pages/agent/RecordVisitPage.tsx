@@ -2025,9 +2025,6 @@ export default function RecordVisitPage() {
                                     <p className="text-white font-bold text-base tracking-wide">{upiConfig?.payee_name}</p>
                                     <p className="text-blue-200 text-xs">UPI Payment</p>
                                   </div>
-                                  <div className="bg-white/20 rounded-full px-3 py-1">
-                                    <p className="text-white text-xs font-semibold">Secure Pay</p>
-                                  </div>
                                 </div>
                                 <div className="bg-blue-50 px-4 py-2 text-center border-b border-blue-100">
                                   <p className="text-blue-800 text-xs font-medium">Amount to Pay</p>
@@ -2046,10 +2043,10 @@ export default function RecordVisitPage() {
                                   <p className="text-xs text-slate-500 text-center">
                                     Scan with any UPI app · <strong>₹{Number(form.amount).toLocaleString("en-IN")}</strong> pre-filled
                                   </p>
-                                  <div className="flex items-center gap-2 text-amber-600">
-                                    <div className="w-3.5 h-3.5 border-2 border-amber-300 border-t-amber-600 rounded-full animate-spin" />
-                                    <p className="text-xs font-medium">Waiting for payment…</p>
-                                  </div>
+                                  {/* A static QR has no callback: nothing here is waiting, the agent enters the UTR. */}
+                                  <p className="text-xs font-medium text-slate-600 text-center">
+                                    When the customer has paid, enter the transaction ID from their confirmation below.
+                                  </p>
                                   <p className="text-[10px] text-slate-400 text-center">Loan {maskedAcct}</p>
                                 </div>
                               </div>

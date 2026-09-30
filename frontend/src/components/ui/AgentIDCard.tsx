@@ -135,11 +135,6 @@ export default function AgentIDCard({ agentId, name, idCardNumber, territory, ti
                 {Array.from({ length: 6 }).map((_, i) => <div key={i} className="bg-yellow-100/40 rounded-sm" />)}
               </div>
             </div>
-
-            <div className="mt-4 pt-3 border-t border-white/20 flex items-center gap-1.5">
-              <div className="w-1.5 h-1.5 rounded-full bg-green-300 animate-pulse" />
-              <p className="text-[10px] opacity-70">RBI Compliant · Geo-Verified Agent</p>
-            </div>
           </div>
         </div>
       ) : (

@@ -33,7 +33,7 @@ interface Props {
 
 export default function PaymentReceiptModal({ receipt: r, onClose }: Props) {
   const verified = r.verified !== false;   // default to verified unless explicitly pending
-  const text = `PAYMENT RECEIPT\n─────────────────\nReceipt No: ${r.receiptNumber}\nAmount: ₹${r.amount.toLocaleString("en-IN")}\nMode: ${r.mode}\nCustomer: ${r.customerName}\nLoan: ${r.loanAccount}\nCase: ${r.caseNumber}\nAgent: ${r.agentName}\nDate: ${new Date(r.timestamp).toLocaleString("en-IN")}\n─────────────────\nTIQCollect · RBI Compliant`;
+  const text = `PAYMENT RECEIPT\n─────────────────\nReceipt No: ${r.receiptNumber}\nAmount: ₹${r.amount.toLocaleString("en-IN")}\nMode: ${r.mode}\nCustomer: ${r.customerName}\nLoan: ${r.loanAccount}\nCase: ${r.caseNumber}\nAgent: ${r.agentName}\nDate: ${new Date(r.timestamp).toLocaleString("en-IN")}\n─────────────────\nTIQCollect`;
 
   async function handleShare() {
     if (navigator.share) {
@@ -80,7 +80,7 @@ export default function PaymentReceiptModal({ receipt: r, onClose }: Props) {
             <ReceiptRow label="Date & Time" value={new Date(r.timestamp).toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })} />
           </div>
           <div className="border-t border-dashed border-slate-200 pt-3 text-center text-xs text-slate-400">
-            TIQCollect · RBI Compliant · {verified ? "Borrower-verified (OTP)" : "Awaiting borrower OTP"}
+            TIQCollect · {verified ? "Borrower-verified (OTP)" : "Awaiting borrower OTP"}
           </div>
         </div>
 

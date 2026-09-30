@@ -23,13 +23,25 @@ function files(dir: string): string[] {
   });
 }
 
-const RULES: { name: string; re: RegExp }[] = [
+// `paths` limits a rule to files it has been decided for (matched against src/<path>).
+const RULES: { name: string; re: RegExp; paths?: RegExp }[] = [
   // The app has no liveness detection, so nothing may say it checked or passed one.
   { name: "liveness claim", re: /liveness\s+(?:check|detection|passed)/i },
   // A fixed place printed as where the agent is: "Location: <City>, <State>".
   { name: "fixed location", re: /Location:\s*[A-Z][a-z]+,\s*[A-Z][a-z]+/ },
   // A captured-evidence state set from a literal picture instead of the camera.
   { name: "stand-in capture", re: /setCaptured\w*\(\s*["'`]data:image/ },
+  // The check-in takes no selfie and keeps none (deliberately, until B07 brings attendance with
+  // a retention rule and a consent basis). Nothing may say it does. "Agent Selfie", the photo
+  // taken at the premises, is a different thing and is saved.
+  { name: "selfie check-in claim",
+    re: /selfie[\s-]+(?:check-?in|attendance)|selfie (?:and|\+) gps|check[\s-]?in (?:with|by)(?: a)? selfie|selfie for attendance/i },
+  // The receipt and the ID card are handed to a borrower; nobody can substantiate a regulatory
+  // claim on them. Only components/: the landing and login pages say it too, which is marketing
+  // copy and the owner's call (asked of the coordinator), so they are not in this rule yet.
+  { name: "RBI compliance claim", re: /RBI[\s-]+compliant/i, paths: /^src\/components\// },
+  // A static UPI QR has no callback: no screen may show the app waiting for, or securing, a payment.
+  { name: "payment process claim", re: /Waiting for payment|>\s*Secure Pay\s*</ },
 ];
 
 function scan(): string[] {
@@ -39,8 +51,8 @@ function scan(): string[] {
     readFileSync(f, "utf8")
       .split("\n")
       .forEach((line, i) => {
-        for (const { name, re } of RULES) {
-          if (re.test(line)) hits.push(`src/${rel}:${i + 1} ${name}`);
+        for (const { name, re, paths } of RULES) {
+          if ((!paths || paths.test(`src/${rel}`)) && re.test(line)) hits.push(`src/${rel}:${i + 1} ${name}`);
         }
       });
   }
@@ -59,6 +71,16 @@ describe("no claim about evidence that the code does not back", () => {
     ['  "Selfie attendance check-in with liveness detection",', "liveness claim"],
     ['<p className="flex items-center gap-1.5"><MapPin /> Location: Mumbai, Maharashtra</p>', "fixed location"],
     ['        setCapturedSelfie("data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTAw");', "stand-in capture"],
+    ['              <h3 className="font-semibold text-slate-900">Selfie Check-In</h3>', "selfie check-in claim"],
+    ['<p className="text-xs">Align your face with the circle and take selfie for attendance</p>', "selfie check-in claim"],
+    ['  { time: "9:30 AM", event: "Agents check in with selfie + GPS stamp — duty status goes live" },', "selfie check-in claim"],
+    ['    desc: "Agents check in with a selfie, receive their optimised beat map, navigate case-to-case" },', "selfie check-in claim"],
+    ['  "Selfie and GPS check-in at the start of the day",', "selfie check-in claim"],
+    ['desc: "ID card number on every visit record. Selfie check-in required before field work." },', "selfie check-in claim"],
+    ['TIQCollect · RBI Compliant · {verified ? "Borrower-verified (OTP)" : "Awaiting borrower OTP"}', "RBI compliance claim"],
+    ['\\n─────────────────\\nTIQCollect · RBI Compliant`;', "RBI compliance claim"],
+    ['<p className="text-xs font-medium">Waiting for payment…</p>', "payment process claim"],
+    ['<p className="text-white text-xs font-semibold">Secure Pay</p>', "payment process claim"],
   ])("rule catches %s", (line, rule) => {
     const re = RULES.find((r) => r.name === rule)!.re;
     expect(re.test(line)).toBe(true);
@@ -68,7 +90,11 @@ describe("no claim about evidence that the code does not back", () => {
     'setCapturedSelfie(canvasRef.current.toDataURL("image/jpeg"));',
     '<p>GPS fix: {describeFix(checkInFix)}</p>',
     'const loc = `Location: ${city}`;',
-    '"Selfie and GPS check-in at the start of the day",',
+    '"GPS check-in at the start of the day",',
+    'AGENT_SELFIE: "Agent Selfie", BORROWER: "Borrower Photo", VEHICLE_ASSET: "Vehicle / Asset",',
+    'TIQCollect · {verified ? "Borrower-verified (OTP)" : "Awaiting borrower OTP"}',
+    '"Contact hour indicator (RBI 8AM–7PM enforcement)",',
+    'When the customer has paid, enter the transaction ID from their confirmation below.',
   ])("does not flag ordinary code: %s", (line) => {
     expect(RULES.filter((r) => r.re.test(line)).map((r) => r.name)).toEqual([]);
   });
