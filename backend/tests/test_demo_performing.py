@@ -187,3 +187,24 @@ def test_the_performing_mix_is_a_distribution_over_real_loan_types():
     assert "CREDIT_CARD" not in P.PRODUCTS
     assert Counter(P.BOOK_NUMBER.values()).most_common(1)[0][1] == 1      # one number per bank
     assert min(P.BOOK_NUMBER.values()) > len(R.AGENCIES)                    # never an agency's number
+
+
+def test_v1_borrower_emails_move_to_reserved_domains_and_nothing_else_changes():
+    """v1's Faker emails can name a real provider; generate_demo_v2 moves them."""
+    from scripts.generate_demo_v2 import rehome_borrower_emails
+    create_schema(engine)
+    try:
+        with engine.begin() as conn:
+            _seed_kumaon(conn, borrowers=4)
+            cu = T["customers"]
+            ids = [r[0] for r in conn.execute(sa.select(cu.c.id).order_by(cu.c.customer_ref))]
+            for cid, email in zip(ids, ["rajesh.k23@gmail.com", "asha.rani@inboxmail.test", None, "x@yahoo.co.in"]):
+                conn.execute(cu.update().where(cu.c.id == cid).values(email=email))
+            assert rehome_borrower_emails(conn) == {"moved_to_test_domains": 2}
+            assert rehome_borrower_emails(conn) == {"moved_to_test_domains": 0}          # idempotent
+            got = dict(conn.execute(sa.select(cu.c.id, cu.c.email)).all())
+        assert got[ids[0]].startswith("rajesh.k23@") and got[ids[0]].endswith(".test")
+        assert got[ids[1]] == "asha.rani@inboxmail.test" and got[ids[2]] is None
+        assert got[ids[3]].startswith("x@") and got[ids[3]].endswith(".test")
+    finally:
+        drop_schema(engine)

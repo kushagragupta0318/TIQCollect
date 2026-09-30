@@ -33,7 +33,7 @@ from sqlalchemy import create_engine
 
 from app.core.config import settings
 from app.demo import roster as R
-from app.demo.books import INSTALMENT_WINDOW, generate_book, require_rbi_window
+from app.demo.books import EMAIL_DOMAINS, INSTALMENT_WINDOW, generate_book, require_rbi_window
 from app.demo.latent import AGENCY_LATENT, CONTACT_HOUR
 from app.demo.performing import generate_performing
 from app.demo.world import T, build_world, insert
@@ -149,6 +149,25 @@ def rederive_aravalli_visit_flags(conn) -> dict:
             "distance_changed_over_1m": moved}
 
 
+def rehome_borrower_emails(conn) -> dict:
+    """v1's seed drew borrower emails with Faker, which can name a real
+    provider's domain: an invented address a real person may own. Every
+    borrower email moves to a reserved .test domain (the local part is kept,
+    the domain chosen by it, so the move is deterministic). Visible
+    correction, like DATA-R; nothing else about the customer changes."""
+    import zlib
+    cu = T["customers"]
+    moved = 0
+    for cid, email in conn.execute(sa.select(cu.c.id, cu.c.email).where(cu.c.email.is_not(None))).all():
+        local, _, domain = email.partition("@")
+        if domain.endswith(".test"):
+            continue
+        new = f"{local}@{EMAIL_DOMAINS[zlib.crc32(local.encode()) % len(EMAIL_DOMAINS)]}"
+        conn.execute(cu.update().where(cu.c.id == cid).values(email=new))
+        moved += 1
+    return {"moved_to_test_domains": moved}
+
+
 def run(engine, profile_name: str, manifest_path: str | None, seed: int = 20260922) -> dict:
     require_rbi_window()
     prof = PROFILES[profile_name]
@@ -166,6 +185,7 @@ def run(engine, profile_name: str, manifest_path: str | None, seed: int = 202609
             counts["aravalli loan_instalments (GENERATED)"] = aravalli_instalments(conn)
             counts["aravalli visit flags re-derived (DATA-R)"] = rederive_aravalli_visit_flags(conn)
             counts["aravalli anchor history (TRANSFORM_CURRENT)"] = aravalli_anchor_history(conn)
+            counts["aravalli borrower emails (reserved domains)"] = rehome_borrower_emails(conn)
         truths = {}
         for i, (key, w) in enumerate(sorted(world.agencies.items(), key=lambda kv: kv[1].number)):
             if not w.agents:
