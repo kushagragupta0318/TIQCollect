@@ -98,6 +98,10 @@ export function stanceCoverageText(s: RecoveryRiskCard["stance"]): string {
   if (!s.latest_scoring_day || s.accounts_scored === 0) {
     return "No scored accounts yet, so there is no coverage to report.";
   }
+  if (s.share_sampled) {
+    return `${pct(s.share, 1)} of a ${(s.sample_size ?? 0).toLocaleString("en-IN")}-account sample, from the ` +
+      `${s.accounts_scored.toLocaleString("en-IN")} scored on ${s.latest_scoring_day}, carried a recorded borrower stance.`;
+  }
   return `${s.accounts_with_stance.toLocaleString("en-IN")} of ${s.accounts_scored.toLocaleString("en-IN")} accounts ` +
     `(${pct(s.share, 1)}) scored on ${s.latest_scoring_day} carried a recorded borrower stance.`;
 }

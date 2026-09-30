@@ -48,6 +48,9 @@ class StanceCoverage(BaseModel):
     accounts_scored: int
     accounts_with_stance: int
     share: Optional[float] = None
+    #: True when the share was measured over a sample of the day's accounts.
+    share_sampled: bool = False
+    sample_size: Optional[int] = None
 
 
 class Abstention(BaseModel):

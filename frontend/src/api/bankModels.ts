@@ -37,7 +37,10 @@ export interface RecoveryRiskCard {
     latest_scoring_day: string | null;
     accounts_scored: number;
     accounts_with_stance: number;
+    /** Over the sample when the scoring day was too large to read whole. */
     share: number | null;
+    share_sampled: boolean;
+    sample_size: number | null;
   };
   abstention: { coverage_floor: number; latest_day_declined: number; latest_day_scored: number };
   bands: { band: string | null; oot_n: number | null; oot_bad_rate: number | null }[];

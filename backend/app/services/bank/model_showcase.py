@@ -16,10 +16,12 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
+from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.errors import AppException, ErrorCode
+from app.ml.empirical_bayes import MULTIPLIER_BOUNDS as EB_BOUNDS
 from app.ml.pipeline.engine import MIN_FEATURE_COVERAGE
 from app.ml.pipeline.monitor import MIN_MATURED_FOR_MONITORING, readiness, serving_version
 from app.ml.pipeline.registry import version_dir
@@ -28,6 +30,7 @@ from app.ml.repayment_scorecard import SCORECARD_VERSION
 from app.ml.visit_priority import SCORE_VERSION as VISIT_PRIORITY_VERSION
 from app.models.loan import Loan
 from app.models.model_prediction import ModelPrediction
+from app.services.global_allocator import GlobalAllocator
 from app.services.placement_read_service import apply_region_limit
 
 TRAINED_MODEL = "recovery_risk"
@@ -68,20 +71,20 @@ _LAYERS: tuple[dict, ...] = (
      "acts_on": "Snapshots read by manager analytics.",
      "evidence": "None claimed; a hand-weighted rule, not a trained model."},
     {"key": "visit_priority", "name": "Visit priority", "kind": "SCORECARD", "is_modelled": False,
-     "decides": "Which of today's cases an agent should see first.",
+     "decides": "How urgent each case is for tomorrow's plan (promises falling due, the NPA line, value).",
      "method": "Hand-weighted priority score.",
-     "acts_on": "The order of an agent's route for the day.",
+     "acts_on": "Which cases the nightly plan takes first, and up to {priority_uplift} extra weight for a case in the assignment.",
      "evidence": "None claimed; a hand-weighted rule."},
     {"key": "agent_competency", "name": "Agent competency", "kind": "SHRINKAGE", "is_modelled": False,
      "decides": "How strong each agent is on each kind of case, without over-reading a small record.",
      "method": "Closed-form empirical-Bayes shrinkage toward the team's average.",
-     "acts_on": "A bounded multiplier (0.75 to 1.25) in the nightly allocation.",
+     "acts_on": "A bounded multiplier ({eb_low} to {eb_high}) in the nightly allocation.",
      "evidence": "A formula, not a fit: no weights to validate."},
     {"key": "allocator", "name": "Case-to-agent allocation", "kind": "OPTIMISER", "is_modelled": False,
      "decides": "The day's assignment of cases to agents.",
      "method": "Hungarian assignment over a cost matrix combining the layers above with distance and capacity.",
      "acts_on": "Every agent's planned day, recorded with the reason each case went where it did.",
-     "evidence": "Optimal for its objective by construction; the objective weights are published."},
+     "evidence": "Optimal for its objective by construction; the weights are fixed in code (ADR 0002), not learned."},
 )
 
 _LAYER_VERSIONS = {
@@ -118,32 +121,51 @@ class _LatestDay:
     scored: int
     declined: int
     with_stance: int
+    #: True when stance coverage was measured over a sample, not the whole day.
+    sampled: bool = False
+    sample_size: int = 0
+
+
+# The stance lives inside the prediction's `features` JSON, which no portable
+# index reaches, so that share is counted in Python. Bounded: a scoring day on a
+# large book is unbounded, and nothing unbounded runs inside a request. The
+# counts themselves are exact — only the share is sampled, and it says so.
+STANCE_SAMPLE_LIMIT = 5_000
 
 
 def _latest_scoring_day(db: Session, bank_id: str, version: str | None) -> _LatestDay:
     """This bank's newest scoring day on the serving version: accounts scored,
-    declined, and how many carried a recorded stance. One row per account (a
-    re-plan re-scores the pool; its newest row stands)."""
+    accounts declined, and the share carrying a recorded stance.
+
+    One row per account: a re-plan re-scores the whole pool, so the same account
+    can hold several rows for one day and only its newest counts."""
     if not version:
         return _LatestDay(None, 0, 0, 0)
-    base = (db.query(ModelPrediction)
-            .filter(ModelPrediction.bank_id == bank_id, ModelPrediction.model_name == TRAINED_MODEL,
-                    ModelPrediction.model_version == version))
-    last = base.with_entities(ModelPrediction.as_of_date).order_by(ModelPrediction.as_of_date.desc()).first()
+    same = (ModelPrediction.bank_id == bank_id, ModelPrediction.model_name == TRAINED_MODEL,
+            ModelPrediction.model_version == version)
+    last = (db.query(func.max(ModelPrediction.as_of_date)).filter(*same).scalar())
     if last is None:
         return _LatestDay(None, 0, 0, 0)
-    rows = (base.filter(ModelPrediction.as_of_date == last[0])
-            .with_entities(ModelPrediction.entity_id, ModelPrediction.is_modelled, ModelPrediction.features)
-            .order_by(ModelPrediction.scored_at)
-            .all())
-    newest: dict[str, tuple[bool, Any]] = {}
-    for entity_id, modelled, features in rows:
-        newest[str(entity_id)] = (bool(modelled), features)
-    scored = [f for m, f in newest.values() if m]
-    return _LatestDay(
-        on=last[0], scored=len(scored), declined=sum(1 for m, _ in newest.values() if not m),
-        with_stance=sum(1 for f in scored if _stance_recorded(f)),
-    )
+
+    on_day = (*same, ModelPrediction.as_of_date == last)
+    newest = (db.query(ModelPrediction.entity_id.label("entity_id"),
+                       func.max(ModelPrediction.scored_at).label("scored_at"))
+              .filter(*on_day).group_by(ModelPrediction.entity_id).subquery())
+    rows = (db.query(ModelPrediction.is_modelled, func.count())
+            .join(newest, and_(ModelPrediction.entity_id == newest.c.entity_id,
+                               ModelPrediction.scored_at == newest.c.scored_at))
+            .filter(*on_day).group_by(ModelPrediction.is_modelled).all())
+    scored = sum(n for modelled, n in rows if modelled)
+    declined = sum(n for modelled, n in rows if not modelled)
+
+    features = (db.query(ModelPrediction.features)
+                .join(newest, and_(ModelPrediction.entity_id == newest.c.entity_id,
+                                   ModelPrediction.scored_at == newest.c.scored_at))
+                .filter(*on_day, ModelPrediction.is_modelled.is_(True))
+                .limit(STANCE_SAMPLE_LIMIT).all())
+    with_stance = sum(1 for (f,) in features if _stance_recorded(f))
+    return _LatestDay(on=last, scored=scored, declined=declined, with_stance=with_stance,
+                      sampled=scored > len(features), sample_size=len(features))
 
 
 def _first_scored(db: Session, bank_id: str, version: str | None) -> date | None:
@@ -180,7 +202,10 @@ def models_overview(db: Session, ctx) -> dict:
     layers = []
     for layer in _LAYERS:
         v = version if layer["key"] == TRAINED_MODEL else _LAYER_VERSIONS.get(layer["key"])
-        layers.append({**layer, "version": v})
+        # Figures in the copy come from the code that applies them, never restated.
+        acts_on = layer["acts_on"].format(priority_uplift=f"{GlobalAllocator.PRIORITY_UPLIFT:.0%}",
+                                          eb_low=EB_BOUNDS[0], eb_high=EB_BOUNDS[1])
+        layers.append({**layer, "acts_on": acts_on, "version": v})
 
     bands = [{"band": b.get("band"), "oot_n": b.get("count"), "oot_bad_rate": b.get("bad_rate")}
              for b in (meta.get("bands_oot") or []) if isinstance(b, dict)]
@@ -208,7 +233,10 @@ def models_overview(db: Session, ctx) -> dict:
                 "latest_scoring_day": day.on.isoformat() if day.on else None,
                 "accounts_scored": day.scored,
                 "accounts_with_stance": day.with_stance,
-                "share": round(day.with_stance / day.scored, 4) if day.scored else None,
+                # Over the sample when the day was too large to read whole.
+                "share": round(day.with_stance / day.sample_size, 4) if day.sample_size else None,
+                "share_sampled": day.sampled,
+                "sample_size": day.sample_size if day.sampled else None,
             },
             "abstention": {"coverage_floor": MIN_FEATURE_COVERAGE, "latest_day_declined": day.declined,
                            "latest_day_scored": day.scored},

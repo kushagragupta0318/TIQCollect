@@ -78,13 +78,20 @@ describe("small readers", () => {
 
   const stance = (o: Partial<RecoveryRiskCard["stance"]>): RecoveryRiskCard["stance"] => ({
     feature: "latest_disposition", feature_label: "latest disposition", capture_since: "2026-09-28",
-    related_features: ["latest_disposition", "disposition_recency_class"], latest_scoring_day: "2026-09-21", accounts_scored: 1245, accounts_with_stance: 0, share: 0, ...o,
+    related_features: ["latest_disposition", "disposition_recency_class"], latest_scoring_day: "2026-09-21", accounts_scored: 1245, accounts_with_stance: 0, share: 0,
+    share_sampled: false, sample_size: null, ...o,
   });
 
   it("states stance coverage as counts and a share, and has an empty state", () => {
     expect(stanceCoverageText(stance({}))).toBe("0 of 1,245 accounts (0.0%) scored on 2026-09-21 carried a recorded borrower stance.");
     expect(stanceCoverageText(stance({ latest_scoring_day: null, accounts_scored: 0, share: null })))
       .toBe("No scored accounts yet, so there is no coverage to report.");
+  });
+
+  it("says so when the share came from a sample of a large day", () => {
+    expect(stanceCoverageText(stance({ accounts_scored: 40000, accounts_with_stance: 1500, share: 0.3,
+                                       share_sampled: true, sample_size: 5000 })))
+      .toBe("30.0% of a 5,000-account sample, from the 40,000 scored on 2026-09-21, carried a recorded borrower stance.");
   });
 
   it("says plainly that no live figure exists before monitoring is ready", () => {

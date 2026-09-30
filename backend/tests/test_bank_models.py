@@ -123,6 +123,9 @@ def test_the_six_layers_and_only_the_trained_one_is_modelled(w):
     assert layers["recovery_risk"]["kind"] == "TRAINED_MODEL" and layers["recovery_risk"]["version"] == SERVING
     assert layers["repayment_scorecard"]["version"] == ms.SCORECARD_VERSION
     assert "not a model" in layers["repayment_scorecard"]["evidence"]
+    from app.services.global_allocator import GlobalAllocator
+    assert f"{GlobalAllocator.PRIORITY_UPLIFT:.0%} extra weight" in layers["visit_priority"]["acts_on"]
+    assert "{" not in "".join(l["acts_on"] for l in body["layers"])            # every placeholder filled
 
 
 def test_the_model_card_quotes_the_live_equivalent_beside_the_artifact(w):
@@ -158,6 +161,19 @@ def test_stance_coverage_is_this_banks_newest_day_one_row_per_account(w):
     assert card["monitoring"]["first_outcomes_mature_from"] == (DAY - timedelta(days=1) + timedelta(days=30)).isoformat()
     other = w["c"].get("/api/v1/bank/models", headers=_h(w["ba2"])).json()["recovery_risk"]["stance"]
     assert (other["accounts_scored"], other["accounts_with_stance"]) == (1, 1)
+
+
+def test_a_large_scoring_day_reports_the_share_as_a_sample_and_says_so(w, monkeypatch):
+    """Nothing unbounded runs in a request: the counts stay exact, the share is
+    measured over a bounded sample and is labelled as one."""
+    monkeypatch.setattr(ms, "STANCE_SAMPLE_LIMIT", 2)
+    db, loans = w["db"], w["loans"]
+    for loan in loans:                                      # 4 accounts, all with a stance
+        _pred(db, loan, stance="WILL_PAY")
+    db.commit()
+    stance = w["c"].get("/api/v1/bank/models", headers=_h(w["ba"])).json()["recovery_risk"]["stance"]
+    assert stance["accounts_scored"] == 4                    # exact, from SQL
+    assert (stance["share_sampled"], stance["sample_size"], stance["share"]) == (True, 2, 1.0)
 
 
 def test_no_predictions_yet_is_an_empty_state_not_a_zero_share(w):
@@ -205,6 +221,19 @@ def test_a_declined_score_is_returned_as_abstention(w):
 def test_an_unscored_loan_has_no_prediction(w):
     body = _explain(w, w["ba"], w["loans"][1].id).json()
     assert body["prediction"] is None and body["serving_version"] == SERVING
+
+
+def test_a_prediction_row_carrying_another_tenant_is_never_served(w):
+    """Defence in depth: the loan is bank-checked first, so this can only arise
+    from a bad write or a restored row. The prediction query is scoped too, and
+    a row whose bank is not the caller's is not served for their own loan."""
+    db, loan = w["db"], w["loans"][0]
+    _pred(db, loan, bank=BANK2, p=0.11, band="A")          # wrong tenant, right loan
+    db.commit()
+    assert _explain(w, w["ba"], loan.id).json()["prediction"] is None
+    _pred(db, loan, p=0.70)
+    db.commit()
+    assert _explain(w, w["ba"], loan.id).json()["prediction"]["p_no_payment"] == 0.70
 
 
 def test_another_banks_loan_is_the_same_404_as_a_missing_one(w):
