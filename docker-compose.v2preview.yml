@@ -11,8 +11,8 @@
 # container restores backend/fixtures/fieldops-demo-v2.dump (B15) into its own
 # empty database; the master login below is applied on every API boot.
 #
-# The three demo logins (backend/fixtures/README.md): a bank admin, an agency
-# manager and a field agent. The password is read from v2preview.env, which is
+# The four demo logins (backend/fixtures/README.md): a bank admin, an agency
+# manager, a field agent and a second bank admin. The password is read from v2preview.env, which is
 # gitignored and must never be committed.
 #
 # 2026-09-28 (B15 follow-up, coordinator request): new file.
@@ -20,7 +20,7 @@
 x-v2-env: &v2-env
   DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-fieldops}:${POSTGRES_PASSWORD:-fieldops_dev_pass}@postgres:5432/tiq_v2
   DEMO_MODE: "true"
-  DEMO_MASTER_ACCOUNTS: ananya.iyer@girivanfinance.test,vikram.malhotra@aravallifs.test,piyush.sharma@aravallifs.test
+  DEMO_MASTER_ACCOUNTS: ananya.iyer@girivanfinance.test,vikram.malhotra@aravallifs.test,piyush.sharma@aravallifs.test,kavya.reddy@girivanfinance.test
   DEMO_FIXTURE: /app/fixtures/fieldops-demo-v2.dump
   ALLOWED_ORIGINS: http://localhost:5474,http://localhost:8401
   MINIO_PUBLIC_ENDPOINT: localhost:19002

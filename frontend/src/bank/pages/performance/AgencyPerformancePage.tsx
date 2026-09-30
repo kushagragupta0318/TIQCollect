@@ -10,6 +10,7 @@
 // window, and `n` is the evidence behind a real one. Every null here means
 // "not knowable", never zero — see api/bank.ts's AgencyScorecard docblock.
 import { useMemo, useState } from "react";
+import { useSearchParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { Info, Trophy } from "lucide-react";
 import { ExecutiveHeader, PageFailure, PageLoading, PageRoot } from "../../components/PageTemplate";
@@ -47,7 +48,9 @@ function RatioTile({ label, value, sub }: { label: string; value: number | null;
 }
 
 function ScorecardSection() {
-  const [agencyId, setAgencyId] = useState("");
+  // ?agency= preselects (the directory's Performance cell links here).
+  const [searchParams] = useSearchParams();
+  const [agencyId, setAgencyId] = useState(() => searchParams.get("agency") ?? "");
 
   const agenciesQuery = useQuery({ queryKey: ["bank-agencies-plain"], queryFn: () => listAgencies(), staleTime: 5 * 60_000 });
   const agencies = useMemo(

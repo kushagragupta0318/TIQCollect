@@ -117,7 +117,18 @@ services:
 
   # ─── MinIO (visit photos, signatures, recordings) ─────────────────────────
   minio:
-    image: minio/minio:latest
+    # Pinned by digest, not `latest`: minio/minio stopped being published, so a
+    # floating tag here only works until something prunes the local cache, and
+    # then dev stops starting too.
+    #
+    # Deliberately still the Docker Hub digest, not the ghcr mirror prod uses
+    # (ADR 0012): the mirror package is private until the owner flips it public,
+    # and a private ghcr reference would make this shared stack need
+    # `docker login ghcr.io` on every machine that runs it. The Hub digest needs
+    # no auth because it resolves from the local image cache. Same image content
+    # either way (verified byte-identical). Flip this to the mirror once the
+    # package is public.
+    image: ${MINIO_IMAGE:-minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e}
     container_name: fieldops_dev_minio
     restart: unless-stopped
     command: server /data --console-address ":9001"

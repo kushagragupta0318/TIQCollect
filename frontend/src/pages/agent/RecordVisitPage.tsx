@@ -787,8 +787,16 @@ export default function RecordVisitPage() {
     typeof customer?.customer_ref === "string" &&
     customer.customer_ref.startsWith("DEMO");
 
-  useEffect(() => {
-    if (!isLocalDemoCase || !customer) return;
+  // Snap the fix to the borrower once per demo case, so a laptop with no real
+  // GPS still passes the fence. Adjusted while rendering the borrower it
+  // belongs to (React's "reset state when a value changes"), not in an effect:
+  // an effect would paint the un-snapped distance first and re-render.
+  const demoSnapKey = isLocalDemoCase && customer
+    ? `${customer.customer_ref}|${customer.latitude}|${customer.longitude}`
+    : null;
+  const [demoSnappedFor, setDemoSnappedFor] = useState<string | null>(null);
+  if (customer && demoSnapKey !== null && demoSnapKey !== demoSnappedFor) {
+    setDemoSnappedFor(demoSnapKey);
     const currentDistance =
       form.gpsLat != null && form.gpsLon != null
         ? haversineM(form.gpsLat, form.gpsLon, customer.latitude, customer.longitude)
@@ -801,7 +809,7 @@ export default function RecordVisitPage() {
         gpsAltitude: null,
       });
     }
-  }, [isLocalDemoCase, customer?.customer_ref, customer?.latitude, customer?.longitude]);
+  }
 
   const sel = BORROWER_OUTCOMES.find((o) => o.value === form.outcome)
     ?? NOT_MET_OUTCOMES.find((o) => o.value === form.outcome);
@@ -965,7 +973,11 @@ export default function RecordVisitPage() {
   // AMOUNT. If the amount changes, the prior verification (and any offline
   // acknowledgement / resend count) is stale — clear it so the agent must
   // re-verify. Mode is chosen AFTER the OTP, so a mode change must NOT reset it.
-  useEffect(() => {
+  // Done while rendering the new amount, so a stale "verified" tick is never
+  // painted beside it.
+  const [otpBoundAmount, setOtpBoundAmount] = useState(form.amount);
+  if (otpBoundAmount !== form.amount) {
+    setOtpBoundAmount(form.amount);
     setVerificationId(null);
     setOtp(null);
     setOtpCode("");
@@ -973,7 +985,7 @@ export default function RecordVisitPage() {
     setOfflineAck(false);
     setResendsUsed(0);
     setQrPaidDemo(false);
-  }, [form.amount]);
+  }
 
   // Demo: every time the UPI QR becomes visible, start a FRESH waiting→received
   // cycle — reset to "waiting", then after QR_DEMO_DELAY_MS auto-flip to
@@ -982,12 +994,19 @@ export default function RecordVisitPage() {
   // intentionally NOT a dependency, so the flip-to-paid doesn't restart it.)
   // 2026-09-24 (hotfix PAY-1): demo builds only (DEMO_UPI_AUTOCONFIRM), and it
   // records a DEMO-UPI- reference rather than waiving the field.
+  // The reset is a render-time adjustment on the same four values the effect
+  // watches: whenever any of them changes — the QR closing, reopening, the
+  // amount moving — the cycle starts again on "Waiting…".
+  const qrDemoCycleKey = `${form.paymentMode}|${showQR}|${amountNum}|${amountExceedsRemainingTarget}`;
+  const [qrDemoCycle, setQrDemoCycle] = useState(qrDemoCycleKey);
+  if (qrDemoCycle !== qrDemoCycleKey) {
+    setQrDemoCycle(qrDemoCycleKey);
+    setQrPaidDemo(false);
+  }
   useEffect(() => {
     if (!DEMO_UPI_AUTOCONFIRM || form.paymentMode !== "UPI" || !showQR || amountNum <= 0 || amountExceedsRemainingTarget) {
-      setQrPaidDemo(false);
       return;
     }
-    setQrPaidDemo(false);   // reopen always starts on "Waiting…"
     const t = setTimeout(() => {
       setQrPaidDemo(true);
       setForm((f) => (upiReferenceOk(f.upiRef, { demo: true }) ? f : { ...f, upiRef: demoUpiReference(Date.now()) }));

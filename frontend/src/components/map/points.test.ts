@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import L from "leaflet";
-import { AdaptivePointGroup, CLUSTER_ABOVE, drawPoints, shouldCluster, type MapPoint } from "./points";
+import { AdaptivePointGroup, CLUSTER_ABOVE, FIT_PADDING_PX, drawPoints, shouldCluster, type MapPoint } from "./points";
 
 const HOSTILE = `<img src=x onerror="alert(1)"><script>alert(2)</script>"Gurgaon' Zone`;
 
@@ -68,6 +68,18 @@ describe("drawPoints", () => {
 
     remove();
     expect(circles(map)).toHaveLength(0);
+    map.remove();
+  });
+
+  it("fits the view to the points' own bounds with a fixed pixel margin, not a padded box", () => {
+    const map = makeMap();
+    const fit = vi.spyOn(map, "fitBounds");
+    const pts: MapPoint[] = [{ lat: 28.64, lon: 77.22, label: "Delhi" }, { lat: 11.02, lon: 76.96, label: "Coimbatore" }];
+    drawPoints(map, pts, 9);
+    expect(fit).toHaveBeenCalledTimes(1);
+    const [bounds, opts] = fit.mock.calls[0] as [L.LatLngBounds, L.FitBoundsOptions];
+    expect([bounds.getSouth(), bounds.getNorth(), bounds.getWest(), bounds.getEast()]).toEqual([11.02, 28.64, 76.96, 77.22]);
+    expect(opts).toEqual({ maxZoom: 9, padding: [FIT_PADDING_PX, FIT_PADDING_PX] });
     map.remove();
   });
 

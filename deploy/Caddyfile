@@ -1,5 +1,11 @@
 # TLS and the one proxy in front of TIQCollect (docs/DEPLOY.md).
-# Certificates come from Let's Encrypt for both names; they must resolve here.
+#
+# Certificates: public Let's Encrypt by default, which needs both names to
+# resolve to this host from the internet. TIQ_TLS_DIRECTIVE overrides the issuer
+# per site without a second Caddyfile (ADR 0001, one definition):
+#   unset/empty  -> public ACME, the deployment case
+#   tls internal -> Caddy's own local CA, for a local prod server with no public
+#                   DNS (docs/LOCAL-PROD.md; trust its root once, see that file)
 {
 	email {$ACME_EMAIL}
 }
@@ -28,6 +34,7 @@
 
 # The app: the built SPA and /api/v1, one upstream.
 {$APP_DOMAIN} {
+	{$TIQ_TLS_DIRECTIVE}
 	import security_headers
 	encode zstd gzip
 	# Visit media never passes through here (pre-signed URLs go to FILES_DOMAIN);
@@ -42,6 +49,7 @@
 # header is passed through unchanged (Caddy's default), which the signature needs.
 # A pre-signed PUT carries no size limit of its own, so this is the only cap.
 {$FILES_DOMAIN} {
+	{$TIQ_TLS_DIRECTIVE}
 	import security_headers
 	@admin path /minio/*
 	respond @admin 403

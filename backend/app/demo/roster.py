@@ -115,9 +115,8 @@ BANK_USERS = [  # Appendix C.5
     ("farah.siddiqui", "Farah Siddiqui", "BANK_TECHOPS", "9820031103"),
     # A second BANK_ADMIN (2b, 2026-09-29): the placement engine's apply step
     # is four-eyes (applied_by must differ from created_by, ADR 0010), so a
-    # bank with one admin cannot demo apply end to end. Unusable hash like
-    # every other fixture user; deliberately NOT in MASTER_ACCOUNTS below —
-    # adding a 4th master login needs the owner's yes, which is still pending.
+    # bank with one admin cannot demo apply end to end. The owner said yes to
+    # a 4th master login (2026-09-30), so she is MASTER_ACCOUNTS' last slot.
     ("kavya.reddy", "Kavya Reddy", "BANK_ADMIN", "9820031104"),
 ]
 # v1's non-agent users. Deviation from Appendix C.5, announced to the
@@ -130,8 +129,9 @@ V1_STAFF = {
     "manager1@tiqcollect.in": ("vikram.malhotra", "Vikram Malhotra", "AGENCY_MANAGER"),
     "manager2@tiqcollect.in": ("sunita.kapoor", "Sunita Kapoor", "AGENCY_MANAGER"),
 }
+# Order matters: apply_demo_logins.REQUIRED_ROLE_GROUPS is positional.
 MASTER_ACCOUNTS = (f"ananya.iyer@{BANK_DOMAIN}", f"vikram.malhotra@{AGENCY_DOMAIN}",
-                   f"piyush.sharma@{AGENCY_DOMAIN}")
+                   f"piyush.sharma@{AGENCY_DOMAIN}", f"kavya.reddy@{BANK_DOMAIN}")
 
 # Aravalli's workforce (B16). GENDER IS ROSTER DATA, stated per person by the
 # roster's author — never derived from a name, anywhere (coordinator,
