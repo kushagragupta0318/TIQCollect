@@ -182,7 +182,7 @@ class Visit(Base, UUIDPrimaryKey, TimestampMixin):
     consent_given: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     signature_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
-    # N1 (v2_0017): what the agent typed and collected on an escalating visit. The
+    # N1 (v2_0022): what the agent typed and collected on an escalating visit. The
     # page captured all of it and sent none. They move to escalations / visit_media with B23.
     escalation_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     witness_present: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
