@@ -521,6 +521,7 @@ class AgentService:
             "cases_today": cases_today,
             "agency_name": tenant.agency_name if tenant else None,
             "agency_rbi_registration_no": agency.rbi_registration_no if agency else None,
+            "verify_token": create_agent_verify_token(agent.id),
         }
 
     # -----------------------------------------------------------------
