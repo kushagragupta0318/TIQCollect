@@ -86,6 +86,19 @@ def _effective_today(agent_ids: list[str], db) -> tuple[datetime, datetime, date
     """Return (start_of_day, end_of_day, eff_date) scoped to the most recent
     beat date on or before today across the given agents. Falls back to date.today()
     when no beats exist yet (fresh install without a seed).
+
+    A DISPLAY convenience only, same as endpoints/agent._effective_day: it lets
+    money/case/visit figures agree on which day's beat they describe when the
+    latest beat is not literally today (a paused demo book, a weekend, a missed
+    nightly run). Is-this-agent-on-leave never reads it — leave is judged
+    against the real IST calendar day, services/leave_service.leave_today(),
+    same as services/scope.access_day(). Mixing the two used to make on-duty/
+    on-leave counts silently wrong whenever the effective day fell behind
+    (coordinator audit, 2026-09-30): GET /dashboard, GET /agents,
+    GET /agents/performance, GET /analytics and GET /ai/briefing all computed
+    "on leave" from eff_date instead of leave_today() and have been fixed;
+    their OTHER uses of eff_date (which day's/month's money and cases to sum)
+    are correct as they were and are untouched.
     """
     row = (
         db.query(func.max(Beat.beat_date))
@@ -301,7 +314,7 @@ def dashboard(current_user: ManagerOnly, db: DbSession):
     # On duty = stored ON_DUTY minus anyone on APPROVED leave today. The
     # stored status alone lied whenever the 00:10 sync was missed — see
     # services/leave_service.py, 2026-09-22.
-    _on_leave_today = agent_ids_on_leave(db, today_date, my_agent_ids)
+    _on_leave_today = agent_ids_on_leave(db, leave_today(), my_agent_ids)
     agents_on_leave = len(_on_leave_today)
     agents_on_duty = sum(
         1 for a in db.query(Agent).filter(Agent.id.in_(my_agent_ids)).all()
@@ -852,7 +865,7 @@ def list_agents(current_user: ManagerOnly, db: DbSession):
     agent_ids = [a.id for a in agents]
     start_of_day, end_of_day, eff_date = _effective_today(agent_ids, db)
     eff_date_str = eff_date.isoformat()
-    on_leave_today = agent_ids_on_leave(db, eff_date, agent_ids)
+    on_leave_today = agent_ids_on_leave(db, leave_today(), agent_ids)
 
     # ── Today's figures: three grouped queries for the WHOLE team ────────────
     # This was four queries PER AGENT in the loop below — 61 statements for a
@@ -1636,7 +1649,7 @@ def agents_performance(
         a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()
     ]
     _, _, eff_today_perf = _effective_today(my_agent_ids_perf, db)
-    on_leave_today_perf = agent_ids_on_leave(db, eff_today_perf, my_agent_ids_perf)
+    on_leave_today_perf = agent_ids_on_leave(db, leave_today(), my_agent_ids_perf)
     # Arithmetically stepped so no month is skipped or duplicated — see
     # _recent_months. The old 30-day-timedelta loop could drop a month.
     month_list: list[str] = _recent_months(eff_today_perf, max(months, 1))
@@ -2610,9 +2623,12 @@ def analytics(current_user: ManagerOnly, db: DbSession):
     leaderboard_all.sort(key=lambda r: (-r["total_collected"], -r["collection_rate_pct"]))
     leaderboard = leaderboard_all[:10]
 
-    # Duty summary: ON_DUTY / OFF_DUTY / ON_LEAVE for the effective day, with
+    # Duty summary: ON_DUTY / OFF_DUTY / ON_LEAVE for TODAY (leave_today(), the
+    # real IST calendar day — not `today`/eff_date above, which anchors the
+    # money and case figures on this page to whichever day the book last had
+    # data for and would silently misreport leave on a paused book), with
     # leave read from approved requests (not only the stored status).
-    _on_leave_today = agent_ids_on_leave(db, today, my_agent_ids)
+    _on_leave_today = agent_ids_on_leave(db, leave_today(), my_agent_ids)
     _eff = [effective_status(a, _on_leave_today)
             for a in db.query(Agent).filter(Agent.id.in_(my_agent_ids)).all()]
     on_duty_count = sum(1 for st in _eff if st is AgentStatus.ON_DUTY)
@@ -3145,7 +3161,7 @@ def ai_briefing(current_user: ManagerOnly, db: DbSession, refresh: bool = False)
         .filter(Case.id.in_(visited_case_ids_today))
         .scalar() or 0.0
     ) if visited_case_ids_today else 0.0
-    _on_leave_today = agent_ids_on_leave(db, eff_date, my_agent_ids)
+    _on_leave_today = agent_ids_on_leave(db, leave_today(), my_agent_ids)
     _agents_all = db.query(Agent).options(joinedload(Agent.user)).filter(Agent.id.in_(my_agent_ids)).all()
     agents_on_duty = sum(1 for a in _agents_all if effective_status(a, _on_leave_today) is AgentStatus.ON_DUTY)
     total_agents = len(my_agent_ids)
