@@ -24,20 +24,14 @@
 #   Case.priority on an existing case and turning that on is new behaviour,
 #   not a like-for-like swap. Wiring the nightly task must not be what makes
 #   either of them live.
-# 2026-09-28 (A15) — Added PRODUCT_MODE (standalone plan §2.3): "standalone"
-#   turns on the bank portal; "embedded" is today's behaviour — this repo
-#   serving Command Center at /api/v1/manager/* and /api/field-ops/*, and
-#   nothing else new. Default is "embedded": the deployed system (CLAUDE.md's
-#   provenance section) is embedded in the Collections platform today, so a
-#   fresh checkout with no override must keep behaving exactly as it does now
-#   rather than silently exposing a bank portal nobody asked for. A standalone
-#   deployment sets it explicitly. Rejects anything else at STARTUP (fail
-#   loud, not "silently read as embedded" — a typo'd env var must not make a
-#   standalone deployment quietly serve as embedded, or vice versa).
+# 2026-09-28 — PRODUCT_MODE (added the same day, A15) was REMOVED: nothing
+#   read it, so it switched nothing, and TIQCollect is standalone with no
+#   embedded mode left (docs/adr/0009). An old env file that still sets it is
+#   ignored (extra="ignore").
 # ───────────────────────────────────────────────────────────────────────────
 import os
 from functools import lru_cache
-from typing import List, Literal
+from typing import List
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -59,10 +53,6 @@ class Settings(BaseSettings):
     APP_NAME: str = "TIQCollect"
     APP_ENV: str = "development"
     DEBUG: bool = False
-    # standalone plan §2.3 — see the 2026-09-28 CHANGELOG entry above. Literal
-    # rather than a plain str + hand-rolled check: pydantic itself refuses any
-    # other value at startup, before a single request is served.
-    PRODUCT_MODE: Literal["standalone", "embedded"] = "embedded"
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
@@ -131,9 +121,10 @@ class Settings(BaseSettings):
     # Google Maps
     GOOGLE_MAPS_API_KEY: str = ""
 
-    # OSRM routing — public demo server by default; point this at a self-hosted
-    # OSRM instance (or paid provider) in production via .env, no code change needed.
-    OSRM_BASE_URL: str = "http://router.project-osrm.org"
+    # OSRM routing: a self-hosted instance, e.g. http://osrm:5000. Empty (the
+    # default, owner 2026-09-28) = straight-line estimates. Never the public demo
+    # server: it would receive every borrower's coordinates.
+    OSRM_BASE_URL: str = ""
 
     # Estimated time an agent spends actually doing a visit (verifying identity,
     # discussing payment, filling the visit form) — added to travel time when
@@ -199,8 +190,8 @@ class Settings(BaseSettings):
     # defaulted. Unset = nothing changes. See that script for the rules.
     DEMO_MASTER_PASSWORD: str = ""
     DEMO_MASTER_ACCOUNTS: str = ""        # three emails, comma-separated: one admin, one manager, one agent
-    # Never touched by the script: the Collections Command Center's service
-    # logins (its TIQCOLLECT_AGENCY_ACCOUNTS), comma-separated emails.
+    # Never touched by the script: accounts that must keep their own password
+    # (service logins), comma-separated emails.
     DEMO_MASTER_KEEP_ACCOUNTS: str = ""
     # The second, explicit opt-in to RETIRE every other account's password.
     # DEMO_MODE cannot be it: .env.example ships DEMO_MODE=true and compose
@@ -244,6 +235,17 @@ class Settings(BaseSettings):
         if self.DEMO_DEVICE_REBIND and not self.DEMO_MODE:
             raise ValueError("DEMO_DEVICE_REBIND=true switches device binding off and needs "
                              "DEMO_MODE=true as well; unset it on a real deployment.")
+        return self
+
+    @model_validator(mode="after")
+    def _production_secrets(self):
+        # Refuse to start rather than run with a guessable JWT key, or with MFA
+        # mandatory and no key to store a TOTP secret under (nobody could enrol).
+        if self.APP_ENV.strip().lower() == "production" and len(self.SECRET_KEY.strip()) < 32:
+            raise ValueError("SECRET_KEY must be at least 32 characters when APP_ENV=production.")
+        key = self.TOTP_ENC_KEY.strip()
+        if self.BANK_MFA_REQUIRED.strip().lower() == "true" and (not key or key.startswith("${")):
+            raise ValueError("BANK_MFA_REQUIRED=true needs TOTP_ENC_KEY; without it no bank user can enrol.")
         return self
     # customer_ref of that showcase customer. Also what _sync_demo_contact()
     # renames on startup, so the name/phone and the anchoring agree by

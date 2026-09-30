@@ -87,7 +87,7 @@ export default function LoginPage() {
                 <Input
                   label="Email"
                   type="email"
-                  placeholder="you@tiqcollect.in"
+                  placeholder="name@company.com"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   autoComplete="email"

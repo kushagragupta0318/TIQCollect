@@ -31,7 +31,7 @@ from sqlalchemy import create_engine
 
 from app.core.config import settings
 from app.demo import roster as R
-from app.demo.books import generate_book, require_rbi_window
+from app.demo.books import INSTALMENT_WINDOW, generate_book, require_rbi_window
 from app.demo.latent import AGENCY_LATENT, CONTACT_HOUR
 from app.demo.world import T, build_world, insert
 
@@ -73,10 +73,39 @@ def aravalli_instalments(conn) -> int:
             tenure = max(1, (r.maturity_date.year - r.disbursement_date.year) * 12
                          + r.maturity_date.month - r.disbursement_date.month)
         for i in range(1, int(tenure) + 1):
+            due = _add_months(r.disbursement_date, i)
+            if not INSTALMENT_WINDOW[0] <= due <= INSTALMENT_WINDOW[1]:
+                continue                          # the fixture's schedule window (books.INSTALMENT_WINDOW)
             out.append(dict(id=R.new_id("instalment", f"ARAVALLI:{r.id}:{i}"), bank_id=R.BANK["id"],
-                            loan_id=r.id, instalment_no=i, due_date=_add_months(r.disbursement_date, i),
+                            loan_id=r.id, instalment_no=i, due_date=due,
                             amount_due=r.emi_amount, source="GENERATED"))
     return insert(conn, "loan_instalments", out)
+
+
+def aravalli_anchor_history(conn) -> int:
+    """One loan_dpd_history row per Aravalli loan at the anchor: v1's CURRENT
+    state, transformed. Not an observation, so TRANSFORM_CURRENT with
+    is_backfill and not observed_pit (43, 2026-09-28); Aravalli has no history
+    before the anchor, and the bank Overview says so."""
+    lo, cu, pl, rg = T["loans"], T["customers"], T["placements"], T["regions"]
+    city_region = {r.name: str(r.id) for r in conn.execute(
+        sa.select(rg.c.name, rg.c.id).where(rg.c.bank_id == R.BANK["id"], rg.c.level == "CITY"))}
+    placed = {str(r.loan_id): str(r.id) for r in conn.execute(
+        sa.select(pl.c.loan_id, pl.c.id).where(pl.c.agency_id == R.AGENCY["id"], pl.c.status == "ACTIVE"))}
+    rows = []
+    for r in conn.execute(sa.select(lo.c.id, lo.c.dpd, lo.c.dpd_bucket, lo.c.status, lo.c.loan_type,
+                                    lo.c.overdue_amount, lo.c.total_outstanding, lo.c.outstanding_principal,
+                                    lo.c.penal_charges, cu.c.city)
+                          .join(cu, cu.c.id == lo.c.customer_id).where(lo.c.bank_id == R.BANK["id"])):
+        rid = str(r.id)
+        rows.append(dict(loan_id=rid, as_of_date=R.ANCHOR_DATE, bank_id=R.BANK["id"], dpd=int(r.dpd or 0),
+                         dpd_bucket=r.dpd_bucket, loan_status=r.status, overdue_amount=r.overdue_amount,
+                         total_outstanding=r.total_outstanding, outstanding_principal=r.outstanding_principal,
+                         penal_charges=r.penal_charges, npa_flag=int(r.dpd or 0) > 90, loan_type=r.loan_type,
+                         region_id=city_region.get(r.city), agency_id=(R.AGENCY["id"] if rid in placed else None),
+                         placement_id=placed.get(rid), is_month_end=False, source="TRANSFORM_CURRENT",
+                         is_backfill=True, observed_pit=False))
+    return insert(conn, "loan_dpd_history", rows)
 
 
 def rederive_aravalli_visit_flags(conn) -> dict:
@@ -128,6 +157,7 @@ def run(engine, profile_name: str, manifest_path: str | None, seed: int = 202609
         if "ARAVALLI" in prof.agencies:
             counts["aravalli loan_instalments (GENERATED)"] = aravalli_instalments(conn)
             counts["aravalli visit flags re-derived (DATA-R)"] = rederive_aravalli_visit_flags(conn)
+            counts["aravalli anchor history (TRANSFORM_CURRENT)"] = aravalli_anchor_history(conn)
         truths = {}
         for i, (key, w) in enumerate(sorted(world.agencies.items(), key=lambda kv: kv[1].number)):
             if not w.agents:

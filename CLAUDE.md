@@ -35,16 +35,11 @@ History does not live here (ADR 0006). The previous 2,702-line version is
   `TIQCollect-product` carry this history. On that remote, `main`, `TIQCollect_final` and
   `tiq-demo` are an **unrelated June repo with no common ancestor**; never merge across. A
   second remote, `personal`, carries session branches. Push only on explicit instruction.
-- **Three copies of the code exist.**
-  - **This repo** is the one to edit.
-  - **`collections-platform/field-ops-stub/`** (the Collections monorepo) is built and routed
-    to `fieldops.transorg.ai`. It receives this repo through a 3-way patch merge
-    (`docs/MERGING-INTO-PLATFORM.md`). Never edit it directly.
-  - **`Desktop/TIQCollect/`** is a stale June copy.
-- **The Collections Command Center** calls this API only as a manager service login:
-  `/api/v1/auth/login` and 11 `/api/v1/manager/*` routes (`command-center/backend/routers/field_ops_manager.py`).
-  Its `FieldAnalytics.jsx` and `FieldCases.jsx` are hand-maintained ports of pages here and
-  drift silently. The old `/api/field-ops/*` contract was deleted on 2026-09-24 (no caller).
+- **TIQCollect is a standalone product** (ADR 0009). Build, test, release and deploy all end in
+  this repo; deployment is `docs/DEPLOY.md`. Until 2026-09-28 it was merged into the Collections
+  monorepo (`field-ops-stub/`, `fieldops.transorg.ai`, Command Center calling `/api/v1/manager/*`).
+  That path is historical: `docs/MERGING-INTO-PLATFORM.md`. `Desktop/TIQCollect/` is a stale June
+  copy.
 
 ## Running it
 
@@ -53,8 +48,8 @@ docker compose up -d                      # api :8400, web :5473, postgres :1543
 docker compose --profile routing up -d    # plus self-hosted OSRM (needs a map extract; see the compose block)
 ```
 
-- **`backend/.env` is optional.** The compose file sets everything the app needs to start. It
-  was written for the platform, and its `${VAR}` references resolve there, not here.
+- **`backend/.env` is optional.** The compose file sets everything the app needs to start.
+  `backend/.env.example` lists every setting.
 - **An empty database is filled from `backend/fixtures/fieldops-demo-v2.dump`,** the committed
   v2 demo book. `docker-entrypoint.sh` restores it in one transaction and then runs
   `alembic upgrade head`; a v1 database or a v1 dump is refused. `fieldops-demo.dump` is the v1
@@ -62,15 +57,15 @@ docker compose --profile routing up -d    # plus self-hosted OSRM (needs a map e
   are in `backend/fixtures/README.md`.
 - **Two Docker setups; keep both working.**
   - Dev: `docker-compose.yml` + `Dockerfile.dev`, hot reload over bind mounts.
-  - Prod: `Dockerfile`, one non-root container serving the built SPA and the API, built by the
-    platform. The same image runs the Celery worker and beat.
+  - Prod: `Dockerfile` (one non-root image: the built SPA and the API; the same image runs the
+    Celery worker and beat) with `docker-compose.prod.yml`, `deploy/` and `docs/DEPLOY.md`.
   - A change to what they consume (`requirements.txt`, `package.json`, the entrypoint, env
     names) must say in its commit what it does to each.
 - **Demo-only behaviour has its own switch and is off by default:** `DEMO_MODE`,
   `DEMO_OTP_ECHO`, `DEMO_REHEARSAL_MODE`. Never enable `DEMO_OTP_ECHO` on a deployment people
   outside the team can reach: it hands the borrower's payment OTP to the agent.
 - **Behind a reverse proxy, set `FORWARDED_ALLOW_IPS` to the proxy's own address,** or every
-  user shares one login rate-limit bucket (`docs/MERGING-INTO-PLATFORM.md`).
+  user shares one login rate-limit bucket (`docs/DEPLOY.md`).
 
 ## Verifying a change
 

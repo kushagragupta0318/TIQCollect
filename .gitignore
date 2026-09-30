@@ -112,3 +112,6 @@ frontend/e2e/screenshots/
 # Rollback manifests written by the demo operator scripts (demo_record_*, ptp_lifecycle_backfill).
 # Runtime output of a data change, kept with the deployment, not in git.
 backend/docs/rollback/
+
+# Production database dumps (docker-compose.prod.yml mounts ./backups).
+backups/

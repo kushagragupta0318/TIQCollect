@@ -26,8 +26,7 @@
 # to backend/.env to add API keys (OpenAI, Twilio, Razorpay…).
 #
 # Ports are in a 1xxxx block and 5473/8400 so this cannot collide with anything
-# you already run — but it WILL collide with the full platform stack in ../,
-# which publishes the same infrastructure ports. Run one or the other.
+# you already run.
 
 services:
   # ─── PostgreSQL ───────────────────────────────────────────────────────────
@@ -70,9 +69,10 @@ services:
   # ─── OSRM (road routing over OpenStreetMap) ───────────────────────────────
   # OPT-IN. Start it with:  docker compose --profile routing up -d
   #
-  # WHY IT IS HERE. settings.OSRM_BASE_URL defaults to router.project-osrm.org,
-  # the PUBLIC DEMO SERVER: rate-limited, no SLA, and its usage policy rules out
-  # production traffic. The nightly planner fires one (stops+1)^2 table call per
+  # WHY IT IS HERE. settings.OSRM_BASE_URL is empty by default (straight-line
+  # estimates); until 2026-09-28 it was router.project-osrm.org, the PUBLIC DEMO
+  # SERVER: rate-limited, no SLA, it received borrower coordinates, and its usage
+  # policy rules out production traffic. The nightly planner fires one (stops+1)^2 table call per
   # agent against it at 20:00, and core/routing falls back to straight-line
   # Haversine whenever it is refused — which is how every beat ETA came to be
   # crow-flies without anyone noticing.
@@ -146,10 +146,7 @@ services:
     container_name: fieldops_dev_api
     restart: unless-stopped
     # Optional. Supply backend/.env to add API keys; the defaults below are
-    # enough to run without it. Note that backend/.env is written for the
-    # platform and refers to shared values as ${VAR}, which resolve out of the
-    # platform's .env — running standalone those come through empty, which is
-    # why everything the app cannot start without is set explicitly below.
+    # enough to run without it.
     env_file:
       - path: ./backend/.env
         required: false
@@ -196,8 +193,7 @@ services:
       # Pairs with the web's VITE_DEMO_UPI_AUTOCONFIRM below (hotfix PAY-1
       # round 3, 2026-09-24): the demo auto-confirm records a DEMO-UPI-
       # reference, and the server accepts one only with this flag. DEMO_MODE
-      # does not admit it. DEV ONLY: the prod image and the platform compose
-      # never set it, and it defaults to false in config.py.
+      # does not admit it. DEV ONLY: docker-compose.prod.yml never sets it, and it defaults to false in config.py.
       DEMO_UPI_ACCEPT: "true"
       # RBI contact hours are enforced with a real 403. Left open so the app
       # works outside 08:00-19:00 IST; set 8 and 19 for true behaviour.

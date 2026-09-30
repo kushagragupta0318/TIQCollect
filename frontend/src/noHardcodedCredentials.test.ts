@@ -99,7 +99,7 @@ describe("no hardcoded credentials in what the browser is served", () => {
     'export async function login(email: string, password: string, deviceId: string) {',
     '                      type={showPassword ? "text" : "password"}',
     '                      aria-label={showPassword ? "Hide password" : "Show password"}',
-    '                  placeholder="you@tiqcollect.in"',
+    '                  placeholder="name@company.com"',
     '                      autoComplete="current-password"',
     '    const data = await apiLogin(email, password, deviceId);',
   ])("does not flag ordinary form code: %s", (line) => {
