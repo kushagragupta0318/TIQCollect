@@ -164,7 +164,7 @@ class PaymentService:
             raise AppException(422, problem[0], problem[1])
         case = self._get_accessible_case(agent, case_id)
 
-        # Idempotency (v2_0025): a retry after a lost response — the photo uploads
+        # Idempotency: a retry after a lost response — the photo uploads
         # routinely push it past the 15-second window below — must return the
         # payment it already made, not a second one. This returns BEFORE the OTP
         # gate and every side effect (a new receipt number, the audit row, the
@@ -220,6 +220,10 @@ class PaymentService:
             # first (the partial unique index on (agent_id, client_submission_id)).
             # Return the row it made; re-raise if it is not there, because then it
             # was a different constraint, not this idempotency key.
+            # The rollback cannot un-spend this attempt's OTP token — Redis is not
+            # in the transaction — but the token was for this exact amount/case, the
+            # winner's payment stands, and nothing double-counts; only a redundant
+            # token is consumed.
             self.db.rollback()
             stored = self._by_submission(agent, csid) if csid else None
             if stored is None:
