@@ -34,10 +34,22 @@ def _admin():
     return create_engine(PG_URL, isolation_level="AUTOCOMMIT")
 
 
+#: Every scratch database refuses a statement that runs longer than this. Set
+#: on the DATABASE so it holds for every connection whoever opens it, and
+#: enforced by the SERVER — which is the whole point: a query blocking inside
+#: libpq cannot be interrupted by pytest-timeout's signal, because the handler
+#: cannot run until the C call returns. That is how one KPI query hung
+#: backend-pg for six hours on 2026-10-01 without naming a test. Generous
+#: enough for a genuinely slow test; if one needs more, raise this
+#: deliberately rather than removing the net.
+STATEMENT_TIMEOUT = "60s"
+
+
 def new_database(tag: str) -> str:
     name = f"tiq_pgtest_{tag}_{uuid.uuid4().hex[:8]}"
     with _admin().connect() as c:
         c.execute(text(f'CREATE DATABASE "{name}"'))
+        c.execute(text(f"ALTER DATABASE \"{name}\" SET statement_timeout = '{STATEMENT_TIMEOUT}'"))
     return make_url(PG_URL).set(database=name).render_as_string(hide_password=False)
 
 

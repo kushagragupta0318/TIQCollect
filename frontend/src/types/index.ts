@@ -111,6 +111,8 @@ export interface Agent {
    *  when the agency record has one (A14). */
   agency_name?: string | null;
   agency_rbi_registration_no?: string | null;
+  /** GET /agent/profile only: the signed token for the ID card's QR (G05). */
+  verify_token?: string | null;
 }
 
 export interface Customer {

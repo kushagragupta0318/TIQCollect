@@ -17,7 +17,7 @@
 //   That is reproduced exactly — the beat queryFn swallows and returns null, the
 //   summary queryFn throws and React Query retains the previous data.
 // ───────────────────────────────────────────────────────────────────────────
-import { useCallback, useEffect, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getBeat, getHomeSummary } from "@/api/agent";
 import { BeatContext, type BeatData, type HomeSummaryData } from "./useBeat";
@@ -103,8 +103,21 @@ export function BeatProvider({ children }: { children: ReactNode }) {
     return () => document.removeEventListener("visibilitychange", handleVisible);
   }, [refresh]);
 
+  // Perf (2026-10-01, owner F12 report "agent view rougher than manager"):
+  // this object was recreated every render, so every useBeat() consumer across
+  // the agent shell (AgentLayout, AgentHomePage, AgentCasesPage, BeatMapPage,
+  // RecordVisitPage, AgentCaseDetailPage) re-rendered on every BeatProvider
+  // render - including every background refetch's isFetching flip - whether
+  // beat/summary/loading had actually changed or not. refresh/patch/
+  // patchSummary are already useCallback-stable, so this now only changes
+  // identity when the data it actually carries does.
+  const value = useMemo(
+    () => ({ beat, summary, loading, refresh, patch, patchSummary }),
+    [beat, summary, loading, refresh, patch, patchSummary],
+  );
+
   return (
-    <BeatContext.Provider value={{ beat, summary, loading, refresh, patch, patchSummary }}>
+    <BeatContext.Provider value={value}>
       {children}
     </BeatContext.Provider>
   );

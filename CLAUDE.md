@@ -203,8 +203,10 @@ its duration yet, so the nightly window has never been timed.
 
 Full list with evidence: `docs/ENGINEERING-AUDIT.md`. The short form:
 
-1. **Lint fails:** 7 `react-hooks/set-state-in-effect` errors in `ManagerAnalyticsPage` (3),
-   `AgentCaseDetailPage` (1) and `RecordVisitPage` (3).
+1. ~~Lint fails: 7 `react-hooks/set-state-in-effect` errors.~~ **Fixed.** `ManagerAnalyticsPage`'s
+   three were closed without this file being updated; `AgentCaseDetailPage` (1) and
+   `RecordVisitPage` (3) closed in `l3-lint` (merge `0ed9d86`, 2026-09-30). `npm run lint`
+   measured 0 errors / 3 pre-existing `exhaustive-deps` warnings the same day (L9).
 2. **`manager.py` holds its business logic in the route layer,** with no typed responses. The
    split is in RESTRUCTURE-PLAN 2.4.
 3. **"Today" is computed several ways.**

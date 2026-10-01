@@ -48,6 +48,21 @@ def test_every_defined_kpi_has_a_figure_on_the_girivan_book(views):
     assert ov.totals and ov.narrative
 
 
+def test_collection_efficiency_excludes_an_unread_agency_but_keeps_the_rest(views):
+    """Aravalli has no opening reading (fixtures/README): it must drop out of the
+    bank-wide figure, not blank it, and be unavailable only when selected alone."""
+    from app.demo.roster import BANK, AGENCY  # AGENCY = Aravalli
+    from app.services.bank.kpi_catalog import compute_overview
+    from app.services.bank.kpi_filter import KpiFilter
+    with _session(views, BANK["id"]) as s:
+        bank_wide = compute_overview(s, BANK["id"])
+        aravalli_only = compute_overview(s, BANK["id"], KpiFilter(agency=AGENCY["id"]))
+    by_bank = {k["id"]: k for k in bank_wide.kpis}
+    by_arav = {k["id"]: k for k in aravalli_only.kpis}
+    assert by_bank["collection_efficiency"]["available"]        # the read agencies carry it
+    assert not by_arav["collection_efficiency"]["available"]     # Aravalli alone has no reading
+
+
 def test_a_session_for_another_bank_sees_none_of_girivans_rows(views):
     """The views filter on the session's bank; asking for Girivan by id from a
     Kumaon session returns nothing, never Girivan's figures."""

@@ -642,6 +642,9 @@ class ProfileResponse(BaseModel):
     cases_today: int
     agency_name: Optional[str] = None
     agency_rbi_registration_no: Optional[str] = None
+    # The signed token for the ID card's QR (G05) — core/security.create_agent_verify_token,
+    # validated by the public GET /verify-agent. Minted fresh on every profile fetch.
+    verify_token: str
 
 
 class AvailabilityDay(BaseModel):

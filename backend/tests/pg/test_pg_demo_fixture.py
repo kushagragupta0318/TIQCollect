@@ -21,7 +21,7 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 
-from tests.pg.conftest import BACKEND, drop_database, new_database
+from tests.pg.conftest import BACKEND, drop_database, new_database, run_alembic
 
 DUMP = BACKEND / "fixtures" / "fieldops-demo-v2.dump"
 MANIFEST = BACKEND / "fixtures" / "fieldops-demo-v2.truth.json"
@@ -57,7 +57,20 @@ def db(sql_text):
         body = "\n".join(line for line in sql_text.splitlines() if not line.startswith("SET transaction_timeout"))
         subprocess.run(["psql", *args, "-X", "-q", "-v", "ON_ERROR_STOP=1", "-o", os.devnull],
                        input=f"BEGIN;\n{body}\nCOMMIT;\n", text=True, env=env, check=True, capture_output=True)
+        # Restore THEN upgrade, as docker-entrypoint.sh does. The dump is a
+        # snapshot at one revision (v2_0016 today), so without this the suite
+        # tests today's code against an older schema — which is how the
+        # pre-v2_0017 unindexed v_visit_to_pay stayed live in CI and hung the
+        # bank-overview test for six hours.
+        from alembic import command
+        run_alembic(url, command.upgrade, "head")
         engine = create_engine(url)
+        # ANALYZE, as docker-entrypoint.sh does: pg_restore loads rows, not
+        # pg_statistic, and planned on guesses the bank Overview's
+        # v_visit_to_pay join takes 300s+ against 1s analysed. That, not the
+        # view or the data, is what hit the 60s statement_timeout.
+        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as c:
+            c.execute(text("ANALYZE"))
         yield engine
         engine.dispose()
     finally:
@@ -276,3 +289,24 @@ def test_instalments_are_inside_the_stated_window(db):
                lo=lo, hi=hi) == 0
     readme = (BACKEND / "fixtures" / "README.md").read_text(encoding="utf-8")
     assert f"{lo.isoformat()}" in readme and f"{hi.isoformat()}" in readme
+
+
+def test_the_restored_fixture_is_at_the_code_s_head_revision(db):
+    """The fixture must test today's code against today's schema.
+
+    The dump is a snapshot at whatever revision it was built on, so the
+    restore alone leaves the suite a few migrations behind — invisibly,
+    because nothing fails, it just tests the wrong thing. On 2026-10-01 that
+    was the pre-v2_0017 unindexed v_visit_to_pay: the bank-overview KPI query
+    never returned and backend-pg burned six hours on every branch.
+    """
+    from alembic.script import ScriptDirectory
+    from tests.pg.conftest import alembic_cfg
+
+    head = ScriptDirectory.from_config(alembic_cfg()).get_current_head()
+    with db.connect() as c:
+        stamped = c.execute(text("SELECT version_num FROM alembic_version")).scalar()
+    assert stamped == head, (
+        f"the restored fixture is at {stamped}, the code is at {head} — "
+        "the db fixture must upgrade after restoring, as docker-entrypoint.sh does"
+    )

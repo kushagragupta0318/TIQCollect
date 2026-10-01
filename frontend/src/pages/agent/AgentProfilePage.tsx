@@ -11,6 +11,7 @@ import AgentIDCard from "@/components/ui/AgentIDCard";
 import { LeaveRequestsSection } from "./LeaveRequestsSection";
 import type { Agent } from "@/types";
 import { useAnimatedValue } from "@/hooks/useAnimatedValue";
+import { todayIso } from "@/lib/today";
 
 // Indian-style compact currency so every ₹ value is formatted identically.
 function inrCompact(n: number): string {
@@ -173,7 +174,6 @@ export default function AgentProfilePage() {
       {/* ── Digital ID card: the single source for the ID number ── */}
       {agent && (
         <AgentIDCard
-          agentId={agent.id}
           name={user?.full_name ?? agent.full_name ?? ""}
           idCardNumber={agent.id_card_number}
           territory={agent.territory}
@@ -181,6 +181,7 @@ export default function AgentProfilePage() {
           employeeCode={agent.employee_code}
           issuer={agent.agency_name}
           rbiRegistrationNo={agent.agency_rbi_registration_no}
+          verifyToken={agent.verify_token}
         />
       )}
 
@@ -283,7 +284,7 @@ function AvailabilitySection({ calendar }: { calendar: AvailabilityCalendar }) {
   const daysInMonth = new Date(year, month, 0).getDate();
   const firstDow = new Date(year, month - 1, 1).getDay();                 // 0 = Sun
   const monthLabel = new Date(year, month - 1, 1).toLocaleDateString("en-IN", { month: "long", year: "numeric" });
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = todayIso();
 
   // Leading blanks + the month's days.
   const cells: (number | null)[] = [

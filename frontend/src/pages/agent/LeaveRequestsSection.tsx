@@ -14,6 +14,7 @@ import { CalendarOff, Loader2 } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { getMyLeaveRequests, requestLeave, withdrawLeave, type LeaveRequest, type LeaveType } from "@/api/agent";
 import { errorDetail } from "@/lib/apiError";
+import { todayIso } from "@/lib/today";
 
 const TYPES: { value: LeaveType; label: string; hint: string }[] = [
   { value: "SICK_LEAVE", label: "Sick leave", hint: "can start today · reason required" },
@@ -27,7 +28,6 @@ const STATUS_STYLE: Record<string, { bg: string; fg: string; word: string }> = {
   CANCELLED: { bg: "#EEF0F4", fg: "#6B6D76", word: "Withdrawn" },
 };
 const fmt = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
-const todayIso = () => new Date().toISOString().slice(0, 10);
 
 export function LeaveRequestsSection() {
   const [rows, setRows] = useState<LeaveRequest[] | null>(null);
