@@ -164,6 +164,19 @@ class PaymentService:
             raise AppException(422, problem[0], problem[1])
         case = self._get_accessible_case(agent, case_id)
 
+        # Idempotency (v2_0025): a retry after a lost response — the photo uploads
+        # routinely push it past the 15-second window below — must return the
+        # payment it already made, not a second one. This returns BEFORE the OTP
+        # gate and every side effect (a new receipt number, the audit row, the
+        # borrower notification), so a retry neither double-counts nor re-spends
+        # the single-use OTP token. Older clients send no id and still get the
+        # 15-second window.
+        csid = getattr(req, "client_submission_id", None)
+        if csid:
+            stored = self._by_submission(agent, csid)
+            if stored is not None:
+                return self._payment_repeat(stored, case, req)
+
         existing = self._find_recent_duplicate(case.id, agent.id, req)
         if existing:
             return self._payment_response(existing, case)
@@ -186,6 +199,7 @@ class PaymentService:
         payment = Payment(
             case_id=case.id,
             visit_id=req.visit_id,
+            client_submission_id=csid,
             agent_id=agent.id,
             amount=req.amount,
             mode=req.mode,
@@ -199,7 +213,18 @@ class PaymentService:
             verified_at=now_utc if verified else None,
         )
         self.db.add(payment)
-        self.db.flush()   # assign payment.id for the audit row below
+        try:
+            self.db.flush()   # assign payment.id for the audit row below
+        except IntegrityError:
+            # Two retries of one submission raced and the other's INSERT landed
+            # first (the partial unique index on (agent_id, client_submission_id)).
+            # Return the row it made; re-raise if it is not there, because then it
+            # was a different constraint, not this idempotency key.
+            self.db.rollback()
+            stored = self._by_submission(agent, csid) if csid else None
+            if stored is None:
+                raise
+            return self._payment_repeat(stored, case, req)
 
         if verified:
             self.db.add(AuditLog(
@@ -355,6 +380,31 @@ class PaymentService:
             f"Thank you for your payment.\n– {bn}"
         )
         return NotificationService.send_twilio(e164, sms_body, wa_body, db=self.db, case_id=case.id)
+
+    def _by_submission(self, agent, client_submission_id: str) -> Payment | None:
+        return (self.db.query(Payment)
+                .filter(Payment.agent_id == agent.id,
+                        Payment.client_submission_id == client_submission_id)
+                .first())
+
+    def _payment_repeat(self, stored: Payment, case: Case, req) -> dict:
+        """The response for a submission already recorded. A 409 — not a silent
+        return of the first payment — when the id was reused for a DIFFERENT case,
+        amount or mode: that is a client bug, and returning the first payment would
+        hide a money error."""
+        if str(stored.case_id) != str(case.id):
+            raise AppException(409, ErrorCode.IDEMPOTENCY_KEY_REUSED,
+                               "This submission id was already used for another case.")
+        if float(stored.amount) != float(req.amount) or \
+                str(getattr(stored.mode, "value", stored.mode)) != str(getattr(req.mode, "value", req.mode)):
+            raise AppException(409, ErrorCode.IDEMPOTENCY_KEY_REUSED,
+                               "This submission id was already used for a different amount or mode.")
+        # receipt_sent defaults False: this call sent nothing (the receipt went
+        # with the original payment). Matches the 15-second duplicate path above,
+        # which returns the same default — the field is an event about THIS attempt
+        # (schemas/agent.py), not the payment's state, so the two dedupe paths
+        # report alike.
+        return self._payment_response(stored, case)
 
     @staticmethod
     def _payment_response(payment: Payment, case: Case, *, receipt_sent: bool = False) -> dict:

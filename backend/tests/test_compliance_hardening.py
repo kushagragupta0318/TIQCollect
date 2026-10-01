@@ -97,7 +97,7 @@ def world():
     db.flush()
     ag = _agent(db, ua, "EMP001", mgr)
     db.flush()
-    cases = {k: _case(db, ag, k) for k in ("VISIT", "PTP", "PAY", "PAY2")}
+    cases = {k: _case(db, ag, k) for k in ("VISIT", "PTP", "PAY", "PAY2", "IDEM", "IDEM2", "IDEMOTP")}
     cases["NOPHONE"] = _case(db, ag, "NOPHONE", phone="")
     db.commit()
     yield {"db": db, "mgr": mgr, "ua": ua, "ag": ag, **cases}
@@ -294,6 +294,80 @@ def test_receipt_sent_is_false_when_there_is_nobody_to_send_to(world, monkeypatc
     out = ps.PaymentService(db).collect_payment(agent, case.id, CollectPaymentRequest(
         amount=100.0, mode=PaymentMode.CASH))
     assert out["receipt_sent"] is False and _FakeTwilio.calls == []
+    db.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Retried-payment idempotency (v2_0025): a retry past the 15-second window must
+# return the payment already made, never a second one.
+# ═══════════════════════════════════════════════════════════════════════════
+def test_a_retried_payment_returns_the_same_row_and_does_not_double_count(world, monkeypatch):
+    _configure_twilio(monkeypatch); _real_tenant(monkeypatch)
+    db = TestingSession()
+    agent = db.get(Agent, world["ag"].id); case = world["IDEM"]
+    csid = str(uuid.uuid4())
+    req = CollectPaymentRequest(amount=1200.0, mode=PaymentMode.CASH, client_submission_id=csid)
+    first = ps.PaymentService(db).collect_payment(agent, case.id, req)
+    # A retry of the SAME submission, after the 15-second window would have passed.
+    repeat = ps.PaymentService(db).collect_payment(
+        agent, case.id, CollectPaymentRequest(amount=1200.0, mode=PaymentMode.CASH, client_submission_id=csid))
+    assert repeat["id"] == first["id"]                                        # same row, not a new one
+    assert repeat["total_collected"] == 1200.0                               # counted ONCE, not 2400
+    assert db.query(Payment).filter(Payment.client_submission_id == csid).count() == 1
+    assert len(_rows(db, AuditAction.PAYMENT_SUBMITTED, first["id"])) == 1   # one audit row
+    assert len(_FakeTwilio.calls) == 1                                        # one receipt SMS
+    assert repeat["receipt_sent"] is False                                    # this call sent nothing
+    db.close()
+
+
+def test_a_retried_payment_does_not_respend_the_otp(world, monkeypatch):
+    _configure_twilio(monkeypatch); _real_tenant(monkeypatch)
+    import app.services.otp_service as otp_mod
+    calls = {"n": 0}
+
+    def _consume(self, verification_id, case_id, amount):
+        calls["n"] += 1
+        return True
+
+    monkeypatch.setattr(otp_mod.OtpService, "consume_for_payment", _consume)
+    db = TestingSession()
+    agent = db.get(Agent, world["ag"].id); case = world["IDEMOTP"]
+    csid = str(uuid.uuid4())
+    req = lambda: CollectPaymentRequest(amount=900.0, mode=PaymentMode.CASH,
+                                        client_submission_id=csid, verification_id=str(uuid.uuid4()))
+    first = ps.PaymentService(db).collect_payment(agent, case.id, req())
+    assert calls["n"] == 1                                                    # OTP consumed once
+    repeat = ps.PaymentService(db).collect_payment(agent, case.id, req())
+    assert repeat["id"] == first["id"]
+    assert calls["n"] == 1, "the repeat must NOT re-spend the OTP token"      # still once
+    db.close()
+
+
+def test_a_submission_id_reused_for_a_different_amount_is_409(world, monkeypatch):
+    _configure_twilio(monkeypatch); _real_tenant(monkeypatch)
+    db = TestingSession()
+    agent = db.get(Agent, world["ag"].id); case = world["IDEM2"]
+    csid = str(uuid.uuid4())
+    ps.PaymentService(db).collect_payment(agent, case.id, CollectPaymentRequest(
+        amount=500.0, mode=PaymentMode.CASH, client_submission_id=csid))
+    with pytest.raises(HTTPException) as e:
+        ps.PaymentService(db).collect_payment(agent, case.id, CollectPaymentRequest(
+            amount=600.0, mode=PaymentMode.CASH, client_submission_id=csid))   # different amount
+    assert e.value.status_code == 409
+    db.close()
+
+
+def test_a_submission_id_reused_for_another_case_is_409(world, monkeypatch):
+    _configure_twilio(monkeypatch); _real_tenant(monkeypatch)
+    db = TestingSession()
+    agent = db.get(Agent, world["ag"].id)
+    csid = str(uuid.uuid4())
+    ps.PaymentService(db).collect_payment(agent, world["IDEM"].id, CollectPaymentRequest(
+        amount=300.0, mode=PaymentMode.CASH, client_submission_id=csid))
+    with pytest.raises(HTTPException) as e:
+        ps.PaymentService(db).collect_payment(agent, world["IDEM2"].id, CollectPaymentRequest(
+            amount=300.0, mode=PaymentMode.CASH, client_submission_id=csid))   # same id, other case
+    assert e.value.status_code == 409
     db.close()
 
 

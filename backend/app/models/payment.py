@@ -19,7 +19,7 @@ import enum
 from datetime import datetime
 from sqlalchemy import (
     Boolean, CheckConstraint, DateTime, Enum as SAEnum, ForeignKeyConstraint, Index, String,
-    UniqueConstraint,
+    UniqueConstraint, text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import PUBLIC, Base, Money, TimestampMixin, UUIDPrimaryKey, UUIDType, uuid_fk
@@ -69,6 +69,9 @@ class Payment(Base, UUIDPrimaryKey, TimestampMixin):
     case_id: Mapped[str] = mapped_column(UUIDType, nullable=False)
     loan_id: Mapped[str] = mapped_column(UUIDType, nullable=False)
     visit_id: Mapped[str | None] = mapped_column(UUIDType)
+    # v2_0021: the client's id for this submission, so a retry after a lost response returns the
+    # row it made instead of a second payment (visits, call_logs and ptps have had one since v2_0015).
+    client_submission_id: Mapped[str | None] = mapped_column(UUIDType, nullable=True)
     # NULLABLE since 2026-09-09, and the NULL means something specific: nobody
     # collected this. A direct bank payment is real money against the case, but
     # it is not evidence about any agent, so attributing it to one would inflate
@@ -129,5 +132,13 @@ class Payment(Base, UUIDPrimaryKey, TimestampMixin):
         Index(None, "agency_id", "status", "payment_date"),
         Index(None, "loan_id", "status", "payment_date"),
         Index(None, "bank_id", "payment_date"),
+        # agent_id is NULLABLE (a direct bank payment has no collecting agent) and
+        # Postgres treats NULLs as distinct, so without the agent_id IS NOT NULL
+        # clause two agentless rows with the same id would both be allowed. The
+        # agent endpoint always has an agent, but the predicate states exactly what
+        # the index enforces.
+        Index("uq_payments_agent_id_client_submission_id", "agent_id", "client_submission_id", unique=True,
+              postgresql_where=text("client_submission_id IS NOT NULL AND agent_id IS NOT NULL"),
+              sqlite_where=text("client_submission_id IS NOT NULL AND agent_id IS NOT NULL")),
         {"schema": "collections"},
     )
