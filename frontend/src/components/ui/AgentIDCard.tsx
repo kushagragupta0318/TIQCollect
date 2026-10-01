@@ -1,8 +1,8 @@
 import { Shield, QrCode } from "lucide-react";
 import { useState } from "react";
+import QRCode from "react-qr-code";
 
 interface Props {
-  agentId: string;
   name: string;
   idCardNumber: string;
   territory: string;
@@ -13,63 +13,14 @@ interface Props {
    *  Either may be absent; nothing is printed in its place (A14). */
   issuer?: string | null;
   rbiRegistrationNo?: string | null;
+  /** Signed core/security.create_agent_verify_token, from GET /agent/profile
+   *  (G05). Encoded as a link to the public GET /verify-agent so a borrower's
+   *  camera can scan it directly. Absent only on a stale cached profile —
+   *  the back face says so rather than showing a placeholder. */
+  verifyToken?: string | null;
 }
 
-/* Deterministic pseudo-QR grid from a seed string */
-function hashStr(s: string): number {
-  let h = 2166136261;
-  for (let i = 0; i < s.length; i++) {
-    h = Math.imul(h ^ s.charCodeAt(i), 16777619) >>> 0;
-  }
-  return h;
-}
-
-function bitAt(seed: number, row: number, col: number, size: number): boolean {
-  const isFinderCorner =
-    (row < 3 && col < 3) ||
-    (row < 3 && col >= size - 3) ||
-    (row >= size - 3 && col < 3);
-  if (isFinderCorner) {
-    const r = Math.min(row, size - 1 - row, 2);
-    const c = Math.min(col, size - 1 - col, 2);
-    return r % 2 === 0 || c % 2 === 0;
-  }
-  const idx = row * size + col;
-  const word = idx >> 5;
-  const bit = idx & 31;
-  const rng = hashStr(String(seed + word * 7919));
-  return ((rng >> bit) & 1) === 1;
-}
-
-function MiniQR({ value, size = 18 }: { value: string; size?: number }) {
-  const seed = hashStr(value);
-  const cellSize = 5;
-  const svgSize = size * cellSize;
-
-  return (
-    <svg width={svgSize} height={svgSize} viewBox={`0 0 ${svgSize} ${svgSize}`} className="rounded">
-      <rect width={svgSize} height={svgSize} fill="white" />
-      {Array.from({ length: size }, (_, row) =>
-        Array.from({ length: size }, (_, col) => {
-          const on = bitAt(seed, row, col, size);
-          if (!on) return null;
-          return (
-            <rect
-              key={`${row}-${col}`}
-              x={col * cellSize}
-              y={row * cellSize}
-              width={cellSize}
-              height={cellSize}
-              fill="#1e293b"
-            />
-          );
-        })
-      )}
-    </svg>
-  );
-}
-
-export default function AgentIDCard({ agentId, name, idCardNumber, territory, tier, employeeCode, validUntil, issuer, rbiRegistrationNo }: Props) {
+export default function AgentIDCard({ name, idCardNumber, territory, tier, employeeCode, validUntil, issuer, rbiRegistrationNo, verifyToken }: Props) {
   const [flipped, setFlipped] = useState(false);
 
   return (
@@ -147,7 +98,16 @@ export default function AgentIDCard({ agentId, name, idCardNumber, territory, ti
         <div className="rounded-2xl bg-white border-2 border-slate-100 p-4 shadow-lg flex flex-col items-center gap-3">
           <p className="text-xs text-slate-500 font-medium">Scan to verify agent identity</p>
           <div className="p-3 bg-white rounded-xl border border-slate-100 shadow-inner">
-            <MiniQR value={`tiqcollect:agent:${agentId}:${idCardNumber}`} size={18} />
+            {verifyToken ? (
+              <QRCode
+                value={`${window.location.origin}/api/v1/verify-agent?token=${encodeURIComponent(verifyToken)}`}
+                size={120}
+              />
+            ) : (
+              <p className="w-[120px] h-[120px] flex items-center justify-center text-center text-[10px] text-slate-400 px-2">
+                QR unavailable — reload this page
+              </p>
+            )}
           </div>
           <div className="text-center">
             <p className="text-xs font-mono font-bold text-slate-700">{idCardNumber}</p>

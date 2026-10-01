@@ -4,11 +4,12 @@ import { BANK_PORTAL_ROLES, BANK_ROLE_LABELS, isBankPortalRole } from "./bankRol
 import { PAGE_ENTRIES, searchEntries } from "./searchIndex";
 
 describe("bank navigation — plan §5.1", () => {
-  it("has the five sections, in order, with the planned pages", () => {
+  it("has the six sections, in order, with the planned pages", () => {
     expect(BANK_SECTIONS.map((s) => [s.label, s.items.map((i) => i.name)])).toEqual([
       ["Command Center", ["Overview", "Analytics", "Alerts"]],
       ["AI Strategy", ["Monte Carlo Simulator", "Cash Forecast", "Scenario Lab", "Board Reports"]],
       ["Agencies", ["Directory", "Performance", "Placement", "Onboard Agency"]],
+      ["Governance", ["Models"]],
       ["Tech Ops", ["AI Agents", "MLOps", "Data Quality", "Usage & Cost"]],
       ["Admin", ["Bank Users", "Regions", "Settings", "Audit"]],
     ]);
