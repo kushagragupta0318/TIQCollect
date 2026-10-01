@@ -3,6 +3,7 @@
 // placement by hand. Every figure comes from /bank/placements; the gates are
 // the server's (placement_service), shown here, never re-decided.
 import { useMemo, useState, type ReactNode } from "react";
+import { useNavigate } from "react-router";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRightLeft, Play, RotateCcw } from "lucide-react";
 import api from "@/api/axios";
@@ -55,6 +56,7 @@ function PlaceLoans() {
   const qc = useQueryClient();
   const [filters, setFilters] = useState<LoanFilters>(EMPTY_FILTERS);
   const [page, setPage] = useState(1);
+  const navigate = useNavigate();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   // AI showcase: the loan whose recovery-risk score is being explained.
   const [explain, setExplain] = useState<{ id: string; label: string } | null>(null);
@@ -113,7 +115,17 @@ function PlaceLoans() {
       className: "w-8",
     },
     { key: "loan_account_number", header: "Loan", className: "font-semibold text-foreground" },
-    { key: "customer_name", header: "Borrower" },
+    {
+      key: "customer_name", header: "Borrower",
+      // C08: the borrower page is reached from here; the loan resolves to its customer.
+      render: (l) => (
+        <button type="button" className="text-left font-medium text-primary hover:underline"
+                onClick={() => navigate(`/bank/customers?loan=${encodeURIComponent(l.loan_id)}`)}
+                title="Open this borrower">
+          {l.customer_name}
+        </button>
+      ),
+    },
     { key: "loan_type", header: "Product" },
     { key: "dpd", header: "DPD", align: "right", render: (l) => l.dpd.toLocaleString("en-IN") },
     { key: "overdue_amount", header: "Overdue", align: "right", render: (l) => rs(l.overdue_amount) },

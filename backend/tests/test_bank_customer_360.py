@@ -321,3 +321,23 @@ def test_the_timeline_is_bounded(w, monkeypatch):
     db.commit()
     body = w["c"].get(f"{BASE}/cases/{case.id}/timeline", headers=_h(w["ba"])).json()
     assert len(body["entries"]) == 2 and body["truncated"] is True
+
+
+# ── the entry point from Placements (which lists loans, not customers) ───────
+
+def test_the_loan_entry_resolves_to_its_borrower_and_refuses_the_same_way(w):
+    c, loan = w["c"], w["mine"]
+    ok = c.get(f"{BASE}/loans/{loan.id}/customer-360", headers=_h(w["ba"]))
+    assert ok.status_code == 200
+    assert ok.json()["customer"]["customer_id"] == loan.customer_id
+    missing = c.get(f"{BASE}/loans/{MISSING}/customer-360", headers=_h(w["ba"]))
+    foreign = c.get(f"{BASE}/loans/{w['foreign'].id}/customer-360", headers=_h(w["ba"]))
+    assert missing.status_code == foreign.status_code == 404
+    assert missing.json() == foreign.json()
+
+
+def test_the_loan_entry_respects_the_region_limit(w):
+    limited, outside = _region_limited_user(w)
+    c = w["c"]
+    assert c.get(f"{BASE}/loans/{outside.id}/customer-360", headers=_h(limited)).status_code == 404
+    assert c.get(f"{BASE}/loans/{outside.id}/customer-360", headers=_h(w["ba"])).status_code == 200

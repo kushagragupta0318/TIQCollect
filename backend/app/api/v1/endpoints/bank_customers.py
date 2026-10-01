@@ -38,3 +38,13 @@ def customer_360(customer_id: UUIDPath, ctx: CurrentContext, db: DbSession, adb:
 def case_timeline(case_id: UUIDPath, ctx: CurrentContext, db: DbSession,
                   _user: User = require_perm(_BANK_READ)):
     return svc.case_timeline(db, ctx, case_id, region_limit=region_limit_path(db, _user))
+
+
+@router.get("/loans/{loan_id}/customer-360", response_model=Customer360)
+def customer_360_for_loan(loan_id: UUIDPath, ctx: CurrentContext, db: DbSession, adb: AnalyticsDb,
+                          _user: User = require_perm(_BANK_READ)):
+    """The entry point from Placements, which lists loans rather than customers.
+    Resolves the loan to its borrower and returns the same page."""
+    limit = region_limit_path(db, _user)
+    customer_id = svc.customer_for_loan(db, ctx, loan_id, region_limit=limit)
+    return svc.customer_360(db, adb, ctx, customer_id, region_limit=limit)

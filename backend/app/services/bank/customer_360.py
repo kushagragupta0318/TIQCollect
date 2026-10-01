@@ -67,6 +67,18 @@ def _visible_loans(db: Session, bank_id: str, customer_id: str, region_limit) ->
     return apply_region_limit(q, region_limit).order_by(Loan.loan_account_number).limit(MAX_LOANS).all()
 
 
+def customer_for_loan(db: Session, ctx, loan_id: str, *, region_limit=None) -> str:
+    """The borrower a loan belongs to, for the entry point from Placements (which
+    lists loans, not customers). Same 404 as everywhere else, so this cannot be
+    used to probe which loan ids exist."""
+    bank_id = _bank_id(ctx)
+    q = db.query(Loan.customer_id).filter(Loan.id == loan_id, Loan.bank_id == bank_id)
+    row = apply_region_limit(q, region_limit).first()
+    if row is None:
+        raise _not_found()
+    return row[0]
+
+
 def customer_360(db: Session, adb: Session, ctx, customer_id: str, *, region_limit=None) -> dict:
     bank_id = _bank_id(ctx)
     customer = (db.query(Customer)
