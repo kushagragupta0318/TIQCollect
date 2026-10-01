@@ -1091,13 +1091,18 @@ export default function ManagerCasesPage() {
   });
   // Seeded from ?bucket= for the overview's "Today's Cases by DPD" donut
   // (2026-09-16), same guard as statusFilter above: unknown values → ALL.
+  // All five real DPDBucket values (models/loan.py) — this used to list only
+  // three, so clicking the donut's Current or 1-30d segment silently reset to
+  // ALL instead of filtering (demo QA sweep, 2026-10-01). Server-side now,
+  // same as recovery — see getCases.
   const [bucketFilter, setBucketFilter] = useState(() => {
     const b = searchParams.get("bucket") || "ALL";
-    return ["BUCKET_2", "BUCKET_3", "NPA"].includes(b) ? b : "ALL";
+    return ["CURRENT", "BUCKET_1", "BUCKET_2", "BUCKET_3", "NPA"].includes(b) ? b : "ALL";
   });
-  // Server-side, unlike bucketFilter: the recovery label lives in the snapshot
-  // table, so narrowing it client-side would only filter the 50 rows already
-  // fetched and leave a HIGH-recovery case on page 3 sitting on page 3.
+  // Server-side, same reason as bucketFilter above: the recovery label lives
+  // in the snapshot table, so narrowing it client-side would only filter the
+  // 50 rows already fetched and leave a HIGH-recovery case on page 3 sitting
+  // on page 3.
   const [recoveryFilter, setRecoveryFilter] = useState("ALL");
   // Visit priority. Default OFF: the legacy allocation_date ordering is the page
   // a manager already knows, and switching it silently would move every row
@@ -1165,7 +1170,7 @@ export default function ManagerCasesPage() {
   // value can contain, and reaching for one is how a literal NUL ended up in
   // this file on the first attempt — valid TypeScript, but it made the source
   // read as binary to grep and diff.
-  const filterSig = JSON.stringify([statusFilter, recoveryFilter, prioritySort,
+  const filterSig = JSON.stringify([statusFilter, bucketFilter, recoveryFilter, prioritySort,
                                     priorityBand, dateFrom, dateTo, agentId ?? "",
                                     activity, ptpDue]);
   const [pageState, setPageState] = useState({ sig: filterSig, page: 0 });
@@ -1177,7 +1182,7 @@ export default function ManagerCasesPage() {
   // the same string and React Query does not treat them as different queries.
   const casesQ = useQuery({
     queryKey: ["manager", "cases", {
-      status: statusFilter, recovery: recoveryFilter, sort: prioritySort,
+      status: statusFilter, bucket: bucketFilter, recovery: recoveryFilter, sort: prioritySort,
       band: priorityBand, from: dateFrom, to: dateTo,
       agent: agentId ?? null, page,
       activity: activity ? `${activity.stage}|${activity.window}|${activity.outcome ?? ""}` : null,
@@ -1187,6 +1192,7 @@ export default function ManagerCasesPage() {
       try {
         return await getCases({
           status: statusFilter !== "ALL" ? statusFilter : undefined,
+          dpd_bucket: bucketFilter !== "ALL" ? bucketFilter : undefined,
           recovery: recoveryFilter !== "ALL" ? recoveryFilter : undefined,
           sort: prioritySort !== "OFF" ? prioritySort : undefined,
           priority_band: priorityBand !== "ALL" ? priorityBand : undefined,
@@ -1250,7 +1256,6 @@ export default function ManagerCasesPage() {
   }, [datesReady]);
 
   const displayed = cases.filter((c) => {
-    if (bucketFilter !== "ALL" && c.loan.dpd_bucket !== bucketFilter) return false;
     if (search) {
       const q = search.toLowerCase();
       return (
@@ -1315,7 +1320,9 @@ export default function ManagerCasesPage() {
       });
     }
     if (bucketFilter !== "ALL") {
-      const labels: Record<string, string> = { BUCKET_2: "31–60 DPD", BUCKET_3: "61–90 DPD", NPA: "NPA 90+" };
+      const labels: Record<string, string> = {
+        CURRENT: "Current (0 DPD)", BUCKET_1: "1–30 DPD", BUCKET_2: "31–60 DPD", BUCKET_3: "61–90 DPD", NPA: "NPA 90+",
+      };
       out.push({ key: "bucket", label: labels[bucketFilter] ?? bucketFilter, clear: () => setBucketFilter("ALL") });
     }
     if (activity) {
@@ -1455,6 +1462,8 @@ export default function ManagerCasesPage() {
             <FilterField label="DPD bucket">
               <select className={CONTROL} value={bucketFilter} onChange={(e) => setBucketFilter(e.target.value)} aria-label="Filter by DPD bucket">
                 <option value="ALL">All</option>
+                <option value="CURRENT">Current (0 DPD)</option>
+                <option value="BUCKET_1">1–30 DPD</option>
                 <option value="BUCKET_2">31–60 DPD</option>
                 <option value="BUCKET_3">61–90 DPD</option>
                 <option value="NPA">NPA 90+</option>
