@@ -14,6 +14,7 @@ import { BankLayout } from "./layout/BankLayout";
 import { guardRedirect } from "@/lib/roles";
 import { BANK_PORTAL_ROLES, BANK_ROLE_LABELS, isBankPortalRole } from "./layout/bankRoles";
 import { BANK_NAV_ITEMS } from "./layout/navigation";
+import { BankAnalyticsPage } from "./pages/BankAnalyticsPage";
 import { BankOverviewPage } from "./pages/BankOverviewPage";
 import { BankPlacementPage } from "./pages/BankPlacementPage";
 import { BankPlaceholderPage } from "./pages/BankPlaceholderPage";
@@ -30,7 +31,9 @@ const AGENCY_DIRECTORY_PATH = "agencies/directory";
 const AGENCY_PERFORMANCE_PATH = "agencies/performance";
 
 // Screens that are built; every other nav item renders its placeholder.
-const BUILT_PAGES: Record<string, ComponentType> = { overview: BankOverviewPage, "agencies/placement": BankPlacementPage };
+const BUILT_PAGES: Record<string, ComponentType> = {
+  overview: BankOverviewPage, analytics: BankAnalyticsPage, "agencies/placement": BankPlacementPage,
+};
 
 
 export default function BankApp() {
