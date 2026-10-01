@@ -65,6 +65,12 @@ def db(sql_text):
         from alembic import command
         run_alembic(url, command.upgrade, "head")
         engine = create_engine(url)
+        # ANALYZE, as docker-entrypoint.sh does: pg_restore loads rows, not
+        # pg_statistic, and planned on guesses the bank Overview's
+        # v_visit_to_pay join takes 300s+ against 1s analysed. That, not the
+        # view or the data, is what hit the 60s statement_timeout.
+        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as c:
+            c.execute(text("ANALYZE"))
         yield engine
         engine.dispose()
     finally:
