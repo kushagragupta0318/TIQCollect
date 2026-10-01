@@ -30,12 +30,14 @@ from datetime import date
 
 import sqlalchemy as sa
 from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.demo import roster as R
 from app.demo.books import EMAIL_DOMAINS, INSTALMENT_WINDOW, generate_book, require_rbi_window
 from app.demo.latent import AGENCY_LATENT, CALENDAR_SEASON, CONTACT_HOUR, SALARY_DAYS
 from app.demo.performing import generate_performing
+from app.demo.recovery_scoring import score_generated_books
 from app.demo.world import T, build_world, insert
 
 
@@ -205,6 +207,12 @@ def run(engine, profile_name: str, manifest_path: str | None, seed: int = 202609
             performing[bank_key] = p.__dict__
             print(f"[generate_demo_v2] performing {bank_key}: {p.loans} loans, {p.history_rows} history rows",
                   flush=True)
+        recovery_scoring = {}
+        for bank_key in {a.bank_key for a in R.AGENCIES if a.key in truths}:
+            s = score_generated_books(Session(bind=conn), bank_key=bank_key)
+            recovery_scoring[bank_key] = s.__dict__
+            print(f"[generate_demo_v2] recovery_risk {bank_key}: {s.cases_modelled} modelled, "
+                  f"{s.cases_declined} declined of {s.cases_considered} open cases", flush=True)
     manifest = {
         "SYNTHETIC_WARNING": "Every borrower, loan, agent and event in this book is synthetic; every "
                              "organisation and person is fictional (docs/DATA-MODEL-V2.md Appendix C).",
@@ -226,6 +234,13 @@ def run(engine, profile_name: str, manifest_path: str | None, seed: int = 202609
         "not_generated": {"ARAVALLI": "v1's book via the B15 transform; carries no injected truth"},
         "performing": performing,
         "world_and_corrections": counts,
+        # Unlike the rest of this manifest, these counts describe a REAL
+        # write: ml.model_predictions rows from the actual recovery_risk
+        # model (app/demo/recovery_scoring.py), scored at the anchor date,
+        # same as the product's own call. Recorded here for the same reason
+        # every other count is — so the fixture build's own log is the
+        # source of truth for what landed — not because it is generator-only.
+        "recovery_scoring": recovery_scoring,
         "seconds": round(time.time() - t0, 1),
     }
     if manifest_path:
