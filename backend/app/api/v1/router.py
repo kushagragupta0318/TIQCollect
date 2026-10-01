@@ -28,3 +28,7 @@ api_router.include_router(bank_placements.router)
 # /bank/loans/{id}/explanation. Own line, for the same merge reason as above.
 from app.api.v1.endpoints import bank_models  # noqa: E402
 api_router.include_router(bank_models.router)
+# 2026-10-01 (L5, C08): the bank's borrower page, /bank/customers/{id}/360 and
+# /bank/cases/{id}/timeline. Own line, for the same merge reason as above.
+from app.api.v1.endpoints import bank_customers  # noqa: E402
+api_router.include_router(bank_customers.router)
