@@ -14,7 +14,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { CSSProperties, ReactNode } from "react";
-import { useNavigate } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { Users, Briefcase, IndianRupee, MapPin, Clock, AlertTriangle, Sparkles, RefreshCw, TrendingUp, TrendingDown, ShieldAlert } from "lucide-react";
 import { getDashboard, getAgents, getBriefing, getUnallocatedCases } from "@/api/manager";
 import { BeatPlanSummaryStrip } from "./TomorrowAllocationCard";
@@ -401,9 +401,9 @@ export default function ManagerOverviewPage() {
       >
         <div className="flex items-center justify-between gap-3 mb-4">
           <h2 className="text-base font-bold min-w-0 truncate" style={{ color: "#1C1C1F" }}>Agent Leaderboard</h2>
-          <a href="/manager/agents" className="tap-target inline-flex items-center text-sm font-semibold text-brand-600 hover:text-brand-700 transition-colors flex-shrink-0">
+          <Link to="/manager/agents" className="tap-target inline-flex items-center text-sm font-semibold text-brand-600 hover:text-brand-700 transition-colors flex-shrink-0">
             View all →
-          </a>
+          </Link>
         </div>
         <div className="space-y-2">
           {agents.slice(0, 10).map((a, idx) => (
@@ -412,9 +412,9 @@ export default function ManagerOverviewPage() {
         </div>
         {agents.length > 10 && (
           <div className="mt-3 pt-3 text-center" style={{ borderTop: "1px solid #EAEBEF" }}>
-            <a href="/manager/agents" className="text-xs font-semibold text-brand-600 hover:text-brand-700 transition-colors">
+            <Link to="/manager/agents" className="text-xs font-semibold text-brand-600 hover:text-brand-700 transition-colors">
               See all {agents.length} agents →
-            </a>
+            </Link>
           </div>
         )}
       </div>
@@ -437,10 +437,16 @@ export default function ManagerOverviewPage() {
             <h3 className="text-sm font-bold mb-3 flex items-center gap-2" style={{ color: "#1C1C1F" }}>
               Pending Actions
             </h3>
+            {/* 2026-10-01 (demo QA sweep): "Cases pending first visit" and
+                "Escalated cases" used to be Math.round(cases_assigned * 0.18)
+                and a bare 3 — invented whenever the briefing failed to load.
+                Escalated now reads the real zero-filled count this page
+                already has (case_status_counts, same field the pipeline donut
+                uses); there is no real equivalent for "pending first visit"
+                in this summary, so that row is gone rather than guessed. */}
             <div className="space-y-2.5">
-              <ActionItem label="PTP follow-ups due today"      value={s.ptps_due_today}                    color="text-warning-600" />
-              <ActionItem label="Cases pending first visit"     value={Math.round(s.cases_assigned * 0.18)} color="text-brand-600"   />
-              <ActionItem label="Escalated cases"               value={3}                                    color="text-danger-600"  />
+              <ActionItem label="PTP follow-ups due today" value={s.ptps_due_today} color="text-warning-600" />
+              <ActionItem label="Escalated cases" value={s.case_status_counts?.ESCALATED ?? 0} color="text-danger-600" />
             </div>
           </div>
         )}
