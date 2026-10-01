@@ -584,10 +584,15 @@ def test_every_manager_route_that_reads_tenant_data_is_scoped():
         #
         # So every route relying on a helper here MUST also carry a behavioural
         # tenancy test. For these two that is
-        # test_audit_log_does_not_leak_another_managers_team below.
+        # test_audit_log_does_not_leak_another_managers_team below; for
+        # `_team_breakdown` (the analytics breakdowns, known issue 8) it is
+        # test_the_route_returns_only_this_managers_team in
+        # tests/test_portfolio_breakdown.py, which asserts another manager's
+        # branch, city and product are absent from the rows.
         if not ('manager_user_id' in chunk or 'current_user.id' in chunk
                 or '_require_own_agent' in chunk
-                or '_audit_visible_user_ids' in chunk or '_audit_log_query' in chunk):
+                or '_audit_visible_user_ids' in chunk or '_audit_log_query' in chunk
+                or '_team_breakdown' in chunk):
             unscoped.append(path)
     assert unscoped == [], f'unscoped manager routes: {unscoped}'
 

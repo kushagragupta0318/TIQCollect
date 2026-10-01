@@ -19,7 +19,7 @@ from __future__ import annotations
 from calendar import monthrange
 from collections import defaultdict
 from datetime import datetime, date, timezone, timedelta
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import and_, func, or_
@@ -3003,71 +3003,61 @@ def get_payment_modes(
     }
 
 
-@router.get("/analytics/dpd-breakdown")
+from pydantic import BaseModel as _BreakdownBase  # local, as the other sections here do
+
+from app.services import portfolio_breakdown
+
+
+class BreakdownRowOut(_BreakdownBase):
+    """One row of a portfolio breakdown. `key` is the dimension's value, already
+    labelled: a loan with no branch recorded reads "Not recorded" rather than
+    vanishing, so the rows still sum to the page's header."""
+    key: str
+    case_count: int
+    target_lakhs: float
+    collected_lakhs: float
+    collection_rate_pct: float
+
+
+def _team_breakdown(db, current_user, *, dimension: str, month: Optional[str]) -> list[BreakdownRowOut]:
+    my_agent_ids = [a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()]
+    try:
+        rows = portfolio_breakdown.breakdown(db, dimension=dimension, agent_ids=my_agent_ids, month=month)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return [BreakdownRowOut(**vars(r)) for r in rows]
+
+
+@router.get("/analytics/dpd-breakdown", response_model=list[BreakdownRowOut])
 def get_team_dpd_breakdown(
     current_user: ManagerOnly,
     db: DbSession,
-    month: Optional[str] = None,  # YYYY-MM — if provided, sums payments in that month
+    month: Optional[str] = None,  # YYYY-MM - if provided, sums payments in that month
 ):
     """DPD collection breakdown across all team cases.
     Without month: all-time portfolio totals (Case.collected_amount).
-    With month: only payments collected in that calendar month."""
-    bucket_order = ["BUCKET_1", "BUCKET_2", "BUCKET_3", "NPA"]
+    With month: only payments collected in that calendar month.
 
-    my_agent_ids = [a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()]
+    The query lives in services/portfolio_breakdown now (known issue 8): the
+    same metric rules serve branch, city and product, and one definition cannot
+    drift from another. The response is unchanged.
+    """
+    return _team_breakdown(db, current_user, dimension="bucket", month=month)
 
-    if month:
-        yr, mo = month.split("-")
-        month_start = datetime(int(yr), int(mo), 1)
-        month_end = datetime(int(yr) + 1, 1, 1) if int(mo) == 12 else datetime(int(yr), int(mo) + 1, 1)
 
-        rows = (
-            db.query(
-                Loan.dpd_bucket,
-                func.count(func.distinct(Case.id)).label("case_count"),
-                func.sum(Case.target_amount).label("target_amount"),
-                func.sum(Payment.amount).label("collected_amount"),
-            )
-            .join(Case, Case.loan_id == Loan.id)
-            .join(Payment, Payment.case_id == Case.id)
-            .filter(
-                Case.agent_id.in_(my_agent_ids),
-                Payment.agent_id.in_(my_agent_ids),
-                Payment.payment_date >= month_start,
-                Payment.payment_date < month_end,
-                Payment.status != "REJECTED",
-            )
-            .group_by(Loan.dpd_bucket)
-            .all()
-        )
-    else:
-        rows = (
-            db.query(
-                Loan.dpd_bucket,
-                func.count(Case.id).label("case_count"),
-                func.sum(Case.target_amount).label("target_amount"),
-                func.sum(Case.collected_amount).label("collected_amount"),
-            )
-            .join(Case, Case.loan_id == Loan.id)
-            .filter(Case.agent_id.in_(my_agent_ids))
-            .group_by(Loan.dpd_bucket)
-            .all()
-        )
+@router.get("/analytics/breakdown", response_model=list[BreakdownRowOut])
+def get_team_breakdown(
+    current_user: ManagerOnly,
+    db: DbSession,
+    dimension: Literal["bucket", "product", "branch", "city"] = "bucket",
+    month: Optional[str] = None,  # YYYY-MM - if provided, sums payments in that month
+):
+    """The team's book by branch, city, product or DPD bucket (known issue 8).
 
-    result = []
-    for r in rows:
-        bucket = r.dpd_bucket.value if hasattr(r.dpd_bucket, "value") else str(r.dpd_bucket)
-        target = float(r.target_amount or 0)
-        collected = float(r.collected_amount or 0)
-        result.append({
-            "bucket": bucket,
-            "case_count": r.case_count,
-            "target_lakhs": round(target / 100000, 2),
-            "collected_lakhs": round(collected / 100000, 2),
-            "collection_rate_pct": round(collected / max(target, 1) * 100, 1),
-        })
-    result.sort(key=lambda x: bucket_order.index(x["bucket"]) if x["bucket"] in bucket_order else 99)
-    return result
+    Ordered largest collection first for every dimension except bucket, which
+    keeps its severity order. Rows are this manager's agents' cases only.
+    """
+    return _team_breakdown(db, current_user, dimension=dimension, month=month)
 
 
 # ---------------------------------------------------------------------------

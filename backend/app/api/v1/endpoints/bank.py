@@ -19,6 +19,7 @@ from app.models.tenancy import Agency, Bank, Region
 from app.models.user import User
 from app.services.bank.kpi_catalog import ROWS, compute_overview
 from app.services.bank.kpi_filter import PERIODS, FilterError, KpiFilter
+from app.services import portfolio_breakdown
 
 router = APIRouter(prefix="/bank", tags=["bank"])
 
@@ -149,3 +150,41 @@ def filters(ctx: CurrentContext, db: DbSession, _user: User = require_perm("cc.r
         buckets=[Option(value=b.value, label=b.value.replace("_", " ").title()) for b in DPDBucket],
         security=[Option(value="SECURED", label="Secured"), Option(value="UNSECURED", label="Unsecured")],
     )
+
+
+class BreakdownRowOut(BaseModel):
+    key: str
+    case_count: int
+    target_lakhs: float
+    collected_lakhs: float
+    collection_rate_pct: float
+
+
+@router.get("/breakdown", response_model=list[BreakdownRowOut],
+            summary="The bank's book by branch, city, product or DPD bucket")
+def breakdown(ctx: CurrentContext, db: DbSession,
+              dimension: Literal["bucket", "product", "branch", "city"] = "branch",
+              month: Optional[str] = None,
+              _user: User = require_perm("cc.read")):
+    """Known issue 8's breakdowns for the bank, computed LIVE rather than from
+    the analytics materialized views.
+
+    Why live: branch is not in mv_portfolio_daily's grain, and adding it there
+    multiplies that view's rows by the branches per region -- measured on the
+    demo book at 23.8, so 27,940 rows become roughly 600,000, refreshed nightly.
+    A live aggregate over 27,845 loans is milliseconds here. On a real bank's
+    millions it is seconds, which is poor for a dashboard tile and is exactly
+    what the materialized views exist to avoid. So this is the honest cheap
+    answer for the pilot, not the scalable one: folding branch into the MV grain
+    is tracked as post-demo scale work (f8's ruling (B), 2026-10-01).
+
+    Note the figures come from the transactional tables, so they are live rather
+    than as-of the last refresh, and will not tie to the Overview's KPIs to the
+    rupee when a refresh is stale.
+    """
+    bank_id = _bank_of(ctx)
+    try:
+        rows = portfolio_breakdown.breakdown(db, dimension=dimension, bank_id=bank_id, month=month)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    return [BreakdownRowOut(**vars(r)) for r in rows]
