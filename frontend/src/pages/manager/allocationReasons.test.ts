@@ -22,7 +22,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
-  agentAdjustment, effectiveRecoveryRate, mlBadge, ownerTag, rankedReasons,
+  agentAdjustment, deferredBadge, effectiveRecoveryRate, mlBadge, ownerTag, rankedReasons,
 } from "./allocationReasons";
 
 /** A real row, copied from allocation_decisions on the live demo book. */
@@ -395,5 +395,23 @@ describe("backend contract", () => {
     };
     // No badge at all — and certainly not one claiming 76%.
     expect(mlBadge(shadowOnly)).toBeNull();
+  });
+});
+
+describe("deferredBadge — every DEFERRED_* subtype gets a badge", () => {
+  it("labels the two subtypes that used to render nothing", () => {
+    expect(deferredBadge("DEFERRED_PTP").label).toBe("PTP DUE");
+    expect(deferredBadge("DEFERRED_VISIT_CAP").label).toBe("VISIT CAP");
+  });
+
+  it("keeps the existing two labels unchanged", () => {
+    expect(deferredBadge("DEFERRED").label).toBe("DEFERRED");
+    expect(deferredBadge("DEFERRED_ROUTE_INFEASIBLE").label).toBe("ROUTE OUTLIER");
+  });
+
+  it("never returns null, so a future DEFERRED_* subtype still shows something", () => {
+    const badge = deferredBadge("DEFERRED_SOME_NEW_REASON");
+    expect(badge.label).toBe("SOME NEW REASON");
+    expect(badge.title).toContain("DEFERRED_SOME_NEW_REASON");
   });
 });
