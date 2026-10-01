@@ -9,13 +9,19 @@ from __future__ import annotations
 
 from datetime import date
 
+import numpy as np
 import pytest
 
 from app.core.errors import AppException, ErrorCode
 from app.strategy import calibration as C
 from app.strategy.honesty import STAMP_FIELDS
+from app.strategy.states import STATES
 
 BANK = "bank-1"
+# The ladder estimate_shock_sigma needs both directions on: CURRENT only worsens,
+# SMA_0 only improves, so a middle state must see both. A random walk over these
+# gives SMA_0/SMA_1 heavy two-way movement.
+_LADDER = ("CURRENT", "SMA_0", "SMA_1", "SMA_2")
 
 
 class _FakeResult:
@@ -31,19 +37,20 @@ class _FakeSession:
 
 
 def _book(n_loans: int, n_months: int) -> list[dict]:
-    """A book with heavy two-way movement: half the loans oscillate CURRENT<->SMA_0
-    each month, so every month has many deteriorations AND improvements — enough
-    for estimate_shock_sigma (needs >=5 of each per segment)."""
+    """A seeded random walk over CURRENT..SMA_2: each loan steps +-1 on the ladder
+    (reflecting at the ends) each month, so the middle states (SMA_0, SMA_1) see
+    both deteriorations and improvements every month — enough for
+    estimate_shock_sigma's >=5-of-each-per-segment. Deterministic via the seed."""
+    rng = np.random.default_rng(12345)
     months = [date(2026, (mo % 12) + 1, 28) for mo in range(n_months)]
+    pos = rng.integers(0, len(_LADDER), size=n_loans)
     rows = []
-    for li in range(n_loans):
-        for mi, m in enumerate(months):
-            # loans 0..n/2 oscillate by month parity; the rest hold CURRENT.
-            if li < n_loans // 2:
-                state = "SMA_0" if (li + mi) % 2 == 0 else "CURRENT"
-            else:
-                state = "CURRENT"
-            rows.append({"loan_id": f"L{li}", "as_of_date": m, "state": state,
+    for mi, m in enumerate(months):
+        if mi > 0:
+            step = rng.integers(0, 2, size=n_loans) * 2 - 1          # -1 or +1
+            pos = np.clip(pos + step, 0, len(_LADDER) - 1)
+        for li in range(n_loans):
+            rows.append({"loan_id": f"L{li}", "as_of_date": m, "state": _LADDER[pos[li]],
                          "total_outstanding": 100000.0, "loan_type": "PERSONAL", "region_id": "WEST"})
     return rows
 
@@ -57,7 +64,7 @@ def _thin_book(n_months: int) -> list[dict]:
 
 
 def test_calibrate_returns_a_coverage_figure_stamped_synthetic():
-    reading = C.calibrate(_FakeSession(_book(60, 10)), BANK, n_paths=40, seed=1)
+    reading = C.calibrate(_FakeSession(_book(120, 10)), BANK, n_paths=40, seed=1)
     r = reading.report
     assert 0.0 <= r.coverage <= 1.0 and 0.0 < r.nominal <= 1.0
     assert r.horizon_months >= 2
@@ -66,7 +73,7 @@ def test_calibrate_returns_a_coverage_figure_stamped_synthetic():
 
 
 def test_the_stamp_travels_in_the_result_dict():
-    d = C.calibrate(_FakeSession(_book(50, 9)), BANK, n_paths=30, seed=2).as_dict()
+    d = C.calibrate(_FakeSession(_book(120, 9)), BANK, n_paths=30, seed=2).as_dict()
     assert set(d) >= STAMP_FIELDS
     assert "coverage" in d and "passes" in d and "basis" in d
     assert d["synthetic"] is True
@@ -91,13 +98,13 @@ def test_a_book_too_sparse_to_estimate_volatility_abstains_not_raises():
 
 def test_the_horizon_is_sized_to_the_panel():
     # 7 months -> horizon capped at months-3 = 4, never the default 6.
-    reading = C.calibrate(_FakeSession(_book(50, 7)), BANK, n_paths=20, seed=3)
+    reading = C.calibrate(_FakeSession(_book(120, 7)), BANK, n_paths=20, seed=3)
     assert reading.report.horizon_months == 4
     # a long panel honours the requested default
-    reading = C.calibrate(_FakeSession(_book(50, 14)), BANK, horizon_months=6, n_paths=20, seed=3)
+    reading = C.calibrate(_FakeSession(_book(120, 14)), BANK, horizon_months=6, n_paths=20, seed=3)
     assert reading.report.horizon_months == 6
 
 
 def test_data_version_defaults_to_the_latest_month_end():
-    reading = C.calibrate(_FakeSession(_book(50, 9)), BANK, n_paths=20, seed=4)
+    reading = C.calibrate(_FakeSession(_book(120, 9)), BANK, n_paths=20, seed=4)
     assert reading.stamp.data_version == reading.month_ends[-1].isoformat()
