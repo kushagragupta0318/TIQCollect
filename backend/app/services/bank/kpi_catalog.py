@@ -302,9 +302,18 @@ def compute_overview(db: Session, bank_id: str, f: KpiFilter | None = None) -> O
         # One KPI must never take the page down. A KPI that raises (a slow query
         # killed by statement_timeout, a None where a tuple is unpacked, a bad
         # cast) becomes one "unavailable" tile, not a 500 on /bank/overview.
+        #
+        # Each KPI runs inside a SAVEPOINT: a DB error aborts the transaction, so
+        # without one the NEXT KPI's query fails with InFailedSqlTransaction and
+        # the whole page cascades. Rolling back the savepoint returns the session
+        # to a usable state for the remaining KPIs.
+        sp = db.begin_nested()
         try:
-            ov.kpis.append(_one(db, k, bank_id, as_of, views, like_for_like, f))
+            kpi = _one(db, k, bank_id, as_of, views, like_for_like, f)
+            sp.commit()
+            ov.kpis.append(kpi)
         except Exception:
+            sp.rollback()
             logger.exception("kpi.compute_failed", kpi=k.id, bank_id=bank_id)
             ov.kpis.append(_unavailable(k, "could not be computed"))
     if as_of is not None:
