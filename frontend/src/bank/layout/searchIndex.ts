@@ -3,7 +3,7 @@
 // takes anything else as `extra` entries, so KPIs and alerts join the index
 // when the Command Center tasks (C03, C06) produce them.
 import type { LucideIcon } from "lucide-react";
-import { BANK_NAV_ITEMS, bankHref } from "./navigation";
+import { BANK_NAV_ITEMS, bankHref, isBuiltPath } from "./navigation";
 
 export type SearchKind = "page" | "tool" | "kpi" | "alert" | "account";
 
@@ -25,7 +25,9 @@ export const KIND_CHIP: Record<SearchKind, { color: string; bg: string; label: s
   alert: { color: "text-warning", bg: "bg-warning/10", label: "Alert" },
 };
 
-export const PAGE_ENTRIES: SearchEntry[] = BANK_NAV_ITEMS.map((item) => ({
+// Built pages only, for the same reason the rail hides the rest: a search hit
+// that lands on "Not built yet" reads as a broken product.
+export const PAGE_ENTRIES: SearchEntry[] = BANK_NAV_ITEMS.filter((item) => isBuiltPath(item.path)).map((item) => ({
   kind: "page",
   id: bankHref(item),
   title: item.name,

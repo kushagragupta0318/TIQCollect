@@ -10,6 +10,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { BANK_NAV_ITEMS, BUILT_BANK_SECTIONS, BUILT_NAV_PATHS, isBuiltPath } from "./navigation";
+import { PAGE_ENTRIES } from "./searchIndex";
 
 const APP = readFileSync(join(__dirname, "..", "BankApp.tsx"), "utf8");
 
@@ -65,6 +66,12 @@ describe("the rail and the router agree", () => {
     // The placeholder route is still emitted for every nav item.
     expect(APP).toMatch(/BANK_NAV_ITEMS\s*\.filter/);
     expect(APP).toContain("BankPlaceholderPage");
+  });
+
+  it("offers only built pages in the top-bar search, for the same reason", () => {
+    const paths = PAGE_ENTRIES.map((e) => (e.path ?? "").replace(/^\/bank\//, ""));
+    for (const p of paths) expect(isBuiltPath(p), `${p} is searchable but has no page`).toBe(true);
+    expect(paths).toContain("overview");
   });
 
   it("the borrower page is reached from a row, never the rail", () => {
