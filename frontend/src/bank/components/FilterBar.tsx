@@ -52,6 +52,13 @@ export function FilterBar() {
   });
   const o = q.data;
   const set = (patch: Partial<KpiFilter>) => setF({ ...f, ...patch });
+  // An agency that isn't ACTIVE yet (PENDING onboarding, SUSPENDED) has no
+  // book — filtering to it blanks the whole page with an honest but
+  // confusing "no reading for this selection." Say so in the option itself,
+  // so picking it is an informed choice, not a trap (owner hit this on
+  // Hooghly, still mid-onboarding).
+  const agencies = (o?.agencies ?? []).map((a) =>
+    a.level && a.level !== "ACTIVE" ? { ...a, label: `${a.label} (${a.level.toLowerCase()})` } : a);
 
   return (
     <div className="flex flex-wrap items-end gap-3 rounded-[16px] border border-border/50 bg-card px-4 py-3">
@@ -77,7 +84,7 @@ export function FilterBar() {
         </>
       )}
       <Choice label="Geography" value={f.geo} options={o?.geography ?? []} all="All India" onChange={(geo) => set({ geo })} />
-      <Choice label="Agency" value={f.agency} options={o?.agencies ?? []} all="All agencies" onChange={(agency) => set({ agency })} />
+      <Choice label="Agency" value={f.agency} options={agencies} all="All agencies" onChange={(agency) => set({ agency })} />
       <Choice label="Product" value={f.product} options={o?.products ?? []} all="All products" onChange={(product) => set({ product })} />
       <Choice label="DPD bucket" value={f.bucket} options={o?.buckets ?? []} all="All buckets" onChange={(bucket) => set({ bucket })} />
       <Choice label="Security" value={f.security} options={o?.security ?? []} all="Secured and unsecured"
