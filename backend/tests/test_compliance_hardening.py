@@ -97,7 +97,7 @@ def world():
     db.flush()
     ag = _agent(db, ua, "EMP001", mgr)
     db.flush()
-    cases = {k: _case(db, ag, k) for k in ("VISIT", "PTP", "PAY", "PAY2")}
+    cases = {k: _case(db, ag, k) for k in ("VISIT", "PTP", "PAY", "PAY2", "IDEM", "IDEM2", "IDEMOTP")}
     cases["NOPHONE"] = _case(db, ag, "NOPHONE", phone="")
     db.commit()
     yield {"db": db, "mgr": mgr, "ua": ua, "ag": ag, **cases}
@@ -294,6 +294,132 @@ def test_receipt_sent_is_false_when_there_is_nobody_to_send_to(world, monkeypatc
     out = ps.PaymentService(db).collect_payment(agent, case.id, CollectPaymentRequest(
         amount=100.0, mode=PaymentMode.CASH))
     assert out["receipt_sent"] is False and _FakeTwilio.calls == []
+    db.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Retried-payment idempotency: a retry past the 15-second window must
+# return the payment already made, never a second one.
+# ═══════════════════════════════════════════════════════════════════════════
+def test_a_retried_payment_returns_the_same_row_and_does_not_double_count(world, monkeypatch):
+    _configure_twilio(monkeypatch); _real_tenant(monkeypatch)
+    # Window to 0 so the 15-second _find_recent_duplicate path CANNOT fire: an
+    # identical immediate repeat would otherwise be caught there and this test
+    # would pass even if the csid fix were deleted. With the window off, only the
+    # csid early-return can produce the pass — this is the retry-past-the-window
+    # case the fix exists for (fc caught the shadowing).
+    monkeypatch.setattr(ps.PaymentService, "_DUPLICATE_SUBMIT_WINDOW_SECONDS", 0)
+    db = TestingSession()
+    agent = db.get(Agent, world["ag"].id); case = world["IDEM"]
+    csid = str(uuid.uuid4())
+    req = CollectPaymentRequest(amount=1200.0, mode=PaymentMode.CASH, client_submission_id=csid)
+    first = ps.PaymentService(db).collect_payment(agent, case.id, req)
+    # A retry of the SAME submission, past the duplicate window (now 0).
+    repeat = ps.PaymentService(db).collect_payment(
+        agent, case.id, CollectPaymentRequest(amount=1200.0, mode=PaymentMode.CASH, client_submission_id=csid))
+    assert repeat["id"] == first["id"]                                        # same row, not a new one
+    assert repeat["total_collected"] == 1200.0                               # counted ONCE, not 2400
+    assert db.query(Payment).filter(Payment.client_submission_id == csid).count() == 1
+    assert len(_rows(db, AuditAction.PAYMENT_SUBMITTED, first["id"])) == 1   # one audit row
+    assert len(_FakeTwilio.calls) == 1                                        # one receipt SMS
+    assert repeat["receipt_sent"] is False                                    # this call sent nothing
+    db.close()
+
+
+def test_a_retried_payment_does_not_respend_the_otp(world, monkeypatch):
+    _configure_twilio(monkeypatch); _real_tenant(monkeypatch)
+    import app.services.otp_service as otp_mod
+    calls = {"n": 0}
+
+    def _consume(self, verification_id, case_id, amount):
+        calls["n"] += 1
+        return True
+
+    monkeypatch.setattr(otp_mod.OtpService, "consume_for_payment", _consume)
+    # Window off, so the repeat reaches the OTP gate only via the csid path — else
+    # the 15-second return (also before the gate) would mask whether the fix works.
+    monkeypatch.setattr(ps.PaymentService, "_DUPLICATE_SUBMIT_WINDOW_SECONDS", 0)
+    db = TestingSession()
+    agent = db.get(Agent, world["ag"].id); case = world["IDEMOTP"]
+    csid = str(uuid.uuid4())
+    req = lambda: CollectPaymentRequest(amount=900.0, mode=PaymentMode.CASH,
+                                        client_submission_id=csid, verification_id=str(uuid.uuid4()))
+    first = ps.PaymentService(db).collect_payment(agent, case.id, req())
+    assert calls["n"] == 1                                                    # OTP consumed once
+    repeat = ps.PaymentService(db).collect_payment(agent, case.id, req())
+    assert repeat["id"] == first["id"]
+    assert calls["n"] == 1, "the repeat must NOT re-spend the OTP token"      # still once
+    db.close()
+
+
+def test_a_submission_id_reused_for_a_different_amount_is_409(world, monkeypatch):
+    _configure_twilio(monkeypatch); _real_tenant(monkeypatch)
+    db = TestingSession()
+    agent = db.get(Agent, world["ag"].id); case = world["IDEM2"]
+    csid = str(uuid.uuid4())
+    ps.PaymentService(db).collect_payment(agent, case.id, CollectPaymentRequest(
+        amount=500.0, mode=PaymentMode.CASH, client_submission_id=csid))
+    with pytest.raises(HTTPException) as e:
+        ps.PaymentService(db).collect_payment(agent, case.id, CollectPaymentRequest(
+            amount=600.0, mode=PaymentMode.CASH, client_submission_id=csid))   # different amount
+    assert e.value.status_code == 409
+    db.close()
+
+
+def test_a_submission_id_reused_for_another_case_is_409(world, monkeypatch):
+    _configure_twilio(monkeypatch); _real_tenant(monkeypatch)
+    db = TestingSession()
+    agent = db.get(Agent, world["ag"].id)
+    csid = str(uuid.uuid4())
+    ps.PaymentService(db).collect_payment(agent, world["IDEM"].id, CollectPaymentRequest(
+        amount=300.0, mode=PaymentMode.CASH, client_submission_id=csid))
+    with pytest.raises(HTTPException) as e:
+        ps.PaymentService(db).collect_payment(agent, world["IDEM2"].id, CollectPaymentRequest(
+            amount=300.0, mode=PaymentMode.CASH, client_submission_id=csid))   # same id, other case
+    assert e.value.status_code == 409
+    db.close()
+
+
+def test_a_raced_retry_catches_the_integrity_error_and_returns_the_winners_row(world, monkeypatch):
+    """The race branch: two deliveries both pass the lookup, the second INSERT hits
+    the partial unique index, and collect_payment must roll back and return the
+    winner's row — not raise. Simulated by making the first _by_submission lookup
+    miss (as if the winner's row were not yet visible), so the second call inserts a
+    duplicate and hits IntegrityError; the except-block re-read then finds it."""
+    _configure_twilio(monkeypatch); _real_tenant(monkeypatch)
+    monkeypatch.setattr(ps.PaymentService, "_DUPLICATE_SUBMIT_WINDOW_SECONDS", 0)
+    db = TestingSession()
+    agent = db.get(Agent, world["ag"].id); case = world["IDEM2"]
+    csid = str(uuid.uuid4())
+    winner = ps.PaymentService(db).collect_payment(agent, case.id, CollectPaymentRequest(
+        amount=150.0, mode=PaymentMode.CASH, client_submission_id=csid))
+    real_by = ps.PaymentService._by_submission
+    seen = {"n": 0}
+
+    def flaky(self, ag, cs):
+        seen["n"] += 1
+        return None if seen["n"] == 1 else real_by(self, ag, cs)   # miss once, then real
+
+    monkeypatch.setattr(ps.PaymentService, "_by_submission", flaky)
+    out = ps.PaymentService(db).collect_payment(agent, case.id, CollectPaymentRequest(
+        amount=150.0, mode=PaymentMode.CASH, client_submission_id=csid))
+    assert out["id"] == winner["id"]                                  # returned the winner, did not raise
+    assert seen["n"] == 2                                             # lookup, then re-read in the except
+    assert db.query(Payment).filter(Payment.client_submission_id == csid).count() == 1
+    db.close()
+
+
+def test_an_older_client_with_no_submission_id_still_gets_the_15s_window(world, monkeypatch):
+    """A client that sends no id must still be deduped by the 15-second window, so
+    nobody can delete _find_recent_duplicate believing csid replaced it."""
+    _configure_twilio(monkeypatch); _real_tenant(monkeypatch)
+    db = TestingSession()
+    agent = db.get(Agent, world["ag"].id); case = world["IDEMOTP"]
+    req = lambda: CollectPaymentRequest(amount=250.0, mode=PaymentMode.CASH)   # no client_submission_id
+    first = ps.PaymentService(db).collect_payment(agent, case.id, req())
+    repeat = ps.PaymentService(db).collect_payment(agent, case.id, req())      # immediate, within 15s
+    assert repeat["id"] == first["id"]                                         # 15s path caught it
+    assert db.query(Payment).filter(Payment.case_id == case.id, Payment.amount == 250.0).count() == 1
     db.close()
 
 
