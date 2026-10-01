@@ -559,10 +559,14 @@ UNCALIBRATED_WARNING = (
     "Shock volatility, lever elasticities, LGDs and recovery fractions are assumptions; read the bands "
     "as scenario arithmetic, not a forecast."
 )
-SYNTHETIC_WARNING = (
+# The synthetic line on its own. SYNTHETIC_WARNING glues it to UNCALIBRATED for
+# the common uncalibrated-synthetic case; honesty.py composes the two per-case
+# (a backtest can pass on a synthetic book, which is calibrated AND synthetic).
+SYNTHETIC_LINE = (
     "SYNTHETIC: the book or its transition counts are generated, not observed; not evidence about any "
-    "real borrower. " + UNCALIBRATED_WARNING
+    "real borrower."
 )
+SYNTHETIC_WARNING = SYNTHETIC_LINE + " " + UNCALIBRATED_WARNING
 
 
 # ── Inputs: the book and its matrices ────────────────────────────────────────
