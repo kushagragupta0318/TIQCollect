@@ -13,7 +13,7 @@ from datetime import date, datetime
 
 from sqlalchemy import (
     BigInteger, Boolean, CheckConstraint, Date, DateTime, Float, ForeignKeyConstraint, Index, Integer,
-    Numeric, SmallInteger, String, Text, UniqueConstraint,
+    Numeric, SmallInteger, String, Text, UniqueConstraint, false,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -68,8 +68,8 @@ class SimulationRun(Base, UUIDPrimaryKey, CreatedAtMixin):
     bank_id: Mapped[str] = uuid_fk("tenancy.banks.id")
     kind: Mapped[str] = mapped_column(String(12), nullable=False)
     name: Mapped[str | None] = mapped_column(String(120))
-    status: Mapped[str] = mapped_column(String(10), nullable=False, default="QUEUED")
-    progress_pct: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(10), nullable=False, default="QUEUED", server_default="QUEUED")
+    progress_pct: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     seed: Mapped[int] = mapped_column(BigInteger, nullable=False)
     n_paths: Mapped[int] = mapped_column(Integer, nullable=False)
     horizon_months: Mapped[int] = mapped_column(SmallInteger, nullable=False)
@@ -83,8 +83,8 @@ class SimulationRun(Base, UUIDPrimaryKey, CreatedAtMixin):
                                                   use_alter=True)        # scenario comparison
 
     # ── E02 honesty (§0.1). A run says what it rests on, or says it cannot. ──
-    calibrated_by_backtest: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    synthetic_inputs: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    calibrated_by_backtest: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
+    synthetic_inputs: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
     synthetic_warning: Mapped[str | None] = mapped_column(Text)          # "SYNTHETIC: …" / "UNCALIBRATED: …"
     calibration: Mapped[dict | None] = mapped_column(JsonDoc)            # engine_version, origin, horizon, coverage…
     assumptions: Mapped[list] = mapped_column(JsonDoc, nullable=False, default=list)
@@ -92,7 +92,7 @@ class SimulationRun(Base, UUIDPrimaryKey, CreatedAtMixin):
     chunk_paths: Mapped[list | None] = mapped_column(JsonDoc)
     abstain_reason: Mapped[str | None] = mapped_column(Text)             # set iff status = ABSTAINED
 
-    approval_status: Mapped[str] = mapped_column(String(10), nullable=False, default="NONE")
+    approval_status: Mapped[str] = mapped_column(String(10), nullable=False, default="NONE", server_default="NONE")
     approved_by: Mapped[str | None] = uuid_fk("tenancy.users.id", nullable=True)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_by: Mapped[str] = uuid_fk("tenancy.users.id")
@@ -111,6 +111,10 @@ class SimulationRun(Base, UUIDPrimaryKey, CreatedAtMixin):
         CheckConstraint("(status = 'ABSTAINED') = (abstain_reason IS NOT NULL)", name="abstain_reason_iff"),
         CheckConstraint("calibrated_by_backtest OR synthetic_inputs OR synthetic_warning IS NOT NULL",
                         name="uncalibrated_says_so"),
+        # The target of simulation_results' composite (run_id, bank_id) FK, so a result
+        # can never be read under another bank's scope. v2_0018 declares it; the model
+        # must too, or autogenerate drifts.
+        UniqueConstraint("id", "bank_id"),
         Index(None, "bank_id", "created_at"),
         {"schema": SCHEMA},
     )
@@ -124,13 +128,15 @@ class SimulationResult(Base, UUIDPrimaryKey):
     __tablename__ = "simulation_results"
 
     bank_id: Mapped[str] = uuid_fk("tenancy.banks.id")
-    run_id: Mapped[str] = uuid_fk("strategy.simulation_runs.id", ondelete="CASCADE")
+    # A plain column: the composite (run_id, bank_id) FK below is the only FK on run_id,
+    # matching v2_0018. A single-column run_id FK on top of it is redundant and drifts.
+    run_id: Mapped[str] = mapped_column(UUIDType, nullable=False)
     metric: Mapped[str] = mapped_column(String(40), nullable=False)      # GNPA_PCT, ECL, NET_RECOVERY…
     period_index: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     period_end: Mapped[date] = mapped_column(Date, nullable=False)
     # A canonical NULL-free key ("lt=HOME|st=SMA_1|r=<uuid>"), so the unique key below holds:
     # NULLs in the segment columns would make every "all segments" row distinct.
-    segment_key: Mapped[str] = mapped_column(String(200), nullable=False, default="ALL")
+    segment_key: Mapped[str] = mapped_column(String(200), nullable=False, default="ALL", server_default="ALL")
     segment_loan_type: Mapped[LoanType | None] = mapped_column(LOAN_TYPE_SQL)
     segment_state: Mapped[str | None] = mapped_column(String(16))        # a dim_portfolio_state code
     segment_region_id: Mapped[str | None] = mapped_column(UUIDType)

@@ -34,6 +34,29 @@ def views(db):  # noqa: F811
     return db
 
 
+def test_one_failing_kpi_degrades_to_unavailable_not_a_500(views, monkeypatch):
+    """A KPI that raises must become one 'unavailable' tile, never a 500 on the
+    whole page. Found when fc's fix unhung the file: a stock KPI whose like-for-like
+    cohort was empty hit a trend-None unpack and took the page down. Guarded now in
+    compute_overview AND in _one."""
+    from app.demo.roster import BANK
+    from app.services.bank import kpi_catalog as K
+
+    real_one = K._one
+
+    def boom(db, k, *a, **kw):
+        if k.id == "gnpa_pct":
+            raise RuntimeError("deliberate KPI failure")
+        return real_one(db, k, *a, **kw)
+
+    monkeypatch.setattr(K, "_one", boom)
+    with _session(views, BANK["id"]) as s:
+        ov = K.compute_overview(s, BANK["id"])          # must not raise
+    by = {k["id"]: k for k in ov.kpis}
+    assert by["gnpa_pct"]["available"] is False and "could not be computed" in by["gnpa_pct"]["reason"]
+    assert any(v["available"] for kid, v in by.items() if kid != "gnpa_pct")
+
+
 def test_every_defined_kpi_has_a_figure_on_the_girivan_book(views):
     from app.demo.roster import BANK
     from app.services.bank.kpi_catalog import compute_overview
