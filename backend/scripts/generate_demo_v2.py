@@ -34,6 +34,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.demo import roster as R
+from app.demo.beats import generate_beats
 from app.demo.books import EMAIL_DOMAINS, INSTALMENT_WINDOW, generate_book, require_rbi_window
 from app.demo.latent import AGENCY_LATENT, CALENDAR_SEASON, CONTACT_HOUR, SALARY_DAYS
 from app.demo.performing import generate_performing
@@ -213,6 +214,12 @@ def run(engine, profile_name: str, manifest_path: str | None, seed: int = 202609
             recovery_scoring[bank_key] = s.__dict__
             print(f"[generate_demo_v2] recovery_risk {bank_key}: {s.cases_modelled} modelled, "
                   f"{s.cases_declined} declined of {s.cases_considered} open cases", flush=True)
+        beats = {}
+        for bank_key in {a.bank_key for a in R.AGENCIES if a.key in truths}:
+            b = generate_beats(conn, bank_key=bank_key)
+            beats[bank_key] = b.__dict__
+            print(f"[generate_demo_v2] beats {bank_key}: {b.agent_days} agent-days, "
+                  f"{b.leave_days} leave days", flush=True)
     manifest = {
         "SYNTHETIC_WARNING": "Every borrower, loan, agent and event in this book is synthetic; every "
                              "organisation and person is fictional (docs/DATA-MODEL-V2.md Appendix C).",
@@ -241,6 +248,12 @@ def run(engine, profile_name: str, manifest_path: str | None, seed: int = 202609
         # every other count is — so the fixture build's own log is the
         # source of truth for what landed — not because it is generator-only.
         "recovery_scoring": recovery_scoring,
+        # Also a real write (planning.beats), not generator-only truth. See
+        # app/demo/beats.py's own module docstring for what "planned" means
+        # here and does not mean: a post-hoc efficient ordering of the day's
+        # real cases, never a committed morning plan — route efficiency, not
+        # plan completion.
+        "beats": beats,
         "seconds": round(time.time() - t0, 1),
     }
     if manifest_path:
