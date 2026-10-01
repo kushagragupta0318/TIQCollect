@@ -81,9 +81,11 @@ services:
 
   minio:
     # minio/minio is no longer pullable from Docker Hub or quay.io (checked
-    # 2026-09-28): see docs/DEPLOY.md, State today. MINIO_IMAGE names the image
-    # you have; pin it to a release you have tested.
-    image: ${MINIO_IMAGE:-minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e}
+    # 2026-09-28), so we serve a pinned digest from our own mirror (ADR 0012).
+    # The mirror is NOT pushed yet: until it is, set MINIO_IMAGE to the Docker
+    # Hub digest, which resolves from a machine's local cache
+    # (deploy/.env.prod.example carries that line ready to use).
+    image: ${MINIO_IMAGE:-ghcr.io/kushagragupta0318/minio@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2}
     restart: unless-stopped
     command: server /data
     environment:
@@ -100,7 +102,7 @@ services:
 
   # One-shot: the bucket exists and is private (no anonymous access), every start.
   minio-init:
-    image: ${MINIO_IMAGE:-minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e}
+    image: ${MINIO_IMAGE:-ghcr.io/kushagragupta0318/minio@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2}
     restart: "no"
     entrypoint: ["sh", "-c"]
     command:
@@ -169,11 +171,17 @@ services:
       APP_DOMAIN: ${APP_DOMAIN:?set APP_DOMAIN}
       FILES_DOMAIN: ${FILES_DOMAIN:?set FILES_DOMAIN}
       ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL}
+      # Empty = public Let's Encrypt. "tls internal" = Caddy's local CA, for a
+      # local prod server with no public DNS (docs/LOCAL-PROD.md).
+      TIQ_TLS_DIRECTIVE: ${TIQ_TLS_DIRECTIVE:-}
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddydata:/data
     networks:
       tiq:
+        # Fixed, because FORWARDED_ALLOW_IPS names exactly this address: the API
+        # believes X-Forwarded-For from Caddy alone, so the login rate limit is
+        # per real client instead of one shared bucket.
         ipv4_address: 172.30.0.10
     depends_on:
       api:

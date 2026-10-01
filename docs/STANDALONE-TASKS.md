@@ -210,6 +210,13 @@ P0 runs alongside P1. P3 and P5 may overlap once P1 is done.
 - [ ] **C06** Alerts: 7 ported rules + 4 field rules, alert cards page. *M*
   *(`DecisionAlerts` is ported (UI05); no rules exist in `services/bank/`.)*
 - [ ] **C07** Performance: < 800 ms p95 on `stress`. *M*
+- [ ] **C08** **Customer 360** — one borrower, everything: serve `analytics.v_case_360` (exists since v2_0007,
+      RLS-scoped, nothing reads it) plus a timeline of visits, calls, payments and PTPs; the model explanation
+      panel; evidence (photos, signature, recordings) through presigned URLs. The bank portal has no way to
+      open a single borrower today. *L* · owner-requested 2026-09-30
+- [ ] **C09** **Audit trail views** — per-customer action history, and a bank-wide action log with actor, entity,
+      tenant and timestamp. Depends on the RLS lane's audit-tenant work (an audit row carries the tenant of the
+      entity it is about as well as the actor's). *M* · owner-requested 2026-09-30
 
 ### Agency Management (§6.2–6.3)
 
@@ -225,7 +232,10 @@ P0 runs alongside P1. P3 and P5 may overlap once P1 is done.
 
 ### Bank admin
 
-- [ ] **K01** Bank users (invite, roles, MFA status, sessions), regions editor, bank settings, audit page. *M*
+- [ ] **K01** Bank users: invite, roles, MFA status, sessions. *M*
+- [ ] **K02** Regions editor. *S*
+- [ ] **K03** Bank settings. *S*
+      *(Split from the original four-part K01 on 2026-09-30; its "audit page" clause became C09.)*
 
 ---
 
