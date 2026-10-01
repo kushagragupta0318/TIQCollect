@@ -31,16 +31,29 @@ class _FakeSession:
 
 
 def _book(n_loans: int, n_months: int) -> list[dict]:
-    """A legal moving book: most loans hold CURRENT, a rotating slice sits in
-    SMA_0, so there are real CURRENT<->SMA_0 transitions to fit and score."""
+    """A book with heavy two-way movement: half the loans oscillate CURRENT<->SMA_0
+    each month, so every month has many deteriorations AND improvements — enough
+    for estimate_shock_sigma (needs >=5 of each per segment)."""
     months = [date(2026, (mo % 12) + 1, 28) for mo in range(n_months)]
     rows = []
     for li in range(n_loans):
         for mi, m in enumerate(months):
-            state = "SMA_0" if (li + mi) % 5 == 0 else "CURRENT"
+            # loans 0..n/2 oscillate by month parity; the rest hold CURRENT.
+            if li < n_loans // 2:
+                state = "SMA_0" if (li + mi) % 2 == 0 else "CURRENT"
+            else:
+                state = "CURRENT"
             rows.append({"loan_id": f"L{li}", "as_of_date": m, "state": state,
                          "total_outstanding": 100000.0, "loan_type": "PERSONAL", "region_id": "WEST"})
     return rows
+
+
+def _thin_book(n_months: int) -> list[dict]:
+    """A near-static book: one loan holds CURRENT. No movement to estimate
+    volatility from — calibrate must abstain, not raise."""
+    months = [date(2026, (mo % 12) + 1, 28) for mo in range(n_months)]
+    return [{"loan_id": "L0", "as_of_date": m, "state": "CURRENT",
+             "total_outstanding": 100000.0, "loan_type": "PERSONAL", "region_id": "WEST"} for m in months]
 
 
 def test_calibrate_returns_a_coverage_figure_stamped_synthetic():
@@ -65,6 +78,15 @@ def test_a_book_too_short_to_fit_and_score_abstains():
     with pytest.raises(AppException) as e:
         C.calibrate(_FakeSession(_book(40, C.MIN_CALIBRATION_MONTHS - 1)), BANK, n_paths=20)
     assert e.value.code is ErrorCode.INSUFFICIENT_HISTORY
+
+
+def test_a_book_too_sparse_to_estimate_volatility_abstains_not_raises():
+    """A long but static book cannot estimate shock volatility; calibrate must
+    abstain with a reason, not let the ValueError 500 the page."""
+    with pytest.raises(AppException) as e:
+        C.calibrate(_FakeSession(_thin_book(10)), BANK, n_paths=20)
+    assert e.value.code is ErrorCode.INSUFFICIENT_HISTORY
+    assert "too sparse to calibrate" in e.value.detail
 
 
 def test_the_horizon_is_sized_to_the_panel():

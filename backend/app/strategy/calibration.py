@@ -86,7 +86,15 @@ def calibrate(adb: Session, bank_id: str, *, as_of: date | None = None,
             f"{MIN_CALIBRATION_MONTHS} to fit on one window and score on another.")
 
     horizon = _window(reading.months, horizon_months)
-    report = backtest(reading.panel, horizon_months=horizon, n_paths=n_paths, seed=seed)
+    try:
+        report = backtest(reading.panel, horizon_months=horizon, n_paths=n_paths, seed=seed)
+    except ValueError as e:
+        # A panel too sparse to estimate shock volatility (no segment has enough
+        # deterioration AND improvement moves) cannot support a calibration claim.
+        # Abstain with a reason — the same honest refusal E01 gives — rather than
+        # letting a thin book 500 the page (ADR 0005's abstain-rather-than-impute).
+        raise AppException(422, ErrorCode.INSUFFICIENT_HISTORY,
+                           f"This bank's history is too sparse to calibrate: {e}") from e
 
     dv = data_version or (reading.month_ends[-1].isoformat() if reading.month_ends else "unknown")
     basis = (f"{reading.loans} {'synthetic ' if synthetic else ''}loans, "
