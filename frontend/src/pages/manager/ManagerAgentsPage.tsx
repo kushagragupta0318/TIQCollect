@@ -1380,24 +1380,38 @@ function ReallocationModal({ plan, onClose, onRefresh }: { plan: ReallocationPla
   // 2026-10-01 (demo QA sweep): this used to be toast.success + onClose with
   // no API call — a fake "Reallocation plan logged" that reassigned nothing.
   // Applies each suggestion through the same POST /cases/{id}/reassign a
-  // manual reassign uses, reports the real count (including partial
-  // failures — a case resolved or reassigned by someone else between the
-  // plan being computed and Apply being pressed is a 404/409, not a crash),
-  // and refreshes the roster so the moved cases' counts are not stale for
-  // the next 30s poll.
+  // manual reassign uses, in batches of CHUNK rather than all at once (a
+  // large plan firing 40+ concurrent writes is its own problem), reports the
+  // real count (including partial failures — a case resolved or reassigned
+  // by someone else between the plan being computed and Apply being pressed
+  // is a 404/409, not a crash), and refreshes the roster.
+  //
+  // 2026-10-01 (audit) — wording. reassignCase's own response already says
+  // takes_effect: "next nightly plan; today's beat is unchanged" (every
+  // successful reassign returns the identical string — it is a property of
+  // the reassign rule, not of the individual case). The toast used to say
+  // "Reallocated N cases", which reads as already moved; read and surface
+  // the real timing instead of discarding it.
+  const CHUNK = 8;
   async function applyPlan() {
     setApplying(true);
     const reason = `Reallocation plan — moved from ${plan.from_agent.name}`;
-    const results = await Promise.allSettled(
-      plan.suggested_reallocations.map((r) =>
-        reassignCase(r.case_id, { new_agent_id: r.to_agent_id, reason })),
-    );
-    const ok = results.filter((r) => r.status === "fulfilled").length;
+    const results: PromiseSettledResult<Awaited<ReturnType<typeof reassignCase>>>[] = [];
+    for (let i = 0; i < plan.suggested_reallocations.length; i += CHUNK) {
+      const batch = plan.suggested_reallocations.slice(i, i + CHUNK);
+      results.push(...await Promise.allSettled(
+        batch.map((r) => reassignCase(r.case_id, { new_agent_id: r.to_agent_id, reason })),
+      ));
+    }
+    const fulfilled = results.filter(
+      (r): r is PromiseFulfilledResult<Awaited<ReturnType<typeof reassignCase>>> => r.status === "fulfilled");
+    const ok = fulfilled.length;
     const failed = results.length - ok;
+    const takesEffect = fulfilled[0]?.value.takes_effect ?? "next nightly plan";
     setApplying(false);
-    if (failed === 0) toast.success(`Reallocated ${ok} case${ok === 1 ? "" : "s"} from ${plan.from_agent.name}`);
+    if (failed === 0) toast.success(`${ok} case${ok === 1 ? "" : "s"} queued for reassignment from ${plan.from_agent.name} — effective ${takesEffect}`);
     else if (ok === 0) toast.error("Could not apply the reallocation plan — try again");
-    else toast.success(`Reallocated ${ok} of ${results.length} cases — ${failed} could not be moved`);
+    else toast.success(`${ok} of ${results.length} cases queued for reassignment — effective ${takesEffect} — ${failed} could not be moved`);
     onRefresh();
     onClose();
   }
