@@ -214,6 +214,13 @@ else
     python -m scripts.ensure_db_settings --apply
     echo "[entrypoint] fixture restored — applying migrations newer than it"
     alembic upgrade head
+    # A restored database carries no planner statistics: pg_restore loads the
+    # rows, not pg_statistic. Planned on guesses, the Overview's
+    # v_visit_to_pay join takes 300s+ where it takes 1s analysed (measured
+    # 2026-10-01). autovacuum gets there on its own; the first request must not
+    # pay for it.
+    echo "[entrypoint] collecting planner statistics"
+    psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -X -q -c "ANALYZE"
     echo "[entrypoint] restore complete"
     # 2026-09-28 (B16, d4) — the agencies' specimen documents live in MinIO,
     # which a pg_dump does not carry. Re-created from the roster (the bytes
