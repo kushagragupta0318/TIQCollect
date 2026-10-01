@@ -32,3 +32,7 @@ api_router.include_router(bank_models.router)
 # /bank/cases/{id}/timeline. Own line, for the same merge reason as above.
 from app.api.v1.endpoints import bank_customers  # noqa: E402
 api_router.include_router(bank_customers.router)
+# 2026-10-01 (P4 E01-E04, L2): the Monte Carlo strategy simulator, /bank/strategy/simulate.
+# Own line, for the same merge reason as above.
+from app.api.v1.endpoints import bank_strategy  # noqa: E402
+api_router.include_router(bank_strategy.router)

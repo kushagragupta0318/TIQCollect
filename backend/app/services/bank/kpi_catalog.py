@@ -17,10 +17,13 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Callable
 
+import structlog
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.services.bank.kpi_filter import DIMENSION_LABELS, SENTINEL, KpiFilter
+
+logger = structlog.get_logger()
 
 PORTFOLIO = "portfolio_daily_scoped"
 TRANSITIONS = "bucket_transitions_monthly_scoped"
@@ -296,7 +299,23 @@ def compute_overview(db: Session, bank_id: str, f: KpiFilter | None = None) -> O
     ov = Overview(as_of=as_of)
     like_for_like = PORTFOLIO in views and _has_column(db, PORTFOLIO, "is_backfill")
     for k in KPIS:
-        ov.kpis.append(_one(db, k, bank_id, as_of, views, like_for_like, f))
+        # One KPI must never take the page down. A KPI that raises (a slow query
+        # killed by statement_timeout, a None where a tuple is unpacked, a bad
+        # cast) becomes one "unavailable" tile, not a 500 on /bank/overview.
+        #
+        # Each KPI runs inside a SAVEPOINT: a DB error aborts the transaction, so
+        # without one the NEXT KPI's query fails with InFailedSqlTransaction and
+        # the whole page cascades. Rolling back the savepoint returns the session
+        # to a usable state for the remaining KPIs.
+        sp = db.begin_nested()
+        try:
+            kpi = _one(db, k, bank_id, as_of, views, like_for_like, f)
+            sp.commit()
+            ov.kpis.append(kpi)
+        except Exception:
+            sp.rollback()
+            logger.exception("kpi.compute_failed", kpi=k.id, bank_id=bank_id)
+            ov.kpis.append(_unavailable(k, "could not be computed"))
     if as_of is not None:
         ov.totals = _totals(db, bank_id, as_of, views, f)
         ov.notes = _notes(db, bank_id, as_of, like_for_like, f)
@@ -375,7 +394,10 @@ def _one(db: Session, k: KpiDef, bank: str, as_of: date | None, views: set[str],
         trend = _trend(k, now.value, prev.value, "vs prior month") if now.value is not None else None
     if now.value is None:
         return _unavailable(k, "no reading for this selection")
-    trend_text, up, good = trend
+    # A value with no comparable prior (e.g. a stock KPI whose like-for-like
+    # cohort was empty last period) shows the figure without a trend, rather than
+    # unpacking None. The value is real; only the comparison is missing.
+    trend_text, up, good = trend if trend is not None else ("No prior-period comparison", None, None)
     basis = k.basis
     if k.kind == "stock" and like_for_like:
         basis += " The change is like for like: only loans read on both dates."
