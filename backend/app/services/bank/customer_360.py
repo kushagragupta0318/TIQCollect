@@ -94,7 +94,10 @@ def customer_360(db: Session, adb: Session, ctx, customer_id: str, *, region_lim
     loan_ids = [loan.id for loan in loans]
     rows = adb.execute(
         text(f"SELECT {_CASE_COLUMNS} FROM analytics.v_case_360 "
-             "WHERE customer_id = :cid AND loan_id = ANY(:loan_ids) "
+             # CAST both sides: psycopg2 sends a Python list as text[], and
+             # loan_id/customer_id are uuid — without the casts Postgres refuses
+             # the comparison outright ("operator does not exist: uuid = text").
+             "WHERE customer_id = CAST(:cid AS uuid) AND loan_id = ANY(CAST(:loan_ids AS uuid[])) "
              "ORDER BY placed_on DESC NULLS LAST, case_number"),
         {"cid": customer_id, "loan_ids": loan_ids},
     ).mappings().all()
