@@ -17,6 +17,8 @@ from app.core.request_context import CurrentContext
 from app.models.loan import DPDBucket, LoanType
 from app.models.tenancy import Agency, Bank, Region
 from app.models.user import User
+from app.services.bank.analytics_catalog import TABS as ANALYTICS_TABS
+from app.services.bank.analytics_catalog import compute_tab
 from app.services.bank.kpi_catalog import ROWS, compute_overview
 from app.services.bank.kpi_filter import PERIODS, FilterError, KpiFilter
 
@@ -111,6 +113,40 @@ def overview(ctx: CurrentContext, db: DbSession, adb: AnalyticsDb,
         narrative=NarrativeOut(sentences=ov.narrative),
         notes=ov.notes,
     )
+
+
+class AnalyticsTabOut(BaseModel):
+    tab: str
+    available: bool
+    reason: Optional[str] = None
+    #: Each tab's own chart-ready shape (plan §5.4) — structurally different
+    #: per tab (a funnel is not a transition matrix), so unlike KpiOut this
+    #: is not forced into one row shape. Every number in it is a real read
+    #: from the scoped views, never invented (same rule as the KPIs).
+    panels: dict
+
+
+@router.get("/analytics/{tab}", response_model=AnalyticsTabOut, summary="Analytics tab (plan §5.4)")
+def analytics_tab(tab: Literal["exposure", "migration", "agencies", "compliance"],
+                  ctx: CurrentContext, db: DbSession, adb: AnalyticsDb,
+                  period: Literal["mtd", "l30", "qtd", "fytd", "custom"] = "mtd",
+                  start: Optional[date] = None, end: Optional[date] = None,
+                  geo: UUIDQuery = None, agency: UUIDQuery = None,
+                  product: Optional[LoanType] = None, bucket: Optional[DPDBucket] = None,
+                  security: Optional[Literal["SECURED", "UNSECURED"]] = None,
+                  _user: User = require_perm("cc.read")):
+    bank_id = _bank_of(ctx)
+    _own(db, Region, geo, bank_id)
+    _own(db, Agency, agency, bank_id)
+    try:
+        f = KpiFilter(period=period, start=start, end=end, geo=geo, agency=agency,
+                      product=product.value if product else None, bucket=bucket.value if bucket else None,
+                      security=security)
+    except FilterError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    assert tab in ANALYTICS_TABS, tab   # Literal above already refused anything else
+    out = compute_tab(db, adb, tab, bank_id, f)
+    return AnalyticsTabOut(tab=tab, available=out["available"], reason=out["reason"], panels=out["panels"])
 
 
 class Option(BaseModel):
