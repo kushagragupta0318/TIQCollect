@@ -1078,6 +1078,18 @@ function CaseRow({ c, onOpen }: { c: Case; onOpen: () => void }) {
 // Python tuple; the server 422s anything else, so a drift here fails loudly.
 const ACTIVITY_STAGES = ["planned", "visited", "met", "paid_or_promised", "not_met", "met_no_money"];
 
+// The five real DPDBucket values (models/loan.py) and their label, in one
+// place — until 2026-10-01 this was three separate hand-kept lists (the
+// state-init allowlist, the filter-chip label, the <select>'s <option>s),
+// and all three disagreed on which buckets existed (audit).
+const DPD_BUCKETS: { value: string; label: string }[] = [
+  { value: "CURRENT", label: "Current (0 DPD)" },
+  { value: "BUCKET_1", label: "1–30 DPD" },
+  { value: "BUCKET_2", label: "31–60 DPD" },
+  { value: "BUCKET_3", label: "61–90 DPD" },
+  { value: "NPA", label: "NPA 90+" },
+];
+
 export default function ManagerCasesPage() {
   const [searchParams] = useSearchParams();
   const [search, setSearch] = useState("");
@@ -1097,7 +1109,7 @@ export default function ManagerCasesPage() {
   // same as recovery — see getCases.
   const [bucketFilter, setBucketFilter] = useState(() => {
     const b = searchParams.get("bucket") || "ALL";
-    return ["CURRENT", "BUCKET_1", "BUCKET_2", "BUCKET_3", "NPA"].includes(b) ? b : "ALL";
+    return DPD_BUCKETS.some((d) => d.value === b) ? b : "ALL";
   });
   // Server-side, same reason as bucketFilter above: the recovery label lives
   // in the snapshot table, so narrowing it client-side would only filter the
@@ -1320,10 +1332,8 @@ export default function ManagerCasesPage() {
       });
     }
     if (bucketFilter !== "ALL") {
-      const labels: Record<string, string> = {
-        CURRENT: "Current (0 DPD)", BUCKET_1: "1–30 DPD", BUCKET_2: "31–60 DPD", BUCKET_3: "61–90 DPD", NPA: "NPA 90+",
-      };
-      out.push({ key: "bucket", label: labels[bucketFilter] ?? bucketFilter, clear: () => setBucketFilter("ALL") });
+      const label = DPD_BUCKETS.find((d) => d.value === bucketFilter)?.label ?? bucketFilter;
+      out.push({ key: "bucket", label, clear: () => setBucketFilter("ALL") });
     }
     if (activity) {
       // Says the WINDOW, because that is what makes the set what it is.
@@ -1462,11 +1472,7 @@ export default function ManagerCasesPage() {
             <FilterField label="DPD bucket">
               <select className={CONTROL} value={bucketFilter} onChange={(e) => setBucketFilter(e.target.value)} aria-label="Filter by DPD bucket">
                 <option value="ALL">All</option>
-                <option value="CURRENT">Current (0 DPD)</option>
-                <option value="BUCKET_1">1–30 DPD</option>
-                <option value="BUCKET_2">31–60 DPD</option>
-                <option value="BUCKET_3">61–90 DPD</option>
-                <option value="NPA">NPA 90+</option>
+                {DPD_BUCKETS.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
               </select>
             </FilterField>
             <FilterField label="Assigned between" className="col-span-2 lg:col-span-1">
