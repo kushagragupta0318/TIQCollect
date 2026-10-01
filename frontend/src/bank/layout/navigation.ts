@@ -253,6 +253,7 @@ export const BUILT_NAV_PATHS: ReadonlySet<string> = new Set([
   "agencies/placement",
   "agencies/onboard",
   "governance/models",
+  "strategy/monte-carlo",
 ]);
 
 export const isBuiltPath = (path: string): boolean => BUILT_NAV_PATHS.has(path);
