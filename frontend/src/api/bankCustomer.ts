@@ -106,3 +106,30 @@ export async function getCaseTimeline(caseId: string): Promise<CaseTimeline> {
   const { data } = await api.get<CaseTimeline>(`/bank/cases/${caseId}/timeline`);
   return data;
 }
+
+export interface CustomerHit {
+  customer_id: string;
+  full_name: string;
+  city: string | null;
+  /** Loans of this borrower the CALLER may see, not the borrower's whole book. */
+  loans: number;
+  first_account: string | null;
+}
+
+export interface CustomerSearch {
+  items: CustomerHit[];
+  /** The query was shorter than `min_query_length`: empty for that reason, not
+   *  because nothing matched. The two are never confused in the UI. */
+  query_too_short: boolean;
+  min_query_length: number;
+  /** More matched than were returned. There is no page 2 by design. */
+  truncated: boolean;
+}
+
+/** Borrowers of the caller's own bank, inside their region limit. The bank is
+ *  never a parameter, and a borrower outside the caller's scope is returned as
+ *  nothing at all, indistinguishable from a genuine no-match. */
+export async function searchCustomers(q: string): Promise<CustomerSearch> {
+  const { data } = await api.get<CustomerSearch>("/bank/customers/search", { params: { q } });
+  return data;
+}

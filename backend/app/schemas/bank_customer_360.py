@@ -94,3 +94,24 @@ class CaseTimeline(BaseModel):
     entries: list[TimelineEntry]
     truncated: bool
     limit: int
+
+
+class CustomerHit(BaseModel):
+    """One borrower in the top-bar lookup. Enough to tell two people of the same
+    name apart, and nothing a report would want: no balances, no identifiers."""
+    customer_id: str
+    full_name: str
+    city: Optional[str] = None
+    #: Loans of this borrower the caller may see, not the borrower's whole book.
+    loans: int
+    first_account: Optional[str] = None
+
+
+class CustomerSearch(BaseModel):
+    items: list[CustomerHit]
+    #: True when the query was shorter than `min_query_length`; the items are
+    #: then empty for that reason and not because nothing matched.
+    query_too_short: bool
+    min_query_length: int
+    #: True when more borrowers matched than were returned. There is no page 2.
+    truncated: bool
