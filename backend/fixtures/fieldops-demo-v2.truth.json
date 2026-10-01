@@ -2213,6 +2213,16 @@
   }
  },
  "anchor_date": "2026-09-22",
+ "beats": {
+  "GIRIVAN": {
+   "agent_days": 21496,
+   "leave_days": 0
+  },
+  "KUMAON": {
+   "agent_days": 874,
+   "leave_days": 0
+  }
+ },
  "calendar_season": {
   "by_month": {
    "1": 0.1,
@@ -2359,7 +2369,19 @@
   ],
   "slots_per_agent": 38
  },
- "seconds": 263.9,
+ "recovery_scoring": {
+  "GIRIVAN": {
+   "cases_considered": 4405,
+   "cases_declined": 0,
+   "cases_modelled": 4405
+  },
+  "KUMAON": {
+   "cases_considered": 183,
+   "cases_declined": 0,
+   "cases_modelled": 183
+  }
+ },
+ "seconds": 246.6,
  "seed": 20260922,
  "what": "Ground truth for the generated demo book. Generator-only: never loaded into a product table.",
  "world_and_corrections": {
