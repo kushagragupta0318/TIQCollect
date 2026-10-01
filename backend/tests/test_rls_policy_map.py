@@ -23,24 +23,43 @@ def _rev(path=REV):
 
 
 RLS = _rev()
-# Tables added after v2_0012 carry their own RLS_BANK_ONLY / RLS_POLICIES (v2_0013: cost_rates).
+# Tables added after v2_0012 carry their own RLS_BANK_ONLY or RLS_AGENCY_OWNED
+# beside RLS_POLICIES (v2_0013: cost_rates, bank-only). A table both tenants
+# touch -- the agency raises the row, the bank signs it off -- is AGENCY_OWNED,
+# which is why a later revision needs that list too: bank-only would hide the
+# row from the agency that raised it.
 LATER = [m for m in (_rev(p) for p in sorted(REV.parent.glob("v2_*.py")) if p.stem > REV.stem)
          if hasattr(m, "RLS_POLICIES")]
+
+
+def _later(attr: str) -> set[str]:
+    return set().union(*(set(getattr(m, attr, ())) for m in LATER)) if LATER else set()
+
+
 TABLES = {t.fullname: {c.name for c in t.columns} for t in Base.metadata.sorted_tables}
 GROUPS = {
-    "AGENCY_OWNED": set(RLS.AGENCY_OWNED), "VIA_PLACEMENT": set(RLS.VIA_PLACEMENT),
+    "AGENCY_OWNED": set(RLS.AGENCY_OWNED) | _later("RLS_AGENCY_OWNED"),
+    "VIA_PLACEMENT": set(RLS.VIA_PLACEMENT),
     "VIA_CUSTOMER_LOANS": set(RLS.VIA_CUSTOMER_LOANS),
-    "BANK_ONLY": set(RLS.BANK_ONLY).union(*(set(getattr(m, "RLS_BANK_ONLY", ())) for m in LATER)),
+    "BANK_ONLY": set(RLS.BANK_ONLY) | _later("RLS_BANK_ONLY"),
     "SPECIAL": set(RLS.SPECIAL), "NO_RLS": set(RLS.NO_RLS),
 }
 
 
 def test_later_revisions_use_v2_0012_s_templates():
+    """A later revision picks a template, it does not write one. Every table it
+    declares is listed as bank-only or as agency-owned, and carries that
+    template's expression verbatim -- a hand-rolled variant is how a scope hole
+    gets in one table at a time."""
     bank_only = RLS._policies()[RLS.BANK_ONLY[0]]
     for m in LATER:
-        assert set(m.RLS_POLICIES) == set(getattr(m, "RLS_BANK_ONLY", ())), m.__name__
+        bank = set(getattr(m, "RLS_BANK_ONLY", ()))
+        agency = set(getattr(m, "RLS_AGENCY_OWNED", ()))
+        assert bank & agency == set(), f"{m.__name__}: a table is in both lists"
+        declared = {**{t: bank_only for t in bank}, **{t: RLS._AGENCY_OWNED for t in agency}}
+        assert set(m.RLS_POLICIES) == set(declared), m.__name__
         for table, expr in m.RLS_POLICIES.items():
-            assert expr == bank_only, table
+            assert expr == declared[table], table
 
 
 def test_every_table_is_classified_exactly_once():
@@ -58,14 +77,14 @@ def test_no_tenant_bearing_table_is_left_without_a_policy():
 
 
 def test_each_policy_fits_its_columns():
-    for t in RLS.AGENCY_OWNED:
+    for t in GROUPS["AGENCY_OWNED"]:
         assert {"bank_id", "agency_id"} <= TABLES[t], t
     for t, col in RLS.VIA_PLACEMENT.items():
         assert "bank_id" in TABLES[t] and col in TABLES[t] and "agency_id" not in TABLES[t], t
     for t in (*RLS.VIA_CUSTOMER_LOANS, *RLS.BANK_ONLY):
         assert "bank_id" in TABLES[t], t
     # An agency-owned row must never be classed bank-only or via-placement: that would hide it from its agency.
-    assert sorted(t for t in (*RLS.BANK_ONLY, *RLS.VIA_PLACEMENT) if "agency_id" in TABLES[t]) == []
+    assert sorted(t for t in (*GROUPS["BANK_ONLY"], *RLS.VIA_PLACEMENT) if "agency_id" in TABLES[t]) == []
 
 
 def test_each_table_gets_the_template_of_its_group():
