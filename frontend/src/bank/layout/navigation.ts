@@ -234,6 +234,34 @@ export const bankHref = (item: Pick<BankNavItem, "path">): string => `${BANK_BAS
 
 export const BANK_NAV_ITEMS: BankNavItem[] = BANK_SECTIONS.flatMap((s) => s.items);
 
+/**
+ * The nav paths that resolve to a real page. ONE list: BankApp routes by it and
+ * the sidebar renders by it, so a screen cannot be routed and un-navigable, or
+ * listed in the rail and dead.
+ *
+ * 2026-10-01 — the rail offered 13 items that all landed on "Not built yet",
+ * which in a demo reads as a broken product rather than an unfinished one.
+ * Unbuilt items are no longer rendered; their ROUTES stay registered, so a deep
+ * link or a bookmark still reaches the placeholder and says what it is.
+ * Add a path here the moment its page exists — the rail follows automatically.
+ */
+export const BUILT_NAV_PATHS: ReadonlySet<string> = new Set([
+  "overview",
+  "analytics",
+  "agencies/directory",
+  "agencies/performance",
+  "agencies/placement",
+  "agencies/onboard",
+  "governance/models",
+]);
+
+export const isBuiltPath = (path: string): boolean => BUILT_NAV_PATHS.has(path);
+
+/** The sections the rail shows: built items only, and no empty section heading. */
+export const BUILT_BANK_SECTIONS: BankNavSection[] = BANK_SECTIONS
+  .map((s) => ({ ...s, items: s.items.filter((i) => isBuiltPath(i.path)) }))
+  .filter((s) => s.items.length > 0);
+
 /** The nav item a pathname belongs to (exact, or a sub-route of it). */
 export function findNavItem(pathname: string): BankNavItem | undefined {
   const clean = pathname.replace(/\/+$/, "");
