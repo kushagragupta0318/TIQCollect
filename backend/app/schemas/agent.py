@@ -137,6 +137,10 @@ class CollectPaymentRequest(BaseModel):
     # as VERIFIED. Absent → Payment stays PENDING_VERIFICATION (offline/deferred
     # path; borrower verifies later once they have signal).
     verification_id: Optional[str] = None
+    # The client's id for this submission (v2_0021): a repeat returns the payment already made.
+    # A payment is never queued offline (the borrower's OTP must reach the server), so it carries
+    # no capture time, only this. Absent = an older client: the 15-second window still applies.
+    client_submission_id: Optional[UUIDStr] = None
 
 
 class SetPTPRequest(OfflineCapture):
@@ -642,6 +646,9 @@ class ProfileResponse(BaseModel):
     cases_today: int
     agency_name: Optional[str] = None
     agency_rbi_registration_no: Optional[str] = None
+    # The signed token for the ID card's QR (G05) — core/security.create_agent_verify_token,
+    # validated by the public GET /verify-agent. Minted fresh on every profile fetch.
+    verify_token: str
 
 
 class AvailabilityDay(BaseModel):

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Calendar } from "lucide-react";
 import type { AgentAvailabilityCalendar, AgentCalendarDay } from "@/api/manager";
 import { CAL_MUTED } from "./calendarTheme";
+import { todayIso } from "@/lib/today";
 
 // ── Agent Duty Calendar — proper month calendar with navigation ────────────────
 
@@ -29,7 +30,7 @@ export function DutyCalendarCard({ cal, loading, jumpToMonth }: { cal: AgentAvai
     cal.calendar.filter((d) => d.date.startsWith(visibleMonth)).map((d) => [d.date, d])
   );
 
-  const today = new Date().toISOString().split("T")[0];
+  const today = todayIso();
   const [year, month] = visibleMonth ? visibleMonth.split("-").map(Number) : [0, 0];
   const lastDay = year ? new Date(year, month, 0).getDate() : 0;
   const firstDow = year ? new Date(year, month - 1, 1).getDay() : 1; // 0=Sun

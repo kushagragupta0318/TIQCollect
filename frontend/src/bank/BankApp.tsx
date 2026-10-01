@@ -21,6 +21,8 @@ import { BankPlaceholderPage } from "./pages/BankPlaceholderPage";
 import OnboardAgencyWizardPage from "./pages/onboarding/OnboardAgencyWizardPage";
 import AgencyDirectoryPage from "./pages/directory/AgencyDirectoryPage";
 import AgencyPerformancePage from "./pages/performance/AgencyPerformancePage";
+import ModelsPage from "./pages/models/ModelsPage";
+import CustomerPage from "./pages/customer/CustomerPage";
 
 /** The nav items with a real page instead of the generic placeholder
  *  (D01-D03, D05, D06). Kept out of the BANK_NAV_ITEMS.map() below so their
@@ -33,6 +35,7 @@ const AGENCY_PERFORMANCE_PATH = "agencies/performance";
 // Screens that are built; every other nav item renders its placeholder.
 const BUILT_PAGES: Record<string, ComponentType> = {
   overview: BankOverviewPage, analytics: BankAnalyticsPage, "agencies/placement": BankPlacementPage,
+  "governance/models": ModelsPage,
 };
 
 
@@ -72,6 +75,10 @@ export default function BankApp() {
         {/* D01-D03: fresh draft (no id yet), or resuming one by its agency_id. */}
         <Route path={ONBOARD_AGENCY_PATH} element={<OnboardAgencyWizardPage />} />
         <Route path={`${ONBOARD_AGENCY_PATH}/:agencyId`} element={<OnboardAgencyWizardPage />} />
+        {/* C08: the borrower page, by customer or from a Placements loan row.
+            Not in navigation.ts: it is reached from a row, never from the rail. */}
+        <Route path="customers/:customerId" element={<CustomerPage />} />
+        <Route path="customers" element={<CustomerPage />} />
         {/* D05: the agency directory table + coverage map. */}
         <Route path={AGENCY_DIRECTORY_PATH} element={<AgencyDirectoryPage />} />
         {/* D06: agency scorecard + regional leaderboard. */}

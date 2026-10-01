@@ -8,6 +8,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+// The page links a borrower row to the C08 borrower page, so it needs a router.
+import { MemoryRouter } from "react-router";
 import api from "@/api/axios";
 import { useAuthStore } from "@/store/authStore";
 import { BankPlacementPage } from "./BankPlacementPage";
@@ -35,7 +37,11 @@ function mockGet(runs: EngineRun[]) {
 
 function renderEngine() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  render(<QueryClientProvider client={qc}><BankPlacementPage /></QueryClientProvider>);
+  render(
+    <QueryClientProvider client={qc}>
+      <MemoryRouter><BankPlacementPage /></MemoryRouter>
+    </QueryClientProvider>,
+  );
   fireEvent.click(screen.getByRole("tab", { name: "Engine" }));
 }
 
