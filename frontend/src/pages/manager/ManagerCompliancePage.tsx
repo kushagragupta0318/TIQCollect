@@ -313,6 +313,7 @@ const ACTION_LABEL: Record<string, string> = {
   PAYMENT_VERIFIED: "Payment verified by borrower OTP",
   PTP_UPDATED: "Promise to pay updated",
   ANOMALY_REVIEWED: "Visit anomaly reviewed",
+  DATA_EXPORT: "Data exported",
 };
 
 function AuditTrail() {
