@@ -3028,7 +3028,27 @@ def _team_breakdown(db, current_user, *, dimension: str, month: Optional[str]) -
     return [BreakdownRowOut(**vars(r)) for r in rows]
 
 
-@router.get("/analytics/dpd-breakdown", response_model=list[BreakdownRowOut])
+class DpdBreakdownRowOut(_BreakdownBase):
+    """The DPD rows' long-standing shape, whose dimension field is `bucket`.
+
+    The generic breakdown calls it `key`. This one keeps `bucket` because three
+    producers feed one card -- this route, the per-agent route, and
+    /manager/analytics's own dpd_breakdown -- and renaming the field would be a
+    frontend change for no gain to the reader.
+    """
+    bucket: str
+    case_count: int
+    target_lakhs: float
+    collected_lakhs: float
+    collection_rate_pct: float
+
+
+def _as_dpd_rows(rows: list[BreakdownRowOut]) -> list[DpdBreakdownRowOut]:
+    return [DpdBreakdownRowOut(bucket=r.key, **{k: v for k, v in vars(r).items() if k != "key"})
+            for r in rows]
+
+
+@router.get("/analytics/dpd-breakdown", response_model=list[DpdBreakdownRowOut])
 def get_team_dpd_breakdown(
     current_user: ManagerOnly,
     db: DbSession,
@@ -3040,9 +3060,9 @@ def get_team_dpd_breakdown(
 
     The query lives in services/portfolio_breakdown now (known issue 8): the
     same metric rules serve branch, city and product, and one definition cannot
-    drift from another. The response is unchanged.
+    drift from another. The response is unchanged, field names included.
     """
-    return _team_breakdown(db, current_user, dimension="bucket", month=month)
+    return _as_dpd_rows(_team_breakdown(db, current_user, dimension="bucket", month=month))
 
 
 @router.get("/analytics/breakdown", response_model=list[BreakdownRowOut])

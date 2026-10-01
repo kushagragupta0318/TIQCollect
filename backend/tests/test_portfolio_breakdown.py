@@ -257,7 +257,14 @@ def test_the_route_refuses_a_dimension_it_does_not_serve(client, world):
 
 
 def test_the_dpd_breakdown_route_still_answers_as_before(client, world):
-    """The agency page's existing call, unchanged by the refactor."""
+    """The agency page's existing call, unchanged by the refactor -- INCLUDING
+    the field name. The generic breakdown calls the dimension `key`; this route
+    must keep calling it `bucket`, because the analytics page feeds three
+    producers into one card and a rename would break it silently."""
     r = client.get("/api/v1/manager/analytics/dpd-breakdown", headers=_headers(world["manager"]))
     assert r.status_code == 200, r.text
-    assert [row["key"] for row in r.json()] == ["BUCKET_2", "NPA"]
+    rows = r.json()
+    assert [row["bucket"] for row in rows] == ["BUCKET_2", "NPA"]
+    assert "key" not in rows[0]
+    assert set(rows[0]) == {"bucket", "case_count", "target_lakhs", "collected_lakhs",
+                            "collection_rate_pct"}

@@ -534,6 +534,30 @@ export async function getPtpOutcomes(months = 6, agentId?: string): Promise<impo
   return data;
 }
 
+/** A dimension the team's book can be broken down by (known issue 8). The
+ *  bucket dimension is the long-standing DPD card; the other three were always
+ *  in the data and never surfaced. */
+export type BreakdownDimension = "bucket" | "product" | "branch" | "city";
+
+export interface BreakdownRow {
+  /** The dimension's value: a bucket name, a loan type, a branch code, a city.
+   *  "Not recorded" when the column is empty, rather than the row being dropped. */
+  key: string;
+  case_count: number;
+  target_lakhs: number;
+  collected_lakhs: number;
+  collection_rate_pct: number;
+}
+
+/** The team's book by branch, city, product or bucket. Rows come back largest
+ *  collection first, except bucket, which keeps its severity order. */
+export async function getTeamBreakdown(dimension: BreakdownDimension, month?: string): Promise<BreakdownRow[]> {
+  const { data } = await api.get<BreakdownRow[]>("/manager/analytics/breakdown", {
+    params: { dimension, ...(month ? { month } : {}) },
+  });
+  return data;
+}
+
 export async function getTeamDPDBreakdown(month?: string): Promise<AgentDPDRow[]> {
   const { data } = await api.get<AgentDPDRow[]>("/manager/analytics/dpd-breakdown", {
     params: month ? { month } : undefined,
