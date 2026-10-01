@@ -24,3 +24,7 @@ api_router.include_router(bank.router)
 # its own line so d4's p3-d4 edit of the import above merges without a conflict.
 from app.api.v1.endpoints import bank_placements  # noqa: E402
 api_router.include_router(bank_placements.router)
+# 2026-09-30 (L5, AI showcase): the model pages, /bank/models and
+# /bank/loans/{id}/explanation. Own line, for the same merge reason as above.
+from app.api.v1.endpoints import bank_models  # noqa: E402
+api_router.include_router(bank_models.router)

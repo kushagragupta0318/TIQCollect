@@ -143,6 +143,13 @@ export function RepaymentScore({ data }: { data: RepaymentScoreData | null }) {
         </span>
       </div>
 
+      {/* Provenance, always visible (2026-09-30, AI showcase): which rule, which
+          version, when. A hand-weighted scorecard says so in words. */}
+      <div className="mt-1 text-[10px] opacity-60">
+        {data.is_modelled ? `Trained model ${data.model_version}` : `Hand-weighted scorecard ${data.model_version} · not a trained model`}
+        {" "}· scored {data.as_of}
+      </div>
+
       {!data.is_confident && (
         <div className="flex items-start gap-1.5 mt-2 text-[11px] leading-snug opacity-80">
           <Info className="w-3.5 h-3.5 flex-shrink-0 mt-px" />
@@ -196,8 +203,7 @@ export function RepaymentScore({ data }: { data: RepaymentScoreData | null }) {
           )}
 
           <div className="pt-1 text-[10px] opacity-50">
-            {data.model_version} · as of {data.as_of} · decision support only,
-            it does not decide whether to visit
+            Decision support only; it does not decide whether to visit
           </div>
         </div>
       )}

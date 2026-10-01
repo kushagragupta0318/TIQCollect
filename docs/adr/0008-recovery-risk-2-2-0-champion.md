@@ -37,6 +37,13 @@ nightly allocation since 2026-09-17. **Pointer:** `backend/app/ml/artifacts/reco
    feature (IV 0.31) has no product surface: 0 of 2,404 visits and 0 of 1,089 calls record it.
    Until stance capture ships and its coverage is measured, **quote the live-equivalent figures,
    not the artifact's.**
+   - **Amendment, 2026-09-30:**
+     - Stance capture shipped on 2026-09-28 (`142311f`, the visit and call forms).
+     - All 9,494 recovery_risk 2.2.0 predictions in the demo book predate it. Every one reads
+       `latest_disposition = NONE`.
+     - The live-equivalent figures stand until the measured coverage is material.
+     - The bank's Models page (`GET /bank/models`) reports that coverage live, from the newest
+       scoring day.
 2. **Synthetic training data.** It demonstrates the pipeline, not real-borrower performance.
 3. **The allocator uplift (ADR 0002) was measured under 1.1.0.** It has not been re-run under
    2.2.0.

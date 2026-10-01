@@ -144,6 +144,20 @@ export const BANK_SECTIONS: BankNavSection[] = [
     ],
   },
   {
+    // Model-risk readers look for governance, not operations (tiqcollect-06).
+    label: "Governance",
+    icon: BrainCircuit,
+    items: [
+      {
+        name: "Models",
+        path: "governance/models",
+        icon: BrainCircuit,
+        summary: "The six scoring layers as a set, and the trained model's card: honest figures, coverage, monitoring, control.",
+        tasks: "F07/F09 (read-only slice: the AI showcase)",
+      },
+    ],
+  },
+  {
     label: "Tech Ops",
     icon: Cpu,
     items: [
