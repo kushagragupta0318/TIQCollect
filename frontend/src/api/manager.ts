@@ -119,6 +119,11 @@ export async function getCompliance(): Promise<ComplianceMetrics> {
 export interface AgencyContractSummary {
   contract_no: string;
   status: string;
+  /** False when this is the "nothing ACTIVE exists" fallback to the most
+   *  recent contract regardless of status — a lapsed/terminated/draft
+   *  contract shown because there is nothing better, not because it is in
+   *  force. Label it when false; never show its terms as current. */
+  is_current: boolean;
   start_date: string;
   end_date: string;
   max_agents: number | null;

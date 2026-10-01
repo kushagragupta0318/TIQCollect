@@ -95,6 +95,11 @@ export default function AgencyProfilePage() {
             <FileText className="w-4 h-4 text-brand-600" /> Contract {contract.contract_no}
             <span className="badge badge-slate">{humanize(contract.status)}</span>
           </h2>
+          {!contract.is_current && (
+            <p className="text-xs text-warning-600 bg-warning-50 rounded-lg px-2.5 py-1.5">
+              This agency has no ACTIVE contract — showing the most recent one on file. These terms are not currently in force.
+            </p>
+          )}
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
             <Field label="Start" value={contract.start_date} />
             <Field label="End" value={contract.end_date} />

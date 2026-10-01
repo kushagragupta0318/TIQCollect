@@ -8,7 +8,17 @@
 #   Picks the ACTIVE contract; falls back to the most recent contract by
 #   start_date if the agency has none ACTIVE (lapsed/awaiting renewal), so an
 #   agency between contracts still sees its last terms rather than a blank
-#   page — its `status` field says plainly that it is not current.
+#   page. `contract.is_current` says plainly which case this is — see
+#   build_agency_profile below; it used to be only `status`, which a reader
+#   has to already know to check, and D07 (the bank's view of the same
+#   contract) would have shown a terminated contract's terms as though they
+#   were in force with nothing warning otherwise.
+#
+#   build_agency_profile(db, agency) is the ONE shape-building function,
+#   taking an already-resolved, already-scoped Agency — not a principal — so
+#   D07 (bank clicks an agency in its Directory) can call it too after
+#   resolving the id through scope.agency_or_404, with no logic duplicated
+#   between "my own agency" and "an agency I bank-scope into by id".
 #
 #   Placements received/recalls (the other half of G04) is not here: it reads
 #   the bank-side placement model (placement.read, already used by
@@ -31,13 +41,26 @@ def get_agency_profile(db: Session, principal) -> dict:
     agency = db.query(Agency).filter(Agency.id == principal.agency_id).first()
     if agency is None:
         raise _not_found()
+    return build_agency_profile(db, agency)
 
+
+def build_agency_profile(db: Session, agency: Agency) -> dict:
+    """Identity + contract + authorised commission terms for an agency the
+    caller has already resolved and scope-checked. Pure given `agency`: no
+    role or tenant logic lives here, so a caller cannot get the scoping wrong
+    by calling this instead of the check — there is nothing to check here."""
     contract = (
         db.query(AgencyContract)
         .filter(AgencyContract.agency_id == agency.id, AgencyContract.status == "ACTIVE")
         .order_by(AgencyContract.start_date.desc())
         .first()
     )
+    # Whether `contract` is the one actually in force, not the "nothing
+    # better exists" fallback below. The fallback can be DRAFT, EXPIRED or
+    # TERMINATED; without this flag a caller has to notice `status` itself
+    # means "not current", which is exactly how a terminated contract's terms
+    # could be shown as current on D07.
+    is_current = contract is not None
     if contract is None:
         contract = (
             db.query(AgencyContract)
@@ -78,6 +101,7 @@ def get_agency_profile(db: Session, principal) -> dict:
         "contract": None if contract is None else {
             "contract_no": contract.contract_no,
             "status": contract.status,
+            "is_current": is_current,
             "start_date": contract.start_date.isoformat(),
             "end_date": contract.end_date.isoformat(),
             "max_agents": contract.max_agents,

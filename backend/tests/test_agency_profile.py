@@ -95,6 +95,7 @@ def test_agency_admin_sees_own_contract_and_authorised_terms_only(w):
     assert body["agency"]["legal_name"] == "Aravalli Field Services Pvt. Ltd."
     assert body["agency"]["contact_name"] == "Asha Rao"
     assert body["contract"]["contract_no"] == "MTB/FCA/2026-27/014"
+    assert body["contract"]["is_current"] is True
     assert body["contract"]["max_agents"] == 25
     assert body["contract"]["security_deposit"] == 500000.0
     assert {(t["loan_type"], t["dpd_bucket"]) for t in body["commission_terms"]} == {
@@ -120,3 +121,47 @@ def test_agency_with_no_contract_returns_null_not_an_error(w):
     assert r.status_code == 200, r.text
     assert r.json()["contract"] is None
     assert r.json()["commission_terms"] == []
+
+
+def test_agency_with_only_a_terminated_contract_is_marked_not_current(w):
+    db = w["db"]
+    other = test_id("agency:lapsed")
+    db.add(Agency(id=other, bank_id=TEST_BANK_ID, code="AGY-LAPSED", legal_name="Konkan Recovery Services LLP",
+                  status="ACTIVE", contacts=[], is_demo=True))
+    db.flush()
+    db.add(AgencyContract(bank_id=TEST_BANK_ID, agency_id=other, contract_no="MTB/KRS/2024-25/003",
+                          status="TERMINATED", start_date=date(2024, 4, 1), end_date=date(2025, 3, 31),
+                          sla_first_visit_days=5, recall_on_sla_breach=True, recall_at_contract_end=True))
+    u = _user(db, "admin3", UserRole.AGENCY_ADMIN, agency=other, phone="9800000004")
+    db.commit()
+
+    r = w["c"].get(BASE, headers=_h(u))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    # The audit bug this closes: a terminated contract used to render with
+    # nothing distinguishing it from a live one.
+    assert body["contract"]["status"] == "TERMINATED"
+    assert body["contract"]["is_current"] is False
+
+
+def test_agency_admin_never_sees_another_agencys_contract(w):
+    db = w["db"]
+    other = test_id("agency:second")
+    db.add(Agency(id=other, bank_id=TEST_BANK_ID, code="AGY-SECOND", legal_name="Konkan Recovery Services LLP",
+                  status="ACTIVE", contacts=[], is_demo=True))
+    db.flush()
+    db.add(AgencyContract(bank_id=TEST_BANK_ID, agency_id=other, contract_no="MTB/KRS/2026-27/009",
+                          status="ACTIVE", start_date=date(2026, 1, 1), end_date=date(2026, 12, 31),
+                          sla_first_visit_days=7, recall_on_sla_breach=False, recall_at_contract_end=True))
+    other_admin = _user(db, "admin4", UserRole.AGENCY_ADMIN, agency=other, phone="9800000005")
+    db.commit()
+
+    # The original fixture's agency+contract is the only other one seeded, so
+    # this is a real two-tenant check, not a single-agency book where leaking
+    # the other tenant's row would have nothing to leak.
+    mine = w["c"].get(BASE, headers=_h(w["admin"])).json()
+    theirs = w["c"].get(BASE, headers=_h(other_admin)).json()
+    assert mine["agency"]["legal_name"] == "Aravalli Field Services Pvt. Ltd."
+    assert mine["contract"]["contract_no"] == "MTB/FCA/2026-27/014"
+    assert theirs["agency"]["legal_name"] == "Konkan Recovery Services LLP"
+    assert theirs["contract"]["contract_no"] == "MTB/KRS/2026-27/009"
