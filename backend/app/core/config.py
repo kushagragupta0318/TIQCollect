@@ -197,6 +197,15 @@ class Settings(BaseSettings):
     # DEMO_MODE cannot be it: .env.example ships DEMO_MODE=true and compose
     # defaults it on, so a real deployment may well run with it.
     DEMO_MASTER_DISABLE_OTHERS: str = ""
+    # 2026-09-30 (lane L6, owner's decision) — a SECOND, separate opt-in: the
+    # same DEMO_MASTER_PASSWORD for every active agency's admin, managers and
+    # first N field agents, plus the bank's own users, so the demo shows a
+    # believable org chart logging in rather than four isolated accounts.
+    # apply_demo_logins.apply_agency_staff(); off by default, independent of
+    # DEMO_MASTER_ACCOUNTS. docs/DEMO-LOGINS.md lists who this covers.
+    DEMO_STAFF_LOGIN_ENABLED: str = ""
+    DEMO_STAFF_AGENTS_PER_AGENCY: int = 4
+    DEMO_STAFF_BANK_CODE: str = "GIRIVAN"
     # Accounts outside these are never retired. The v2 demo book: every domain
     # of the roster (B16, 2026-09-28: both banks and all ten agencies, from
     # app/demo/roster.py, the one place a demo name lives). (Was

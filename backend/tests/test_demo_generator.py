@@ -27,7 +27,7 @@ def test_a_neutral_latent_reproduces_the_ledger_exactly():
     every other table comes from the ledger's untouched logic."""
     from app.demo.books import DemoLedgerSimulator
     base = LedgerSimulator(_small()).run()
-    same = DemoLedgerSimulator(_small(), AgencyLatent(skill_mean=0.0, skill_sd=0.35)).run()
+    same = DemoLedgerSimulator(_small(), AgencyLatent(skill_mean=0.0, skill_sd=0.35), calendar=False).run()
     for name, frame in base.tables().items():
         pd.testing.assert_frame_equal(frame.reset_index(drop=True), same.tables()[name].reset_index(drop=True),
                                       check_like=False, obj=name)
@@ -44,6 +44,41 @@ def test_latent_skill_moves_only_the_agents_and_what_they_cause():
     n = _small().n_borrowers
     pd.testing.assert_frame_equal(strong.borrowers.head(n).reset_index(drop=True),
                                   weak.borrowers.head(n).reset_index(drop=True))
+
+
+def test_the_ledger_s_default_season_is_its_own_sine_and_the_hook_is_wired():
+    """L6 moved the inline term into LedgerSimulator._season. The default
+    must be the same expression (the pre/post tables were byte-identical,
+    measured on 2026-09-30), and a subclass must actually reach the day loop."""
+    import numpy as np
+    sim = LedgerSimulator(_small())
+    for t in range(0, 400, 7):
+        month = t // sim.cfg.cycle_days
+        assert sim._season(t, month) == sim.cfg.seasonality_amplitude * np.sin(2 * np.pi * month / 12.0)
+
+    class Flat(LedgerSimulator):
+        def _season(self, t, month):
+            return -3.0
+    assert len(Flat(_small()).run().payments) < len(LedgerSimulator(_small()).run().payments)
+
+
+def test_the_demo_calendar_lifts_march_and_softens_april_on_the_same_book():
+    from app.demo.books import DemoLedgerSimulator
+    from app.demo.latent import CALENDAR_SEASON, SALARY_DAYS, calendar_season
+    cfg = replace(LedgerConfig(), n_borrowers=600, months=6, n_agents=10, seed=11, start_date=date(2026, 1, 1))
+    lat = AgencyLatent(skill_mean=0.0, skill_sd=0.35)
+
+    def by_month(led):
+        days = led.payments.payment_day.map(lambda d: (cfg.start_date + timedelta(days=int(d))).month)
+        return days.value_counts()
+    cal = by_month(DemoLedgerSimulator(cfg, lat).run())
+    flat = by_month(DemoLedgerSimulator(cfg, lat, calendar=False).run())
+    assert cal[3] / cal[4] > flat[3] / flat[4]
+    # roughly zero-mean, so the book's overall payment rate is not what moves
+    year = [calendar_season(date(2026, 1, 1) + timedelta(days=k)) for k in range(365)]
+    assert abs(sum(year) / len(year)) < 0.03
+    assert set(CALENDAR_SEASON) == set(range(1, 13))
+    assert [lo for lo, _hi, _v in SALARY_DAYS] == [1, 8, 11] and SALARY_DAYS[-1][1] == 31
 
 
 def test_the_ledger_config_has_no_generator_fields():

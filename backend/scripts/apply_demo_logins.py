@@ -221,6 +221,125 @@ def apply(db: Session, *, password: str | None, accounts_raw: str | None, demo_m
     return out
 
 
+STAFF_ROLES = frozenset({UserRole.AGENCY_ADMIN, UserRole.AGENCY_MANAGER, UserRole.FIELD_AGENT})
+DEFAULT_AGENTS_PER_AGENCY = 4
+
+
+class _NoSuchBank(Exception):
+    pass
+
+
+def staff_targets(db: Session, *, bank_code: str, agents_per_agency: int,
+                  everyone: list[User] | None = None) -> tuple[list[User], int]:
+    """The ONE definition of "who gets the shared staff login": `bank_code`'s
+    own users, plus every ACTIVE agency's admin, every manager, and its first
+    `agents_per_agency` field agents (by email, deterministic). Read-only;
+    apply_agency_staff() and scripts/generate_demo_logins_doc.py both call
+    this, so the doc can never list an account that would not actually get
+    the password. Raises _NoSuchBank if `bank_code` names no bank."""
+    from app.models.tenancy import Agency, Bank
+
+    everyone = db.query(User).all() if everyone is None else everyone
+    bank = db.query(Bank).filter(Bank.code == bank_code).one_or_none()
+    if bank is None:
+        raise _NoSuchBank(bank_code)
+
+    targets: list[User] = [u for u in everyone if u.bank_id == bank.id and u.agency_id is None
+                           and u.role.value.startswith("BANK_")]
+    agencies = (db.query(Agency).filter(Agency.bank_id == bank.id, Agency.status == "ACTIVE")
+               .order_by(Agency.code).all())
+    for a in agencies:
+        staff = sorted((u for u in everyone if u.agency_id == a.id and u.role in STAFF_ROLES),
+                       key=lambda u: (u.role.value, (u.email or "").lower()))
+        admins = [u for u in staff if u.role == UserRole.AGENCY_ADMIN]
+        managers = [u for u in staff if u.role == UserRole.AGENCY_MANAGER]
+        agents = [u for u in staff if u.role == UserRole.FIELD_AGENT][:agents_per_agency]
+        targets += admins + managers + agents
+    return targets, len(agencies)
+
+
+@dataclass
+class StaffOutcome:
+    applied: bool
+    reason: str = ""
+    configured: bool = True
+    accounts_set: list[str] = field(default_factory=list)
+    accounts_unchanged: list[str] = field(default_factory=list)
+    agencies: int = 0
+
+
+def apply_agency_staff(db: Session, *, password: str | None, demo_mode: bool, enabled: bool,
+                       bank_code: str = "GIRIVAN", agents_per_agency: int = DEFAULT_AGENTS_PER_AGENCY,
+                       keep_raw: str | None = "", demo_domains: str | None = None,
+                       max_users: int = FIXTURE_USER_COUNT) -> StaffOutcome:
+    """A SECOND, SEPARATE pass (owner's decision, 2026-09-30): the same shared
+    password for every bank user of `bank_code`, plus every ACTIVE agency's
+    AGENCY_ADMIN, every AGENCY_MANAGER, and its first `agents_per_agency`
+    FIELD_AGENTs (by email, deterministic) — so the demo shows a believable
+    org chart logging in, not four isolated accounts. DOES NOT touch
+    apply()'s DEMO_MASTER_ACCOUNTS mechanism or its four-eyes slots; the two
+    are independent and may overlap harmlessly (same password, idempotent).
+
+    Off by default (`enabled`): a deployment that only wants the four master
+    accounts must opt in. Same fail-closed shape as apply(): every account
+    touched must be case-unique, on a demo domain, and within the fixture's
+    user count; a keep-listed account is skipped, never assigned nor counted
+    against the agency's agent quota."""
+    if not _real(password):
+        return StaffOutcome(applied=False, configured=False, reason="DEMO_MASTER_PASSWORD is not set; nothing changed")
+    if not demo_mode:
+        return StaffOutcome(applied=False, reason="DEMO_MODE is off; refusing to set a shared password")
+    if not enabled:
+        return StaffOutcome(applied=False, configured=False, reason="DEMO_STAFF_LOGIN_ENABLED is off; nothing changed")
+    if len(password) < MIN_PASSWORD_LENGTH:
+        return StaffOutcome(applied=False, reason=f"DEMO_MASTER_PASSWORD is shorter than {MIN_PASSWORD_LENGTH} characters")
+    if agents_per_agency < 0:
+        return StaffOutcome(applied=False, reason="agents_per_agency must not be negative")
+
+    keep = set(parse_accounts(keep_raw))
+    if (keep_raw or "").strip() and ("${" in keep_raw or not keep):
+        return StaffOutcome(applied=False, reason="DEMO_MASTER_KEEP_ACCOUNTS is set but names no account, "
+                                                   "or holds an unresolved ${...}")
+
+    everyone = db.query(User).all()
+    lowered = [(u.email or "").strip().lower() for u in everyone]
+    clashes = sorted({e for e in lowered if e and lowered.count(e) > 1})
+    if clashes:
+        return StaffOutcome(applied=False, reason=f"accounts differ only by letter case: {', '.join(clashes)}")
+    if len(everyone) > max_users:
+        return StaffOutcome(applied=False, reason=(f"{len(everyone)} users, more than the demo fixture's "
+                                                    f"{max_users}; this is not a demo box"))
+
+    if demo_domains is None:
+        from app.core.config import settings
+        demo_domains = settings.DEMO_EMAIL_DOMAINS
+    domains = {d.strip().lower() for d in (demo_domains or "").split(",") if d.strip()}
+
+    try:
+        targets, n_agencies = staff_targets(db, bank_code=bank_code, agents_per_agency=agents_per_agency,
+                                            everyone=everyone)
+    except _NoSuchBank:
+        return StaffOutcome(applied=False, reason=f"no bank with code {bank_code!r}; nothing changed")
+
+    targets = [u for u in targets if ((u.email or "").strip().lower()) not in keep]
+    foreign = sorted({u.email for u in targets if _domain((u.email or "").lower()) not in domains})
+    if foreign:
+        return StaffOutcome(applied=False, reason=(f"{len(foreign)} account(s) outside the demo domains "
+                                                    f"{sorted(domains)}; this is not a demo box"))
+
+    out = StaffOutcome(applied=True, agencies=n_agencies)
+    for u in sorted(targets, key=lambda u: (u.email or "").lower()):
+        if u.hashed_password and not is_disabled_password_hash(u.hashed_password) \
+                and verify_password(password, u.hashed_password):
+            out.accounts_unchanged.append(u.email)
+            continue
+        u.hashed_password = hash_password(password)
+        _end_sessions(db, u)
+        out.accounts_set.append(u.email)
+    db.commit()
+    return out
+
+
 def main() -> int:
     from app.core.config import settings
     from app.core.database import SessionLocal
@@ -245,6 +364,27 @@ def main() -> int:
           + (f"{out.disabled} other accounts retired, {out.already_disabled} already retired"
              if explicit_true(settings.DEMO_MASTER_DISABLE_OTHERS) else
              f"{out.left_alone} other accounts left as they are (DEMO_MASTER_DISABLE_OTHERS is off)"))
+
+    db2 = SessionLocal()
+    try:
+        staff_out = apply_agency_staff(
+            db2, password=settings.DEMO_MASTER_PASSWORD, demo_mode=settings.DEMO_MODE,
+            enabled=explicit_true(settings.DEMO_STAFF_LOGIN_ENABLED),
+            bank_code=settings.DEMO_STAFF_BANK_CODE or "GIRIVAN",
+            agents_per_agency=int(settings.DEMO_STAFF_AGENTS_PER_AGENCY or DEFAULT_AGENTS_PER_AGENCY),
+            keep_raw=settings.DEMO_MASTER_KEEP_ACCOUNTS, demo_domains=settings.DEMO_EMAIL_DOMAINS)
+    finally:
+        db2.close()
+    if not staff_out.applied:
+        if not staff_out.configured:
+            print(f"[demo-logins] agency staff: {staff_out.reason}")
+        else:
+            logger.error("demo_logins.staff_refused", reason=staff_out.reason)
+            print(f"[demo-logins] agency staff REFUSED: {staff_out.reason}", file=sys.stderr)
+            return EXIT_REFUSED
+    else:
+        print(f"[demo-logins] agency staff: {len(staff_out.accounts_set)} set, "
+              f"{len(staff_out.accounts_unchanged)} unchanged, across {staff_out.agencies} active agencies")
     return EXIT_APPLIED
 
 
