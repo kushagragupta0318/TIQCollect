@@ -459,7 +459,14 @@ export default function ManagerOverviewPage() {
         <TodayDpdCard
           rows={summary?.today_dpd_breakdown ?? null}
           effectiveDate={summary?.effective_date}
-          onOpen={(bucket) => navigate(`/manager/cases?bucket=${bucket}`)}
+          // activity=planned&activity_window=today scopes the list to the
+          // same case set the donut counted (today's beats — services/
+          // field_activity_service.planned_case_ids, the same Beat.beat_date
+          // query the donut's all_beat_case_ids uses). Without it, bucket=
+          // alone filtered every case in the date range, so the donut's NPA
+          // count and the list's NPA count answered two different questions
+          // that happened to share a label (audit, 2026-10-01).
+          onOpen={(bucket) => navigate(`/manager/cases?bucket=${bucket}&activity=planned&activity_window=today`)}
         />
       </Reveal>
     </div>
