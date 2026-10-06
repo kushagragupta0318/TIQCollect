@@ -131,7 +131,10 @@ V1_STAFF = {
 }
 # Order matters: apply_demo_logins.REQUIRED_ROLE_GROUPS is positional.
 MASTER_ACCOUNTS = (f"ananya.iyer@{BANK_DOMAIN}", f"vikram.malhotra@{AGENCY_DOMAIN}",
-                   f"piyush.sharma@{AGENCY_DOMAIN}", f"kavya.reddy@{BANK_DOMAIN}")
+                   f"piyush.sharma@{AGENCY_DOMAIN}", f"kavya.reddy@{BANK_DOMAIN}",
+                   # 5th slot (2026-10-06): Meera Khanna, Aravalli's AGENCY_ADMIN, so the
+                   # agency-admin tier (and the reversal agency-approve) is demoable.
+                   f"meera.khanna@{AGENCY_DOMAIN}")
 
 # Aravalli's workforce (B16). GENDER IS ROSTER DATA, stated per person by the
 # roster's author — never derived from a name, anywhere (coordinator,

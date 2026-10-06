@@ -85,6 +85,8 @@ REQUIRED_ROLE_GROUPS: tuple[tuple[str, frozenset[UserRole]], ...] = (
     ("a FIELD_AGENT", frozenset({UserRole.FIELD_AGENT})),
     # placement.run is BANK_ADMIN-only and apply needs a second person.
     ("a second bank user, for the four-eyes demo (BANK_ADMIN)", frozenset({UserRole.BANK_ADMIN})),
+    # 5th slot (2026-10-06): the agency-admin tier, so Meera Khanna can log in.
+    ("an AGENCY_ADMIN", frozenset({UserRole.AGENCY_ADMIN})),
 )
 
 
