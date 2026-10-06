@@ -43,6 +43,7 @@ from datetime import datetime, timezone, timedelta
 
 from sqlalchemy.exc import IntegrityError
 
+from app.core import storage
 from app.core.config import settings
 from app.core.errors import AppException, ErrorCode
 from app.core.events import publish_event
@@ -163,6 +164,10 @@ class PaymentService:
         if problem:
             raise AppException(422, problem[0], problem[1])
         case = self._get_accessible_case(agent, case_id)
+        if req.receipt_photo_key and not storage.is_case_evidence_key(case.id, req.receipt_photo_key):
+            raise AppException(422, ErrorCode.EVIDENCE_KEY_INVALID,
+                               "The photo attached to this payment is not one taken for this case. "
+                               "Take it again.")
 
         # Idempotency: a retry after a lost response — the photo uploads
         # routinely push it past the 15-second window below — must return the
@@ -323,6 +328,7 @@ class PaymentService:
                     id=str(uuid.uuid4()),
                     created_at=paid_at,
                     user_id=None,   # nobody did this; a verified payment did
+                    bank_id=ptp.bank_id, agency_id=ptp.agency_id,
                     action=AuditAction.PTP_UPDATED,
                     entity_type="PTP",
                     entity_id=ptp.id,

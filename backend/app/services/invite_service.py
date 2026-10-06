@@ -140,6 +140,10 @@ def create_invite(db: Session, inviter: User, *, email: str, role: UserRole, ful
                     details={"role": role.value, "bank_id": bank_id, "agency_id": agency_id},
                     ip_address=_client_ip(request))
         raise AppException(403, ErrorCode.INVITE_NOT_ALLOWED, "You cannot invite someone to that role.")
+    if inviter.role == UserRole.PLATFORM_ADMIN:
+        # Allowed above; only now does this request act inside the one named bank (RLS, A13b S1b).
+        from app.services.scope import platform_acts_in_bank
+        bank_id = platform_acts_in_bank(db, inviter, bank_id)
 
     bank = db.get(Bank, bank_id) if bank_id else None
     if bank is None or bank.status != "ACTIVE":
@@ -183,7 +187,7 @@ def create_invite(db: Session, inviter: User, *, email: str, role: UserRole, ful
     db.add(inv)
     db.flush()
     stage_audit(db, action=AuditAction.USER_INVITED, user_id=inviter.id, entity_type="UserInvite",
-                entity_id=inv.id, ip_address=_client_ip(request),
+                entity_id=inv.id, bank_id=inv.bank_id, agency_id=inv.agency_id, ip_address=_client_ip(request),
                 details={"role": role.value, "purpose": inv.purpose, "bank_id": bank_id, "agency_id": agency_id,
                          "channel": channel})
     try:
@@ -239,14 +243,22 @@ def revoke_invite(db: Session, principal: User, invite_id: str, *, request: Requ
     inv.revoked_at = now()
     inv.revoked_by = principal.id
     stage_audit(db, action=AuditAction.INVITE_REVOKED, user_id=principal.id, entity_type="UserInvite",
-                entity_id=inv.id, ip_address=_client_ip(request), details={"role": inv.role.value})
+                entity_id=inv.id, bank_id=inv.bank_id, agency_id=inv.agency_id, ip_address=_client_ip(request), details={"role": inv.role.value})
     db.commit()
     return to_dict(inv)
 
 
 # ── accept (public) ─────────────────────────────────────────────────────────
 def _open_by_token(db: Session, token: str) -> UserInvite:
-    inv = db.query(UserInvite).filter(UserInvite.token_sha256 == token_sha256(token or "")).first()
+    # A13b S1b: the invitation's tenant first, then the row under it. The token
+    # is the capability: whoever holds it acts inside the invitee's tenant.
+    from app.core import preauth
+    sha = token_sha256(token or "")
+    invitee = preauth.invitee_by_token_sha(db, sha)
+    if invitee is None:
+        raise AppException(400, ErrorCode.INVITE_INVALID, _INVALID)
+    preauth.bind(db, invitee)
+    inv = db.query(UserInvite).filter(UserInvite.token_sha256 == sha).first()
     if inv is None or status_of(inv) != "OPEN":
         raise AppException(400, ErrorCode.INVITE_INVALID, _INVALID)
     return inv

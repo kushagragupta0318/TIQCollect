@@ -178,12 +178,13 @@ visit fell). The pg test re-measures it.
 
 ### The demo master login (v2)
 
-One password, four accounts, in this order: a bank user, an agency manager, a
-field agent, and a second BANK_ADMIN (the owner's decisions, the fourth on
-2026-09-30; `scripts/apply_demo_logins.py` checks each slot's role).
+One password, five accounts, in this order: a bank user, an agency manager, a
+field agent, a second BANK_ADMIN, and an AGENCY_ADMIN (the owner's decisions,
+the fourth on 2026-09-30, the fifth on 2026-10-06; `scripts/apply_demo_logins.py`
+checks each slot's role).
 
 ```
-DEMO_MASTER_ACCOUNTS=ananya.iyer@girivanfinance.test,vikram.malhotra@aravallifs.test,piyush.sharma@aravallifs.test,kavya.reddy@girivanfinance.test
+DEMO_MASTER_ACCOUNTS=ananya.iyer@girivanfinance.test,vikram.malhotra@aravallifs.test,piyush.sharma@aravallifs.test,kavya.reddy@girivanfinance.test,meera.khanna@aravallifs.test
 DEMO_MASTER_PASSWORD=          # ask the team; at least 16 characters; never in a committed file
 DEMO_MODE=true
 ```
@@ -194,6 +195,7 @@ DEMO_MODE=true
 | AGENCY_MANAGER | `vikram.malhotra@aravallifs.test` | the manager app (17 agents: his 15, plus Shreya Chaudhary and Kiran Bhatia) |
 | FIELD_AGENT | `piyush.sharma@aravallifs.test` | the agent app |
 | BANK_ADMIN | `kavya.reddy@girivanfinance.test` | the bank portal; applies a placement run Ananya planned |
+| AGENCY_ADMIN | `meera.khanna@aravallifs.test` | the agency admin tier (and the reversal agency-approve) |
 
 Every other login in the book is `<first>.<last>@<its domain>`, and none is
 usable. The domains are girivanfinance.test and kumaonfinance.test, plus one
@@ -206,8 +208,10 @@ for `DEMO_MASTER_DISABLE_OTHERS`. Girivan Finance has a second BANK_ADMIN,
 Kavya Reddy (`kavya.reddy@girivanfinance.test`), so the placement engine's
 four-eyes apply step (ADR 0010) can be demonstrated end to end: one plans,
 the other applies. The owner approved her as the fourth master login on
-2026-09-30. A box whose `DEMO_MASTER_ACCOUNTS` still names three accounts
-refuses on boot (logged, nothing changed) until the fourth is added.
+2026-09-30, and Meera Khanna (Aravalli's Operations Head) as the fifth, an
+AGENCY_ADMIN, on 2026-10-06. A box whose `DEMO_MASTER_ACCOUNTS` names fewer
+than five accounts refuses on boot (logged, nothing changed) until the rest
+are added.
 
 **Verified 2026-09-28** by booting an empty database through
 `docker-entrypoint.sh`, with the branch's entrypoint and code in throwaway

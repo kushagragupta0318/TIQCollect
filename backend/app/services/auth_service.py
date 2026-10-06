@@ -36,7 +36,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from fastapi import HTTPException, status, Request
 
-from app.core.audit import stage_audit
+from app.core import preauth
+from app.core.audit import stage_audit, write_audit
 from app.core.config import settings
 from app.core.permissions import role_capabilities
 from app.core.errors import AppException, ErrorCode
@@ -75,6 +76,12 @@ def _client_ip(request: Request) -> str | None:
 
 
 def _log(db: Session, action: AuditAction, user_id: str | None, request: Request, entity_id: str | None = None, details: dict | None = None, success: bool = True, failure_reason: str | None = None) -> None:
+    if user_id is None:
+        # No principal was found, so no tenant is bound: the tenantless refusal path (A13b S1b).
+        write_audit(db, action=action, user_id=None, bank_id=None, agency_id=None,
+                    entity_type="User" if entity_id else None, entity_id=entity_id, details=details, success=success, failure_reason=failure_reason,
+                    ip_address=_client_ip(request), user_agent=request.headers.get("user-agent"))
+        return
     log = AuditLog(
         id=str(uuid.uuid4()),
         created_at=datetime.now(timezone.utc),
@@ -147,8 +154,13 @@ def revoke_user_sessions(db: Session, user_id: str, reason: str, *, by: str | No
         # the caller's transaction rather than through write_audit, which
         # commits on its own: this function's contract is "caller commits",
         # and the row must land exactly when the revocation does.
+        # The row carries the TARGET's tenant as well as its actor's (an admin
+        # may be bank-level or PLATFORM): the target's own tenant can read it.
+        target = db.get(User, user_id)
         stage_audit(db, action=AuditAction.SESSION_REVOKED, user_id=by or user_id, entity_type="User",
-                    entity_id=user_id, details={"reason": reason, "count": count, "kept_sid": except_sid})
+                    entity_id=user_id, bank_id=target.bank_id if target else None,
+                    agency_id=target.agency_id if target else None,
+                    details={"reason": reason, "count": count, "kept_sid": except_sid})
     return count
 
 
@@ -248,6 +260,10 @@ def _login_response(user: User, tokens: dict) -> dict:
 
 def login(db: Session, email: str, password: str, device_id: str, request: Request, *,
           totp_code: str | None = None, device_secret: str | None = None) -> dict:
+    principal = preauth.by_email(db, email)
+    if principal is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    preauth.bind(db, principal)
     user: User | None = db.query(User).filter(User.email == email).first()
 
     if not user:
@@ -356,12 +372,17 @@ def quick_login(db: Session, token: str, request: Request) -> dict:
     # the token was previously valid for 90 days and reusable without limit.
     # One row per redeemed jti; a second redemption of the same token is
     # rejected even though it hasn't expired yet.
+    principal = preauth.by_user_id(db, payload.get("sub"))
+    if principal is not None:
+        preauth.bind(db, principal)
     jti = payload.get("jti")
     if not jti or db.get(UsedQuickLoginToken, jti):
-        _log(db, AuditAction.LOGIN_FAILED, payload.get("sub"), request, success=False, failure_reason="Quick-login link already used")
+        _log(db, AuditAction.LOGIN_FAILED, principal.user_id if principal else None, request,
+             entity_id=None if principal else payload.get("sub"), success=False,
+             failure_reason="Quick-login link already used")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="This link has already been used. Ask for a new one.")
 
-    user: User | None = db.query(User).filter(User.id == payload["sub"]).first()
+    user: User | None = db.query(User).filter(User.id == principal.user_id).first() if principal else None
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired link")
     if not user.is_active:
@@ -419,7 +440,11 @@ def refresh_tokens(db: Session, refresh_token: str, request: Request) -> dict:
     if payload.get("type") != "refresh":
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token type")
 
-    user = db.get(User, payload["sub"])
+    principal = preauth.by_user_id(db, payload.get("sub"))
+    if principal is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired")
+    preauth.bind(db, principal)
+    user = db.get(User, principal.user_id)
     if not user or not user.is_active or _agent_is_suspended(db, user):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired")
 

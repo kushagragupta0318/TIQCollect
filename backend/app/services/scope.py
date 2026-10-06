@@ -58,13 +58,14 @@ def agents_in_scope(db: Session, principal):
         FIELD_AGENT      -> themself
         AGENCY_MANAGER   -> the agents they manage (manager_user_id), inside their agency
         AGENCY_ADMIN     -> every agent of their agency
-        BANK_* / SERVICE -> every agent of their bank's agencies
+        bank-wide        -> every agent of their bank's agencies (tenant_scope BANK:
+                            BANK_*, and SERVICE with no agency)
         PLATFORM_ADMIN   -> everyone
         anything else    -> nothing
     (BANK_ANALYST region limits arrive with A01/A02's capability layer.)"""
     from sqlalchemy import false
     from app.models.agent import Agent
-    from app.models.user import UserRole
+    from app.models.user import UserRole, tenant_scope
 
     q = db.query(Agent)
     role = getattr(principal, "role", None)
@@ -74,7 +75,7 @@ def agents_in_scope(db: Session, principal):
         return q.filter(Agent.agency_id == principal.agency_id, Agent.manager_user_id == principal.id)
     if role == UserRole.AGENCY_ADMIN:
         return q.filter(Agent.agency_id == principal.agency_id)
-    if role in (UserRole.BANK_ADMIN, UserRole.BANK_ANALYST, UserRole.BANK_TECHOPS, UserRole.SERVICE):
+    if tenant_scope(role, getattr(principal, "agency_id", None)) == "BANK":
         return q.filter(Agent.bank_id == principal.bank_id)
     if role == UserRole.PLATFORM_ADMIN:
         return q
@@ -89,7 +90,7 @@ def cases_in_scope(db: Session, principal):
     from sqlalchemy import false, or_
     from app.models.agent import Agent
     from app.models.case import Case
-    from app.models.user import UserRole
+    from app.models.user import UserRole, tenant_scope
 
     q = db.query(Case)
     role = getattr(principal, "role", None)
@@ -104,7 +105,7 @@ def cases_in_scope(db: Session, principal):
                         or_(Case.agent_id.in_(mine), Case.agent_id.is_(None)))
     if role == UserRole.AGENCY_ADMIN:
         return q.filter(Case.agency_id == principal.agency_id)
-    if role in (UserRole.BANK_ADMIN, UserRole.BANK_ANALYST, UserRole.BANK_TECHOPS, UserRole.SERVICE):
+    if tenant_scope(role, getattr(principal, "agency_id", None)) == "BANK":
         return q.filter(Case.bank_id == principal.bank_id)
     if role == UserRole.PLATFORM_ADMIN:
         return q
@@ -187,6 +188,27 @@ def today_beat_cases(db: Session, agent, *, options=()):
     return beat, [rows[i] for i in ids if i in rows]
 
 
+def platform_acts_in_bank(db: Session, principal, bank_id) -> str:
+    """A PLATFORM_ADMIN acting inside ONE named bank for the rest of this
+    request: onboarding its first admin, resetting a BANK_ADMIN's credentials.
+    Under RLS the operation then sees that bank and nothing else, so a query
+    that forgot its filter cannot reach another bank. It adds no power the API
+    lacks (the tenant is the app's to set); it narrows PLATFORM to one bank.
+
+    Call it only AFTER the operation's own permission check has passed.
+    Refuses (PermissionError) any principal but PLATFORM_ADMIN; a malformed
+    bank id is the usual 404. Returns the canonical bank id."""
+    from app.core.database import apply_tenant_context
+    from app.models.user import UserRole
+    if getattr(principal, "role", None) != UserRole.PLATFORM_ADMIN:
+        raise PermissionError("platform_acts_in_bank is for PLATFORM_ADMIN only")
+    bid = parse_uuid(bank_id)
+    if bid is None:
+        raise AppException(404, ErrorCode.NOT_FOUND, "Bank not found")
+    apply_tenant_context(db, bank_id=bid, agency_id=None, scope="BANK", user_id=principal.id)
+    return bid
+
+
 def agencies_in_scope(db: Session, principal):
     """A Query of the agencies `principal` (a User) may see. Additive to
     agents_in_scope/cases_in_scope above (2026-09-28, D02), not a change to
@@ -195,18 +217,18 @@ def agencies_in_scope(db: Session, principal):
 
         AGENCY_ADMIN/MANAGER -> their own agency only (bank-scoped tenants
                                  never read another agency's onboarding draft)
-        BANK_* / SERVICE     -> every agency of their bank
+        bank-wide (tenant_scope BANK) -> every agency of their bank
         PLATFORM_ADMIN       -> everyone
         anything else        -> nothing"""
     from sqlalchemy import false
     from app.models.tenancy import Agency
-    from app.models.user import UserRole
+    from app.models.user import UserRole, tenant_scope
 
     q = db.query(Agency)
     role = getattr(principal, "role", None)
     if role in (UserRole.AGENCY_ADMIN, UserRole.AGENCY_MANAGER):
         return q.filter(Agency.id == principal.agency_id)
-    if role in (UserRole.BANK_ADMIN, UserRole.BANK_ANALYST, UserRole.BANK_TECHOPS, UserRole.SERVICE):
+    if tenant_scope(role, getattr(principal, "agency_id", None)) == "BANK":
         return q.filter(Agency.bank_id == principal.bank_id)
     if role == UserRole.PLATFORM_ADMIN:
         return q

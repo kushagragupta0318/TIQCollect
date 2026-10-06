@@ -449,6 +449,75 @@ export async function getAgencyScorecard(agencyId: string, filters: ScorecardFil
   return data;
 }
 
+// ── Agency profile (P3 D07) ─────────────────────────────────────────────────
+// Contract + commission are the SAME shape G04's agency-side view returns
+// (services/agency_profile_service.build_agency_profile) — one definition,
+// read from both sides. placed_volume and people are bank-only.
+
+export interface AgencyProfileContract {
+  contract_no: string;
+  status: string;
+  /** False on the "nothing ACTIVE exists" fallback — never render these
+   *  terms as current when false. */
+  is_current: boolean;
+  start_date: string;
+  end_date: string;
+  max_agents: number | null;
+  max_placed_cases: number | null;
+  max_visits_per_month: number | null;
+  sla_first_visit_days: number;
+  recall_no_activity_days: number | null;
+  recall_on_sla_breach: boolean;
+  recall_at_contract_end: boolean;
+  performance_bonus_pct: number | null;
+  performance_target_pct: number | null;
+  security_deposit: number | null;
+}
+
+export interface AgencyCommissionTerm {
+  loan_type: string;
+  dpd_bucket: string;
+  commission_pct: number;
+  fixed_fee_per_resolution: number | null;
+}
+
+export interface AgencyProfileManager {
+  id: string;
+  full_name: string;
+  email: string;
+  role: string;
+}
+
+export interface BankAgencyProfile {
+  agency: {
+    legal_name: string;
+    trade_name: string | null;
+    rbi_registration_no: string | null;
+    status: string;
+    hq_city: string | null;
+    contact_name: string | null;
+    contact_email: string | null;
+    contact_phone: string | null;
+  };
+  contract: AgencyProfileContract | null;
+  commission_terms: AgencyCommissionTerm[];
+  placed_volume: {
+    active_count: number;
+    active_exposure: number;
+    lifetime_count: number;
+  };
+  people: {
+    agent_count: number;
+    agents_on_duty: number;
+    managers: AgencyProfileManager[];
+  };
+}
+
+export async function getBankAgencyProfile(agencyId: string): Promise<BankAgencyProfile> {
+  const { data } = await api.get<BankAgencyProfile>(`/bank/agencies/${agencyId}/profile`);
+  return data;
+}
+
 /**
  * GET /bank/agencies-leaderboard — every agency in scope, ranked by
  * Performance Index descending, unscored (index: null) agencies last

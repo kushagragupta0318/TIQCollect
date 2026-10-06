@@ -180,6 +180,7 @@ def admin_reset(db: Session, admin: User, target: User, *, request: Request | No
     from app.services import auth_service
     auth_service.revoke_user_sessions(db, target.id, "ADMIN_REVOKED", by=admin.id)
     stage_audit(db, action=AuditAction.MFA_DISABLED, user_id=admin.id, entity_type="User", entity_id=target.id,
+                bank_id=target.bank_id, agency_id=target.agency_id,
                 ip_address=_client_ip(request), details={"by": "admin"})
     db.commit()
 
@@ -230,7 +231,11 @@ def enrollment_gate(db: Session, user: User) -> dict | None:
 def _ticket_user(db: Session, ticket: str) -> tuple[User, str]:
     key = _TICKET_PREFIX + token_sha256(ticket or "")
     data = _store().hgetall(key) or {}
-    user = db.get(User, data.get("user_id")) if data.get("user_id") else None
+    from app.core import preauth
+    principal = preauth.by_user_id(db, data.get("user_id"))    # the tenant first (A13b S1b)
+    if principal is not None:
+        preauth.bind(db, principal)
+    user = db.get(User, principal.user_id) if principal is not None else None
     if user is None or not user.is_active:
         raise AppException(400, ErrorCode.MFA_INVALID, "This setup link has expired. Sign in again.")
     return user, key

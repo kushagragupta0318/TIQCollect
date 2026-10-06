@@ -475,7 +475,7 @@ const FEATURES = [
     icon: FileCheck,
     color: "bg-teal-50 text-teal-600 border-teal-100",
     title: "Digital Visit Recording",
-    desc: "Selfie check-in, GPS verification, premises photos, payment receipts, PTP commitment capture — every visit fully documented with tamper-evident audit trail.",
+    desc: "GPS check-in, geo-fenced visits, premises photos, payment receipts, PTP commitment capture — every visit fully documented with tamper-evident audit trail.",
   },
   {
     icon: IndianRupee,
@@ -506,7 +506,7 @@ const HOW_IT_WORKS = [
   {
     icon: Navigation,
     title: "Agents Execute on Beat",
-    desc: "Agents check in with a selfie, receive their optimised beat map, navigate case-to-case with Google Maps, and record visits — payments, PTPs, photos — all on mobile.",
+    desc: "Agents check in with GPS, receive their optimised beat map, navigate case-to-case with Google Maps, and record visits — payments, PTPs, photos — all on mobile.",
   },
   {
     icon: TrendingUp,
@@ -519,13 +519,13 @@ const TIMELINE = [
   { time: "8:00 PM", event: "Overnight allocation runs — matches open cases to eligible agents by territory, language and specialisation" },
   { time: "6:00 AM", event: "Beat plans pushed to all agents — geo-optimised routes pre-calculated overnight" },
   { time: "9:00 AM", event: "PTP reminders sent — agents receive alerts for today's promise-to-pay follow-ups" },
-  { time: "9:30 AM", event: "Agents check in with selfie + GPS stamp — duty status goes live on manager dashboard" },
+  { time: "9:30 AM", event: "Agents check in with a GPS stamp — duty status goes live on manager dashboard" },
   { time: "10AM–6PM", event: "Field visits executed — payments, PTPs, escalations recorded in real-time" },
   { time: "7:00 PM", event: "Contact hours close — visit recording disabled, daily summary generated for managers" },
 ];
 
 const AGENT_FEATURES = [
-  "Selfie attendance check-in with liveness detection",
+  "GPS check-in at the start of the day",
   "Geo-optimised beat map with Google Maps navigation",
   "Customer detail: loan info, DPD, visit history, active PTP",
   "6-step visit recording: outcome → payment → PTP → photos",
@@ -547,7 +547,7 @@ const MANAGER_FEATURES = [
 const COMPLIANCE = [
   { rule: "Contact Hours: 8AM – 7PM only", desc: "API blocks visit recording outside permitted hours. Frontend shows warning banner." },
   { rule: "No Sunday collections", desc: "Visit recording disabled on Sundays at the API middleware layer." },
-  { rule: "Agent identity verification", desc: "ID card number on every visit record. Selfie check-in required before field work." },
+  { rule: "Agent identity verification", desc: "ID card number on every visit record." },
   { rule: "Geo-stamped audit trail", desc: "GPS coordinates recorded on check-in, every visit, and payment collection." },
   { rule: "Immutable audit logs (5-year)", desc: "All actions logged with timestamp, user, and IP. No deletes or updates permitted." },
   { rule: "Customer consent & language preference", desc: "Language stored on customer record. Consent flag on document uploads." },

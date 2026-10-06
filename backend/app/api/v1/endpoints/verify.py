@@ -74,6 +74,14 @@ def verify_agent(request: Request, db: DbSession,
         raise _NOT_FOUND
 
     agent_id = payload.get("sub")
+    # A13b S1b: the card's agent's tenant, then the read under it. The signed
+    # token is what lets an anonymous caller read these four fields at all.
+    from app.core import preauth
+    principal = preauth.by_agent_id(db, agent_id)
+    if principal is None:
+        logger.info("verify_agent.refused", reason="no_such_agent")
+        raise _NOT_FOUND
+    preauth.bind(db, principal)
     row = (
         db.query(Agent, User)
         .join(User, User.id == Agent.user_id)

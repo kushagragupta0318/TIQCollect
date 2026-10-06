@@ -338,7 +338,7 @@ def _end_placement_on_recall(db, case_obj: Case, today: date, recall_reason: str
     note = f"{recall_reason}. {bank_remark}".strip(" .")
     closed = PlacementService(db).recall(placement, on=today, end_reason="FEED_RECALL", note=note, ended_by=None)
     stage_audit(db, action=AuditAction.PLACEMENT_RECALLED, user_id=None, entity_type="Placement",
-                entity_id=placement.id,
+                entity_id=placement.id, bank_id=placement.bank_id, agency_id=placement.agency_id,
                 details={"source": "FEED", "reason": note, "agency_id": placement.agency_id,
                          "loan_id": placement.loan_id, "case_id": case_obj.id,
                          "other_cases_closed": [c.id for c in closed]})
@@ -358,7 +358,7 @@ def _end_placement_from_feed(db, case_obj: Case, today: date, bank_action: str) 
         return "no_active_placement"
     PlacementService(db).end_from_feed(placement, bank_action=bank_action, on=today)
     stage_audit(db, action=AuditAction.PLACEMENT_ENDED, user_id=None, entity_type="Placement",
-                entity_id=placement.id,
+                entity_id=placement.id, bank_id=placement.bank_id, agency_id=placement.agency_id,
                 details={"source": "FEED", "bank_action": bank_action, "status": placement.status,
                          "end_reason": placement.end_reason, "agency_id": placement.agency_id,
                          "loan_id": placement.loan_id, "case_id": case_obj.id})

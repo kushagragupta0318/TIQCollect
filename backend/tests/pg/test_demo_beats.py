@@ -20,13 +20,67 @@ from tests.pg.test_pg_demo_fixture import db, sql_text  # noqa: F401 — the res
 pytestmark = pytest.mark.filterwarnings("ignore")
 
 
+def _generated_agency_ids():
+    """The agencies generate_beats builds for: every one of GIRIVAN's except
+    Aravalli, whose beats came from v1 with their own lifecycle."""
+    from app.demo.roster import AGENCIES
+    return [a.id for a in AGENCIES if a.key != "ARAVALLI" and a.bank_key == "GIRIVAN"]
+
+
 @pytest.fixture(scope="module")
-def built(db):  # noqa: F811
+def baked(db):  # noqa: F811
+    """What the COMMITTED DUMP already carries, read before `built` clears it.
+
+    l6 baked the generated beats into the dump, so the restored fixture arrives
+    with them. That is a real property of the artifact we ship, and nothing
+    checked it; test_the_baked_dump_already_carries_beats does, from here.
+    """
+    with db.connect() as c:
+        return c.execute(text(
+            "SELECT count(*) AS beats, count(DISTINCT agency_id) AS agencies, "
+            "       count(*) FILTER (WHERE NOT is_leave_day AND estimated_distance_km IS NULL) AS unplanned, "
+            "       count(*) FILTER (WHERE beat_number IS NULL OR beat_number = '') AS unnumbered "
+            "FROM planning.beats WHERE agency_id = ANY(CAST(:ids AS uuid[]))"), {"ids": _generated_agency_ids()}).one()
+
+
+@pytest.fixture(scope="module")
+def built(db, baked):  # noqa: F811
+    """The GENERATOR's own output, which is what the rest of this module tests.
+
+    The dump is baked, and generate_beats refuses to build twice, so every test
+    here used to error at setup instead of testing anything (red on CI since the
+    bake). Clearing the generated agencies' beats in this THROWAWAY database
+    restores what the module was written to prove. Aravalli's rows stay — every
+    query below excludes them anyway — and nothing references beats by foreign
+    key, so the delete is local and complete. (leave_requests.beat_ids is a JSON
+    list, not an FK; stale ids there are harmless in a database we drop.)
+    It depends on `baked` so the artifact is read BEFORE it is cleared.
+    """
     from app.demo.beats import generate_beats
 
     with db.begin() as conn:
+        conn.execute(text("DELETE FROM planning.beats WHERE agency_id = ANY(CAST(:ids AS uuid[]))"),
+                     {"ids": _generated_agency_ids()})
+    with db.begin() as conn:
         result = generate_beats(conn, bank_key="GIRIVAN")
     return result
+
+
+def test_the_baked_dump_already_carries_beats(baked):
+    """The shipped dump must arrive with the generated book's beats: the demo
+    opens on today's routes, and a dump that lost them would look empty on the
+    agent app with nothing in the suite complaining."""
+    assert baked.beats > 0, "the committed dump carries no generated beats"
+    assert baked.agencies >= 2, f"only {baked.agencies} generated agencies have beats in the dump"
+    # Every working day carries a planned distance -- that is what makes the
+    # beat a measurement of route efficiency rather than a bare list of cases.
+    assert baked.unplanned == 0, f"{baked.unplanned} baked working beats have no estimated distance"
+    assert baked.unnumbered == 0, f"{baked.unnumbered} baked beats have no beat number"
+    # NOT asserted: route_geometry. The baked book is HISTORICAL, reconstructed
+    # from past visits, and only 339 of its 25,590 beats carry a polyline --
+    # geometry comes from planning a day, not from having worked one. Today's
+    # freshly generated beats do all carry it, which is a different population;
+    # conflating the two is a mistake this comment exists to stop repeating.
 
 
 def test_every_generated_agency_has_beats(db, built):  # noqa: F811

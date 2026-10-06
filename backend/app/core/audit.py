@@ -41,6 +41,8 @@ def write_audit(
     ip_address: str | None = None,
     user_agent: str | None = None,
     created_at: datetime | None = None,
+    bank_id: str | None = None,
+    agency_id: str | None = None,
 ) -> bool:
     """Add one AuditLog row and commit it on its own. Returns whether it landed.
 
@@ -50,11 +52,22 @@ def write_audit(
     exception type and traceback, exactly as a swallowed notification failure
     is, and the caller carries on: the audit trail records what happened, it
     does not decide whether it happens.
+
+    A row with no user and no tenant is a pre-authentication refusal (an
+    unknown link, an unsigned caller). No principal may write one under RLS,
+    so on Postgres it goes through audit.auth_write_refusal (v2_0026), which
+    takes only refusals of the actions it lists.
     """
     try:
-        db.add(_row(action=action, user_id=user_id, entity_type=entity_type, entity_id=entity_id,
-                    details=details, success=success, failure_reason=failure_reason,
-                    ip_address=ip_address, user_agent=user_agent, created_at=created_at))
+        if user_id is None and bank_id is None and db.get_bind().dialect.name == "postgresql":
+            _write_refusal(db, action=action, entity_type=entity_type, entity_id=entity_id, details=details,
+                           success=success, failure_reason=failure_reason, ip_address=ip_address,
+                           user_agent=user_agent)
+        else:
+            db.add(_row(action=action, user_id=user_id, entity_type=entity_type, entity_id=entity_id,
+                        details=details, success=success, failure_reason=failure_reason,
+                        ip_address=ip_address, user_agent=user_agent, created_at=created_at,
+                        bank_id=bank_id, agency_id=agency_id))
         db.commit()
         return True
     except Exception as exc:  # noqa: BLE001 — the event already happened; the row is evidence
@@ -80,6 +93,8 @@ def stage_audit(
     failure_reason: str | None = None,
     ip_address: str | None = None,
     user_agent: str | None = None,
+    bank_id: str | None = None,
+    agency_id: str | None = None,
 ) -> None:
     """Add one AuditLog row to the CALLER'S transaction; the caller commits.
 
@@ -92,16 +107,23 @@ def stage_audit(
     write and the row must survive the raise that follows."""
     db.add(_row(action=action, user_id=user_id, entity_type=entity_type, entity_id=entity_id,
                 details=details, success=success, failure_reason=failure_reason,
-                ip_address=ip_address, user_agent=user_agent, created_at=None))
+                ip_address=ip_address, user_agent=user_agent, created_at=None,
+                bank_id=bank_id, agency_id=agency_id))
 
 
 def _row(*, action, user_id, entity_type, entity_id, details, success, failure_reason,
-         ip_address, user_agent, created_at) -> AuditLog:
-    """The one construction of an AuditLog row, for both writers."""
+         ip_address, user_agent, created_at, bank_id, agency_id) -> AuditLog:
+    """The one construction of an AuditLog row, for both writers.
+
+    Tenant (A13b S1a): a row with a user takes that user's bank and agency
+    (tenancy_listener). A row no user wrote (user_id=None) must pass its
+    entity's bank_id / agency_id, or no bank or agency can ever read it."""
     return AuditLog(
         id=str(uuid.uuid4()),
         created_at=created_at or datetime.now(timezone.utc),
         user_id=user_id,
+        bank_id=bank_id,
+        agency_id=agency_id,
         action=action,
         entity_type=entity_type,
         entity_id=entity_id,
@@ -111,3 +133,18 @@ def _row(*, action, user_id, entity_type, entity_id, details, success, failure_r
         success=success,
         failure_reason=failure_reason,
     )
+
+
+def _write_refusal(db: Session, *, action, entity_type, entity_id, details, success, failure_reason,
+                   ip_address, user_agent) -> None:
+    """The tenantless row, through the SECURITY DEFINER writer. It refuses a
+    success, an action it does not list, and any tenant: a caller cannot use
+    it to write into a bank's trail. The row's time is the database's now()."""
+    import json
+    from sqlalchemy import text
+    db.execute(text("SELECT audit.auth_write_refusal(:action, :success, :entity_type, :entity_id, "
+                    ":failure_reason, :ip, :ua, CAST(:details AS jsonb))"),
+               {"action": str(getattr(action, "value", action)), "success": success, "entity_type": entity_type,
+                "entity_id": entity_id, "failure_reason": failure_reason, "ip": ip_address,
+                "ua": (user_agent or "")[:500] or None,
+                "details": json.dumps(details) if details is not None else None})

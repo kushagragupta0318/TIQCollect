@@ -36,7 +36,7 @@ import type {
   RecoveryBreakdown,
 } from "@/api/manager";
 import { TierBadge } from "@/components/ui/Badge";
-import { LIVE, useLiveRefresh } from "@/lib/liveQuery";
+import { LIVE } from "@/lib/liveQuery";
 
 
 const LINE_COLORS = [
@@ -383,9 +383,20 @@ const AS_BEFORE = {
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function ManagerAnalyticsPage() {
-  const [analytics, setAnalytics]   = useState<AnalyticsData | null>(null);
-  const [agentPerf, setAgentPerf]   = useState<AgentsPerformanceData | null>(null);
-  const [loading, setLoading]       = useState(true);
+  // Analytics + per-agent performance are react-query-cached (2026-10-06) with
+  // the same live cadence the old useEffect+useLiveRefresh pair had (AS_BEFORE
+  // spreads ...LIVE: a 60s poll while visible, refetch on focus/reconnect). The
+  // win is cross-nav caching. This page used to hold the payload in local state
+  // that was reset to null on every mount, so each visit to the Analytics tab
+  // blanked to the loading skeleton and blocked on the heaviest endpoint
+  // (getAnalytics) before it could render anything. Now a revisit paints the
+  // cached charts immediately and refreshes in the background (isLoading is true
+  // only on the first load, when there is no cached payload to show).
+  const analyticsQ = useQuery({ queryKey: ["manager", "analytics"], queryFn: getAnalytics, ...AS_BEFORE });
+  const agentPerfQ = useQuery({ queryKey: ["manager", "agents", "performance", 6], queryFn: () => getAgentsPerformance(6), ...AS_BEFORE });
+  const analytics: AnalyticsData | null = analyticsQ.data ?? null;
+  const agentPerf: AgentsPerformanceData | null = agentPerfQ.data ?? null;
+  const loading = analyticsQ.isLoading || agentPerfQ.isLoading;
   const [chartMode, setChartMode]   = useState<"team" | "individual">("team");
   // `barReady` is DERIVED, not stored. 2026-09-10.
   //
@@ -409,21 +420,14 @@ export default function ManagerAnalyticsPage() {
   const [selTeamMonth, setSelTeamMonth]   = useState<string | null>(null);
   const [selAgentMonth, setSelAgentMonth] = useState<string | null>(null);  // month label e.g. "Apr"
 
+  // The initial-load failure toast the old Promise.all `.catch` fired. Only the
+  // first load (no cached payload) surfaces it; a failed background refresh
+  // keeps the stale charts silently, as the old useLiveRefresh did.
   useEffect(() => {
-    Promise.all([getAnalytics(), getAgentsPerformance(6)])
-      .then(([a, p]) => { setAnalytics(a); setAgentPerf(p); })
-      .catch(() => toast.error("Failed to load analytics"))
-      .finally(() => setLoading(false));
-  }, []);
-  // 2026-09-18 — the trend, DPD, recovery and leaderboard payload above is
-  // effect-loaded, not a query, so it gets the same cadence by hand: a quiet
-  // re-read every minute while visible and on focus. Silent on failure — a
-  // stale chart beats a toast every minute on a flaky link.
-  useLiveRefresh(() => {
-    Promise.all([getAnalytics(), getAgentsPerformance(6)])
-      .then(([a, p]) => { setAnalytics(a); setAgentPerf(p); })
-      .catch(() => {});
-  });
+    if ((analyticsQ.isError || agentPerfQ.isError) && !analytics && !agentPerf) {
+      toast.error("Failed to load analytics");
+    }
+  }, [analyticsQ.isError, agentPerfQ.isError, analytics, agentPerf]);
 
   useEffect(() => {
     if (!loading && analytics) {

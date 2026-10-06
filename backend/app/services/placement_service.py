@@ -596,7 +596,7 @@ class PlacementService:
                 continue
             p.status, p.ended_on, p.ended_by, p.end_reason = status, on, None, self.RECONCILE_REASON
             stage_audit(self.db, action=AuditAction.PLACEMENT_ENDED, user_id=None, entity_type="Placement",
-                        entity_id=p.id,
+                        entity_id=p.id, bank_id=p.bank_id, agency_id=p.agency_id,
                         details={"source": "RECONCILE", "loan_status": loan_status.value, "status": status,
                                  "agency_id": p.agency_id, "loan_id": p.loan_id})
         if not dry_run:

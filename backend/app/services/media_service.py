@@ -28,12 +28,19 @@ from app.core import storage
 from app.core.config import settings
 from app.models.agent import Agent
 from app.models.case import Case
-from app.models.visit import Visit
+from app.models.visit import VISIT_DOCUMENT_CATEGORIES, Visit
 
 
 class MediaService:
-    _SUBJECT_MAP = {"agent": "AGENT_SELFIE", "borrower": "BORROWER", "object": "VEHICLE_ASSET", "signature": "SIGNATURE"}
-    _VALID_SUBJECTS = set(_SUBJECT_MAP.keys())
+    # "receipt" is the cheque or payment-confirmation photo of a live payment (N1):
+    # it is stored on Payment.receipt_photo_key, not on the visit.
+    _SUBJECT_MAP = {"agent": "AGENT_SELFIE", "borrower": "BORROWER", "object": "VEHICLE_ASSET", "signature": "SIGNATURE",
+                    "receipt": "RECEIPT"}
+    # "document" is one of the four things an agent collects at a visit (N1); its
+    # category (VISIT_DOCUMENT_CATEGORIES) and file type come with the request.
+    _VALID_SUBJECTS = set(_SUBJECT_MAP.keys()) | {"document"}
+    _DOCUMENT_CONTENT_TYPES = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp",
+                               "application/pdf": "pdf"}
     # signature is a PNG canvas capture (customer consent artifact), not a JPEG camera photo
     _SUBJECT_CONTENT_TYPE = {"signature": ("image/png", "png")}
 
@@ -43,9 +50,15 @@ class MediaService:
     def get_photo_upload_url(self, agent: Agent, case_id: str, subject: str, *,
                              client_submission_id: str | None = None, captured_at=None,
                              device_seq: int | None = None, device_id: str | None = None,
-                             token_device_id: str | None = None) -> dict:
+                             token_device_id: str | None = None,
+                             category: str | None = None, content_type: str | None = None) -> dict:
         if subject not in self._VALID_SUBJECTS:
-            raise HTTPException(status_code=400, detail=f"subject must be one of: {', '.join(self._VALID_SUBJECTS)}")
+            raise HTTPException(status_code=400, detail=f"subject must be one of: {', '.join(sorted(self._VALID_SUBJECTS))}")
+        if subject == "document":
+            if category not in VISIT_DOCUMENT_CATEGORIES:
+                raise HTTPException(status_code=400, detail=f"category must be one of: {', '.join(VISIT_DOCUMENT_CATEGORIES)}")
+            if (content_type or "image/jpeg") not in self._DOCUMENT_CONTENT_TYPES:
+                raise HTTPException(status_code=400, detail=f"content_type must be one of: {', '.join(sorted(self._DOCUMENT_CONTENT_TYPES))}")
         # I02: an outbox upload names its visit's submission. Judged like the
         # visit (capture-day access), and keyed by it, so a retried PUT
         # overwrites its own object rather than orphaning a new one.
@@ -58,8 +71,13 @@ class MediaService:
         case = agent_case_or_404(self.db, agent, case_id,   # A03: the one rule
                                  on_day=capture.day if capture.late else None)
 
-        photo_type_str = self._SUBJECT_MAP[subject]
-        content_type, ext = self._SUBJECT_CONTENT_TYPE.get(subject, ("image/jpeg", "jpg"))
+        if subject == "document":
+            photo_type_str = f"DOC_{category}"
+            content_type = content_type or "image/jpeg"
+            ext = self._DOCUMENT_CONTENT_TYPES[content_type]
+        else:
+            photo_type_str = self._SUBJECT_MAP[subject]
+            content_type, ext = self._SUBJECT_CONTENT_TYPE.get(subject, ("image/jpeg", "jpg"))
         if client_submission_id:
             # Once its visit is stored the evidence is final: no overwrite after the fact.
             if (self.db.query(Visit.id).filter(Visit.agent_id == agent.id,
@@ -185,3 +203,17 @@ class MediaService:
                         seen.add(photo_type)
                         result.append(entry)
         return result
+
+    @staticmethod
+    def document_entries(visit: Visit) -> list[dict]:
+        """The documents saved on a visit, each with a short-lived download link.
+        A link that cannot be signed is None, never a made-up one."""
+        out = []
+        for d in visit.documents or []:
+            try:
+                view_url = storage.presigned_download_url(d["key"], expires_minutes=60)
+            except Exception:
+                view_url = None
+            out.append({"category": d.get("category"), "content_type": d.get("content_type"),
+                        "view_url": view_url})
+        return out

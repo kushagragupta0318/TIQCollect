@@ -20,7 +20,7 @@
 x-v2-env: &v2-env
   DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-fieldops}:${POSTGRES_PASSWORD:-fieldops_dev_pass}@postgres:5432/tiq_v2
   DEMO_MODE: "true"
-  DEMO_MASTER_ACCOUNTS: ananya.iyer@girivanfinance.test,vikram.malhotra@aravallifs.test,piyush.sharma@aravallifs.test,kavya.reddy@girivanfinance.test
+  DEMO_MASTER_ACCOUNTS: ananya.iyer@girivanfinance.test,vikram.malhotra@aravallifs.test,piyush.sharma@aravallifs.test,kavya.reddy@girivanfinance.test,meera.khanna@aravallifs.test
   DEMO_FIXTURE: /app/fixtures/fieldops-demo-v2.dump
   ALLOWED_ORIGINS: http://localhost:5474,http://localhost:8401
   MINIO_PUBLIC_ENDPOINT: localhost:19002

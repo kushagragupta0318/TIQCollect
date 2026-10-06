@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     APP_NAME: str = "TIQCollect"
     APP_ENV: str = "development"
     DEBUG: bool = False
+    # SQLAlchemy statement logging. Was tied to DEBUG, which on dev logged every
+    # statement with full params (incl. 200+ element UUID IN-lists) and was the
+    # dominant dev-side request latency. Off by default; turn on only to debug SQL.
+    SQL_ECHO: bool = False
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
@@ -189,7 +193,7 @@ class Settings(BaseSettings):
     # by scripts/apply_demo_logins.py at boot; never logged, printed or
     # defaulted. Unset = nothing changes. See that script for the rules.
     DEMO_MASTER_PASSWORD: str = ""
-    DEMO_MASTER_ACCOUNTS: str = ""        # four emails, in order: bank user, manager, agent, 2nd BANK_ADMIN
+    DEMO_MASTER_ACCOUNTS: str = ""        # five emails, in order: bank user, manager, agent, 2nd BANK_ADMIN, AGENCY_ADMIN
     # Never touched by the script: accounts that must keep their own password
     # (service logins), comma-separated emails.
     DEMO_MASTER_KEEP_ACCOUNTS: str = ""

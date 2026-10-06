@@ -76,10 +76,11 @@ def create_first_admin(db, *, bank_code: str, bank_name: str, bank_display: str,
     db.flush()
     token = _issue(db, user, "FIRST_LOGIN", FIRST_PASSWORD_TTL)
     stage_audit(db, action=AuditAction.USER_CREATED, user_id=None, entity_type="User", entity_id=user.id,
+                bank_id=bank.id, agency_id=None,
                 details={"role": UserRole.BANK_ADMIN.value, "bank_id": bank.id, "bank_created": created_bank,
                          "via": "scripts.create_first_admin"})
     stage_audit(db, action=AuditAction.PASSWORD_RESET_ISSUED, user_id=None, entity_type="User",
-                entity_id=user.id, details={"kind": "FIRST_PASSWORD", "via": "scripts.create_first_admin"})
+                entity_id=user.id, bank_id=bank.id, agency_id=None, details={"kind": "FIRST_PASSWORD", "via": "scripts.create_first_admin"})
     db.commit()
     return {"bank_id": bank.id, "bank_created": created_bank, "user_id": user.id, "token": token}
 
