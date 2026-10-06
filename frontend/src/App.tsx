@@ -51,9 +51,23 @@ const SimulatorPage = lazy(() => import("@/pages/simulator/SimulatorPage"));
 // the scoped bank.css — so none of it is in the agency or agent bundles.
 const BankApp = lazy(() => import("@/bank/BankApp"));
 
+// Perf (2026-10-06, enriched demo book): a tab switch or an alt-tab back into
+// the browser must not restart the whole manager/agent dashboard. staleTime
+// keeps a freshly-visited tab's data usable without a refetch; the pages that
+// genuinely need live data drive it with their own refetchInterval (overview,
+// live map), so window-focus and reconnect refetches are pure redundant load
+// on the API and pure redundant re-renders. Measured: with focus-refetch on,
+// every return to the browser refetched all active queries at once
+// (~5-6 per manager page). Off by default; a page opts back in explicitly.
 const queryClient = new QueryClient({
   defaultOptions: {
-    queries: { staleTime: 30_000, retry: 1 },
+    queries: {
+      staleTime: 60_000,
+      gcTime: 5 * 60_000,
+      retry: 1,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+    },
   },
 });
 
