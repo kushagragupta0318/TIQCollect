@@ -281,7 +281,8 @@ export default function ManagerLayout() {
           <div className="flex items-center gap-2 sm:gap-2.5 flex-shrink-0">
             <SOSAlertBadge sosCount={sosCount} />
             <NotificationBell sosCount={sosCount} sosAgents={sosAgents} leavePending={leavePending} />
-            <AccountMenu name={user?.full_name ?? ""} role={user?.role ?? ""} onLogout={handleLogout} />
+            <AccountMenu name={user?.full_name ?? ""} role={user?.role ?? ""} onLogout={handleLogout}
+              onAgencyProfile={() => navigate("/manager/agency-profile")} />
           </div>
         </header>
         </div>

@@ -310,3 +310,29 @@ export function mlBadge(ml: DecisionMl | undefined | null): {
     ].filter(Boolean).join(" "),
   };
 }
+
+/**
+ * The deferred-pill label and tooltip for a DEFERRED_* outcome (demo QA
+ * sweep, 2026-10-01). Every subtype in models/allocation_decision.py's
+ * AllocationOutcome gets one here, including ones added after this was
+ * written — the fallback turns `DEFERRED_WHATEVER_NEW` into "WHATEVER NEW"
+ * rather than silently showing nothing, which is what let DEFERRED_PTP and
+ * DEFERRED_VISIT_CAP count toward the "Deferred (N)" pill while rendering no
+ * badge and not matching the DEFERRED filter at all.
+ */
+export function deferredBadge(outcome: string): { label: string; title: string } {
+  switch (outcome) {
+    case "DEFERRED":
+      return { label: "DEFERRED", title: "Deferred this run — no specific reason recorded." };
+    case "DEFERRED_ROUTE_INFEASIBLE":
+      return { label: "ROUTE OUTLIER", title: "Too far from the agent's other stops to route economically today." };
+    case "DEFERRED_PTP":
+      return { label: "PTP DUE", title: "The borrower has an active promise to pay — a visit before then would be a wasted trip." };
+    case "DEFERRED_VISIT_CAP":
+      return { label: "VISIT CAP", title: "This case has already used its visits for the month (Case.max_visits_allowed)." };
+    default: {
+      const rest = outcome.replace(/^DEFERRED_?/, "").replace(/_/g, " ").trim();
+      return { label: rest ? rest.toUpperCase() : "DEFERRED", title: `Deferred: ${outcome}.` };
+    }
+  }
+}

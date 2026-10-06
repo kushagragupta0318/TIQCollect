@@ -36,3 +36,7 @@ api_router.include_router(bank_customers.router)
 # Own line, for the same merge reason as above.
 from app.api.v1.endpoints import bank_strategy  # noqa: E402
 api_router.include_router(bank_strategy.router)
+# 2026-10-01 (P2 G04, L9): the agency's own read-only profile, /manager/agency-profile.
+# Own line, same reason as bank_placements above.
+from app.api.v1.endpoints import manager_agency_profile  # noqa: E402
+api_router.include_router(manager_agency_profile.router)

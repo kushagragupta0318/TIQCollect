@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { LogOut } from "lucide-react";
+import { LogOut, Building2 } from "lucide-react";
 
 /**
  * Avatar button that opens a small account menu carrying Sign Out.
@@ -12,10 +12,15 @@ export function AccountMenu({
   name,
   role,
   onLogout,
+  onAgencyProfile,
 }: {
   name: string;
   role: string;
   onLogout: () => void;
+  /** P2 G04. AGENCY_ADMIN only (plan §10, "Also for AGENCY_ADMIN") — omitted
+   *  or absent for any other role, including AGENCY_MANAGER, so the item
+   *  simply isn't offered rather than being shown and then 403ing. */
+  onAgencyProfile?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -66,6 +71,17 @@ export function AccountMenu({
               {role.replace(/_/g, " ").toLowerCase()}
             </p>
           </div>
+          {role === "AGENCY_ADMIN" && onAgencyProfile && (
+            <button
+              role="menuitem"
+              onClick={() => { setOpen(false); onAgencyProfile(); }}
+              className="tap-target w-full flex items-center gap-2.5 px-4 py-3 text-sm font-semibold transition-colors hover:bg-slate-50 border-b"
+              style={{ color: "#1C1C1F", background: "none", border: "none", borderBottom: "1px solid hsl(var(--border) / 0.5)", cursor: "pointer" }}
+            >
+              <Building2 className="w-4 h-4 flex-shrink-0" />
+              Agency profile
+            </button>
+          )}
           <button
             role="menuitem"
             onClick={() => { setOpen(false); onLogout(); }}

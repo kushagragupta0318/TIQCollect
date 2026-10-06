@@ -1161,6 +1161,13 @@ def list_cases(
     # answers "show me where the recoverable money is" rather than "show me what
     # the label said on some past day".
     recovery: Optional[str] = None,
+    # CURRENT / BUCKET_1 / BUCKET_2 / BUCKET_3 / NPA — the loan's DPD bucket.
+    # Server-side, same reason as `recovery` just above: the overview's "Today's
+    # Cases by DPD" donut links here with ?bucket=, and until 2026-10-01 the
+    # frontend filtered this client-side on the one page already fetched (and
+    # only recognised 3 of the 5 buckets), so the donut's count and the list
+    # disagreed (demo QA sweep).
+    dpd_bucket: Optional[str] = None,
     # ── Visit priority (2026-08-27) ─────────────────────────────────────────
     # sort="priority_desc" | "priority_asc" turns the list into the ACTIONABLE
     # priority view: resolved cases drop out (a settled case has no next visit
@@ -1227,6 +1234,11 @@ def list_cases(
         # already carries two joinedloads and a window-free correlated subquery
         # here would be re-evaluated per row.
         q = q.filter(Case.loan_id.in_(_loan_ids_with_recovery(db, recovery.upper())))
+    if dpd_bucket:
+        bucket = dpd_bucket.upper()
+        if bucket not in DPDBucket.__members__:
+            raise HTTPException(status_code=422, detail=f"dpd_bucket must be one of {list(DPDBucket.__members__)}")
+        q = q.filter(Case.loan_id.in_(db.query(Loan.id).filter(Loan.dpd_bucket == bucket)))
     if agent_id:
         q = q.filter(Case.agent_id == agent_id)
     if date_from:

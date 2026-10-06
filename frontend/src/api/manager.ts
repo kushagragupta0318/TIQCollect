@@ -60,6 +60,11 @@ export async function getCases(params?: {
    *  working next. Distinct from `recovery`, which bands how much of the loan
    *  comes back. */
   priority_band?: string;
+  /** CURRENT | BUCKET_1 | BUCKET_2 | BUCKET_3 | NPA — the loan's DPD bucket.
+   *  Server-side, same reason as `recovery`: the overview's DPD donut links
+   *  here, and narrowing client-side only filtered the one page already
+   *  fetched, so the donut and the list disagreed (demo QA sweep, 2026-10-01). */
+  dpd_bucket?: string;
   limit?: number;
   offset?: number;
 }) {
@@ -106,6 +111,57 @@ export interface ComplianceMetrics {
 
 export async function getCompliance(): Promise<ComplianceMetrics> {
   const { data } = await api.get<ComplianceMetrics>("/manager/compliance");
+  return data;
+}
+
+// ── Agency profile (P2 G04) — AGENCY_ADMIN only; the backend 403s anyone else ──
+
+export interface AgencyContractSummary {
+  contract_no: string;
+  status: string;
+  /** False when this is the "nothing ACTIVE exists" fallback to the most
+   *  recent contract regardless of status — a lapsed/terminated/draft
+   *  contract shown because there is nothing better, not because it is in
+   *  force. Label it when false; never show its terms as current. */
+  is_current: boolean;
+  start_date: string;
+  end_date: string;
+  max_agents: number | null;
+  max_placed_cases: number | null;
+  max_visits_per_month: number | null;
+  sla_first_visit_days: number;
+  recall_no_activity_days: number | null;
+  recall_on_sla_breach: boolean;
+  recall_at_contract_end: boolean;
+  performance_bonus_pct: number | null;
+  performance_target_pct: number | null;
+  security_deposit: number | null;
+}
+
+export interface AgencyCommissionTerm {
+  loan_type: string;
+  dpd_bucket: string;
+  commission_pct: number;
+  fixed_fee_per_resolution: number | null;
+}
+
+export interface AgencyProfile {
+  agency: {
+    legal_name: string;
+    trade_name: string | null;
+    rbi_registration_no: string | null;
+    status: string;
+    hq_city: string | null;
+    contact_name: string | null;
+    contact_email: string | null;
+    contact_phone: string | null;
+  };
+  contract: AgencyContractSummary | null;
+  commission_terms: AgencyCommissionTerm[];
+}
+
+export async function getAgencyProfile(): Promise<AgencyProfile> {
+  const { data } = await api.get<AgencyProfile>("/manager/agency-profile");
   return data;
 }
 
