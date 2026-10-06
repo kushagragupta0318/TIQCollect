@@ -21,6 +21,7 @@ import {
   getAnalytics, getAgentsPerformance, getDashboard,
   getManagerAgentCalendar, getAgentDPDBreakdown, getTeamDPDBreakdown, getTeamAttendance,
 } from "@/api/manager";
+import { BreakdownCard } from "./BreakdownCard";
 import { CasePipelineCard } from "./CasePipelineCard";
 import { CashTrendCard, PaymentMixCard } from "./PaymentModesCard";
 import { PtpOutcomesCard } from "./PtpOutcomesCard";
@@ -858,6 +859,13 @@ export default function ManagerAnalyticsPage() {
             agentName={selectedAgent?.agent_name}
             selMonth={!selectedAgent ? selTeamMonth : selAgentMonth}
           />
+          {/* The same money a third way (known issue 8): by branch, city or
+              product. Only agency-wide -- picking an agent narrows to their
+              cases, and "which branch is this one agent's book in" is a
+              question nobody asks. */}
+          {!selectedAgent && (
+            <BreakdownCard selMonth={selTeamMonth} apiMonth={apiTeamMonth} barReady={barReady} />
+          )}
           <CasePipelineCard
             counts={dashboardQ.data?.case_status_counts}
             onOpen={(statuses) => navigate(`/manager/cases?status=${statuses.join(",")}`)}
