@@ -21,6 +21,7 @@ import { BankPlaceholderPage } from "./pages/BankPlaceholderPage";
 import OnboardAgencyWizardPage from "./pages/onboarding/OnboardAgencyWizardPage";
 import AgencyDirectoryPage from "./pages/directory/AgencyDirectoryPage";
 import AgencyPerformancePage from "./pages/performance/AgencyPerformancePage";
+import AgencyProfilePage from "./pages/directory/AgencyProfilePage";
 import ModelsPage from "./pages/models/ModelsPage";
 import CustomerPage from "./pages/customer/CustomerPage";
 import MonteCarloPage from "./pages/strategy/MonteCarloPage";
@@ -84,6 +85,9 @@ export default function BankApp() {
         <Route path={AGENCY_DIRECTORY_PATH} element={<AgencyDirectoryPage />} />
         {/* D06: agency scorecard + regional leaderboard. */}
         <Route path={AGENCY_PERFORMANCE_PATH} element={<AgencyPerformancePage />} />
+        {/* D07: the agency profile a Directory row opens to (not in
+            navigation.ts — reached from a row, same as customers above). */}
+        <Route path="agencies/profile/:agencyId" element={<AgencyProfilePage />} />
         {BankComponentGalleryPage && (
           <Route
             path="_gallery"
