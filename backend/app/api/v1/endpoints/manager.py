@@ -51,6 +51,7 @@ from app.ml.recovery_scorecard import (
 )
 from app.models.payment import Payment, PaymentMode, PaymentStatus
 from app.models.ptp import PTP, PTPStatus
+from app.core.permissions import require_perm
 from app.models.user import User
 from app.models.visit import Visit, VisitOutcome
 from app.services.brand import brand_for
@@ -1778,7 +1779,7 @@ def ai_health(current_user: ManagerOnly):
 # healthy and deliberately not in use, and those are different states.
 
 @router.get("/ml/health")
-def ml_health(current_user: ManagerOnly, db: DbSession):
+def ml_health(db: DbSession, current_user: User = require_perm("ml.read")):
     from app.ml.pipeline.engine import DecisionEngine, health_all
 
     out = health_all()
@@ -1909,9 +1910,9 @@ def _ml_monitoring_block(db, model_name: str = "recovery_risk") -> dict:
 # code path from the nightly job to `champion.txt`.
 
 @router.get("/ml/candidates")
-def ml_candidates(current_user: ManagerOnly, db: DbSession,
-                  model: str = "recovery_risk", limit: int = 25,
-                  state: Optional[str] = None):
+def ml_candidates(db: DbSession, model: str = "recovery_risk", limit: int = 25,
+                  state: Optional[str] = None,
+                  current_user: User = require_perm("ml.read")):
     """Every retraining attempt, newest first — the durable retraining report.
 
     Deliberately NOT tenant-scoped: a model is one global object, not a
@@ -1929,7 +1930,8 @@ def ml_candidates(current_user: ManagerOnly, db: DbSession,
 
 
 @router.get("/ml/candidates/{candidate_id}")
-def ml_candidate_detail(candidate_id: UUIDPath, current_user: ManagerOnly, db: DbSession):
+def ml_candidate_detail(candidate_id: UUIDPath, db: DbSession,
+                        current_user: User = require_perm("ml.read")):
     from app.ml.pipeline import registry
     from app.models.model_candidate import ModelCandidate
 
@@ -1947,8 +1949,8 @@ def ml_candidate_detail(candidate_id: UUIDPath, current_user: ManagerOnly, db: D
 
 
 @router.post("/ml/candidates/{candidate_id}/approve")
-def ml_approve_candidate(candidate_id: UUIDPath, current_user: ManagerOnly,
-                         db: DbSession, note: Optional[str] = None):
+def ml_approve_candidate(candidate_id: UUIDPath, db: DbSession, note: Optional[str] = None,
+                         current_user: User = require_perm("ml.approve")):
     """Record a person's decision to accept the challenger. Does NOT promote."""
     from app.ml.pipeline.lifecycle import ApprovalRefused, approve
 
@@ -1972,8 +1974,8 @@ def ml_approve_candidate(candidate_id: UUIDPath, current_user: ManagerOnly,
 
 
 @router.post("/ml/candidates/{candidate_id}/reject")
-def ml_reject_candidate(candidate_id: UUIDPath, current_user: ManagerOnly,
-                        db: DbSession, note: Optional[str] = None):
+def ml_reject_candidate(candidate_id: UUIDPath, db: DbSession, note: Optional[str] = None,
+                        current_user: User = require_perm("ml.approve")):
     from app.ml.pipeline.lifecycle import ApprovalRefused, reject
 
     try:
@@ -1995,8 +1997,8 @@ def ml_reject_candidate(candidate_id: UUIDPath, current_user: ManagerOnly,
 
 
 @router.post("/ml/candidates/{candidate_id}/promote")
-def ml_promote_candidate(candidate_id: UUIDPath, current_user: ManagerOnly,
-                         db: DbSession):
+def ml_promote_candidate(candidate_id: UUIDPath, db: DbSession,
+                         current_user: User = require_perm("ml.promote")):
     """The one write in this codebase that changes what borrowers are scored by.
 
     Separate from `/approve` on purpose: approval records a judgement, promotion
@@ -3315,6 +3317,8 @@ def ai_briefing(current_user: ManagerOnly, db: DbSession, refresh: bool = False)
         _brief_llm = _llm.complete(
             f"Operational data: {_ctx}",
             purpose="briefing", json_mode=True, temperature=0.25, max_tokens=1200,
+            # The staff names this blob carries; the seam restores them in the answer.
+            names=_ctx["stalled_names"],
             system=(
                 "You are a collections agency AI operations analyst. Return JSON with: "
                 "headline (1 sentence, data-specific numbers), "
@@ -3615,6 +3619,7 @@ def agent_ai_insight(agent_id: UUIDPath, current_user: ManagerOnly, db: DbSessio
         _insight_llm = _llm.complete(
             f"Agent data: {_ctx}",
             purpose="agent_insight", json_mode=True, temperature=0.25, max_tokens=1200,
+            names=[agent_name],
             system=(
                     "You are a collections operations analyst. Analyse a field agent's full performance profile. "
                     "Return JSON with exactly these keys: "
@@ -4172,6 +4177,8 @@ def get_monthly_report(
         for b in bucket_order if b in dpd_map
     )
 
+    # Every staff name this report's prompt embeds, whichever branch built it.
+    prompt_names: list[str] = []
     if agent_id:
         # ── Per-agent report ──────────────────────────────────────────────
         agent_obj = (
@@ -4181,6 +4188,7 @@ def get_monthly_report(
         tier = getattr(agent_obj, "tier", "?") if agent_obj else "?"
         territory = getattr(agent_obj, "territory", "?") if agent_obj else "?"
         scope = agent_name
+        prompt_names.append(agent_name)
 
         row = (
             db.query(AgentPerformance)
@@ -4349,6 +4357,7 @@ def get_monthly_report(
                 if r.agent and r.agent.user:
                     name = r.agent.user.full_name.split()[0]
                 agent_rates.append((name, round(float(r.collection_rate or 0) * 100, 0)))
+            prompt_names.extend(n for n, _ in agent_rates if n != "?")
             agent_rates.sort(key=lambda x: x[1], reverse=True)
             on_target = sum(1 for _, rt in agent_rates if rt >= 50)
             top3 = ", ".join(f"{n} {rt:.0f}%" for n, rt in agent_rates[:3])
@@ -4391,6 +4400,7 @@ def get_monthly_report(
     report_text = scope_stats  # rich fallback when the model cannot answer
     _report_llm = _llm.complete(
         prompt, purpose="monthly_report", max_tokens=900, temperature=0.3,
+        names=prompt_names,
     )
     if _report_llm.ai_generated and _report_llm.text:
         report_text = _report_llm.text
