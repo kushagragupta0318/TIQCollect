@@ -18,11 +18,11 @@ import enum
 from datetime import datetime
 
 from sqlalchemy import (
-    CheckConstraint, DateTime, Enum as SAEnum, ForeignKeyConstraint, Index, Text, text,
+    CheckConstraint, DateTime, ForeignKeyConstraint, Index, String, Text, text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import PUBLIC, Base, TimestampMixin, UUIDPrimaryKey, UUIDType, uuid_fk
+from app.models.base import Base, TimestampMixin, UUIDPrimaryKey, UUIDType, uuid_fk
 
 
 class ReversalStatus(str, enum.Enum):
@@ -35,10 +35,18 @@ class ReversalStatus(str, enum.Enum):
     REJECTED = "REJECTED"               # declined at either stage; nothing moved
 
 
-REVERSAL_STATUS_SQL = SAEnum(ReversalStatus, name="reversal_status_enum", schema=PUBLIC, metadata=Base.metadata)
+# Stored as a String + CheckConstraint, NOT a native pg enum: post-baseline native
+# enums aren't tracked by the migration enum-drift test (it reads only the baseline's
+# ENUMS + later ENUM_ADDITIONS), so the codebase convention for a status column added
+# after the baseline is String + a CHECK (as strategy.simulation_runs does).
+REVERSAL_STATUSES = tuple(s.value for s in ReversalStatus)
 # A reversal is live while it could still reach the bank, be signed off, or already has.
 OPEN_REVERSAL_STATUSES = frozenset(
     {ReversalStatus.PENDING_AGENCY, ReversalStatus.PENDING_BANK, ReversalStatus.APPROVED})
+
+
+def _check_in(col: str, values: tuple[str, ...]) -> str:
+    return col + " IN (" + ", ".join(f"'{v}'" for v in values) + ")"
 
 
 class PaymentReversalRequest(Base, UUIDPrimaryKey, TimestampMixin):
@@ -53,8 +61,8 @@ class PaymentReversalRequest(Base, UUIDPrimaryKey, TimestampMixin):
     case_id: Mapped[str] = mapped_column(UUIDType, nullable=False)
 
     reason: Mapped[str] = mapped_column(Text, nullable=False)       # why: a mis-entry needs stating
-    status: Mapped[ReversalStatus] = mapped_column(
-        REVERSAL_STATUS_SQL, default=ReversalStatus.PENDING_AGENCY,
+    status: Mapped[str] = mapped_column(
+        String(14), default=ReversalStatus.PENDING_AGENCY.value,
         server_default=text("'PENDING_AGENCY'"), nullable=False)
 
     # Agency stage: the manager raises it and the agency approves its own side.
@@ -72,6 +80,7 @@ class PaymentReversalRequest(Base, UUIDPrimaryKey, TimestampMixin):
         # and the service sets it from the payment, consistent with isolation being
         # service-enforced today.
         ForeignKeyConstraint(["payment_id"], ["collections.payments.id"], ondelete="CASCADE"),
+        CheckConstraint(_check_in("status", REVERSAL_STATUSES), name="status"),
         # Each stage, once passed, names who passed it and when. The agency approval
         # exists by PENDING_BANK; the bank approval by APPROVED.
         CheckConstraint(

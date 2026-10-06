@@ -70,7 +70,7 @@ class PaymentReversalService:
     def agency_approve(self, user, request_id: str) -> PaymentReversalRequest:
         req = self._request_in_agency(user, request_id)
         if req.status != ReversalStatus.PENDING_AGENCY:
-            raise AppException(409, ErrorCode.CONFLICT, f"This reversal is already {req.status.value}.")
+            raise AppException(409, ErrorCode.CONFLICT, f"This reversal is already {req.status}.")
         now = datetime.now(timezone.utc)
         req.status = ReversalStatus.PENDING_BANK
         req.agency_approved_by_id = user.id
@@ -87,7 +87,7 @@ class PaymentReversalService:
         self._require_bank_scope(user, scope)
         req = self._request_for_bank(user, request_id, scope)
         if req.status != ReversalStatus.PENDING_BANK:
-            raise AppException(409, ErrorCode.CONFLICT, f"This reversal is not awaiting the bank ({req.status.value}).")
+            raise AppException(409, ErrorCode.CONFLICT, f"This reversal is not awaiting the bank ({req.status}).")
         # Fiduciary separation: the bank sign-off is never one of the agency actors.
         if str(user.id) in {str(req.agency_requested_by_id), str(req.agency_approved_by_id)}:
             raise AppException(403, ErrorCode.FORBIDDEN,
@@ -115,11 +115,11 @@ class PaymentReversalService:
             self._require_bank_scope(user, scope)
             req = self._request_for_bank(user, request_id, scope)
             if req.status != ReversalStatus.PENDING_BANK:
-                raise AppException(409, ErrorCode.CONFLICT, f"This reversal is not awaiting the bank ({req.status.value}).")
+                raise AppException(409, ErrorCode.CONFLICT, f"This reversal is not awaiting the bank ({req.status}).")
         else:
             req = self._request_in_agency(user, request_id)
             if req.status not in (ReversalStatus.PENDING_AGENCY, ReversalStatus.PENDING_BANK):
-                raise AppException(409, ErrorCode.CONFLICT, f"This reversal is already {req.status.value}.")
+                raise AppException(409, ErrorCode.CONFLICT, f"This reversal is already {req.status}.")
         req.status = ReversalStatus.REJECTED
         req.decision_note = note
         self.db.commit()          # a rejection touches no ledger; the row is its record

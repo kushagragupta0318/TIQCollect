@@ -27,14 +27,18 @@ from app.models.ptp import PTP, PTPStatus
 from app.models.user import User, UserRole
 from app.services import payment_reversal_service as prs
 from app.services.payment_reversal_service import PaymentReversalService
-from tests._db import create_schema, make_engine, make_session_factory, test_id
+from sqlalchemy import insert
+from app.models.tenancy import Agency
+from tests._db import (
+    TEST_AGENCY_ID, TEST_BANK_ID, create_schema, make_engine, make_session_factory, test_id,
+)
 
 engine = make_engine()
 Session = make_session_factory(bind=engine)
 
-BANK = test_id("bank")
-AGENCY = test_id("agency")
-OTHER_AGENCY = test_id("agency2")
+BANK = TEST_BANK_ID            # the seeded test bank (FK target)
+AGENCY = TEST_AGENCY_ID        # the seeded test agency
+OTHER_AGENCY = test_id("agency:other")   # a second agency, seeded in _schema, for the tenancy test
 
 
 def _uid() -> str:
@@ -85,6 +89,13 @@ def _agent(db, mgr):
 @pytest.fixture(scope="module", autouse=True)
 def _schema():
     create_schema(engine)
+    # A second agency under the same bank, for the cross-agency tenancy test.
+    with engine.begin() as conn:
+        conn.execute(insert(Agency.__table__), [{
+            "id": OTHER_AGENCY, "bank_id": BANK, "code": "AGENCY-OTHER-001",
+            "legal_name": "Other Field Services Pvt. Ltd.", "trade_name": "Other Field Services",
+            "status": "ACTIVE", "contacts": [], "is_demo": True,
+        }])
 
 
 def _request_and_agency_approve(db, svc, mgr, admin, pay):

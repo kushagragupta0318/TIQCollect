@@ -2796,6 +2796,9 @@ router at the v1-main merge; it listed 76 capabilities.)*
 | `allocation.rollback` | roll back a run | S |
 | `leave.approve` | approve, reject, revoke or mark leave | |
 | `payments.verify` | verify or reject payments | S |
+| `payment.reversal.request` | request to reverse a mistaken collection | |
+| `payment.reversal.approve.agency` | the agency's approval of a reversal (routes it to the bank) | |
+| `payment.reversal.approve.bank` | the bank's fiduciary final sign-off; the ledger unwinds here | S |
 | `fraud.review` | confirm or dismiss anomaly findings | |
 | `disputes.manage` | work disputes and complaints | |
 | `settlements.propose` | propose a settlement | |
@@ -2859,6 +2862,9 @@ Legend:
 | `cases.assign`, `escalations.manage`, `allocation.plan`, `allocation.settings` | · | · | · | · | Y | T | · | · |
 | `allocation.rollback` | · | · | · | · | Y | T | · | · |
 | `leave.approve`, `payments.verify`, `fraud.review`, `disputes.manage`, `settlements.propose` | · | · | · | · | Y | T | · | · |
+| `payment.reversal.request` | · | · | · | · | · | Y | · | · |
+| `payment.reversal.approve.agency` | · | · | · | · | Y | Y | · | · |
+| `payment.reversal.approve.bank` | · | Y | · | · | · | · | · | · |
 | `settlements.approve` | · | Y | · | · | · | · | · | · |
 | `agency.audit.read` | · | · | · | · | Y | · | · | · |
 | `field.*` (8) | · | · | · | · | · | · | S | · |

@@ -6,7 +6,8 @@ verbatim as a frozen literal (every revision copies its template rather than imp
 it). RLS is COARSE — tenant isolation only; the stage lock is service-enforced (ADR
 0015), so the same expression serves USING and WITH CHECK.
 
-reversal_status_enum is a new native enum in public. The three capabilities
+status is a String + CHECK (not a native enum: post-baseline native enums aren't tracked by
+the enum-drift test; same convention as strategy.simulation_runs). The three capabilities
 (payment.reversal.request/.approve.agency/.approve.bank) seed into tenancy.permissions
 + role_permissions (v2_0008's pattern). The audit-action enum values were added
 separately in v2_0028 (a value added by ALTER TYPE cannot be used in the same tx).
@@ -19,7 +20,6 @@ Create Date: 2026-10-01
 """
 import sqlalchemy as sa
 from alembic import op
-from sqlalchemy.dialects import postgresql
 
 revision = "v2_0029"
 down_revision = "v2_0028"
@@ -67,9 +67,6 @@ def _grant_specs() -> list[tuple[str, str, str]]:
 
 
 def upgrade() -> None:
-    reversal_status = postgresql.ENUM(*_STATUSES, name="reversal_status_enum", schema="public")
-    reversal_status.create(op.get_bind(), checkfirst=True)
-
     op.create_table(
         "payment_reversal_requests",
         sa.Column("id", sa.Uuid(as_uuid=False), nullable=False),
@@ -78,8 +75,7 @@ def upgrade() -> None:
         sa.Column("payment_id", sa.Uuid(as_uuid=False), nullable=False),
         sa.Column("case_id", sa.Uuid(as_uuid=False), nullable=False),
         sa.Column("reason", sa.Text(), nullable=False),
-        sa.Column("status", postgresql.ENUM(name="reversal_status_enum", schema="public", create_type=False),
-                  server_default=sa.text("'PENDING_AGENCY'"), nullable=False),
+        sa.Column("status", sa.String(length=14), server_default=sa.text("'PENDING_AGENCY'"), nullable=False),
         sa.Column("agency_requested_by_id", sa.Uuid(as_uuid=False), nullable=False),
         sa.Column("agency_approved_by_id", sa.Uuid(as_uuid=False), nullable=True),
         sa.Column("agency_approved_at", sa.DateTime(timezone=True), nullable=True),
@@ -108,6 +104,8 @@ def upgrade() -> None:
             "bank_approved_by_id IS NULL OR "
             "(bank_approved_by_id <> agency_requested_by_id AND bank_approved_by_id <> agency_approved_by_id)",
             name=op.f("ck_payment_reversal_requests_bank_approver_is_not_the_agency")),
+        sa.CheckConstraint("status IN (" + ", ".join(f"'{v}'" for v in _STATUSES) + ")",
+                           name=op.f("ck_payment_reversal_requests_status")),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_payment_reversal_requests")),
         schema="collections",
     )
@@ -147,4 +145,3 @@ def downgrade() -> None:
     op.drop_index("uq_one_open_reversal_per_payment", table_name="payment_reversal_requests",
                   schema="collections", postgresql_where=sa.text("status <> 'REJECTED'"))
     op.drop_table("payment_reversal_requests", schema="collections")
-    postgresql.ENUM(name="reversal_status_enum", schema="public").drop(op.get_bind(), checkfirst=True)
