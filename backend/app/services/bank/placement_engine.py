@@ -665,6 +665,13 @@ def list_runs(db: Session, bank_id: str, *, agency_id: str | None = None, limit:
     return [agency_run_out(r) if agency_id is not None else run_out(r) for r in rows]
 
 
+# What an agency may read of a decision's score_breakdown: the terms of its own
+# placement. An ALLOWLIST: exploration (the agency a loan was swapped off),
+# n_eligible, recall rules and any key added later stay with the bank.
+AGENCY_BREAKDOWN_KEYS = ("expected", "is_modelled", "p_pay", "multiplier", "effect_n", "commission_pct",
+                         "commission_known", "versions")
+
+
 def run_decisions(db: Session, *, bank_id: str, run_id: str, outcome: str | None, page: int, page_size: int,
                   agency_id: str | None = None) -> dict:
     """A run's decisions. For an agency (agency_id set): only an APPLIED run,
@@ -695,9 +702,14 @@ def run_decisions(db: Session, *, bank_id: str, run_id: str, outcome: str | None
                          "refused": {names.get(a, a): r for a, r in (d.gate_results.get("refused") or {}).items()}},
     } for d, lan in rows]
     if agency_id is not None:
-        for it in items:
-            it["previous_agency_id"] = it["previous_agency_name"] = None
-            it["gate_results"] = {}
-            it["reason"] = "placed with your agency" if it["outcome"] == "PLACED" else "re-placed with your agency"
+        # Rebuilt from what the agency may see, never blanked from what the bank sees.
+        items = [{
+            "loan_id": it["loan_id"], "loan_account_number": it["loan_account_number"], "outcome": it["outcome"],
+            "reason": "placed with your agency" if it["outcome"] == "PLACED" else "re-placed with your agency",
+            "score": it["score"], "chosen_agency_id": it["chosen_agency_id"],
+            "chosen_agency_name": it["chosen_agency_name"],
+            "score_breakdown": {k: it["score_breakdown"][k] for k in AGENCY_BREAKDOWN_KEYS
+                                if k in (it["score_breakdown"] or {})},
+        } for it in items]
         return {"run": agency_run_out(run), "items": items, "total": total, "page": page, "page_size": page_size}
     return {"run": run_out(run), "items": items, "total": total, "page": page, "page_size": page_size}
