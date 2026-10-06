@@ -210,6 +210,32 @@ def test_case_rows_come_through_per_case_with_nothing_summed_across_them(w):
                    if k not in {"customer_id"})
 
 
+def test_uuid_columns_from_the_view_come_back_as_strings_and_validate(w):
+    """Regression (6114c37): v_case_360 returns uuid columns (case_id, agency_id,
+    agent_id, loan_id); the response schema types them as str, so the service must
+    stringify them or the serialiser 500s on the whole page."""
+    import uuid
+    from types import SimpleNamespace
+
+    from app.schemas.bank_customer_360 import Customer360
+
+    loan = w["mine"]
+    w["stub"].rows = [{
+        **CASE_ROW,
+        "case_id": uuid.UUID(test_id("case:1")),
+        "agency_id": uuid.UUID(TEST_AGENCY_ID),
+        "agent_id": uuid.UUID(test_id("agent:x")),
+        "loan_id": uuid.UUID(loan.id),
+    }]
+    ctx = SimpleNamespace(scope="BANK", bank_id=TEST_BANK_ID)
+    result = svc.customer_360(w["db"], w["stub"], ctx, loan.customer_id)
+    row = result["cases"][0]
+    assert all(isinstance(row[k], str) for k in ("case_id", "agency_id", "agent_id", "loan_id"))
+    model = Customer360(**result)                    # validates: str, not UUID
+    assert model.cases[0].case_id == test_id("case:1")
+    assert model.cases[0].loan_id == loan.id
+
+
 def test_the_header_carries_the_masked_identifiers_and_does_not_unmask_them(w):
     body = _get(w, w["ba"], w["mine"].customer_id).json()
     header = body["customer"]

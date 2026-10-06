@@ -176,7 +176,7 @@ export default function AgentHomePage() {
           {beat ? (
             <QuickAction icon={<MapPin className="w-5 h-5 text-brand-600" />} label="Open Beat Map" sub="View today's optimised route" onClick={() => navigate("/agent/beat")} color="bg-brand-50" />
           ) : (
-            <QuickAction icon={<MapPin className="w-5 h-5 text-slate-400" />} label="No Route Active" sub="Beat map will appear when scheduled" onClick={() => {}} color="bg-slate-50 opacity-60" />
+            <QuickAction icon={<MapPin className="w-5 h-5 text-slate-400" />} label="No Route Active" sub="Beat map will appear when scheduled" color="bg-slate-50 opacity-60" />
           )}
           <QuickAction icon={<Briefcase className="w-5 h-5 text-slate-600" />} label="All My Cases" sub={`${pendingCases} pending · ${Math.max(totalCases - pendingCases, 0)} done`} onClick={() => navigate("/agent/cases")} color="bg-slate-50" />
           {ptpsDue > 0 && (
@@ -248,19 +248,27 @@ function StatGrid({
   );
 }
 
-function QuickAction({ icon, label, sub, onClick, color }: { icon: React.ReactNode; label: string; sub: string; onClick: () => void; color: string }) {
+function QuickAction({ icon, label, sub, onClick, color }: { icon: React.ReactNode; label: string; sub: string; onClick?: () => void; color: string }) {
+  const body = (
+    <>
+      <div className="w-10 h-10 rounded-xl bg-white flex items-center justify-center flex-shrink-0 shadow-sm">{icon}</div>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-semibold text-slate-900">{label}</p>
+        <p className="text-xs text-slate-400 truncate">{sub}</p>
+      </div>
+      {onClick && <svg className="w-4 h-4 text-slate-300 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>}
+    </>
+  );
+  if (!onClick) {
+    return <div className={`w-full card flex items-center gap-3 text-left ${color} border-0`}>{body}</div>;
+  }
   return (
     // No transition-shadow here. It is a utility, so it outranks .card and
     // narrows transition-property to box-shadow alone — which left .card:hover's
     // lift with nothing to ease and made it snap. .card already transitions
     // transform, shadow and border together.
     <button onClick={onClick} className={`w-full card flex items-center gap-3 cursor-pointer text-left ${color} border-0`}>
-      <div className="w-10 h-10 rounded-xl bg-white flex items-center justify-center flex-shrink-0 shadow-sm">{icon}</div>
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-semibold text-slate-900">{label}</p>
-        <p className="text-xs text-slate-400 truncate">{sub}</p>
-      </div>
-      <svg className="w-4 h-4 text-slate-300 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+      {body}
     </button>
   );
 }

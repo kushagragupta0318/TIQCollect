@@ -280,6 +280,7 @@ def test_11_every_transition_leaves_one_system_audit_row_with_the_facts(w):
     assert len(rows) == 1
     r = rows[0]
     assert r.user_id is None and r.entity_type == "PTP" and r.entity_id == p.id and r.success is True
+    assert (r.bank_id, r.agency_id) == (p.bank_id, p.agency_id)      # A13b: the entity's tenant
     assert r.created_at.replace(tzinfo=timezone.utc) == at
     d = r.details
     assert d["actor"] == "SYSTEM" and d["source"] == SOURCE_NIGHTLY
@@ -388,6 +389,7 @@ def test_16_payment_service_still_honours_a_promise_paid_by_its_date(w):
     assert w.status(p) is PTPStatus.HONORED and p.actual_paid_amount == 1000.0
     row = w.audits(p)[0]
     assert row.details["reason"] == "VERIFIED_PAYMENT_BY_COMMITTED_DATE"
+    assert (row.bank_id, row.agency_id) == (p.bank_id, p.agency_id)
     # and a partial payment still leaves it ACTIVE for the lifecycle to judge later
     c2 = w.case(); q = w.ptp(c2, EFF + timedelta(days=3), amount=1000.0)
     w.pay(c2, 400.0, _at(EFF))

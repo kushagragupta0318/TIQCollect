@@ -127,13 +127,14 @@ An empty install has nothing to look at. To smoke the product with data, set:
 SEED_FROM_FIXTURE=true
 DEMO_MODE=true
 DEMO_MASTER_PASSWORD=<16+ chars>
-DEMO_MASTER_ACCOUNTS=ananya.iyer@girivanfinance.test,vikram.malhotra@aravallifs.test,piyush.sharma@aravallifs.test
+DEMO_MASTER_ACCOUNTS=ananya.iyer@girivanfinance.test,vikram.malhotra@aravallifs.test,piyush.sharma@aravallifs.test,kavya.reddy@girivanfinance.test,meera.khanna@aravallifs.test
 ```
 
 and `$C down -v && $C up -d`. The committed fixture restores in one transaction and migrations
 apply on top. Measured: **2 banks, 10 agencies, 199 users, 165 agents, 13,214 loans, 10,434
-cases, 10,107 placements, 41,431 visits.** The three accounts above get that password (bank
-admin, agency manager, field agent); every other account keeps an unusable hash.
+cases, 10,107 placements, 41,431 visits.** The five accounts above get that password (bank
+admin, agency manager, field agent, a second bank admin, and an agency admin); every other
+account keeps an unusable hash.
 
 **To open the field agent app you also need `DEMO_DEVICE_REBIND=true`.** The fixture's agent
 has a bound device, so signing in from a new browser is refused with

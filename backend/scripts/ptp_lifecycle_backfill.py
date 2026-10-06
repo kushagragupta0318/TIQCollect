@@ -95,6 +95,7 @@ def undo_manifest(db, manifest: dict) -> tuple[int, list[tuple[str, str]]]:
         ptp.actual_paid_amount = float(row["previous_actual_paid_amount"])
         db.add(AuditLog(
             id=str(uuid.uuid4()), created_at=now, user_id=None,
+            bank_id=ptp.bank_id, agency_id=ptp.agency_id,
             action=AuditAction.PTP_UPDATED, entity_type="PTP", entity_id=ptp.id,
             details={"from": row["new_status"], "to": row["previous_status"],
                      "reason": "BACKFILL_ROLLBACK", "actor": "SYSTEM",

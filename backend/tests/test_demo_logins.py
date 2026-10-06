@@ -39,10 +39,13 @@ engine = make_engine()
 Session = make_session_factory(bind=engine, autoflush=False)
 
 MASTER = "correct-horse-battery-staple-2026"          # a test value, 33 chars
-ACCOUNTS = "admin@tiqcollect.in, manager1@tiqcollect.in ,AGENT002@tiqcollect.in, Admin2@tiqcollect.in"
+# Slots, in order: bank user, AGENCY_MANAGER, FIELD_AGENT, 2nd BANK_ADMIN, AGENCY_ADMIN.
+ACCOUNTS = ("admin@tiqcollect.in, manager1@tiqcollect.in ,AGENT002@tiqcollect.in, Admin2@tiqcollect.in, "
+            "meera.khanna@aravallifs.test")
 # The seed's published passwords — the ones this retires.
 SEED = {UserRole.BANK_ADMIN: "Admin@123", UserRole.BANK_ANALYST: "Analyst@123",
-        UserRole.AGENCY_MANAGER: "Manager@123", UserRole.FIELD_AGENT: "Agent@123"}
+        UserRole.AGENCY_MANAGER: "Manager@123", UserRole.FIELD_AGENT: "Agent@123",
+        UserRole.AGENCY_ADMIN: "AgencyAdmin@123"}
 PEOPLE = [
     ("admin@tiqcollect.in", UserRole.BANK_ADMIN),
     ("admin2@tiqcollect.in", UserRole.BANK_ADMIN),
@@ -52,8 +55,10 @@ PEOPLE = [
     ("agent001@tiqcollect.in", UserRole.FIELD_AGENT),
     ("agent002@tiqcollect.in", UserRole.FIELD_AGENT),
     ("agent003@tiqcollect.in", UserRole.FIELD_AGENT),
+    ("meera.khanna@aravallifs.test", UserRole.AGENCY_ADMIN),
 ]
-MASTER_EMAILS = {"admin@tiqcollect.in", "manager1@tiqcollect.in", "agent002@tiqcollect.in", "admin2@tiqcollect.in"}
+MASTER_EMAILS = {"admin@tiqcollect.in", "manager1@tiqcollect.in", "agent002@tiqcollect.in",
+                 "admin2@tiqcollect.in", "meera.khanna@aravallifs.test"}
 N_OTHERS = len(PEOPLE) - len(MASTER_EMAILS)
 CC_ACCOUNT = "manager2@tiqcollect.in"                   # stands in for a Command Center service login
 
@@ -112,7 +117,7 @@ def _apply(db, password=MASTER, accounts=ACCOUNTS, demo_mode=True, **kw):
 
 
 # ── the rule ─────────────────────────────────────────────────────────────────
-def test_the_four_accounts_take_the_master_password_and_nobody_else_can_log_in(db):
+def test_the_five_accounts_take_the_master_password_and_nobody_else_can_log_in(db):
     out = _apply(db)
     assert out.applied and sorted(out.master_set) == sorted(MASTER_EMAILS)
     assert out.disabled == N_OTHERS
@@ -153,26 +158,34 @@ def test_a_new_master_password_rehashes_and_revokes(db):
 @pytest.mark.parametrize("kwargs,reason", [
     ({"password": "short-but-15-ch"}, "shorter than 16"),
     ({"demo_mode": False}, "DEMO_MODE is off"),
-    # the v2 three, without the fourth slot
-    ({"accounts": "admin@tiqcollect.in,manager1@tiqcollect.in,agent002@tiqcollect.in"}, "exactly 4"),
-    ({"accounts": ACCOUNTS + ",agent001@tiqcollect.in"}, "exactly 4"),
-    ({"accounts": "admin@tiqcollect.in,manager1@tiqcollect.in,agent002@tiqcollect.in,ADMIN@tiqcollect.in"},
-     "exactly 4"),
-    ({"accounts": "admin@tiqcollect.in,manager1@tiqcollect.in,agent002@tiqcollect.in,nobody@tiqcollect.in"},
-     "unknown accounts"),
-    ({"accounts": ACCOUNTS + ",${DEMO_EXTRA}"}, "unresolved"),     # four real emails and a broken fifth
+    # too few: the v2 three, without the fourth and fifth slots
+    ({"accounts": "admin@tiqcollect.in,manager1@tiqcollect.in,agent002@tiqcollect.in"}, "exactly 5"),
+    ({"accounts": ACCOUNTS + ",agent001@tiqcollect.in"}, "exactly 5"),
+    # five entries, but one is a case-dup of another: not five distinct
+    ({"accounts": "admin@tiqcollect.in,manager1@tiqcollect.in,agent002@tiqcollect.in,admin2@tiqcollect.in,"
+                  "ADMIN@tiqcollect.in"}, "exactly 5"),
+    ({"accounts": "admin@tiqcollect.in,manager1@tiqcollect.in,agent002@tiqcollect.in,admin2@tiqcollect.in,"
+                  "nobody@tiqcollect.in"}, "unknown accounts"),
+    ({"accounts": ACCOUNTS + ",${DEMO_EXTRA}"}, "unresolved"),     # five real emails and a broken sixth
     ({"accounts": "${DEMO_MASTER_ACCOUNTS}"}, "unresolved"),
     ({"keep_raw": "nobody@tiqcollect.in"}, "unknown accounts"),
     ({"keep_raw": "ADMIN2@tiqcollect.in"}, "both master and keep"),
     # the wrong set of roles
-    ({"accounts": "admin@tiqcollect.in,manager1@tiqcollect.in,manager2@tiqcollect.in,admin2@tiqcollect.in"},
+    ({"accounts": "admin@tiqcollect.in,manager1@tiqcollect.in,manager2@tiqcollect.in,admin2@tiqcollect.in,"
+                  "meera.khanna@aravallifs.test"},
      "#3 manager2@tiqcollect.in is AGENCY_MANAGER"),
     # the right roles in the wrong slots: positional, not first-match
-    ({"accounts": "manager1@tiqcollect.in,admin@tiqcollect.in,agent002@tiqcollect.in,admin2@tiqcollect.in"},
+    ({"accounts": "manager1@tiqcollect.in,admin@tiqcollect.in,agent002@tiqcollect.in,admin2@tiqcollect.in,"
+                  "meera.khanna@aravallifs.test"},
      "in this order"),
     # slot 4 must be able to apply a placement run: a BANK_ANALYST cannot
-    ({"accounts": "admin@tiqcollect.in,manager1@tiqcollect.in,agent002@tiqcollect.in,analyst@tiqcollect.in"},
+    ({"accounts": "admin@tiqcollect.in,manager1@tiqcollect.in,agent002@tiqcollect.in,analyst@tiqcollect.in,"
+                  "meera.khanna@aravallifs.test"},
      "#4 analyst@tiqcollect.in is BANK_ANALYST"),
+    # slot 5 must be an AGENCY_ADMIN: an AGENCY_MANAGER there is refused
+    ({"accounts": "admin@tiqcollect.in,manager1@tiqcollect.in,agent002@tiqcollect.in,admin2@tiqcollect.in,"
+                  "manager2@tiqcollect.in"},
+     "#5 manager2@tiqcollect.in is AGENCY_MANAGER"),
 ])
 def test_a_refusal_changes_nothing(db, kwargs, reason):
     before = _hashes(db)
@@ -185,7 +198,8 @@ def test_two_bank_admins_are_accepted_and_slot_one_still_takes_any_bank_role(db)
     """The four-eyes pair: first-match grouping put both bank users in slot 1
     and refused them. Slot 1 keeps the v2 rule (any BANK_* role)."""
     assert _apply(db).applied
-    out = _apply(db, accounts="analyst@tiqcollect.in,manager1@tiqcollect.in,agent002@tiqcollect.in,admin2@tiqcollect.in")
+    out = _apply(db, accounts=("analyst@tiqcollect.in,manager1@tiqcollect.in,agent002@tiqcollect.in,"
+                               "admin2@tiqcollect.in,meera.khanna@aravallifs.test"))
     assert out.applied and "analyst@tiqcollect.in" in out.master_set
 
 
@@ -224,7 +238,7 @@ def _login(client, email, password):
     return client.post("/api/v1/auth/login", json={"email": email, "password": password, "device_id": "test-device-0001"})
 
 
-def test_the_login_route_admits_the_four_and_refuses_the_published_passwords(db, client):
+def test_the_login_route_admits_the_five_and_refuses_the_published_passwords(db, client):
     _apply(db)
     for email, role in PEOPLE:
         r = _login(client, email, MASTER)

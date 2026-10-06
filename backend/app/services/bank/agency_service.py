@@ -156,7 +156,7 @@ def create_draft(db: Session, bank_admin: User, *, legal_name: str, trade_name: 
         db.rollback()
         raise AppException(409, ErrorCode.CONFLICT, "Could not create the agency. Try again.")
     stage_audit(db, action=AuditAction.AGENCY_ONBOARDED, user_id=bank_admin.id, entity_type="Agency",
-               entity_id=agency.id, details={"step": "identity", "legal_name": legal_name})
+               entity_id=agency.id, bank_id=agency.bank_id, agency_id=agency.id, details={"step": "identity", "legal_name": legal_name})
     db.commit()
     return _agency_dict(agency)
 
@@ -186,7 +186,7 @@ def update_identity(db: Session, bank_admin: User, agency_id: str, **fields) -> 
     if not changed:
         return {"agency_id": agency.id, "changed": []}
     stage_audit(db, action=AuditAction.AGENCY_ONBOARDED, user_id=bank_admin.id, entity_type="Agency",
-               entity_id=agency.id, details={"step": "identity", "changed": list(changed)})
+               entity_id=agency.id, bank_id=agency.bank_id, agency_id=agency.id, details={"step": "identity", "changed": list(changed)})
     db.commit()
     return {"agency_id": agency.id, "changed": list(changed)}
 
@@ -294,7 +294,7 @@ def update_coverage_and_contract(
             ))
 
     stage_audit(db, action=AuditAction.AGENCY_ONBOARDED, user_id=bank_admin.id, entity_type="Agency",
-               entity_id=agency.id, details={"step": "coverage_contract", "contract_id": contract.id})
+               entity_id=agency.id, bank_id=agency.bank_id, agency_id=agency.id, details={"step": "coverage_contract", "contract_id": contract.id})
     db.commit()
     return _agency_dict(agency)
 
@@ -407,7 +407,7 @@ def confirm_document(db: Session, bank_admin: User, agency_id: str, *, doc_type:
         db.rollback()
         raise AppException(409, ErrorCode.CONFLICT, "This upload has already been confirmed.")
     stage_audit(db, action=AuditAction.DOCUMENT_UPLOADED, user_id=bank_admin.id, entity_type="AgencyDocument",
-               entity_id=doc.id, details={"agency_id": agency.id, "doc_type": doc_type, "size_bytes": stat.size})
+               entity_id=doc.id, bank_id=agency.bank_id, agency_id=agency.id, details={"agency_id": agency.id, "doc_type": doc_type, "size_bytes": stat.size})
     db.commit()
     return _document_dict(doc)
 
@@ -441,7 +441,7 @@ def verify_document(db: Session, verifier: User, agency_id: str, doc_id: str,
     doc.verified_by = verifier.id
     doc.verified_at = datetime.now(timezone.utc)
     stage_audit(db, action=AuditAction.DOCUMENT_VERIFIED, user_id=verifier.id, entity_type="AgencyDocument",
-               entity_id=doc.id, details={"agency_id": agency.id, "doc_type": doc.doc_type},
+               entity_id=doc.id, bank_id=agency.bank_id, agency_id=agency.id, details={"agency_id": agency.id, "doc_type": doc.doc_type},
                ip_address=_client_ip(request))
     _maybe_activate(db, agency.id)
     db.commit()
@@ -464,7 +464,7 @@ def reject_document(db: Session, verifier: User, agency_id: str, doc_id: str, *,
     doc.verified_at = datetime.now(timezone.utc)
     doc.rejection_reason = reason
     stage_audit(db, action=AuditAction.DOCUMENT_REJECTED, user_id=verifier.id, entity_type="AgencyDocument",
-               entity_id=doc.id, details={"agency_id": agency.id, "doc_type": doc.doc_type, "reason": reason},
+               entity_id=doc.id, bank_id=agency.bank_id, agency_id=agency.id, details={"agency_id": agency.id, "doc_type": doc.doc_type, "reason": reason},
                ip_address=_client_ip(request))
     db.commit()
     return _document_dict(doc)
@@ -488,7 +488,7 @@ def invite_master_login(db: Session, bank_admin: User, agency_id: str, *, full_n
     agency = agency_or_404(db, bank_admin, agency_id)
     _require_editable(agency)
     stage_audit(db, action=AuditAction.AGENCY_ONBOARDED, user_id=bank_admin.id, entity_type="Agency",
-               entity_id=agency.id, details={"step": "master_login", "invited_email": email})
+               entity_id=agency.id, bank_id=agency.bank_id, agency_id=agency.id, details={"step": "master_login", "invited_email": email})
     result = create_invite(db, bank_admin, email=email, role=UserRole.AGENCY_ADMIN, full_name=full_name,
                            phone=phone, agency_id=agency.id, bank_id=agency.bank_id, channel=channel,
                            request=request)
@@ -554,6 +554,7 @@ def _maybe_activate(db: Session, agency_id: str) -> bool:
     agency.status = "ACTIVE"
     agency.activated_at = datetime.now(timezone.utc)
     stage_audit(db, action=AuditAction.AGENCY_ACTIVATED, user_id=None, entity_type="Agency", entity_id=agency.id,
+               bank_id=agency.bank_id, agency_id=agency.id,
                details={"required_docs_verified": sorted(REQUIRED_DOC_TYPES)})
     return True
 
