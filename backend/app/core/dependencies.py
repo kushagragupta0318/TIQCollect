@@ -3,6 +3,7 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
+from app.core import preauth
 from app.core.database import apply_tenant_context, get_db
 from app.core.security import decode_token
 from app.models.user import User, UserRole, tenant_scope
@@ -38,6 +39,12 @@ def get_current_user(
     user_id: str | None = payload.get("sub")
     if not user_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+    # A13b S1b: the tenant first (RLS shows tiq_app nothing until it is bound),
+    # then the row itself, read under it.
+    principal = preauth.by_user_id(db, user_id)
+    if principal is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
+    preauth.bind(db, principal)
     user = db.get(User, user_id)
     if not user or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
@@ -59,7 +66,7 @@ def get_current_user(
 
 def _bind_principal(db: Session, user: User) -> None:
     apply_tenant_context(db, bank_id=user.bank_id, agency_id=user.agency_id,
-                         scope=tenant_scope(user.role), user_id=user.id)
+                         scope=tenant_scope(user.role, user.agency_id), user_id=user.id)
 
 
 CurrentUser = Annotated[User, Depends(get_current_user)]

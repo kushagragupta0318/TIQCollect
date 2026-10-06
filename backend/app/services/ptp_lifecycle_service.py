@@ -287,6 +287,7 @@ def process_scope(
                     id=audit_id,
                     created_at=processed_at,
                     user_id=None,          # nobody did this; the calendar did
+                    bank_id=ptp.bank_id, agency_id=ptp.agency_id,
                     action=AuditAction.PTP_UPDATED,
                     entity_type="PTP",
                     entity_id=ptp.id,

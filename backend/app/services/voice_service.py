@@ -172,6 +172,13 @@ def resolve_destination(db: Session, *, from_param: str | None, case_id: str | N
         raise VoiceRefused(BAD_IDENTITY)
     user_id, sid = ident
     now = now or datetime.now(timezone.utc)
+    # A13b S1b: the webhook carries no bearer token, so bind the identity's
+    # tenant before reading anything; an unknown user stays unbound and is
+    # refused below with no tenant (the audit writer's tenantless path).
+    from app.core import preauth
+    principal = preauth.by_user_id(db, user_id)
+    if principal is not None:
+        preauth.bind(db, principal)
 
     session = db.get(UserSession, sid)
     expires = session.expires_at if session is not None else None

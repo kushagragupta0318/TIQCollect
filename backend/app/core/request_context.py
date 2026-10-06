@@ -62,7 +62,7 @@ class RequestContext:
     @property
     def scope(self) -> str:
         """PLATFORM / BANK / AGENCY / AGENT: the RLS scope this request's transactions carry."""
-        return tenant_scope(self.role)
+        return tenant_scope(self.role, self.agency_id)
 
 
 def get_request_context(current_user: CurrentUser, payload: TokenPayload) -> RequestContext:

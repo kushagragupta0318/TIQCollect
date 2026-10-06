@@ -15,11 +15,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import api from "@/api/axios";
+import api, { LONG_RUNNING_MS } from "@/api/axios";
 import type { Band, SimulationRun } from "@/api/bankStrategy";
 import MonteCarloPage from "./MonteCarloPage";
 
-vi.mock("@/api/axios", () => ({ default: { get: vi.fn(), post: vi.fn() } }));
+vi.mock("@/api/axios", () => ({ default: { get: vi.fn(), post: vi.fn() }, LONG_RUNNING_MS: 180_000 }));
 
 const band = (p50: number, sem: number): Band => ({
   p5: p50 * 0.7, p10: p50 * 0.8, p50, p90: p50 * 1.2, p95: p50 * 1.3, mean: p50, sem,
@@ -117,6 +117,8 @@ describe("Monte Carlo simulator", () => {
     expect(vi.mocked(api.post).mock.calls[1]).toEqual([
       "/bank/strategy/simulate",
       { preset: "baseline", levers: { placement_rate: 0.8 }, horizon_months: 12, n_paths: 500, seed: 0 },
+      // A Monte Carlo run can exceed the default 15s timeout; runSimulation raises it.
+      { timeout: LONG_RUNNING_MS },
     ]);
     await screen.findByText("11.2%");
   });

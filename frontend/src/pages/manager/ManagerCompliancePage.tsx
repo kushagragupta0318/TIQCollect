@@ -41,6 +41,7 @@
 // ────────────────────────────────────────────────────────────────────────────
 import { Shield, CheckCircle, AlertTriangle, Clock, FileText, ScanSearch, MapPin, Copy, Timer, Navigation, Route, X, Check, ChevronDown, ChevronUp, MinusCircle } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { getAuditLog, exportAuditLog, getCompliance, getFraudAlerts, reviewFraudAlert } from "@/api/manager";
 import type { AuditLogPage, ComplianceMetrics, FraudFinding, FraudReport } from "@/api/manager";
 import { toast } from "react-hot-toast";
@@ -220,15 +221,14 @@ export default function ManagerCompliancePage() {
   // One fetch for the page: the scorecard tiles and the audit-trail rule line
   // both read it, and fetching twice for two consumers is how figures on one
   // screen come to disagree with each other.
-  const [metrics, setMetrics] = useState<ComplianceMetrics | null>(null);
-  const [metricsError, setMetricsError] = useState(false);
-  useEffect(() => {
-    let alive = true;
-    getCompliance()
-      .then((d) => { if (alive) setMetrics(d); })
-      .catch(() => { if (alive) setMetricsError(true); });
-    return () => { alive = false; };
-  }, []);
+  // react-query-cached (2026-10-06): the scorecard tiles used to refetch into
+  // local state on every mount, so each visit to the Compliance tab showed
+  // empty tiles until getCompliance returned. A revisit now serves the cached
+  // metrics immediately. 60s staleTime; the figure is a slow-moving compliance
+  // rollup, not live.
+  const complianceQ = useQuery({ queryKey: ["manager", "compliance"], queryFn: getCompliance, staleTime: 60_000 });
+  const metrics = complianceQ.data ?? null;
+  const metricsError = complianceQ.isError;
 
   return (
     <div className="space-y-5">
