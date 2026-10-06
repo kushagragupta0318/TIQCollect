@@ -53,7 +53,8 @@ export interface AgenciesPanels {
 
 export interface CompliancePanels {
   breaches_over_time: { month_start: string; out_of_hours: number; geofence: number; consent_missing: number; fraud_confirmed: number }[];
-  by_agency: { agency_id: string; out_of_hours: number; geofence: number; visits: number; fraud_confirmed: number }[];
+  by_agency: { agency_id: string; agency_name: string; out_of_hours: number; geofence: number; visits: number;
+              fraud_confirmed: number }[];
 }
 
 /** mv_portfolio_daily's dpd_bucket (CURRENT | BUCKET_1..3 | NPA) to the

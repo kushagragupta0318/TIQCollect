@@ -184,7 +184,7 @@ function ComplianceTab({ panels }: { panels: CompliancePanels }) {
           rows={panels.by_agency}
           rowKey={(r) => r.agency_id}
           columns={[
-            { key: "agency_id", header: "Agency" },
+            { key: "agency_name", header: "Agency" },
             { key: "visits", header: "Visits", align: "right" },
             { key: "out_of_hours", header: "Out of hours", align: "right" },
             { key: "geofence", header: "Geofence", align: "right" },

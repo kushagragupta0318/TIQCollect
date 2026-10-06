@@ -134,7 +134,7 @@ def _agencies(db: Session, adb: Session, bank_id: str, f: KpiFilter) -> dict:
 
 
 # ── Compliance ───────────────────────────────────────────────────────────────
-def _compliance(adb: Session, bank_id: str, f: KpiFilter) -> dict:
+def _compliance(db: Session, adb: Session, bank_id: str, f: KpiFilter) -> dict:
     # mv_field_activity_daily's real columns (v2_0007): activity_date,
     # out_of_hours_attempts, geo_unverified_visits, consent_missing_visits —
     # no fraud column on this view (its grain is visits/calls/PTPs/payments
@@ -166,6 +166,14 @@ def _compliance(adb: Session, bank_id: str, f: KpiFilter) -> dict:
     for row in by_agency:
         row["fraud_confirmed"] = next((r["fraud_confirmed"] for r in fraud_by_agency
                                        if r["agency_id"] == row["agency_id"]), 0)
+    # The view carries agency_id only (collections.fraud_reviews too) — a
+    # plain ORM lookup for the name, same as _agencies()'s own cards, rather
+    # than showing the bank an agency by its raw id.
+    from app.models.tenancy import Agency
+
+    names = {a.id: (a.trade_name or a.legal_name) for a in db.query(Agency).filter(Agency.bank_id == bank_id)}
+    for row in by_agency:
+        row["agency_name"] = names.get(row["agency_id"], row["agency_id"])
     return {"available": True, "reason": None,
            "panels": {"breaches_over_time": breaches_over_time, "by_agency": by_agency}}
 
@@ -195,4 +203,4 @@ def compute_tab(db: Session, adb: Session, tab: str, bank_id: str, f: KpiFilter)
         return _exposure(adb, bank_id, as_of, f)
     if tab == "migration":
         return _migration(adb, bank_id, as_of, f)
-    return _compliance(adb, bank_id, f)
+    return _compliance(db, adb, bank_id, f)

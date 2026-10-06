@@ -116,6 +116,9 @@ def test_compliance_breaches_are_real_and_fraud_matches_the_manifest(views):
     assert by_agency[AGENCY["id"]]["fraud_confirmed"] > 0            # Aravalli's v1-copied reviews
     assert sum(r["fraud_confirmed"] for r in out["panels"]["by_agency"]) == sum(
         r["fraud_confirmed"] for r in by_month)
+    # Not the raw id (C04 task #3): a real name, same lookup _agencies() uses.
+    assert by_agency[AGENCY["id"]]["agency_name"] not in (None, AGENCY["id"])
+    assert all(r["agency_name"] != r["agency_id"] for r in out["panels"]["by_agency"])
 
 
 def test_a_session_for_another_bank_sees_no_figures_on_any_tab(views):
