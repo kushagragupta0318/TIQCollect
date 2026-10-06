@@ -25,7 +25,7 @@ from app.core.ids import UUIDPath, UUIDQuery
 from app.core.permissions import require_perm
 from app.core.ratelimit import AUTH_LIMIT, limiter
 from app.models.user import User
-from app.services.bank import agency_scorecard, agency_service
+from app.services.bank import agency_profile_service, agency_scorecard, agency_service
 from app.services.scope import agency_or_404
 
 router = APIRouter(prefix="/bank", tags=["bank-agencies-admin"])
@@ -219,6 +219,17 @@ def list_agency_directory_route(
         db, current_user, region_id=region_id, status=status, loan_type=loan_type,
         contract_expiring_before=contract_expiring_before,
     )
+
+
+@router.get("/agencies/{agency_id}/profile")
+def agency_profile_route(agency_id: UUIDPath, db: DbSession, current_user: User = require_perm("agency.read")):
+    """D07: the profile a bank opens by clicking any Directory row (PENDING
+    already resumes the onboarding wizard; this is for ACTIVE/SUSPENDED/
+    OFFBOARDED). Contract + commission reuse the agency's own G04 builder —
+    one definition, not two — plus placed volume and the agency's people.
+    Performance stays on D06's own page; this does not recompute it."""
+    agency = agency_or_404(db, current_user, agency_id)
+    return agency_profile_service.bank_agency_profile(db, agency)
 
 
 @router.get("/agencies/{agency_id}/scorecard")
