@@ -10,15 +10,15 @@ be USED in the same transaction; the table and the capability seed that follow a
 v2_0027. Downgrade: Postgres cannot drop an enum value; it stays harmlessly and a
 re-upgrade is a no-op (IF NOT EXISTS).
 
-Assigned v2_0028 by fc (chain v2_0025->0026 l8->0027 l7-n1->0028 mine). Renumber if the wave shifts (number is only in this
+Written against the real head v2_0025 (0026 l8-rls + 0027 l7-n1 not yet merged). fc/06 re-point down_revision to the real head at merge; number lives only in this file (number is only in this
 file). Revision ID: v2_0028
-Revises: v2_0027
+Revises: v2_0025
 Create Date: 2026-10-01
 """
 from alembic import op
 
 revision = "v2_0028"
-down_revision = "v2_0027"
+down_revision = "v2_0025"
 branch_labels = None
 depends_on = None
 

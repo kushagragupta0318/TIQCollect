@@ -68,15 +68,21 @@ back — was noted as the v2 hardening. The owner chose it for v1.
   owner rather than slipped in on a money branch. The model and migration are held until it lands,
   because the model alone — present in `Base.metadata` with `bank_id` and `agency_id` — trips the
   "every tenant table has a policy" test.
-- **RLS is coarse; the stage lock is service-enforced (f8's ruling).** The RLS policy does tenant
-  isolation ONLY — an agency sees its own rows, a bank sees its agencies' rows — using v2_0012's
-  `_AGENCY_OWNED` template (same expression for `USING` and `WITH CHECK`). It does **not** express the
-  stage lock: the database does not enforce "the agency may write only while status is `PENDING_AGENCY`,"
-  because one expression cannot differ between read and write. **The stage lock lives in the service**
-  (the status checks in `agency_approve` / `bank_approve` / `reject`), backed by the model's DB
-  CheckConstraints. A reader should not conclude the database enforces the stage — it does not.
-  Splitting `USING` from `WITH CHECK` to push the stage into the DB is tracked as **post-demo
-  hardening**, not shipped here.
+- **Tenant isolation is enforced by the SERVICE today, not by RLS — and this is the honest state of the
+  whole platform, not just this feature.** The table carries v2_0012's `_AGENCY_OWNED` RLS policy and the
+  per-transaction GUC bind (`app.bank_id`/`app.scope`) is in place, BUT the API connects as the
+  `fieldops` role, which is `rolsuper`/`rolbypassrls` — so every row-level policy is bypassed and never
+  consulted on an API request (d5's audit of 6114c37). v2_0012's step 2 — moving the API onto a
+  non-superuser `tiq_app` login — is unfinished, and until it lands the policies are latent
+  defence-in-depth, not the live control. So the boundary that actually holds today is the service:
+  `_request_for_bank`, the agency-scope checks, scope.py's helpers. The tenancy test is on THAT, and the
+  tests/pg RLS test must `SET ROLE tiq_app` or it proves nothing (the connecting role bypasses policies).
+  A reader must not conclude the database enforces tenant isolation on this path today — it does not yet.
+- **The stage lock is also service-enforced (f8's ruling), for a second reason.** Even once RLS is live,
+  `_AGENCY_OWNED` is one expression for both `USING` and `WITH CHECK`, so it cannot say "the agency may
+  write only while status is `PENDING_AGENCY`." The stage lock lives in the service (the status checks in
+  `agency_approve` / `bank_approve` / `reject`), backed by the model's DB CheckConstraints. Splitting
+  `USING` from `WITH CHECK` to push the stage into the DB is tracked as **post-demo hardening**.
 - **The messaging feature's thread table is agency-owned too** (bank + agency), so it takes the same
   `_AGENCY_OWNED` template and the same coarse-RLS limitation above — this ADR's RLS reasoning covers
   both, rather than being restated there.
