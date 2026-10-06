@@ -1,0 +1,94 @@
+# 0015. Payment reversal: two-stage agency→bank, with an atomic unwind
+
+**Status:** Accepted, 2026-10-01 (owner's ruling, relayed by coordinator f8; lane L7, task #2).
+**Capabilities:** `payment.reversal.request` (AGENCY_MANAGER), `payment.reversal.approve.agency`
+(AGENCY_MANAGER + AGENCY_ADMIN), `payment.reversal.approve.bank` (BANK_ADMIN, sensitive).
+
+## Context
+
+A mistaken collection could not be undone. `PaymentStatus.REVERSED` existed in the enum but nothing
+wrote it, so a wrong payment stayed on the case ledger, in the agent's month figures, and — if it
+satisfied one — on a PTP, forever. A lender's ops team needs to void a mis-entry; the question was who
+may, and how the ledger stays consistent when they do.
+
+An earlier draft used **agency-internal four-eyes** (manager requests, admin approves). That was
+recorded with a caveat: two agency staff can collude to reverse a legitimate collection and understate
+what the agency owes the bank. The stronger control — the bank giving fiduciary sign-off on money moving
+back — was noted as the v2 hardening. The owner chose it for v1.
+
+## Decision
+
+- **Two-stage agency→bank.** The agency raises the reversal and approves its own side; it then routes to
+  the BANK, whose sign-off is fiduciary and final. The ledger unwinds only on bank approval. The agency
+  cannot both initiate and bless a reversal — the real second pair of eyes is the bank, not a second
+  agency account.
+  - `PENDING_AGENCY` → (agency approve) → `PENDING_BANK` → (bank approve) → `APPROVED` [unwind runs here]
+    | `REJECTED` at either stage (nothing moved).
+  - The agency manager may both request and agency-approve (the cap grants AM); there is no agency-internal
+    four-eyes, by design — the bank is the control.
+- **The bank sign-off is never an agency actor.** Enforced three ways: role separation (a BANK_ADMIN, not
+  an agency user), a service check (`bank_approved_by ∉ {agency_requested_by, agency_approved_by}`), and a
+  DB CheckConstraint (`bank_approver_is_not_the_agency`).
+- **The unwind is atomic and total** (one transaction, on bank approval): the payment goes `REVERSED`;
+  `case.collected_amount` and the agent's `current_month_collections` lose the amount (floored at 0);
+  the case re-opens (`IN_PROGRESS` if nothing remains, else `PARTIALLY_PAID`) and `resolved_at` clears;
+  and any PTP the payment honoured is un-honoured — but only if, with this payment excluded
+  (`verified_paid_against` counts VERIFIED only, so marking it REVERSED first drops it), the PTP now
+  falls below its committed amount. A PTP honoured by other payments too stays honoured. A reversal that
+  returned the money but left the PTP HONORED is the inconsistent-ledger class this project keeps
+  closing, so it is all-or-nothing.
+- **The bank stage is cross-tenant and goes through l8's scoped RequestContext, not a hand-rolled
+  bank_id match.** Until l8 merges, a module flag (`_L8_SCOPE_AVAILABLE = False`) makes the bank
+  approve/reject paths refuse with 503; the agency stages work today. When l8 lands: flip the flag and
+  replace the one scoped read with l8's RequestContext. This keeps a cross-tenant write on a money path
+  off a guessed authorization.
+- **Audited on both stages.** `PAYMENT_REVERSAL_REQUESTED` (request) and `PAYMENT_REVERSED` (the applied
+  reversal), appended at the end of the native `audit_action_enum` (its own migration, since a value
+  added by `ALTER TYPE` cannot be used in the same transaction). Both rows carry `bank_id` and
+  `agency_id` so the bank sees every reversal in its audit trail (C09) and l8's audit tenancy is fed.
+- **One live reversal per payment.** A partial-unique index (`status <> 'REJECTED'`) blocks a double
+  reversal and two requests racing to the bank.
+
+## Known limits
+
+- **A single-staffer agency has no eligible approver, and that is an honest dead end, not a hole.** The
+  bank stage is a different tenant, so the agency can always reach a bank approver; but if an agency and
+  its bank contact are the same person in some future configuration, the service refuses self-approval
+  (403) rather than permitting it silently. Such a case escalates; it is never swallowed.
+- **The RLS form is `_AGENCY_OWNED`, and it needs a shared policy-map change first.**
+  `reversal_requests` is the first post-v2_0012 table that is agency-owned and that BOTH tenants write.
+  Its policy is v2_0012's existing two-party template, verbatim (l8's v2_0019 reuses it for
+  `tenancy.users`):
+  `(bank_id = tenancy.current_bank_id() AND (tenancy.current_scope() = 'BANK' OR agency_id = tenancy.current_agency_id()))`
+  — note BOTH arms require `bank_id = current_bank_id()`; an agency session matches only within its own
+  bank, never on `agency_id` alone. But the policy-map test machinery
+  (`tests/test_rls_policy_map.py`) currently lets a post-v2_0012 revision declare only *bank-only*
+  tables; there is no `RLS_AGENCY_OWNED` classification yet, so the table cannot be declared at all. That
+  is a shared ~4-line change (an `RLS_AGENCY_OWNED` list + its test assertion), agreed with the policy
+  owner rather than slipped in on a money branch. The model and migration are held until it lands,
+  because the model alone — present in `Base.metadata` with `bank_id` and `agency_id` — trips the
+  "every tenant table has a policy" test.
+- **RLS is coarse; the stage lock is service-enforced (f8's ruling).** The RLS policy does tenant
+  isolation ONLY — an agency sees its own rows, a bank sees its agencies' rows — using v2_0012's
+  `_AGENCY_OWNED` template (same expression for `USING` and `WITH CHECK`). It does **not** express the
+  stage lock: the database does not enforce "the agency may write only while status is `PENDING_AGENCY`,"
+  because one expression cannot differ between read and write. **The stage lock lives in the service**
+  (the status checks in `agency_approve` / `bank_approve` / `reject`), backed by the model's DB
+  CheckConstraints. A reader should not conclude the database enforces the stage — it does not.
+  Splitting `USING` from `WITH CHECK` to push the stage into the DB is tracked as **post-demo
+  hardening**, not shipped here.
+- **The messaging feature's thread table is agency-owned too** (bank + agency), so it takes the same
+  `_AGENCY_OWNED` template and the same coarse-RLS limitation above — this ADR's RLS reasoning covers
+  both, rather than being restated there.
+- **Demo.** Both stages are demoable with existing master logins: the agency manager (Vikram, a master
+  account) does request + agency-approve, and the existing BANK_ADMIN master (holds
+  `payment.reversal.approve.bank`) does the sign-off. No new master account is required; whether to add
+  the AGENCY_ADMIN tier (Meera) for the org chart is a separate owner call, not a prerequisite.
+
+## Consequences
+
+- A wrong collection can be voided, with the bank — not the agency alone — accountable for money moving
+  back, and the ledger (case, agent, PTP) stays consistent because the unwind is atomic.
+- The agency-collusion risk of the earlier agency-internal design is closed: the bank is the approver.
+- The reversal is the first consumer of l8's cross-tenant scope; the messaging feature (bank↔agency
+  threads) is the second, and both flip on when l8 merges.

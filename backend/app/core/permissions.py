@@ -141,6 +141,12 @@ _CATALOG: tuple[Capability, ...] = (
     _cap("agency.offboard", "offboard (recall and archive)", (BA,), second_person=True, sensitive=True),
     _cap("agency.profile.read", "own agency's contract, commission and SLA (plan §10)", (AA,)),
     _cap("agency.users.manage", "create and manage agency managers", (AA,), sensitive=True),
+    # Payment reversal (#2): two-stage agency→bank. The agency raises and approves
+    # its own side; the BANK gives fiduciary final sign-off, and only then does the
+    # ledger unwind. The bank approver is never an agency actor (DB + service guard).
+    _cap("payment.reversal.request", "request to reverse a mistaken collection", (AM,)),
+    _cap("payment.reversal.approve.agency", "the agency's approval of a reversal (routes it to the bank)", (AM, AA)),
+    _cap("payment.reversal.approve.bank", "the bank's fiduciary final sign-off; the ledger unwinds here", (BA,), sensitive=True),
 
     _cap("placement.read", "placements received or made", (BA, BN, AA, AM)),
     _cap("placement.manual", "place loans by hand", (BA,), sensitive=True),
