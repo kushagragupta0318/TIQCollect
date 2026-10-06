@@ -26,6 +26,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.ml.empirical_bayes import eb_shrink
+from app.services.bank.kpi_catalog import latest_reading
 
 VERSION = "agency-effect-1.0.0"
 
@@ -148,9 +149,20 @@ def _month_back(m: date, n: int) -> date:
 
 
 def latest_month(adb: Session, *, bank_id: str) -> date | None:
-    row = adb.execute(text(f"SELECT max(month_start) AS m FROM {_VIEW} WHERE bank_id = :bank"),
-                      {"bank": bank_id}).first()
-    return row.m if row is not None else None
+    """The calendar month to report the scorecard on.
+
+    NOT `max(month_start)` of this view: the refresh that builds it seeds a
+    row for the current, still-running month before any of that month's
+    placements, visits or collections exist (measured 2026-10-06: Girivan's
+    2026-10-01 row carries placed_new=visits=verified_collections=0 against
+    agents_contracted=194 — a real row, not a NULL, so every ratio in it
+    divides to None or 0/0 and the whole scorecard reads as "Not
+    available"). `latest_reading()` is the portfolio's own last real daily
+    reading (mv_portfolio_daily), which cannot be an empty future month —
+    exposure and compliance already anchor on it; the scorecard now shares
+    that one anchor instead of trusting its own view's month_start."""
+    reading = latest_reading(adb, bank_id)
+    return reading.replace(day=1) if reading else None
 
 
 def agency_effect(adb: Session, *, bank_id: str, agency_id: str | None = None, region_id: str | None = None,
