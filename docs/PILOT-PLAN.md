@@ -286,7 +286,8 @@ days of pilot data. **Dropped** means removed at integration, with the reason re
 |---|---|---|
 | **P4:** E01–E04, E06, E07, E10–E12 | **Pause** | Transition matrices, Monte Carlo, backtests and forecasts need months of real DPD history, and `loan_dpd_history` (B05) only starts collecting it at go-live. E02/E04 are being built now by 43's background agent; stop at the next commit. |
 | E09 (report engine) | **Keep, narrowed** | Already built on d4's branch. It is the base for N08; XLSX first, PPTX last. |
-| **E05** simulator UI, **E08** Scenario Lab | **Drop** | A lender's risk team owns IFRS-9 and stress testing and will not use ours. |
+| **E05** simulator UI | **Reinstated 2026-10-06** (owner) | Built as the Monte Carlo Simulator (merged on l5-bank-ui); wanted in the demo as the AI-showcase piece. Shows honest bands + uncalibrated/synthetic caveats, abstains on insufficient history. |
+| **E08** Scenario Lab | **Drop** | A lender's risk team owns IFRS-9 and stress testing and will not use ours. |
 | **P5:** F02–F05, F07–F09, F11 | **Pause** | An agent runtime, registry, evals and MLOps console with nothing real to run on. F01 stays as done. |
 | **F10** (bank-feed quarantine) · M · 43 (ingest, B05 staging tables) + bb (the scheduled ingest task, RESTRUCTURE-PLAN 2.9) | **Keep active** (owner, 2026-09-24) | The first real bank file will contain duplicates and DPD jumps. Quarantine saves the pilot's first week. |
 | **F12** (restrict `ml.approve` / `ml.promote` to `BANK_TECHOPS`) · S · 43 (A01 capabilities) | **Keep active** (owner, 2026-09-24) | Today any manager can change the live model for every tenant (known issue 11). |

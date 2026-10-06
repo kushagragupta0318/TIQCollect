@@ -5,7 +5,7 @@
 // and the honesty stamp arrives WITH it (ADR 0014). The types below keep the
 // two inseparable: a SimulationRun carries `text`/`basis`/`synthetic`/
 // `calibrated`, so a surface cannot render a figure and omit what it rests on.
-import api from "./axios";
+import api, { LONG_RUNNING_MS } from "./axios";
 
 /** One metric at the horizon, over the run's paths. `sem` is the Monte Carlo
  *  standard error of the mean — it says how many digits are real. */
@@ -94,5 +94,9 @@ export interface SimulationRun {
 }
 
 export async function runSimulation(body: SimulateRequest): Promise<SimulationRun> {
-  return (await api.post<SimulationRun>("/bank/strategy/simulate", body)).data;
+  // A Monte Carlo run (up to 1000 paths x 60 months) exceeds the default 15s
+  // axios timeout; the backend keeps running and returns 200, but the browser
+  // gives up and the page shows the generic error. Same override the allocation
+  // endpoint uses.
+  return (await api.post<SimulationRun>("/bank/strategy/simulate", body, { timeout: LONG_RUNNING_MS })).data;
 }
