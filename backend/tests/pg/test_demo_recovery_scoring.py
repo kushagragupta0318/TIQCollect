@@ -22,16 +22,51 @@ from tests.pg.test_pg_demo_fixture import db, sql_text  # noqa: F401 — the res
 pytestmark = pytest.mark.filterwarnings("ignore")
 
 
+def _generated_agency_ids():
+    from app.demo.roster import AGENCIES
+    return [a.id for a in AGENCIES if a.key != "ARAVALLI" and a.bank_key == "GIRIVAN"]
+
+
 @pytest.fixture(scope="module")
-def scored(db):  # noqa: F811
+def baked(db):  # noqa: F811
+    """The committed dump's own recovery_risk rows, read before `scored` clears
+    them. l6 baked the scoring in, and nothing checked that the artifact really
+    ships with it."""
+    with db.connect() as c:
+        return c.execute(text(
+            "SELECT count(*) AS rows, count(DISTINCT agency_id) AS agencies "
+            "FROM ml.model_predictions WHERE model_name = 'recovery_risk' "
+            "AND agency_id = ANY(CAST(:ids AS uuid[]))"), {"ids": _generated_agency_ids()}).one()
+
+
+@pytest.fixture(scope="module")
+def scored(db, baked):  # noqa: F811
+    """The SCORER's own output. The dump is baked and score_generated_books
+    refuses to score twice, so this module used to error at setup rather than
+    test anything (red on CI since the bake). The generated agencies'
+    recovery_risk rows are cleared in this THROWAWAY database so the scorer runs;
+    Aravalli's v1-copied predictions stay, as every query here excludes them.
+    Depends on `baked` so the artifact is read before it is cleared.
+    """
     from app.demo import roster as R
     from app.demo.recovery_scoring import score_generated_books
 
     s = Session(bind=db)
+    s.execute(text("DELETE FROM ml.model_predictions WHERE model_name = 'recovery_risk' "
+                   "AND agency_id = ANY(CAST(:ids AS uuid[]))"), {"ids": _generated_agency_ids()})
+    s.commit()
     result = score_generated_books(s, bank_key="GIRIVAN")
     s.commit()
     yield result, R
     s.close()
+
+
+def test_the_baked_dump_already_carries_recovery_scores(baked):
+    """The shipped dump must arrive scored: the manager and bank surfaces read
+    recovery_risk, and an unscored dump would abstain everywhere with nothing in
+    the suite noticing."""
+    assert baked.rows > 0, "the committed dump carries no recovery_risk predictions"
+    assert baked.agencies >= 2, f"only {baked.agencies} generated agencies are scored in the dump"
 
 
 def test_every_generated_agency_s_open_cases_are_modelled(db, scored):  # noqa: F811
