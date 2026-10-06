@@ -135,15 +135,28 @@ class PaymentReversalService:
         self.db.flush()
 
         case.collected_amount = round(max(0.0, case.collected_amount - amount), 2)
-        case.status = CaseStatus.IN_PROGRESS if case.collected_amount <= 0 else CaseStatus.PARTIALLY_PAID
-        case.resolved_at = None
+        # Re-open ONLY a payment-driven close. A case closed for another reason
+        # (CLOSED / WRITTEN_OFF / SETTLED / legal) keeps its status and resolved_at —
+        # the reversal adjusts the ledger but does not drag a written-off case back
+        # into collections. The ledger change surfaces it for human review.
+        if case.status in (CaseStatus.PAID, CaseStatus.PARTIALLY_PAID):
+            case.status = CaseStatus.IN_PROGRESS if case.collected_amount <= 0 else CaseStatus.PARTIALLY_PAID
+            case.resolved_at = None
 
         if payment.agent_id:
             from app.models.agent import Agent
             agent = self.db.get(Agent, payment.agent_id)
             if agent is not None:
-                agent.current_month_collections = round(
-                    max(0.0, float(agent.current_month_collections or 0.0) - amount), 2)
+                # current_month_collections is a running counter zeroed monthly
+                # (performance_snapshot) and incremented at collection time, so it holds
+                # only THIS month. Decrement only when the payment is in the current IST
+                # month; reversing an earlier month's payment must not under-report this
+                # one (the counter never held it).
+                from app.core.geo import IST
+                pay_ist, now_ist = payment.payment_date.astimezone(IST), now.astimezone(IST)
+                if (pay_ist.year, pay_ist.month) == (now_ist.year, now_ist.month):
+                    agent.current_month_collections = round(
+                        max(0.0, float(agent.current_month_collections or 0.0) - amount), 2)
 
         # Un-honor a PTP only if it now falls below its committed amount with this
         # payment excluded; one honoured by other payments stays honoured.

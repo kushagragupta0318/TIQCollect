@@ -85,6 +85,15 @@ back — was noted as the v2 hardening. The owner chose it for v1.
   `payment.reversal.approve.bank`) does the sign-off. No new master account is required; whether to add
   the AGENCY_ADMIN tier (Meera) for the org chart is a separate owner call, not a prerequisite.
 
+- **A reversal re-opens only a payment-driven close, and touches only the current month's figure**
+  (both from d5's read of the unwind). The case status/`resolved_at` are reset only when the case is
+  currently `PAID` or `PARTIALLY_PAID`; a case closed for another reason (`CLOSED` / `WRITTEN_OFF` /
+  `SETTLED` / legal) keeps its status — a reversal adjusts the ledger but does not drag a written-off
+  case back into collections. And `agent.current_month_collections` — a running counter zeroed monthly
+  and incremented at collection — is decremented only when the reversed payment is in the current IST
+  month; reversing an earlier month's payment must not under-report this one, because the counter never
+  held it.
+
 ## Consequences
 
 - A wrong collection can be voided, with the bank — not the agency alone — accountable for money moving
