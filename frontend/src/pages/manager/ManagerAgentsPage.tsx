@@ -36,10 +36,9 @@ import { Search, MapPin, AlertTriangle, Phone, ChevronDown, ChevronUp, ChevronsU
 import { toast } from "react-hot-toast";
 import { shortAmount, shortMoney } from "@/lib/money";
 import { AiBadge } from "@/components/ui/AiBadge";
-import { getAgents, getAgentInsight, getReallocationPlan, updateAgentStatus, acknowledgeAgentSos, resetAgentLogin, reactivateAgent } from "@/api/manager";
+import { getAgents, getAgentInsight, getReallocationPlan, updateAgentStatus, acknowledgeAgentSos, resetAgentLogin, reactivateAgent, reassignCase } from "@/api/manager";
 import type { AgentInsight, ReallocationPlan } from "@/api/manager";
 import { errorDetail } from "@/lib/apiError";
-import { todayIso } from "@/lib/today";
 import { Input } from "@/components/ui/Input";
 import { TierBadge } from "@/components/ui/Badge";
 import { useModalA11y } from "@/hooks/useModalA11y";
@@ -271,7 +270,7 @@ export default function ManagerAgentsPage() {
                   Respond
                 </button>
                 <a
-                  href={`tel:${a.employee_code}`}
+                  href={`tel:${a.phone}`}
                   className="tap-target flex-1 sm:flex-none text-xs px-3 rounded-xl font-semibold flex items-center justify-center gap-1 transition-colors"
                   style={{ background: "#fff", border: "1px solid rgba(220,38,38,0.25)", color: "#DC2626" }}
                 >
@@ -759,23 +758,21 @@ function AgentRow({
           <div className="flex gap-2 mt-3 flex-wrap">
             <button
               onClick={() => {
-                const sixMonths = new Date();
-                sixMonths.setMonth(sixMonths.getMonth() - 6);
-                const dateFrom = sixMonths.toISOString().slice(0, 10);
-                const dateTo   = todayIso();
-                navigate(`/manager/cases?agent_id=${agent.id}&agent_name=${encodeURIComponent(agent.full_name)}&date_from=${dateFrom}&date_to=${dateTo}`);
+                // 2026-10-01 (demo QA sweep): this used to pin date_from to
+                // 6 months back, so a case allocated earlier than that — open
+                // or not — never showed up for "View Cases". No date range:
+                // every case of this agent's, oldest to newest.
+                navigate(`/manager/cases?agent_id=${agent.id}&agent_name=${encodeURIComponent(agent.full_name)}`);
               }}
               className="tap-target text-xs px-3 py-1.5 rounded-xl font-semibold transition hover:brightness-95 inline-flex items-center justify-center"
               style={{ background: "#FFFFFF", color: "#2563EB", border: "1px solid #2563EB" }}
             >
               View Cases →
             </button>
-            <button
-              onClick={() => toast.success(`Message sent to ${agent.full_name}`)}
-              className="tap-target text-xs px-3 py-1.5 rounded-xl font-semibold badge-blue transition hover:brightness-95 inline-flex items-center justify-center"
-            >
-              Send Message
-            </button>
+            {/* "Send Message" removed 2026-10-01 (demo QA sweep): it only
+                toast.success'd, nothing was sent. b4 is building the bank↔
+                agency messaging backend this will call; restore once that
+                lands, wired for real — not a stub. */}
             <button
               onClick={fetchPlan}
               disabled={planLoading}
@@ -893,7 +890,7 @@ function AgentRow({
 
       {/* Reallocation Plan Modal */}
       {showPlan && plan && (
-        <ReallocationModal plan={plan} onClose={() => setShowPlan(false)} />
+        <ReallocationModal plan={plan} onClose={() => setShowPlan(false)} onRefresh={onRefresh} />
       )}
     </div>
   );
@@ -1375,9 +1372,49 @@ function AgentInsightStrip({ insight }: { insight: AgentInsight }) {
   );
 }
 
-function ReallocationModal({ plan, onClose }: { plan: ReallocationPlan; onClose: () => void }) {
+function ReallocationModal({ plan, onClose, onRefresh }: { plan: ReallocationPlan; onClose: () => void; onRefresh: () => void }) {
   const panelRef = useRef<HTMLDivElement>(null);
   useModalA11y(true, panelRef, onClose);
+  const [applying, setApplying] = useState(false);
+
+  // 2026-10-01 (demo QA sweep): this used to be toast.success + onClose with
+  // no API call — a fake "Reallocation plan logged" that reassigned nothing.
+  // Applies each suggestion through the same POST /cases/{id}/reassign a
+  // manual reassign uses, in batches of CHUNK rather than all at once (a
+  // large plan firing 40+ concurrent writes is its own problem), reports the
+  // real count (including partial failures — a case resolved or reassigned
+  // by someone else between the plan being computed and Apply being pressed
+  // is a 404/409, not a crash), and refreshes the roster.
+  //
+  // 2026-10-01 (audit) — wording. reassignCase's own response already says
+  // takes_effect: "next nightly plan; today's beat is unchanged" (every
+  // successful reassign returns the identical string — it is a property of
+  // the reassign rule, not of the individual case). The toast used to say
+  // "Reallocated N cases", which reads as already moved; read and surface
+  // the real timing instead of discarding it.
+  const CHUNK = 8;
+  async function applyPlan() {
+    setApplying(true);
+    const reason = `Reallocation plan — moved from ${plan.from_agent.name}`;
+    const results: PromiseSettledResult<Awaited<ReturnType<typeof reassignCase>>>[] = [];
+    for (let i = 0; i < plan.suggested_reallocations.length; i += CHUNK) {
+      const batch = plan.suggested_reallocations.slice(i, i + CHUNK);
+      results.push(...await Promise.allSettled(
+        batch.map((r) => reassignCase(r.case_id, { new_agent_id: r.to_agent_id, reason })),
+      ));
+    }
+    const fulfilled = results.filter(
+      (r): r is PromiseFulfilledResult<Awaited<ReturnType<typeof reassignCase>>> => r.status === "fulfilled");
+    const ok = fulfilled.length;
+    const failed = results.length - ok;
+    const takesEffect = fulfilled[0]?.value.takes_effect ?? "next nightly plan";
+    setApplying(false);
+    if (failed === 0) toast.success(`${ok} case${ok === 1 ? "" : "s"} queued for reassignment from ${plan.from_agent.name} — effective ${takesEffect}`);
+    else if (ok === 0) toast.error("Could not apply the reallocation plan — try again");
+    else toast.success(`${ok} of ${results.length} cases queued for reassignment — effective ${takesEffect} — ${failed} could not be moved`);
+    onRefresh();
+    onClose();
+  }
 
   // PORTALLED TO <body>. 2026-09-16.
   //
@@ -1490,17 +1527,19 @@ function ReallocationModal({ plan, onClose }: { plan: ReallocationPlan; onClose:
             "0 cases can be reallocated". */}
         <div className="px-4 sm:px-5 py-4 flex gap-3 safe-bottom flex-shrink-0" style={{ borderTop: "1px solid #EAEBEF", background: "#fff" }}>
           <button
-            onClick={() => { toast.success(`Reallocation plan logged for ${plan.from_agent.name}`); onClose(); }}
-            disabled={plan.summary.can_reallocate === 0}
+            onClick={applyPlan}
+            disabled={plan.summary.can_reallocate === 0 || applying}
             title={plan.summary.can_reallocate === 0 ? "Nothing to apply — no case can be moved" : undefined}
-            className="tap-target flex-1 py-2.5 rounded-xl text-sm font-semibold text-white transition hover:brightness-95 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:brightness-100"
+            className="tap-target flex-1 py-2.5 rounded-xl text-sm font-semibold text-white transition hover:brightness-95 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:brightness-100 flex items-center justify-center gap-1.5"
             style={{ background: "#0C66E4" }}
           >
-            Apply Plan
+            {applying && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+            {applying ? "Applying…" : "Apply Plan"}
           </button>
           <button
             onClick={onClose}
-            className="tap-target px-4 py-2.5 rounded-xl text-sm font-semibold transition hover:brightness-95"
+            disabled={applying}
+            className="tap-target px-4 py-2.5 rounded-xl text-sm font-semibold transition hover:brightness-95 disabled:opacity-50"
             style={{ background: "#F5F6F9", color: "#475569" }}
           >
             Cancel

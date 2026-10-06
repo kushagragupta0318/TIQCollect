@@ -60,6 +60,11 @@ export async function getCases(params?: {
    *  working next. Distinct from `recovery`, which bands how much of the loan
    *  comes back. */
   priority_band?: string;
+  /** CURRENT | BUCKET_1 | BUCKET_2 | BUCKET_3 | NPA — the loan's DPD bucket.
+   *  Server-side, same reason as `recovery`: the overview's DPD donut links
+   *  here, and narrowing client-side only filtered the one page already
+   *  fetched, so the donut and the list disagreed (demo QA sweep, 2026-10-01). */
+  dpd_bucket?: string;
   limit?: number;
   offset?: number;
 }) {
@@ -106,6 +111,57 @@ export interface ComplianceMetrics {
 
 export async function getCompliance(): Promise<ComplianceMetrics> {
   const { data } = await api.get<ComplianceMetrics>("/manager/compliance");
+  return data;
+}
+
+// ── Agency profile (P2 G04) — AGENCY_ADMIN only; the backend 403s anyone else ──
+
+export interface AgencyContractSummary {
+  contract_no: string;
+  status: string;
+  /** False when this is the "nothing ACTIVE exists" fallback to the most
+   *  recent contract regardless of status — a lapsed/terminated/draft
+   *  contract shown because there is nothing better, not because it is in
+   *  force. Label it when false; never show its terms as current. */
+  is_current: boolean;
+  start_date: string;
+  end_date: string;
+  max_agents: number | null;
+  max_placed_cases: number | null;
+  max_visits_per_month: number | null;
+  sla_first_visit_days: number;
+  recall_no_activity_days: number | null;
+  recall_on_sla_breach: boolean;
+  recall_at_contract_end: boolean;
+  performance_bonus_pct: number | null;
+  performance_target_pct: number | null;
+  security_deposit: number | null;
+}
+
+export interface AgencyCommissionTerm {
+  loan_type: string;
+  dpd_bucket: string;
+  commission_pct: number;
+  fixed_fee_per_resolution: number | null;
+}
+
+export interface AgencyProfile {
+  agency: {
+    legal_name: string;
+    trade_name: string | null;
+    rbi_registration_no: string | null;
+    status: string;
+    hq_city: string | null;
+    contact_name: string | null;
+    contact_email: string | null;
+    contact_phone: string | null;
+  };
+  contract: AgencyContractSummary | null;
+  commission_terms: AgencyCommissionTerm[];
+}
+
+export async function getAgencyProfile(): Promise<AgencyProfile> {
+  const { data } = await api.get<AgencyProfile>("/manager/agency-profile");
   return data;
 }
 
@@ -530,6 +586,30 @@ export async function getPaymentModes(month?: string): Promise<PaymentModes> {
 export async function getPtpOutcomes(months = 6, agentId?: string): Promise<import("@/pages/manager/ptpOutcomes").PtpOutcomes> {
   const { data } = await api.get("/manager/analytics/ptp-outcomes", {
     params: { months, ...(agentId ? { agent_id: agentId } : {}) },
+  });
+  return data;
+}
+
+/** A dimension the team's book can be broken down by (known issue 8). The
+ *  bucket dimension is the long-standing DPD card; the other three were always
+ *  in the data and never surfaced. */
+export type BreakdownDimension = "bucket" | "product" | "branch" | "city";
+
+export interface BreakdownRow {
+  /** The dimension's value: a bucket name, a loan type, a branch code, a city.
+   *  "Not recorded" when the column is empty, rather than the row being dropped. */
+  key: string;
+  case_count: number;
+  target_lakhs: number;
+  collected_lakhs: number;
+  collection_rate_pct: number;
+}
+
+/** The team's book by branch, city, product or bucket. Rows come back largest
+ *  collection first, except bucket, which keeps its severity order. */
+export async function getTeamBreakdown(dimension: BreakdownDimension, month?: string): Promise<BreakdownRow[]> {
+  const { data } = await api.get<BreakdownRow[]>("/manager/analytics/breakdown", {
+    params: { dimension, ...(month ? { month } : {}) },
   });
   return data;
 }

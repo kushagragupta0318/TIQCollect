@@ -180,6 +180,32 @@ def test_the_awadh_suspension_quotes_the_book(db):
     assert f"{round(share[True])}% of August visits" in reason and f"against {round(share[False])}%" in reason
 
 
+def test_september_compliance_figure_matches_the_book(db):
+    """The README's Compliance & Integrity score for September Girivan
+    (fixtures/README.md, "Consent is only asked..."): a hand-computed
+    narrative number, not something the product stores, so this is its only
+    guard against silent drift (lane L6, 2026-09-30 after seasonality)."""
+    from app.demo.roster import BANK
+    row = rows(db, """
+        select count(*) filter (where within_contact_hours is false) as ooh,
+               count(*) filter (where geo_verified is false) as geofence,
+               count(*) filter (where customer_met) as met,
+               count(*) filter (where customer_met and consent_given is not true) as consent_missing,
+               count(*) as total
+        from collections.visits v join tenancy.agencies a on a.id = v.agency_id
+        where a.bank_id = :bank and v.check_in_time >= '2026-09-01' and v.check_in_time < '2026-10-01'
+    """, bank=BANK["id"])[0]
+    ooh, geofence, met, consent_missing, total = row
+    fraud = one(db, """
+        select count(*) from collections.fraud_reviews f
+        join collections.visits v on v.id = f.visit_id join tenancy.agencies a on a.id = v.agency_id
+        where a.bank_id = :bank and f.verdict = 'CONFIRMED'
+          and v.check_in_time >= '2026-09-01' and v.check_in_time < '2026-10-01'
+    """, bank=BANK["id"])
+    score = round(100 - (ooh + geofence + fraud + consent_missing) / total * 100, 1)
+    assert (total, met, consent_missing, ooh, geofence, fraud, score) == (4214, 2284, 705, 106, 166, 0, 76.8)
+
+
 def test_the_injected_breaches_are_where_the_manifest_says(db):
     truth = json.loads(MANIFEST.read_text(encoding="utf-8"))
     for key, t in truth["agencies"].items():
@@ -289,6 +315,46 @@ def test_instalments_are_inside_the_stated_window(db):
                lo=lo, hi=hi) == 0
     readme = (BACKEND / "fixtures" / "README.md").read_text(encoding="utf-8")
     assert f"{lo.isoformat()}" in readme and f"{hi.isoformat()}" in readme
+
+
+# ── the performing book and borrower detail (lane L6, 2026-09-30) ───────────
+def _performing_prefix(bank_key: str) -> str:
+    from app.demo import roster as R
+    from app.demo.performing import BOOK_NUMBER
+    return f"{R.BANKS[bank_key]['code'][:3]}{BOOK_NUMBER[bank_key]:02d}"
+
+
+def test_the_performing_book_is_the_manifest_s_and_never_delinquent(db):
+    truth = json.loads(MANIFEST.read_text(encoding="utf-8"))["performing"]
+    assert truth, "the manifest has no performing book"
+    for bank_key, t in truth.items():
+        p = _performing_prefix(bank_key) + "%"
+        loans = "from lending.loans l join lending.customers c on c.id = l.customer_id where c.customer_ref like :p"
+        assert one(db, f"select count(*) {loans}", p=p) == t["loans"]
+        assert one(db, f"select count(*) {loans} and (l.dpd <> 0 or l.status <> 'ACTIVE' or l.overdue_amount <> 0)",
+                   p=p) == 0
+        assert one(db, f"select count(*) {loans} and exists (select 1 from collections.placements x "
+                       "where x.loan_id = l.id)", p=p) == 0
+        hist = ("from lending.loan_dpd_history h join lending.loans l on l.id = h.loan_id "
+                "join lending.customers c on c.id = l.customer_id where c.customer_ref like :p")
+        assert one(db, f"select count(*) {hist}", p=p) == t["history_rows"]
+        assert one(db, f"select count(*) {hist} and (h.dpd <> 0 or h.agency_id is not null)", p=p) == 0
+
+
+def test_most_of_girivan_s_live_book_is_current(db):
+    """Why the performing book exists: before it, 27-36% of the live book was
+    CURRENT, a lender entirely in collections."""
+    from app.demo.roster import ANCHOR_DATE, BANK
+    live, current = rows(db, "select count(*), count(*) filter (where dpd = 0) from lending.loan_dpd_history "
+                             "where bank_id = :b and as_of_date = :d and loan_status in ('ACTIVE', 'NPA')",
+                         b=BANK["id"], d=ANCHOR_DATE)[0]
+    assert current / live >= 0.65, (current, live)
+
+
+def test_borrower_emails_are_on_reserved_test_domains_only(db):
+    assert one(db, "select count(*) from lending.customers where email is not null "
+                   "and split_part(email, '@', 2) not like '%.test'") == 0
+    assert one(db, "select count(*) from lending.customers where email is not null") > 0
 
 
 def test_the_restored_fixture_is_at_the_code_s_head_revision(db):

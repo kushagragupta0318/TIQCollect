@@ -131,7 +131,10 @@ V1_STAFF = {
 }
 # Order matters: apply_demo_logins.REQUIRED_ROLE_GROUPS is positional.
 MASTER_ACCOUNTS = (f"ananya.iyer@{BANK_DOMAIN}", f"vikram.malhotra@{AGENCY_DOMAIN}",
-                   f"piyush.sharma@{AGENCY_DOMAIN}", f"kavya.reddy@{BANK_DOMAIN}")
+                   f"piyush.sharma@{AGENCY_DOMAIN}", f"kavya.reddy@{BANK_DOMAIN}",
+                   # 5th slot (2026-10-06): Meera Khanna, Aravalli's AGENCY_ADMIN, so the
+                   # agency-admin tier (and the reversal agency-approve) is demoable.
+                   f"meera.khanna@{AGENCY_DOMAIN}")
 
 # Aravalli's workforce (B16). GENDER IS ROSTER DATA, stated per person by the
 # roster's author — never derived from a name, anywhere (coordinator,
@@ -459,10 +462,13 @@ RAJPUTANA = AgencyRoster(
     managers=("Surendra Choudhary", "Anjali Meena"))
 
 # The suspension figures are MEASURED on the generated book (demo profile,
-# seed 20260922, 2026-09-28: Awadh 33.7% of 315 August visits outside the
-# fence; Girivan's other agencies 4.6% of 5,144, Aravalli's re-derived flags
-# included, Kumaon's Almora not); tests/pg/test_pg_demo_fixture.py
-# re-measures them on the committed dump, so the text cannot drift from the data.
+# seed 20260922; re-measured 2026-09-30 after L6 added calendar seasonality,
+# which moves WHEN a loan is visited and so reshuffles the fence-gaming draw:
+# Awadh 29.8% of 352 August visits outside the fence; Girivan's other
+# agencies ~4% (Aravalli's re-derived flags included, Kumaon's Almora not).
+# Was 33.7% of 315 / 4.6% before seasonality (2026-09-28).
+# tests/pg/test_pg_demo_fixture.py re-measures them on the committed dump,
+# so the text cannot drift from the data.
 AWADH = AgencyRoster(
     key="AWADH", bank_key="GIRIVAN", domain="awadhfield.test", zone="NORTH",
     serves=("LUCKNOW", "KANPUR"), n_agents=14, onboarded=date(2026, 2, 20), agency_region="AWADH",
@@ -476,8 +482,8 @@ AWADH = AgencyRoster(
                         ("Compliance Officer", "Pooja Awasthi", "9839205503")],
                 status="SUSPENDED", activated=_at(date(2026, 2, 20)),
                 suspended=(_at(date(2026, 9, 2), 11, 15),
-                           "Geofence-failure spike under review: 34% of August visits recorded outside "
-                           "the 100 m fence against 5% across Girivan's other agencies. Placements paused "
+                           "Geofence-failure spike under review: 30% of August visits recorded outside "
+                           "the 100 m fence against 4% across Girivan's other agencies. Placements paused "
                            "pending the evidence audit.")),
     contract=_contract("AWADH-2026", BANK, no="GFL/AGY/2026/0026", start=date(2026, 2, 20),
                        end=date(2027, 2, 19), cases=1800, seats=18, sla=7, recall=60, deposit="500000.00",

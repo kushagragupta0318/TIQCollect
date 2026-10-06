@@ -202,11 +202,73 @@ def test_an_agency_sees_only_applied_runs_and_only_its_own_loans_in_them(w):
     w["db"].commit()
     assert c.get(f"{BASE}/runs", headers=_h(amb)).json()["items"] == []                   # another agency: nothing
     assert c.get(f"{BASE}/runs/{planned['run_id']}/decisions", headers=_h(amb)).json()["total"] == 0
+    assert decisions["view"] == "agency"
     for d in decisions["items"]:
         assert d["chosen_agency_id"] == TEST_AGENCY_ID
-        assert d["gate_results"] == {} and d["previous_agency_id"] is None
+        assert "gate_results" not in d and "previous_agency_id" not in d and "previous_agency_name" not in d
     assert set(decisions["run"]) == {"run_id", "plan_date", "status", "applied_at"}
     assert c.post(f"{BASE}/runs/{planned['run_id']}/apply", headers=_h(am)).status_code == 403
+
+
+def _applied_to_the_managers_agency(w):
+    w["db"].get(Agency, AG_B).status = "SUSPENDED"          # every loan goes to the manager's agency
+    w["db"].commit()
+    run = _plan(w, w["ba"]).json()
+    w["c"].post(f"{BASE}/runs/{run['run_id']}/apply", headers=_h(w["ba2"]))
+    return run["run_id"]
+
+
+def test_an_agency_never_reads_another_agencys_id_in_its_decisions(w):
+    """Audit MAJOR (2026-09-30): explore() records the agency a loan was
+    swapped OFF, and the agency view passed score_breakdown through verbatim.
+    Planted here exactly as record_run persists it (plus a key the engine may
+    grow later), since a random swap cannot be forced from the API."""
+    run_id = _applied_to_the_managers_agency(w)
+    db = w["db"]
+    for d in db.query(PlacementDecision).filter_by(run_id=run_id).all():
+        d.score_breakdown = {**d.score_breakdown, "exploration": True, "exploration_from_agency": AG_B,
+                             "exploration_n_eligible": 2, "exploration_seed": 7, "n_eligible": 2,
+                             "replacement": "RE_PLACED", "recall_rules": ["SLA_BREACH"], "a_key_added_later": AG_B}
+    db.commit()
+    resp = w["c"].get(f"{BASE}/runs/{run_id}/decisions", headers=_h(w["am"]))
+    assert resp.status_code == 200 and resp.json()["total"] == 3
+    assert AG_B not in resp.text and "Kaveri" not in resp.text
+    from app.services.bank.placement_engine import AGENCY_BREAKDOWN_KEYS
+    for d in resp.json()["items"]:
+        assert set(d["score_breakdown"]) <= set(AGENCY_BREAKDOWN_KEYS) and "is_modelled" in d["score_breakdown"]
+    # The service alone, under the route's typed response: the allowlist holds by itself.
+    import json
+    from app.services.bank import placement_engine as engine
+    out = engine.run_decisions(db, bank_id=TEST_BANK_ID, run_id=run_id, outcome=None, page=1, page_size=50,
+                               agency_id=TEST_AGENCY_ID)
+    assert AG_B not in json.dumps(out, default=str)
+    bank = w["c"].get(f"{BASE}/runs/{run_id}/decisions", headers=_h(w["ba"])).json()
+    assert bank["view"] == "bank" and all(d["score_breakdown"]["exploration_from_agency"] == AG_B
+                                          for d in bank["items"])                 # the bank still sees all
+
+
+def test_the_typed_responses_drop_what_the_service_leaks(w, monkeypatch):
+    """Rule 18: the response model is itself an allowlist. A future service
+    change that leaks a key is stopped at the route."""
+    from app.api.v1.endpoints import bank_placements
+    run_id = _applied_to_the_managers_agency(w)
+    real = bank_placements.engine.run_decisions
+
+    def leaky(*a, **kw):
+        out = real(*a, **kw)
+        out["bank_totals"] = {"n": 99, "from": AG_B}
+        for it in out["items"]:
+            it["previous_agency_id"] = AG_B
+            it["score_breakdown"]["exploration_from_agency"] = AG_B
+        return out
+    monkeypatch.setattr(bank_placements.engine, "run_decisions", leaky)
+    monkeypatch.setattr(bank_placements.engine, "list_runs",
+                        lambda *a, **kw: [{"run_id": run_id, "plan_date": "2026-10-01", "status": "APPLIED",
+                                           "applied_at": None, "summary": {"agency": AG_B}}])
+    for path in (f"{BASE}/runs/{run_id}/decisions", f"{BASE}/runs"):
+        resp = w["c"].get(path, headers=_h(w["am"]))
+        assert resp.status_code == 200, resp.text
+        assert AG_B not in resp.text
 
 
 def test_another_bank_sees_no_run_and_cannot_apply_one(w):

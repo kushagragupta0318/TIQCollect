@@ -36,7 +36,7 @@ import type { AllocationDecisionItem } from "@/api/manager";
 import { isTimeout } from "@/api/axios";
 import { errorDetail, errorStatus } from "@/lib/apiError";
 import { shortMoney } from "@/lib/money";
-import { mlBadge, ownerTag, rankedReasons } from "./allocationReasons";
+import { deferredBadge, mlBadge, ownerTag, rankedReasons } from "./allocationReasons";
 
 
 // Same four options as ManagerOverviewPage.AS_BEFORE, for the same reason: make
@@ -148,7 +148,12 @@ export function TomorrowAllocationCard({ defaultExpanded = false }: { defaultExp
     });
     if (decisionFilter === "ALL") return list;
     if (decisionFilter === "DEFERRED") {
-      return list.filter((d) => d.outcome === "DEFERRED" || d.outcome === "DEFERRED_ROUTE_INFEASIBLE");
+      // Every DEFERRED_* subtype (ROUTE_INFEASIBLE, PTP, VISIT_CAP, and any
+      // added later) — same set the "Deferred (N)" pill above counts via
+      // .startsWith("DEFERRED"). This used to match only the first two
+      // subtypes, so the pill's count and this list disagreed (demo QA sweep,
+      // 2026-10-01).
+      return list.filter((d) => d.outcome.startsWith("DEFERRED"));
     }
     return list.filter((d) => d.outcome === decisionFilter);
   }, [decisions, decisionFilter]);
@@ -740,11 +745,14 @@ export function TomorrowAllocationCard({ defaultExpanded = false }: { defaultExp
                             BLOCKED
                           </span>
                         )}
-                        {(d.outcome === "DEFERRED" || d.outcome === "DEFERRED_ROUTE_INFEASIBLE") && (
-                          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800">
-                            {d.outcome === "DEFERRED_ROUTE_INFEASIBLE" ? "ROUTE OUTLIER" : "DEFERRED"}
-                          </span>
-                        )}
+                        {d.outcome.startsWith("DEFERRED") && (() => {
+                          const badge = deferredBadge(d.outcome);
+                          return (
+                            <span title={badge.title} className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 whitespace-nowrap">
+                              {badge.label}
+                            </span>
+                          );
+                        })()}
                       </div>
                     </div>
                     <p className="text-slate-600 text-[11px] line-clamp-1">{d.reason}</p>

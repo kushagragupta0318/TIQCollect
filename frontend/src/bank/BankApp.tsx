@@ -14,6 +14,7 @@ import { BankLayout } from "./layout/BankLayout";
 import { guardRedirect } from "@/lib/roles";
 import { BANK_PORTAL_ROLES, BANK_ROLE_LABELS, isBankPortalRole } from "./layout/bankRoles";
 import { BANK_NAV_ITEMS } from "./layout/navigation";
+import { BankAnalyticsPage } from "./pages/BankAnalyticsPage";
 import { BankOverviewPage } from "./pages/BankOverviewPage";
 import { BankPlacementPage } from "./pages/BankPlacementPage";
 import { BankPlaceholderPage } from "./pages/BankPlaceholderPage";
@@ -22,6 +23,7 @@ import AgencyDirectoryPage from "./pages/directory/AgencyDirectoryPage";
 import AgencyPerformancePage from "./pages/performance/AgencyPerformancePage";
 import ModelsPage from "./pages/models/ModelsPage";
 import CustomerPage from "./pages/customer/CustomerPage";
+import MonteCarloPage from "./pages/strategy/MonteCarloPage";
 
 /** The nav items with a real page instead of the generic placeholder
  *  (D01-D03, D05, D06). Kept out of the BANK_NAV_ITEMS.map() below so their
@@ -33,7 +35,8 @@ const AGENCY_PERFORMANCE_PATH = "agencies/performance";
 
 // Screens that are built; every other nav item renders its placeholder.
 const BUILT_PAGES: Record<string, ComponentType> = {
-  overview: BankOverviewPage, "agencies/placement": BankPlacementPage, "governance/models": ModelsPage,
+  overview: BankOverviewPage, analytics: BankAnalyticsPage, "agencies/placement": BankPlacementPage,
+  "governance/models": ModelsPage, "strategy/monte-carlo": MonteCarloPage,
 };
 
 

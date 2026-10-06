@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -57,6 +58,11 @@ def _not_found() -> AppException:
 
 
 def _iso(value: Any) -> Any:
+    # The v_case_360 view returns uuid columns (case_id, agency_id, agent_id,
+    # loan_id); the response schema types them as str, so stringify UUIDs here
+    # or the serialiser 500s on the whole page.
+    if isinstance(value, UUID):
+        return str(value)
     return value.isoformat() if isinstance(value, (datetime, date)) else value
 
 

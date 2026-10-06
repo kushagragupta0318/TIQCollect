@@ -107,7 +107,7 @@ import math
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import Any, Iterable
 
 import structlog
 
@@ -223,18 +223,23 @@ def own_case(db, agent_id: str, case_id: str):
 
 # ── Public entry point ───────────────────────────────────────────────────────
 def extract(transcript: str, *, today: date | None = None,
-            remaining_amount: float | None = None) -> ExtractionResult:
+            remaining_amount: float | None = None,
+            names: Iterable[str] = ()) -> ExtractionResult:
     """Suggested form values for one transcript. Never raises.
 
     `remaining_amount` is the case's target less what is collected; the route
     always passes it. None (no case in hand) leaves amounts unbounded above.
+
+    `names` are the people the transcript is likely to name (the borrower).
+    A dictated note is the freest text the product sends a model, so the seam
+    is told what to pseudonymise beyond what its patterns can see.
     """
     text = _normalise(transcript)[:MAX_TRANSCRIPT_CHARS]
     today = today or datetime.now(IST).date()
     if not text:
         return ExtractionResult(source=SOURCE_NONE, failure_reason="Empty transcript")
 
-    res = _ask_llm(text, today)
+    res = _ask_llm(text, today, names=names)
     if res.ai_generated:
         candidates = _from_llm_payload(res.data)
         if candidates is not None:
@@ -288,7 +293,7 @@ LLM_DEADLINE_SECONDS = 25.0
 _POOL = None
 
 
-def _ask_llm(text: str, today: date) -> llm.LLMResult:
+def _ask_llm(text: str, today: date, *, names: Iterable[str] = ()) -> llm.LLMResult:
     """The only LLM call in this module. Not cached: the prompt is verbatim
     borrower speech, and an hour in Redis buys nothing for a one-off note.
 
@@ -305,7 +310,7 @@ def _ask_llm(text: str, today: date) -> llm.LLMResult:
         _POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="visit-extraction-llm")
     fut = _POOL.submit(
         llm.complete, _prompt(text, today), purpose="visit_extraction", system=_SYSTEM,
-        json_mode=True, max_tokens=1200, temperature=0.0, cache_ttl=0,
+        json_mode=True, max_tokens=1200, temperature=0.0, cache_ttl=0, names=list(names),
     )
     try:
         return fut.result(timeout=LLM_DEADLINE_SECONDS)

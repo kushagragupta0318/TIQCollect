@@ -1,23 +1,65 @@
 // Command Center `components/SearchBar.jsx`, ported to TypeScript (spec §2.3).
 // Class strings verbatim. Ctrl/Cmd+K focuses it, arrows move, Enter opens,
-// Escape clears. Account lookup is not wired: the bank has no account-search
-// endpoint yet, so the index is pages plus whatever `extra` the caller passes.
+// Escape clears. The index is the built pages, whatever `extra` the caller
+// passes, and — since /bank/customers/search exists — borrowers of the
+// caller's own bank, which CC lists as "Account" hits.
+//
+// The lookup is the server's decision, never this component's: the bank comes
+// from the caller's row, a region-limited user searches inside their region,
+// and a borrower outside either is returned as nothing at all. So an empty list
+// here never means "not yours" — it means nothing to show.
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useNavigate } from "react-router";
-import { ArrowRight, Command, Search, X, Zap } from "lucide-react";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { ArrowRight, Command, Search, User, X, Zap } from "lucide-react";
+import { searchCustomers } from "@/api/bankCustomer";
 import { KIND_CHIP, PAGE_ENTRIES, searchEntries, type SearchEntry } from "./searchIndex";
+
+/** Borrower hits shown beside the page hits, as CC shows accounts. */
+const MAX_BORROWER_HITS = 4;
+/** Keystrokes are not queries: the request waits for a pause in typing. */
+const DEBOUNCE_MS = 220;
 
 export function BankSearchBar({ extra = [] }: { extra?: SearchEntry[] }) {
   const [query, setQuery] = useState("");
+  // The query as last SENT, which lags what is typed by one debounce.
+  const [term, setTerm] = useState("");
   const [open, setOpen] = useState(false);
   const [cursor, setCursor] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const debounce = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const navigate = useNavigate();
 
   const index = useMemo(() => [...PAGE_ENTRIES, ...extra], [extra]);
-  // CC caps static hits at 5 (accounts would add up to 4 more; none here yet).
-  const results = searchEntries(index, query);
+  // CC caps static hits at 5; borrowers add up to MAX_BORROWER_HITS more.
+  const pages = searchEntries(index, query);
+
+  // The server decides what is too short to search; 3 is only the gate that
+  // keeps the box from asking on every second keystroke.
+  const borrowers = useQuery({
+    queryKey: ["bank", "customer-search", term],
+    queryFn: () => searchCustomers(term),
+    enabled: term.trim().length >= 3,
+    placeholderData: keepPreviousData,
+    staleTime: 30_000,
+    retry: false,
+  });
+
+  const borrowerEntries: SearchEntry[] = useMemo(() => {
+    if (!borrowers.data || borrowers.data.query_too_short) return [];
+    return borrowers.data.items.slice(0, MAX_BORROWER_HITS).map((hit) => ({
+      kind: "account" as const,
+      id: `customer:${hit.customer_id}`,
+      title: hit.full_name,
+      subtitle: [hit.city, hit.first_account, hit.loans > 1 ? `${hit.loans} loans` : null]
+        .filter(Boolean).join(" · "),
+      path: `/bank/customers/${hit.customer_id}`,
+      icon: User,
+    }));
+  }, [borrowers.data]);
+
+  const results = useMemo(() => [...pages, ...borrowerEntries], [pages, borrowerEntries]);
 
   // Ctrl+K / Cmd+K focuses; Escape clears — window-wide, as in CC.
   useEffect(() => {
@@ -29,6 +71,7 @@ export function BankSearchBar({ extra = [] }: { extra?: SearchEntry[] }) {
       }
       if (e.key === "Escape") {
         setQuery("");
+        setTerm("");
         setOpen(false);
         inputRef.current?.blur();
       }
@@ -50,6 +93,7 @@ export function BankSearchBar({ extra = [] }: { extra?: SearchEntry[] }) {
     if (!result) return;
     if (result.path) navigate(result.path);
     setQuery("");
+    setTerm("");
     setOpen(false);
   };
 
@@ -73,6 +117,7 @@ export function BankSearchBar({ extra = [] }: { extra?: SearchEntry[] }) {
 
   const clear = () => {
     setQuery("");
+    setTerm("");
     setCursor(0);
     inputRef.current?.focus();
   };
@@ -86,13 +131,16 @@ export function BankSearchBar({ extra = [] }: { extra?: SearchEntry[] }) {
           ref={inputRef}
           value={query}
           onChange={(e) => {
-            setQuery(e.target.value);
+            const next = e.target.value;
+            setQuery(next);
             setCursor(0);
             setOpen(true);
+            clearTimeout(debounce.current);
+            debounce.current = setTimeout(() => setTerm(next), DEBOUNCE_MS);
           }}
           onFocus={() => setOpen(true)}
           onKeyDown={onKeyDown}
-          placeholder="Search pages, KPIs, alerts..."
+          placeholder="Search pages and borrowers..."
           aria-label="Search"
           className="flex-1 text-[13px] bg-transparent outline-none text-foreground placeholder-muted-foreground min-w-0"
         />

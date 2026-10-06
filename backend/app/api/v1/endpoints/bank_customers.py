@@ -7,15 +7,16 @@ analytics session — that is what makes RLS apply to the caller.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 from app.core.dependencies import AnalyticsDb, DbSession
 from app.core.ids import UUIDPath
 from app.core.permissions import require_perm
 from app.core.request_context import CurrentContext
 from app.models.user import User
-from app.schemas.bank_customer_360 import CaseTimeline, Customer360
+from app.schemas.bank_customer_360 import CaseTimeline, Customer360, CustomerSearch
 from app.services.bank import customer_360 as svc
+from app.services.bank import customer_search as search_svc
 from app.services.scope import region_limit_path
 
 # `placement.read` is the capability the entry point (Placements) already
@@ -32,6 +33,17 @@ router = APIRouter(prefix="/bank", tags=["bank-customers"])
 def customer_360(customer_id: UUIDPath, ctx: CurrentContext, db: DbSession, adb: AnalyticsDb,
                  _user: User = require_perm(_BANK_READ)):
     return svc.customer_360(db, adb, ctx, customer_id, region_limit=region_limit_path(db, _user))
+
+
+@router.get("/customers/search", response_model=CustomerSearch)
+def customer_search(ctx: CurrentContext, db: DbSession,
+                    q: str = Query("", max_length=120, description="A name, customer reference or loan account number"),
+                    _user: User = require_perm(_BANK_READ)):
+    """Borrowers of the caller's own bank, inside their region limit.
+
+    No collision with /customers/{customer_id}/360: that route needs the /360
+    suffix, and its id is a UUIDPath, so "search" could never match it."""
+    return search_svc.search_customers(db, ctx, q, region_limit=region_limit_path(db, _user))
 
 
 @router.get("/cases/{case_id}/timeline", response_model=CaseTimeline)

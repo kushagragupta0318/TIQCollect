@@ -14,7 +14,7 @@ import { Link, useLocation } from "react-router";
 import { LogOut, PanelLeft, PanelLeftClose } from "lucide-react";
 import { Sidebar as SidebarRoot, SidebarContent, SidebarFooter, SidebarHeader } from "../ui/sidebar";
 import { useSidebar } from "../ui/sidebarContext";
-import { BANK_HOME_PATH, BANK_SECTIONS, bankHref, type BankNavItem, type BankNavSection } from "./navigation";
+import { BANK_HOME_PATH, BUILT_BANK_SECTIONS, bankHref, type BankNavItem, type BankNavSection } from "./navigation";
 import logo from "../assets/logo.png";
 import IQ from "../assets/IQ_Logo.png";
 
@@ -159,7 +159,7 @@ export function BankSidebar({ persona, onSignOut }: { persona?: BankPersona; onS
         className={expanded ? "pt-2 overflow-y-auto sidebar-scrollbar-hide" : "pt-3 overflow-visible gap-1.5"}
       >
         {expanded
-          ? BANK_SECTIONS.map((section) => (
+          ? BUILT_BANK_SECTIONS.map((section) => (
               <div key={section.label} className="px-3 py-1">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground px-2 mb-1.5 mt-3">{section.label}</p>
                 <div className="space-y-0.5">
@@ -169,7 +169,7 @@ export function BankSidebar({ persona, onSignOut }: { persona?: BankPersona; onS
                 </div>
               </div>
             ))
-          : BANK_SECTIONS.map((section) => (
+          : BUILT_BANK_SECTIONS.map((section) => (
               <SectionRail key={section.label} section={section} activePath={loc.pathname} />
             ))}
       </SidebarContent>

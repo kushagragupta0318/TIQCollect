@@ -188,11 +188,12 @@ import json
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterable, Iterator
 
 import structlog
 
 from app.core.config import settings
+from app.core.redaction import pseudonymise, restore
 
 logger = structlog.get_logger()
 
@@ -254,6 +255,9 @@ class LLMResult:
     # Set on the PRIMARY's failure when the fallback was tried and failed too:
     # {"provider", "status", "failure_reason"} of the fallback's attempt.
     fallback_failure: dict[str, Any] | None = None
+    #: How many identifiers were replaced before the send, by kind. Evidence of
+    #: what left the building; never the values themselves.
+    redactions: dict[str, int] = field(default_factory=dict)
 
     @property
     def ai_generated(self) -> bool:
@@ -877,6 +881,8 @@ def complete(
     temperature: float = 0.3,
     cache_ttl: int | None = None,
     json_schema: dict | None = None,
+    names: Iterable[str] = (),
+    redact_values: Iterable[str] = (),
 ) -> LLMResult:
     """Ask the model. Returns an LLMResult; never raises.
 
@@ -890,21 +896,41 @@ def complete(
     """
     started = time.monotonic()
     want_json = json_mode or json_schema is not None
+    # No identifier crosses this seam. Pseudonymised rather than blanked, so
+    # the answer can be turned back into something an agent can read, and done
+    # HERE so no caller can forget it — on the fallback's path too.
+    try:
+        red = pseudonymise(prompt, system, names=names, values=redact_values)
+    except Exception as exc:                                    # noqa: BLE001 — fail closed
+        logger.error("llm.redaction_failed", purpose=purpose, error=str(exc),
+                     error_type=type(exc).__name__, exc_info=True)
+        return LLMResult(status=INVALID_REQUEST,
+                         failure_reason="redaction failed; the request was not sent")
+    if red.changed:
+        # Counts only: what was removed, never what it was.
+        logger.info("llm.redacted", purpose=purpose, counts=red.counts)
+
     tried: list[tuple[str, LLMResult]] = []
     for i, (name, provider, model, api_key) in enumerate(_candidates("fast")):
-        r = _complete_one(name, provider, model, api_key, prompt, purpose=purpose,
-                          system=system, want_json=want_json, json_schema=json_schema,
+        r = _complete_one(name, provider, model, api_key, red.prompt, purpose=purpose,
+                          system=red.system, want_json=want_json, json_schema=json_schema,
                           max_tokens=max_tokens, temperature=temperature,
-                          cache_ttl=cache_ttl, started=started, is_fallback=i > 0)
+                          cache_ttl=cache_ttl, started=started, is_fallback=i > 0,
+                          key_prompt=prompt, key_system=system)
         tried.append((name, r))
         if r.status not in _FALLBACK_ON:
             break
-    return _settle(purpose, tried, "complete")
+    result = _settle(purpose, tried, "complete")
+    result.redactions = dict(red.counts)
+    if red.changed:
+        result.text = restore(result.text, red.mapping)
+        result.data = restore(result.data, red.mapping)
+    return result
 
 
 def _complete_one(name, provider, model, api_key, prompt, *, purpose, system, want_json,
                   json_schema, max_tokens, temperature, cache_ttl, started,
-                  is_fallback) -> LLMResult:
+                  is_fallback, key_prompt=None, key_system=None) -> LLMResult:
     def elapsed() -> int:
         return int((time.monotonic() - started) * 1000)
 
@@ -921,7 +947,12 @@ def _complete_one(name, provider, model, api_key, prompt, *, purpose, system, wa
         return LLMResult(status=NOT_CONFIGURED, provider="none", failure_reason=reason)
 
     try:
-        key = _cache_key(purpose, model, prompt, system, json_schema)
+        # Keyed on what the CALLER asked, not on the pseudonymised send:
+        # two borrowers' prompts differ only in the values just replaced, and
+        # a shared key would serve one borrower's brief for another.
+        key = _cache_key(purpose, model,
+                         prompt if key_prompt is None else key_prompt,
+                         system if key_system is None else key_system, json_schema)
     except (TypeError, ValueError, RecursionError) as exc:
         # The prompt itself can no longer reach here (see _cache_key) — only
         # json.dumps(json_schema) can still raise, so this reason is accurate.

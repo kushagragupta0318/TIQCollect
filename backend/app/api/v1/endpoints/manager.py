@@ -19,7 +19,7 @@ from __future__ import annotations
 from calendar import monthrange
 from collections import defaultdict
 from datetime import datetime, date, timezone, timedelta
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import and_, func, or_
@@ -51,6 +51,7 @@ from app.ml.recovery_scorecard import (
 )
 from app.models.payment import Payment, PaymentMode, PaymentStatus
 from app.models.ptp import PTP, PTPStatus
+from app.core.permissions import require_perm
 from app.models.user import User
 from app.models.visit import Visit, VisitOutcome
 from app.services.brand import brand_for
@@ -1161,6 +1162,13 @@ def list_cases(
     # answers "show me where the recoverable money is" rather than "show me what
     # the label said on some past day".
     recovery: Optional[str] = None,
+    # CURRENT / BUCKET_1 / BUCKET_2 / BUCKET_3 / NPA — the loan's DPD bucket.
+    # Server-side, same reason as `recovery` just above: the overview's "Today's
+    # Cases by DPD" donut links here with ?bucket=, and until 2026-10-01 the
+    # frontend filtered this client-side on the one page already fetched (and
+    # only recognised 3 of the 5 buckets), so the donut's count and the list
+    # disagreed (demo QA sweep).
+    dpd_bucket: Optional[str] = None,
     # ── Visit priority (2026-08-27) ─────────────────────────────────────────
     # sort="priority_desc" | "priority_asc" turns the list into the ACTIONABLE
     # priority view: resolved cases drop out (a settled case has no next visit
@@ -1227,6 +1235,11 @@ def list_cases(
         # already carries two joinedloads and a window-free correlated subquery
         # here would be re-evaluated per row.
         q = q.filter(Case.loan_id.in_(_loan_ids_with_recovery(db, recovery.upper())))
+    if dpd_bucket:
+        bucket = dpd_bucket.upper()
+        if bucket not in DPDBucket.__members__:
+            raise HTTPException(status_code=422, detail=f"dpd_bucket must be one of {list(DPDBucket.__members__)}")
+        q = q.filter(Case.loan_id.in_(db.query(Loan.id).filter(Loan.dpd_bucket == bucket)))
     if agent_id:
         q = q.filter(Case.agent_id == agent_id)
     if date_from:
@@ -1766,7 +1779,7 @@ def ai_health(current_user: ManagerOnly):
 # healthy and deliberately not in use, and those are different states.
 
 @router.get("/ml/health")
-def ml_health(current_user: ManagerOnly, db: DbSession):
+def ml_health(db: DbSession, current_user: User = require_perm("ml.read")):
     from app.ml.pipeline.engine import DecisionEngine, health_all
 
     out = health_all()
@@ -1897,9 +1910,9 @@ def _ml_monitoring_block(db, model_name: str = "recovery_risk") -> dict:
 # code path from the nightly job to `champion.txt`.
 
 @router.get("/ml/candidates")
-def ml_candidates(current_user: ManagerOnly, db: DbSession,
-                  model: str = "recovery_risk", limit: int = 25,
-                  state: Optional[str] = None):
+def ml_candidates(db: DbSession, model: str = "recovery_risk", limit: int = 25,
+                  state: Optional[str] = None,
+                  current_user: User = require_perm("ml.read")):
     """Every retraining attempt, newest first — the durable retraining report.
 
     Deliberately NOT tenant-scoped: a model is one global object, not a
@@ -1917,7 +1930,8 @@ def ml_candidates(current_user: ManagerOnly, db: DbSession,
 
 
 @router.get("/ml/candidates/{candidate_id}")
-def ml_candidate_detail(candidate_id: UUIDPath, current_user: ManagerOnly, db: DbSession):
+def ml_candidate_detail(candidate_id: UUIDPath, db: DbSession,
+                        current_user: User = require_perm("ml.read")):
     from app.ml.pipeline import registry
     from app.models.model_candidate import ModelCandidate
 
@@ -1935,8 +1949,8 @@ def ml_candidate_detail(candidate_id: UUIDPath, current_user: ManagerOnly, db: D
 
 
 @router.post("/ml/candidates/{candidate_id}/approve")
-def ml_approve_candidate(candidate_id: UUIDPath, current_user: ManagerOnly,
-                         db: DbSession, note: Optional[str] = None):
+def ml_approve_candidate(candidate_id: UUIDPath, db: DbSession, note: Optional[str] = None,
+                         current_user: User = require_perm("ml.approve")):
     """Record a person's decision to accept the challenger. Does NOT promote."""
     from app.ml.pipeline.lifecycle import ApprovalRefused, approve
 
@@ -1960,8 +1974,8 @@ def ml_approve_candidate(candidate_id: UUIDPath, current_user: ManagerOnly,
 
 
 @router.post("/ml/candidates/{candidate_id}/reject")
-def ml_reject_candidate(candidate_id: UUIDPath, current_user: ManagerOnly,
-                        db: DbSession, note: Optional[str] = None):
+def ml_reject_candidate(candidate_id: UUIDPath, db: DbSession, note: Optional[str] = None,
+                        current_user: User = require_perm("ml.approve")):
     from app.ml.pipeline.lifecycle import ApprovalRefused, reject
 
     try:
@@ -1983,8 +1997,8 @@ def ml_reject_candidate(candidate_id: UUIDPath, current_user: ManagerOnly,
 
 
 @router.post("/ml/candidates/{candidate_id}/promote")
-def ml_promote_candidate(candidate_id: UUIDPath, current_user: ManagerOnly,
-                         db: DbSession):
+def ml_promote_candidate(candidate_id: UUIDPath, db: DbSession,
+                         current_user: User = require_perm("ml.promote")):
     """The one write in this codebase that changes what borrowers are scored by.
 
     Separate from `/approve` on purpose: approval records a judgement, promotion
@@ -3003,71 +3017,81 @@ def get_payment_modes(
     }
 
 
-@router.get("/analytics/dpd-breakdown")
+from pydantic import BaseModel as _BreakdownBase  # local, as the other sections here do
+
+from app.services import portfolio_breakdown
+
+
+class BreakdownRowOut(_BreakdownBase):
+    """One row of a portfolio breakdown. `key` is the dimension's value, already
+    labelled: a loan with no branch recorded reads "Not recorded" rather than
+    vanishing, so the rows still sum to the page's header."""
+    key: str
+    case_count: int
+    target_lakhs: float
+    collected_lakhs: float
+    collection_rate_pct: float
+
+
+def _team_breakdown(db, current_user, *, dimension: str, month: Optional[str]) -> list[BreakdownRowOut]:
+    my_agent_ids = [a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()]
+    try:
+        rows = portfolio_breakdown.breakdown(db, dimension=dimension, agent_ids=my_agent_ids, month=month)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return [BreakdownRowOut(**vars(r)) for r in rows]
+
+
+class DpdBreakdownRowOut(_BreakdownBase):
+    """The DPD rows' long-standing shape, whose dimension field is `bucket`.
+
+    The generic breakdown calls it `key`. This one keeps `bucket` because three
+    producers feed one card -- this route, the per-agent route, and
+    /manager/analytics's own dpd_breakdown -- and renaming the field would be a
+    frontend change for no gain to the reader.
+    """
+    bucket: str
+    case_count: int
+    target_lakhs: float
+    collected_lakhs: float
+    collection_rate_pct: float
+
+
+def _as_dpd_rows(rows: list[BreakdownRowOut]) -> list[DpdBreakdownRowOut]:
+    return [DpdBreakdownRowOut(bucket=r.key, **{k: v for k, v in vars(r).items() if k != "key"})
+            for r in rows]
+
+
+@router.get("/analytics/dpd-breakdown", response_model=list[DpdBreakdownRowOut])
 def get_team_dpd_breakdown(
     current_user: ManagerOnly,
     db: DbSession,
-    month: Optional[str] = None,  # YYYY-MM — if provided, sums payments in that month
+    month: Optional[str] = None,  # YYYY-MM - if provided, sums payments in that month
 ):
     """DPD collection breakdown across all team cases.
     Without month: all-time portfolio totals (Case.collected_amount).
-    With month: only payments collected in that calendar month."""
-    bucket_order = ["BUCKET_1", "BUCKET_2", "BUCKET_3", "NPA"]
+    With month: only payments collected in that calendar month.
 
-    my_agent_ids = [a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()]
+    The query lives in services/portfolio_breakdown now (known issue 8): the
+    same metric rules serve branch, city and product, and one definition cannot
+    drift from another. The response is unchanged, field names included.
+    """
+    return _as_dpd_rows(_team_breakdown(db, current_user, dimension="bucket", month=month))
 
-    if month:
-        yr, mo = month.split("-")
-        month_start = datetime(int(yr), int(mo), 1)
-        month_end = datetime(int(yr) + 1, 1, 1) if int(mo) == 12 else datetime(int(yr), int(mo) + 1, 1)
 
-        rows = (
-            db.query(
-                Loan.dpd_bucket,
-                func.count(func.distinct(Case.id)).label("case_count"),
-                func.sum(Case.target_amount).label("target_amount"),
-                func.sum(Payment.amount).label("collected_amount"),
-            )
-            .join(Case, Case.loan_id == Loan.id)
-            .join(Payment, Payment.case_id == Case.id)
-            .filter(
-                Case.agent_id.in_(my_agent_ids),
-                Payment.agent_id.in_(my_agent_ids),
-                Payment.payment_date >= month_start,
-                Payment.payment_date < month_end,
-                Payment.status != "REJECTED",
-            )
-            .group_by(Loan.dpd_bucket)
-            .all()
-        )
-    else:
-        rows = (
-            db.query(
-                Loan.dpd_bucket,
-                func.count(Case.id).label("case_count"),
-                func.sum(Case.target_amount).label("target_amount"),
-                func.sum(Case.collected_amount).label("collected_amount"),
-            )
-            .join(Case, Case.loan_id == Loan.id)
-            .filter(Case.agent_id.in_(my_agent_ids))
-            .group_by(Loan.dpd_bucket)
-            .all()
-        )
+@router.get("/analytics/breakdown", response_model=list[BreakdownRowOut])
+def get_team_breakdown(
+    current_user: ManagerOnly,
+    db: DbSession,
+    dimension: Literal["bucket", "product", "branch", "city"] = "bucket",
+    month: Optional[str] = None,  # YYYY-MM - if provided, sums payments in that month
+):
+    """The team's book by branch, city, product or DPD bucket (known issue 8).
 
-    result = []
-    for r in rows:
-        bucket = r.dpd_bucket.value if hasattr(r.dpd_bucket, "value") else str(r.dpd_bucket)
-        target = float(r.target_amount or 0)
-        collected = float(r.collected_amount or 0)
-        result.append({
-            "bucket": bucket,
-            "case_count": r.case_count,
-            "target_lakhs": round(target / 100000, 2),
-            "collected_lakhs": round(collected / 100000, 2),
-            "collection_rate_pct": round(collected / max(target, 1) * 100, 1),
-        })
-    result.sort(key=lambda x: bucket_order.index(x["bucket"]) if x["bucket"] in bucket_order else 99)
-    return result
+    Ordered largest collection first for every dimension except bucket, which
+    keeps its severity order. Rows are this manager's agents' cases only.
+    """
+    return _team_breakdown(db, current_user, dimension=dimension, month=month)
 
 
 # ---------------------------------------------------------------------------
@@ -3303,6 +3327,8 @@ def ai_briefing(current_user: ManagerOnly, db: DbSession, refresh: bool = False)
         _brief_llm = _llm.complete(
             f"Operational data: {_ctx}",
             purpose="briefing", json_mode=True, temperature=0.25, max_tokens=1200,
+            # The staff names this blob carries; the seam restores them in the answer.
+            names=_ctx["stalled_names"],
             system=(
                 "You are a collections agency AI operations analyst. Return JSON with: "
                 "headline (1 sentence, data-specific numbers), "
@@ -3603,6 +3629,7 @@ def agent_ai_insight(agent_id: UUIDPath, current_user: ManagerOnly, db: DbSessio
         _insight_llm = _llm.complete(
             f"Agent data: {_ctx}",
             purpose="agent_insight", json_mode=True, temperature=0.25, max_tokens=1200,
+            names=[agent_name],
             system=(
                     "You are a collections operations analyst. Analyse a field agent's full performance profile. "
                     "Return JSON with exactly these keys: "
@@ -4160,6 +4187,8 @@ def get_monthly_report(
         for b in bucket_order if b in dpd_map
     )
 
+    # Every staff name this report's prompt embeds, whichever branch built it.
+    prompt_names: list[str] = []
     if agent_id:
         # ── Per-agent report ──────────────────────────────────────────────
         agent_obj = (
@@ -4169,6 +4198,7 @@ def get_monthly_report(
         tier = getattr(agent_obj, "tier", "?") if agent_obj else "?"
         territory = getattr(agent_obj, "territory", "?") if agent_obj else "?"
         scope = agent_name
+        prompt_names.append(agent_name)
 
         row = (
             db.query(AgentPerformance)
@@ -4337,6 +4367,7 @@ def get_monthly_report(
                 if r.agent and r.agent.user:
                     name = r.agent.user.full_name.split()[0]
                 agent_rates.append((name, round(float(r.collection_rate or 0) * 100, 0)))
+            prompt_names.extend(n for n, _ in agent_rates if n != "?")
             agent_rates.sort(key=lambda x: x[1], reverse=True)
             on_target = sum(1 for _, rt in agent_rates if rt >= 50)
             top3 = ", ".join(f"{n} {rt:.0f}%" for n, rt in agent_rates[:3])
@@ -4379,6 +4410,7 @@ def get_monthly_report(
     report_text = scope_stats  # rich fallback when the model cannot answer
     _report_llm = _llm.complete(
         prompt, purpose="monthly_report", max_tokens=900, temperature=0.3,
+        names=prompt_names,
     )
     if _report_llm.ai_generated and _report_llm.text:
         report_text = _report_llm.text
