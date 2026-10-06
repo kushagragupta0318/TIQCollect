@@ -8,18 +8,18 @@ that does not send them, carries none. `documents` is a JSON list with one entry
 per category (category, key, sha256, content_type); B23's visit_media
 takes it over with the photo columns.
 
-Revision ID: v2_0022
-Revises: v2_0016
+Revision ID: v2_0027
+Revises: v2_0026
 Create Date: 2026-09-30
 """
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision = "v2_0022"
+revision = "v2_0027"
 # v2_0017-v2_0021 are other lanes' and not on this branch yet (v2_0021 is the payment idempotency key).
 # Re-point this to the merged head when rebasing; test_alembic_v2_baseline::_chain fails on a forgotten one.
-down_revision = "v2_0016"
+down_revision = "v2_0026"
 branch_labels = None
 depends_on = None
 

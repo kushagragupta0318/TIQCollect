@@ -1544,7 +1544,7 @@ per-run `allocation_decisions`.
 - **Other v1 → v2 changes:** `beat_stop_id` and `agent_device_id` are added;
   FKs become explicit RESTRICT; `ix_visits_agent_id` and `ix_visits_case_id`
   are dropped as prefix duplicates.
-- **Added after this design (`v2_0022`, N1):** `escalation_notes` TEXT,
+- **Added after this design (`v2_0027`, N1):** `escalation_notes` TEXT,
   `witness_present` BOOL, `witness_name` VARCHAR(200) and `documents` JSONB
   (category, key, sha256, content type; one per category), all nullable. The
   visit form captured all four and sent none. B23 moves `documents` to
