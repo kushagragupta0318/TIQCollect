@@ -29,7 +29,8 @@
 //   they started with; below lg the headers are hidden, so the same options are
 //   mirrored in a <select>.
 // ─────────────────────────────────────────────────────────────────────────
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router";
 import { Search, MapPin, AlertTriangle, Phone, ChevronDown, ChevronUp, ChevronsUpDown, Brain, Shuffle, X, Loader2, TrendingUp, TrendingDown, Minus, IndianRupee, Plus, Pencil, KeyRound, Ban, RotateCcw } from "lucide-react";
@@ -93,14 +94,25 @@ const SORT_LABELS: Record<Exclude<SortKey, "default">, string> = {
   status: "Status",
 };
 
+const AGENTS_KEY = ["manager", "agents"] as const;
+
 export default function ManagerAgentsPage() {
-  const [agents, setAgents]         = useState<Agent[]>([]);
+  // Agents are react-query-cached (2026-10-06) so switching away and back to
+  // this tab serves the last roster instantly instead of a blank list + refetch
+  // on every mount. The 30s background refresh the manual setInterval used to
+  // own is now refetchInterval; the global default has focus refetch off.
+  const queryClient = useQueryClient();
+  const { data: agents = [], isLoading: loading } = useQuery({
+    queryKey: AGENTS_KEY,
+    queryFn: getAgents,
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+  });
   // Leave window: open on demand, or on arrival from the bell (?leave=1).
   const [searchParams, setSearchParams] = useSearchParams();
   const [leaveOpen, setLeaveOpen]   = useState(() => searchParams.get("leave") === "1");
   const leaveQ = useLeaveRequests();
   const leavePending = leaveQ.data?.pending ?? 0;
-  const [loading, setLoading]       = useState(true);
   const [search, setSearch]         = useState("");
   const [statusFilter, setStatusFilter] = useState<"ALL" | "ON_DUTY" | "OFF_DUTY">("ALL");
   const [tierFilter, setTierFilter]     = useState<"ALL" | "TIER_1" | "TIER_2" | "TIER_3">("ALL");
@@ -126,22 +138,22 @@ export default function ManagerAgentsPage() {
     });
   }, []);
 
+  // A refresh handle for the drawers/rows (create, edit, suspend, row refresh):
+  // invalidate so the cached roster refetches once, instead of each caller
+  // re-fetching into its own state.
   const load = useCallback(() => {
-    return getAgents().then((a) => setAgents(a)).catch(() => {});
-  }, []);
+    return queryClient.invalidateQueries({ queryKey: AGENTS_KEY });
+  }, [queryClient]);
 
   // Typed as AgentStatus, not string — a plain `string` here widened the whole
   // mapped array and made it unassignable back to Agent[] (the one real type
-  // error this file had).
+  // error this file had). Optimistic patch into the cache, same effect the
+  // previous setAgents(prev => ...) had.
   const handleStatusChange = useCallback((id: string, newStatus: AgentStatus) => {
-    setAgents((prev) => prev.map((a) => a.id === id ? { ...a, status: newStatus } : a));
-  }, []);
-
-  useEffect(() => {
-    load().finally(() => setLoading(false));
-    const t = setInterval(load, 30_000);
-    return () => clearInterval(t);
-  }, [load]);
+    queryClient.setQueryData<Agent[]>(AGENTS_KEY, (prev) =>
+      prev ? prev.map((a) => a.id === id ? { ...a, status: newStatus } : a) : prev
+    );
+  }, [queryClient]);
 
 
   const filtered = useMemo(() => {
