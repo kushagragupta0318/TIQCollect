@@ -41,15 +41,20 @@ BANK_ROLES = frozenset({UserRole.BANK_ADMIN, UserRole.BANK_ANALYST, UserRole.BAN
 AGENCY_ROLES = frozenset({UserRole.AGENCY_ADMIN, UserRole.AGENCY_MANAGER})
 
 
-def tenant_scope(role: UserRole) -> str:
-    """The RLS scope a principal acts in (DATA-MODEL-V2 §8.1). A field agent is
+def tenant_scope(role: UserRole, agency_id: str | None) -> str:
+    """The RLS scope a principal acts in (DATA-MODEL-V2 §8.1), and the one
+    definition of "bank-wide" that services/scope.py reads. A field agent is
     AGENT: its agency still bounds RLS, but the analytics views show it nothing.
+    SERVICE is an integration account: bank-wide, unless its row names an
+    agency (ck_users_role_scope allows one), and then that agency's.
     Anything else not platform or bank is AGENCY, so an unknown role never widens."""
     if role == UserRole.PLATFORM_ADMIN:
         return "PLATFORM"
     if role == UserRole.FIELD_AGENT:
         return "AGENT"
-    return "BANK" if role in BANK_ROLES else "AGENCY"
+    if role in BANK_ROLES or (role == UserRole.SERVICE and agency_id is None):
+        return "BANK"
+    return "AGENCY"
 
 
 class User(Base, UUIDPrimaryKey, TimestampMixin):

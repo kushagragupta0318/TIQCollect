@@ -323,6 +323,7 @@ class PaymentService:
                     id=str(uuid.uuid4()),
                     created_at=paid_at,
                     user_id=None,   # nobody did this; a verified payment did
+                    bank_id=ptp.bank_id, agency_id=ptp.agency_id,
                     action=AuditAction.PTP_UPDATED,
                     entity_type="PTP",
                     entity_id=ptp.id,

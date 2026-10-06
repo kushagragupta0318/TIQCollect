@@ -339,5 +339,6 @@ def test_reconcile_ends_a_placement_whose_loan_the_bank_closed(db, loan_status, 
     assert p_open.status == "ACTIVE"
     audit = db.query(AuditLog).filter(AuditLog.action == AuditAction.PLACEMENT_ENDED).one()
     assert (audit.user_id, audit.entity_id, audit.details["source"]) == (None, p_closed.id, "RECONCILE")
+    assert (audit.bank_id, audit.agency_id) == (p_closed.bank_id, p_closed.agency_id)
     assert svc.reconcile_orphans(TEST_BANK_ID, on=DAY)["ended"] == 0                   # idempotent
     assert svc.reconcile_orphans(test_id("bank:other"), on=DAY)["ended"] == 0         # another bank: nothing

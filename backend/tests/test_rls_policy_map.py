@@ -10,7 +10,7 @@ import pytest
 
 import app.models  # noqa: F401
 from app.core.database import Base
-from app.models.user import BANK_ROLES, UserRole, tenant_scope
+from app.models.user import UserRole, tenant_scope
 
 REV = pathlib.Path(__file__).resolve().parents[1] / "alembic" / "versions" / "v2_0012_rls.py"
 
@@ -101,11 +101,23 @@ def test_each_table_gets_the_template_of_its_group():
     assert "PLATFORM" not in pol["tenancy.banks"] + pol["tenancy.agencies"]
 
 
-@pytest.mark.parametrize("role", list(UserRole))
-def test_the_scope_of_every_role(role):
-    want = ("PLATFORM" if role == UserRole.PLATFORM_ADMIN else "AGENT" if role == UserRole.FIELD_AGENT
-            else "BANK" if role in BANK_ROLES else "AGENCY")
-    assert tenant_scope(role) == want
+SCOPE_OF = {   # (role, carries an agency) -> scope; a literal table, not the rule restated
+    (UserRole.PLATFORM_ADMIN, False): "PLATFORM",
+    (UserRole.BANK_ADMIN, False): "BANK", (UserRole.BANK_ANALYST, False): "BANK",
+    (UserRole.BANK_TECHOPS, False): "BANK",
+    (UserRole.SERVICE, False): "BANK", (UserRole.SERVICE, True): "AGENCY",
+    (UserRole.AGENCY_ADMIN, True): "AGENCY", (UserRole.AGENCY_MANAGER, True): "AGENCY",
+    (UserRole.FIELD_AGENT, True): "AGENT",
+}
+
+
+def test_the_scope_table_names_every_role():
+    assert {r for r, _ in SCOPE_OF} == set(UserRole)
+
+
+@pytest.mark.parametrize("role,with_agency", list(SCOPE_OF))
+def test_the_scope_of_every_role(role, with_agency):
+    assert tenant_scope(role, "agency-1" if with_agency else None) == SCOPE_OF[(role, with_agency)]
 
 
 def test_the_downgrade_revokes_exactly_what_the_upgrade_granted():

@@ -146,6 +146,7 @@ def test_a_feed_recall_ends_the_placement_and_the_loan_can_be_placed_again(db):
     assert case.status == CaseStatus.CLOSED and case.resolution_notes.startswith("RECALLED by bank")
     audit = db.query(AuditLog).filter(AuditLog.action == AuditAction.PLACEMENT_RECALLED).one()
     assert (audit.user_id, audit.entity_id, audit.details["source"]) == (None, first.id, "FEED")
+    assert (audit.bank_id, audit.agency_id) == (first.bank_id, first.agency_id)
 
     # The same row again changes nothing more.
     again = process_row(_row(bank_action="RECALL", recall_reason="LEGAL_PROCEEDINGS"), db, False, TODAY,
@@ -187,6 +188,7 @@ def test_a_feed_closure_ends_the_placement_with_its_mapped_status(db, over, stat
     audit = db.query(AuditLog).filter(AuditLog.action == AuditAction.PLACEMENT_ENDED).one()
     assert (audit.user_id, audit.entity_id, audit.details["bank_action"]) == (
         None, placement.id, over["bank_action"])
+    assert (audit.bank_id, audit.agency_id) == (placement.bank_id, placement.agency_id)
 
     if over["bank_action"] == "DECEASED":
         # d4's rule, untouched: the borrower stays tagged deceased (do not contact).
