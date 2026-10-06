@@ -1,10 +1,10 @@
 // Command Center › Analytics (plan §5.4, task C04): the eight-tab breakdown.
-// Four tabs are built — Exposure, Migration, Agencies, Compliance — each its
-// own GET /bank/analytics/{tab} call, filtered by the same global KpiFilter
-// every bank page shares. The other four (Recovery, Field Operations, Cost
+// Five tabs are built — Exposure, Migration, Agencies, Recovery, Compliance —
+// each its own GET /bank/analytics/{tab} call, filtered by the same global
+// KpiFilter every bank page shares. The other three (Field Operations, Cost
 // to Collect, Concentration) say so honestly rather than rendering sample
-// data; Field Operations and Recovery are partway (tracked in the tab's own
-// note, not silently dropped from the tab bar).
+// data; Field Operations is partway (tracked in the tab's own note, not
+// silently dropped from the tab bar).
 import { useSearchParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import api from "@/api/axios";
@@ -17,8 +17,9 @@ import { useKpiFilter } from "../components/useKpiFilter";
 import { filterToParams } from "../components/kpiFilter";
 import { ExecutiveHeader, PageRoot } from "../components/PageTemplate";
 import {
-  dpdLadderHeatRows, exposureFunnelStages, pct, securityCoverStages, transitionMatrixData,
+  dpdLadderHeatRows, exposureFunnelStages, moneyCr, pct, securityCoverStages, transitionMatrixData,
   type AgenciesPanels, type AnalyticsTabResponse, type CompliancePanels, type ExposurePanels, type MigrationPanels,
+  type RecoveryPanels,
 } from "./analyticsModel";
 
 type TabId = "exposure" | "migration" | "recovery" | "field_ops" | "agencies" | "cost" | "concentration" | "compliance";
@@ -37,12 +38,10 @@ const TABS: readonly AnalyticsTab<TabId>[] = [
 // The backend's own tab ids (analytics_catalog.TABS) for the four that call
 // the API; the rest render their own honest "not built" note below.
 const API_TAB: Partial<Record<TabId, string>> = {
-  exposure: "exposure", migration: "migration", agencies: "agencies", compliance: "compliance",
+  exposure: "exposure", migration: "migration", agencies: "agencies", recovery: "recovery", compliance: "compliance",
 };
 
 const NOT_BUILT: Partial<Record<TabId, string>> = {
-  recovery: "Recovery vs Expected (recovery_risk-predicted) is next; the cumulative-target-line chart waits on " +
-           "a bank-set collection target, which does not exist in the schema yet — a product decision, not a data gap.",
   field_ops: "Visits per agent, met rate and SLA coverage are built below the other three tabs land; beat " +
             "adherence and planned-vs-actual km wait on the demo book generating routed days, queued separately.",
   cost: "Commission and field cost are already in the Agencies scorecard (Cost per ₹100); a dedicated channel-" +
@@ -92,6 +91,7 @@ export function BankAnalyticsPage() {
       {apiTab && q.data?.available && active === "exposure" && <ExposureTab panels={q.data.panels as unknown as ExposurePanels} />}
       {apiTab && q.data?.available && active === "migration" && <MigrationTab panels={q.data.panels as unknown as MigrationPanels} />}
       {apiTab && q.data?.available && active === "agencies" && <AgenciesTab panels={q.data.panels as unknown as AgenciesPanels} />}
+      {apiTab && q.data?.available && active === "recovery" && <RecoveryTab panels={q.data.panels as unknown as RecoveryPanels} />}
       {apiTab && q.data?.available && active === "compliance" && <ComplianceTab panels={q.data.panels as unknown as CompliancePanels} />}
     </PageRoot>
   );
@@ -157,6 +157,23 @@ function AgenciesTab({ panels }: { panels: AgenciesPanels }) {
           { key: "sla_adherence", header: "SLA adherence", align: "right", render: (r) => pct(r.sla_adherence) },
           { key: "cost_per_100_inr", header: "Cost / ₹100", align: "right", render: (r) => r.cost_per_100_inr == null ? "Not available" : `₹${r.cost_per_100_inr.toFixed(2)}` },
           { key: "compliance_score", header: "Compliance", align: "right", render: (r) => r.compliance_score == null ? "Not available" : r.compliance_score.toFixed(1) },
+        ]}
+      />
+    </Panel>
+  );
+}
+
+function RecoveryTab({ panels }: { panels: RecoveryPanels }) {
+  return (
+    <Panel title="Recovery vs expected" hint="Actual collections against the recovery_risk-predicted figure, by month — the owner's target line: there is no bank-set number in the schema, and the predicted figure is the one that exists without inventing one.">
+      <DataTable
+        rows={panels.by_month}
+        rowKey={(r) => r.month_start}
+        columns={[
+          { key: "month_start", header: "Month" },
+          { key: "actual_inr", header: "Actual", align: "right", render: (r) => moneyCr(r.actual_inr) },
+          { key: "expected_inr", header: "Expected (predicted)", align: "right", render: (r) => moneyCr(r.expected_inr) },
+          { key: "recovery_vs_expected", header: "Recovery vs expected", align: "right", render: (r) => pct(r.recovery_vs_expected) },
         ]}
       />
     </Panel>

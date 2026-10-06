@@ -51,6 +51,11 @@ export interface AgenciesPanels {
   scorecards: AgencyScorecard[];
 }
 
+export interface RecoveryPanels {
+  by_month: { month_start: string; actual_inr: number; expected_inr: number | null;
+             recovery_vs_expected: number | null }[];
+}
+
 export interface CompliancePanels {
   breaches_over_time: { month_start: string; out_of_hours: number; geofence: number; consent_missing: number; fraud_confirmed: number }[];
   by_agency: { agency_id: string; agency_name: string; out_of_hours: number; geofence: number; visits: number;

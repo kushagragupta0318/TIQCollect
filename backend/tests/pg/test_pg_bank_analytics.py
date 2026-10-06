@@ -1,8 +1,7 @@
 """The Analytics tabs (plan §5.4, task C04, lane L6) on the committed demo
-book: Exposure, Migration, Agencies, Compliance — the four built this pass.
-Field Operations and Recovery's target chart are NOT built (no beats data,
-no target concept anywhere in the schema); not tested here because there is
-nothing to abstain-test against yet beyond what Overview already covers.
+book: Exposure, Migration, Agencies, Recovery, Compliance. Field Operations
+is NOT built (queued separately); not tested here because there is nothing
+to abstain-test against yet beyond what Overview already covers.
 """
 from __future__ import annotations
 
@@ -96,6 +95,25 @@ def test_agencies_filter_by_id_returns_only_that_agency(views):
     assert [c["code"] for c in out["panels"]["scorecards"]] == ["AGY-SAHYADRI"]
 
 
+def test_recovery_vs_expected_is_the_predicted_figure_by_month(views):
+    """C04 task #5 (owner ruling 2026-10-06): the target is recovery_risk's
+    predicted recovery (expected_recovery_inr, written once per placement),
+    bank-wide by month — not a bank-set number, since none exists."""
+    from app.demo.roster import BANK
+    from app.services.bank.analytics_catalog import compute_tab
+    from app.services.bank.kpi_filter import KpiFilter
+    with _session(views, BANK["id"]) as s:
+        out = compute_tab(s, s, "recovery", BANK["id"], KpiFilter())
+    assert out["available"], out["reason"]
+    by_month = out["panels"]["by_month"]
+    assert by_month and sum(r["actual_inr"] for r in by_month) > 0
+    priced = [r for r in by_month if r["expected_inr"] is not None]
+    assert priced, "no month has a modelled expected_recovery_inr at all"
+    assert any(r["recovery_vs_expected"] is not None for r in priced)
+    # None, never 0, when nothing was priced that month (ADR 0005).
+    assert all(r["recovery_vs_expected"] is None for r in by_month if r["expected_inr"] is None)
+
+
 def test_compliance_breaches_are_real_and_fraud_matches_the_manifest(views):
     """Awadh's evidence-integrity story (fabricated_photo_rate, latent.py) is
     GENERATOR-ONLY truth — it shapes visit flags but is never written as a
@@ -139,8 +157,10 @@ def test_a_session_for_another_bank_sees_no_figures_on_any_tab(views):
     from app.services.bank.kpi_filter import KpiFilter
     with _session(views, KUMAON_BANK["id"]) as s:
         exposure = compute_tab(s, s, "exposure", BANK["id"], KpiFilter())
+        recovery = compute_tab(s, s, "recovery", BANK["id"], KpiFilter())
         agencies = compute_tab(s, s, "agencies", BANK["id"], KpiFilter())
     assert not exposure["available"]
+    assert recovery["available"] and recovery["panels"]["by_month"] == []   # the scoped view, same as exposure
     assert agencies["available"]
     assert agencies["panels"]["scorecards"]                          # the roster, not RLS-gated
     assert all(c["n_rows"] == 0 for c in agencies["panels"]["scorecards"])   # the DATA is
