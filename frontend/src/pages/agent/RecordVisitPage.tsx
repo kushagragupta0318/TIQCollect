@@ -109,7 +109,12 @@ import {
   User, Users, DoorClosed, Home, Car,
 } from "lucide-react";
 import { toast } from "react-hot-toast";
-import type { VisitPayload } from "@/api/agent";
+import type { CaseUploadSubject, VisitPayload } from "@/api/agent";
+import { keyOf, putWithFetch, uploadEvidence, type UploadResult } from "@/lib/evidenceUpload";
+import { liveEvidenceOutcome } from "@/lib/liveEvidence";
+import {
+  DOCUMENT_CATEGORY_IDS, DOCUMENT_CATEGORY_LABELS, documentProblem, escalationFields, type DocumentCategory,
+} from "@/lib/visitEvidence";
 import { OutboxFullError, type NewVisit } from "@/lib/outbox";
 import { submitVisit } from "@/lib/outboxRunner";
 import { serverNow } from "@/lib/serverClock";
@@ -124,6 +129,7 @@ import SignaturePad from "@/components/ui/SignaturePad";
 import OtpInput from "@/components/ui/OtpInput";
 import PaymentReceiptModal from "@/components/ui/PaymentReceiptModal";
 import VisitRecordedModal from "@/components/ui/VisitRecordedModal";
+import EvidenceUploadFailedModal from "@/components/ui/EvidenceUploadFailedModal";
 import { SOSButton } from "@/components/ui/SOSButton";
 import { useBeat } from "@/contexts/useBeat";
 import type { Customer, Loan, VisitOutcome, PersonMet, DefaultReason } from "@/types";
@@ -135,7 +141,7 @@ import { VisitExtractionPanel } from "./VisitExtractionPanel";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-interface DocUpload { category: string; url: string; name: string }
+interface DocUpload { category: DocumentCategory; url: string; name: string }
 
 type MeetingType = "BORROWER" | "THIRD_PARTY" | "NOT_MET" | null;
 
@@ -356,12 +362,11 @@ const NOT_MET_REASONS = [
   { value: "OTHER",              label: "Other reason" },
 ];
 
-const DOC_CATEGORIES = [
-  { id: "BANK_STMT",      label: "Bank Statement",                  icon: Landmark },
-  { id: "ID_PROOF",       label: "ID Proof (Aadhaar / PAN)",        icon: IdCard },
-  { id: "INCOME_PROOF",   label: "GST / Salary Slip / ITR",         icon: FileText },
-  { id: "MEDICAL_SUPPORT",label: "Medical / Support Docs",          icon: HeartPulse },
-];
+// The ids and labels are lib/visitEvidence's (the server's list); only the icons are this page's.
+const DOC_ICONS: Record<DocumentCategory, typeof Landmark> = {
+  BANK_STMT: Landmark, ID_PROOF: IdCard, INCOME_PROOF: FileText, MEDICAL_SUPPORT: HeartPulse,
+};
+const DOC_CATEGORIES = DOCUMENT_CATEGORY_IDS.map((id) => ({ id, label: DOCUMENT_CATEGORY_LABELS[id], icon: DOC_ICONS[id] }));
 
 // ─── Geo helpers ──────────────────────────────────────────────────────────────
 
@@ -515,7 +520,12 @@ export default function RecordVisitPage() {
   const [receipt, setReceipt] = useState<PaymentReceiptData | null>(null);
   // Success confirmation for the no-payment path. A collection ends in
   // PaymentReceiptModal, which is confirmation enough on its own.
-  const [visitDone, setVisitDone] = useState<{ outcomeLabel?: string; queued?: boolean } | null>(null);
+  const [visitDone, setVisitDone] = useState<{ outcomeLabel?: string; queued?: boolean; missing?: string[] } | null>(null);
+  // What did not reach storage on a live submit, asked about before anything is recorded.
+  const [uploadIssue, setUploadIssue] = useState<string[] | null>(null);
+  const acceptMissingEvidence = useRef(false);
+  // A completed upload is remembered by its source, so a retry sends only what is still missing.
+  const uploadMemo = useRef(new Map<string, { src: string | Blob; result: UploadResult }>());
   const [showQR, setShowQR] = useState(false);
   // Demo: after the QR is shown, auto-reveal a "Payment received ✓" tick (a
   // static UPI QR has no callback, so the received-moment is simulated on a
@@ -829,7 +839,8 @@ export default function RecordVisitPage() {
       // the server's rule): UPI a 12-digit UTR, NEFT/RTGS a bank reference,
       // cheque its number — plus the cheque's date and bank, page-side only.
       paymentReferenceOk(form.paymentMode, form, { demo: DEMO_UPI_AUTOCONFIRM }) &&
-      (form.paymentMode !== "CHEQUE" || (!!form.chequeDate && !!form.chequeBank)));
+      // The page has always labelled the cheque photo required; now it is.
+      (form.paymentMode !== "CHEQUE" || (!!form.chequeDate && !!form.chequeBank && !!form.receiptPhoto)));
 
   const ptpValid = !sel?.needsPTP || (!!form.ptpAmount && !!form.ptpDate);
   const escalationValid = !sel?.needsEscalation || form.escalationNotes.length >= 10;
@@ -929,8 +940,11 @@ export default function RecordVisitPage() {
     reader.readAsDataURL(file);
   }
 
-  function handleDocUpload(e: React.ChangeEvent<HTMLInputElement>, category: string) {
+  function handleDocUpload(e: React.ChangeEvent<HTMLInputElement>, category: DocumentCategory) {
     const file = e.target.files?.[0]; if (!file) return;
+    // A file the server would not issue an upload for is refused here, where the agent can fix it.
+    const problem = documentProblem(file);
+    if (problem) { toast.error(problem); e.target.value = ""; return; }
     const reader = new FileReader();
     reader.onload = (ev) => {
       upd({ documents: [...form.documents.filter((d) => d.category !== category), { category, url: ev.target?.result as string, name: file.name }] });
@@ -938,36 +952,39 @@ export default function RecordVisitPage() {
     reader.readAsDataURL(file);
   }
 
-  async function uploadRecording(blob: Blob | null, recorder: "agent" | "borrower"): Promise<string | undefined> {
-    if (!blob || !caseId) return undefined;
+  // One upload with its outcome said out loud (lib/evidenceUpload.ts). Only a
+  // completed upload is remembered, so a retry never repeats one or hides a failure.
+  async function memoUpload(label: string, src: string | Blob | null, run: (blob: Blob) => Promise<UploadResult>): Promise<UploadResult> {
+    if (!src || !caseId) return { status: "none" };
+    const hit = uploadMemo.current.get(label);
+    if (hit && hit.src === src) return hit.result;
+    let blob: Blob;
     try {
-      const { upload_url, key } = await getRecordingUploadUrl(caseId, recorder);
-      await fetch(upload_url, { method: "PUT", body: blob, headers: { "Content-Type": "audio/webm" } });
-      return key;
+      blob = typeof src === "string" ? await (await fetch(src)).blob() : src;
     } catch {
-      return undefined;
+      return { status: "failed", message: "The file could not be read from this phone." };
     }
+    const result = await run(blob);
+    if (result.status === "uploaded") uploadMemo.current.set(label, { src, result });
+    return result;
   }
 
-  async function uploadGeoPhoto(
-    base64: string | null,
-    subject: "agent" | "borrower" | "object" | "signature",
-  ): Promise<{ key: string; sha256: string } | undefined> {
-    if (!base64 || !caseId) return undefined;
-    try {
-      const { upload_url, key } = await getPhotoUploadUrl(caseId, subject);
-      const res = await fetch(base64);
-      const blob = await res.blob();
-      const buffer = await blob.arrayBuffer();
-      const [, hashBuffer] = await Promise.all([
-        fetch(upload_url, { method: "PUT", body: blob, headers: { "Content-Type": blob.type || "image/jpeg" } }),
-        crypto.subtle.digest("SHA-256", buffer),
-      ]);
-      const sha256 = Array.from(new Uint8Array(hashBuffer)).map((b) => b.toString(16).padStart(2, "0")).join("");
-      return { key, sha256 };
-    } catch {
-      return undefined;
-    }
+  function uploadRecording(blob: Blob | null, recorder: "agent" | "borrower"): Promise<UploadResult> {
+    return memoUpload(`recording:${recorder}`, blob, (b) =>
+      uploadEvidence({ presign: () => getRecordingUploadUrl(caseId!, recorder), put: putWithFetch }, b, "audio/webm"));
+  }
+
+  function uploadGeoPhoto(dataUrl: string | null, subject: CaseUploadSubject): Promise<UploadResult> {
+    return memoUpload(`photo:${subject}`, dataUrl, (b) =>
+      uploadEvidence({ presign: () => getPhotoUploadUrl(caseId!, subject), put: putWithFetch }, b));
+  }
+
+  function uploadDocument(d: DocUpload): Promise<UploadResult> {
+    return memoUpload(`document:${d.category}`, d.url, (b) =>
+      uploadEvidence({
+        presign: () => getPhotoUploadUrl(caseId!, "document", undefined, { category: d.category, contentType: b.type }),
+        put: putWithFetch,
+      }, b));
   }
 
   // The OTP is issued before the payment channel is chosen, so it binds to the
@@ -1100,14 +1117,19 @@ export default function RecordVisitPage() {
       // Recordings are live-only (ADR 0011 decision 3): uploaded now when there
       // is signal, otherwise not kept, and the agent is told rather than left
       // to find out later.
-      const [agentRecKey, borrowerRecKey] = isOnline
+      const noUpload: UploadResult = { status: "none" };
+      const [agentRec, borrowerRec] = isOnline
         ? await Promise.all([
             uploadRecording(form.agentRecordingBlob, "agent"),
             uploadRecording(form.borrowerRecordingBlob, "borrower"),
           ])
-        : [undefined, undefined];
+        : [noUpload, noUpload];
+      const agentRecKey = keyOf(agentRec);
+      const borrowerRecKey = keyOf(borrowerRec);
       if ((form.agentRecordingBlob && !agentRecKey) || (form.borrowerRecordingBlob && !borrowerRecKey)) {
-        toast("A recording could not be uploaded without signal and was not kept.");
+        toast(isOnline
+          ? "A recording could not be uploaded and was not kept."
+          : "A recording needs signal, so it was not kept.");
       }
 
       // Only NEW (freshly captured) photos — skip pre-populated "from prev visit" ones
@@ -1145,6 +1167,9 @@ export default function RecordVisitPage() {
         occupancy_status: form.occupancyStatus || undefined,
         vehicle_present: form.vehiclePresent ?? undefined,
         business_running: form.businessRunning ?? undefined,
+        // What the agent typed in the escalation box and answered about a witness:
+        // it was captured and dropped here until N1.
+        ...escalationFields(!!sel?.needsEscalation, form),
         // 2026-09-29 (I02): the login's device id, the one the server bound and
         // signed into the token, not the browser's user-agent string.
         device_id: deviceId,
@@ -1167,6 +1192,8 @@ export default function RecordVisitPage() {
         ] as const) {
           if (dataUrl) photos.push({ subject, blob: await (await fetch(dataUrl)).blob() });
         }
+        const documents: NonNullable<NewVisit["documents"]> = [];
+        for (const d of form.documents) documents.push({ category: d.category, blob: await (await fetch(d.url)).blob() });
         const res = await submitVisit({
           caseId, caseLabel: caseData?.case_number ?? "this case", capturedAt: serverNow(),
           body: {
@@ -1175,7 +1202,7 @@ export default function RecordVisitPage() {
             ...photoMeta("borrower", form.borrowerPhotoGps, !!freshPhoto.borrower),
             ...photoMeta("object", form.objectPhotoGps, !!freshPhoto.object),
           },
-          photos, ptp,
+          photos, documents, ptp,
         });
         if (res.status === "refused") {
           toast.error(res.message);
@@ -1196,25 +1223,43 @@ export default function RecordVisitPage() {
       // ── Payment: live only, never queued (the borrower's OTP must reach the
       // server). Idempotent by its submission ids, so a retry after a lost
       // response returns the visit and promise already stored.
-      const [agentResult, borrowerResult, objectResult, signatureResult] = await Promise.all([
+      const [agentResult, borrowerResult, objectResult, signatureResult, receiptResult] = await Promise.all([
         uploadGeoPhoto(freshPhoto.agent, "agent"),
         uploadGeoPhoto(freshPhoto.borrower, "borrower"),
         uploadGeoPhoto(freshPhoto.object, "object"),
         uploadGeoPhoto(form.signatureUrl, "signature"),
+        uploadGeoPhoto(form.receiptPhoto, "receipt"),
       ]);
+      const docResults = await Promise.all(form.documents.map((d) => uploadDocument(d)));
+      // Evidence the store did not take is the agent's decision, asked before
+      // anything is recorded. It used to vanish while the screen said "recorded".
+      const evidence = liveEvidenceOutcome(
+        {
+          agent: agentResult, borrower: borrowerResult, object: objectResult,
+          signature: signatureResult, receipt: receiptResult,
+          documents: form.documents.map((d, i) => ({ category: d.category, result: docResults[i] })),
+        },
+        { cheque: form.paymentMode === "CHEQUE", accepted: acceptMissingEvidence.current },
+      );
+      if (!evidence.proceed) {
+        setUploadIssue(evidence.missing);
+        return;
+      }
+      const { keys, missing } = evidence;
 
       const visitRes = await recordVisit(caseId, {
         ...body,
-        ...photoMeta("agent", form.agentPhotoGps, !!agentResult),
-        ...photoMeta("borrower", form.borrowerPhotoGps, !!borrowerResult),
-        ...photoMeta("object", form.objectPhotoGps, !!objectResult),
-        agent_photo_key: agentResult?.key,
-        agent_photo_sha256: agentResult?.sha256,
-        borrower_photo_key: borrowerResult?.key,
-        borrower_photo_sha256: borrowerResult?.sha256,
-        object_photo_key: objectResult?.key,
-        object_photo_sha256: objectResult?.sha256,
-        signature_key: signatureResult?.key,
+        ...photoMeta("agent", form.agentPhotoGps, !!keys.agent),
+        ...photoMeta("borrower", form.borrowerPhotoGps, !!keys.borrower),
+        ...photoMeta("object", form.objectPhotoGps, !!keys.object),
+        agent_photo_key: keys.agent?.key,
+        agent_photo_sha256: keys.agent?.sha256,
+        borrower_photo_key: keys.borrower?.key,
+        borrower_photo_sha256: keys.borrower?.sha256,
+        object_photo_key: keys.object?.key,
+        object_photo_sha256: keys.object?.sha256,
+        signature_key: keys.signatureKey,
+        documents: keys.documents.length ? keys.documents : undefined,
         client_submission_id: liveSubmission.current.visit,
       });
 
@@ -1239,6 +1284,7 @@ export default function RecordVisitPage() {
           cheque_date: form.chequeDate || undefined,
           cheque_bank: form.chequeBank || undefined,
           bank_reference: form.neftRef || undefined,
+          receipt_photo_key: keys.receiptKey,
           // Verified borrower OTP → backend writes the Payment as VERIFIED.
           // Absent (offline branch) → Payment stays PENDING_VERIFICATION.
           verification_id: verificationId || undefined,
@@ -1254,6 +1300,7 @@ export default function RecordVisitPage() {
           agentName: user?.full_name ?? "",
           verified: !!verificationId,
           timestamp: new Date().toISOString(),
+          missingEvidence: missing.length ? missing : undefined,
         };
       }
 
@@ -1286,7 +1333,7 @@ export default function RecordVisitPage() {
         // Centred confirmation rather than a toast: on a phone the toast sat at
         // the edge of the screen while the page was already navigating away,
         // so the agent could not tell whether the visit had saved.
-        setVisitDone({ outcomeLabel: sel?.label });
+        setVisitDone({ outcomeLabel: sel?.label, missing: missing.length ? missing : undefined });
       }
     } catch (err) {
       toast.error(err instanceof OutboxFullError ? err.message : errorDetail(err, "Failed to submit. Please retry."));
@@ -1317,8 +1364,19 @@ export default function RecordVisitPage() {
           customerName={customer?.full_name}
           outcomeLabel={visitDone.outcomeLabel}
           queued={visitDone.queued}
-          autoCloseMs={visitDone.queued ? 4000 : undefined}
+          missing={visitDone.missing}
+          // A confirmation that names missing evidence waits for the tap.
+          autoCloseMs={visitDone.missing ? 0 : visitDone.queued ? 4000 : undefined}
           onClose={() => navigate(`/agent/cases/${caseId}`, { replace: true })}
+        />
+      )}
+
+      {uploadIssue && (
+        <EvidenceUploadFailedModal
+          labels={uploadIssue}
+          onRetry={() => { setUploadIssue(null); void handleSubmit(); }}
+          onContinue={() => { acceptMissingEvidence.current = true; setUploadIssue(null); void handleSubmit(); }}
+          onCancel={() => setUploadIssue(null)}
         />
       )}
 
@@ -1899,7 +1957,7 @@ export default function RecordVisitPage() {
                     <p className="text-sm font-medium text-slate-700 mb-2">Payment Mode</p>
                     <div className="grid grid-cols-3 gap-2">
                       {PAYMENT_MODES.map((m) => (
-                        <button key={m.value} onClick={() => upd({ paymentMode: m.value, cashCounted: false, upiRef: "", chequeNumber: "", chequeDate: "", chequeBank: "", neftRef: "" })} className={`flex flex-col items-center gap-1 py-2.5 rounded-xl border text-xs font-medium ${form.paymentMode === m.value ? "border-brand-400 bg-brand-50 text-brand-700" : "border-slate-200 bg-white text-slate-600 transition-colors hover:border-brand-200 hover:bg-brand-50/50"}`}>
+                        <button key={m.value} onClick={() => upd({ paymentMode: m.value, cashCounted: false, upiRef: "", chequeNumber: "", chequeDate: "", chequeBank: "", neftRef: "", receiptPhoto: null })} className={`flex flex-col items-center gap-1 py-2.5 rounded-xl border text-xs font-medium ${form.paymentMode === m.value ? "border-brand-400 bg-brand-50 text-brand-700" : "border-slate-200 bg-white text-slate-600 transition-colors hover:border-brand-200 hover:bg-brand-50/50"}`}>
                           <m.icon className="w-5 h-5" strokeWidth={1.75} />{m.label}
                         </button>
                       ))}
@@ -1968,9 +2026,6 @@ export default function RecordVisitPage() {
                                     <p className="text-white font-bold text-base tracking-wide">{upiConfig?.payee_name}</p>
                                     <p className="text-blue-200 text-xs">UPI Payment</p>
                                   </div>
-                                  <div className="bg-white/20 rounded-full px-3 py-1">
-                                    <p className="text-white text-xs font-semibold">Secure Pay</p>
-                                  </div>
                                 </div>
                                 <div className="bg-blue-50 px-4 py-2 text-center border-b border-blue-100">
                                   <p className="text-blue-800 text-xs font-medium">Amount to Pay</p>
@@ -1989,10 +2044,10 @@ export default function RecordVisitPage() {
                                   <p className="text-xs text-slate-500 text-center">
                                     Scan with any UPI app · <strong>₹{Number(form.amount).toLocaleString("en-IN")}</strong> pre-filled
                                   </p>
-                                  <div className="flex items-center gap-2 text-amber-600">
-                                    <div className="w-3.5 h-3.5 border-2 border-amber-300 border-t-amber-600 rounded-full animate-spin" />
-                                    <p className="text-xs font-medium">Waiting for payment…</p>
-                                  </div>
+                                  {/* A static QR has no callback: nothing here is waiting, the agent enters the UTR. */}
+                                  <p className="text-xs font-medium text-slate-600 text-center">
+                                    When the customer has paid, enter the transaction ID from their confirmation below.
+                                  </p>
                                   <p className="text-[10px] text-slate-400 text-center">Loan {maskedAcct}</p>
                                 </div>
                               </div>
@@ -2236,7 +2291,7 @@ export default function RecordVisitPage() {
                           <cat.icon className="w-4 h-4 flex-shrink-0" />
                           <span className="truncate">{cat.label}</span>
                           {uploaded && <CheckCircle className="w-3.5 h-3.5 text-success-500 ml-auto flex-shrink-0" />}
-                          <input ref={(el) => { fileRefs.current[cat.id] = el; }} type="file" accept="image/*,application/pdf" className="hidden" onChange={(e) => handleDocUpload(e, cat.id)} />
+                          <input ref={(el) => { fileRefs.current[cat.id] = el; }} type="file" accept="image/jpeg,image/png,image/webp,application/pdf" className="hidden" onChange={(e) => handleDocUpload(e, cat.id)} />
                         </button>
                       );
                     })}
@@ -2322,6 +2377,7 @@ export default function RecordVisitPage() {
               {sel?.needsPayment && form.paymentMode === "UPI" && !upiReferenceOk(form.upiRef, { demo: DEMO_UPI_AUTOCONFIRM }) && <p>• Enter the 12-digit UPI transaction ID (UTR) from the payment confirmation</p>}
               {sel?.needsPayment && ["NEFT", "RTGS"].includes(form.paymentMode) && !form.neftRef.trim() && <p>• Enter the bank reference (UTR) from the transfer confirmation</p>}
               {sel?.needsPayment && form.paymentMode === "CHEQUE" && (!form.chequeNumber || !form.chequeDate || !form.chequeBank) && <p>• Complete cheque details</p>}
+              {sel?.needsPayment && form.paymentMode === "CHEQUE" && !form.receiptPhoto && <p>• Add the cheque photo</p>}
               {sel?.needsPayment && paymentValid && !paymentVerified && <p>• Verify the amount with the borrower via OTP (or use the offline option + signature)</p>}
               {sel?.needsPTP && (!form.ptpAmount || !form.ptpDate) && <p>• Complete PTP commitment details</p>}
               {sel?.needsEscalation && form.escalationNotes.length < 10 && <p>• Add escalation notes (min 10 chars)</p>}

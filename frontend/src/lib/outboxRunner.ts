@@ -31,6 +31,8 @@ export function outboxStore(): OutboxStore {
 
 const realApi: OutboxApi = {
   photoUploadUrl: (caseId, subject, capture) => getPhotoUploadUrl(caseId, subject, capture),
+  documentUploadUrl: (caseId, category, contentType, capture) =>
+    getPhotoUploadUrl(caseId, "document", capture, { category, contentType }),
   async putObject(url, blob, contentType) {
     const res = await fetch(url, { method: "PUT", body: blob, headers: { "Content-Type": contentType } });
     // An expired presigned URL is a 403 from MinIO: retry, a new URL is issued next time.

@@ -606,6 +606,11 @@ class CaseService:
                 "business_running": v.business_running,
                 "agent_recording_transcript": v.agent_recording_transcript,
                 "borrower_recording_transcript": v.borrower_recording_transcript,
+                # N1: what the agent typed and collected, which used to be dropped on submit
+                "escalation_notes": v.escalation_notes,
+                "witness_present": v.witness_present,
+                "witness_name": v.witness_name,
+                "documents": MediaService.document_entries(v),
             }
             for v in sorted(case.visits, key=lambda x: x.check_in_time)
         ]

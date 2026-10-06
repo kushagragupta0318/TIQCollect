@@ -43,6 +43,7 @@ from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
+from app.core import storage
 from app.core.errors import AppException, ErrorCode
 from app.core.events import publish_event
 from app.core.geo import GEO_FENCE_METRES, IST, RBI_CONTACT_END, RBI_CONTACT_START, is_within_contact_hours, within_geo_fence
@@ -88,6 +89,31 @@ def _parse_dt(s: str | None) -> datetime | None:
         return datetime.fromisoformat(s)
     except ValueError:
         return None
+
+
+def _typed(text: str | None) -> str | None:
+    """What the agent typed, trimmed; None when it is blank (N1)."""
+    return (text or "").strip() or None
+
+
+# The request fields that name an uploaded object, as the agent would call them.
+_EVIDENCE_KEY_FIELDS = (
+    ("agent_photo_key", "The agent photo"), ("borrower_photo_key", "The borrower photo"),
+    ("object_photo_key", "The premises photo"), ("signature_key", "The signature"),
+    ("selfie_photo_key", "The selfie"),
+    ("agent_recording_key", "The agent recording"), ("borrower_recording_key", "The borrower recording"),
+)
+
+
+def _check_evidence_keys(case_id: str, req) -> None:
+    """Every object a visit names must be one this case's upload routes could have issued,
+    else 422 before anything is written (N1). Shape only: see storage.is_case_evidence_key."""
+    named = [(label, getattr(req, field, None)) for field, label in _EVIDENCE_KEY_FIELDS]
+    named += [(f"The {d.category} document", d.key) for d in getattr(req, "documents", None) or []]
+    for label, key in named:
+        if key and not storage.is_case_evidence_key(case_id, key):
+            raise AppException(422, ErrorCode.EVIDENCE_KEY_INVALID,
+                               f"{label} attached to this visit was not taken for this case. Take it again.")
 
 
 class VisitService:
@@ -136,6 +162,9 @@ class VisitService:
         # ML-1: a stance is the borrower's, so only a visit that met them may
         # carry one. Before anything is written.
         check_visit_stance(req.borrower_disposition, customer_met=req.customer_met, person_met=req.person_met)
+
+        # getattr: some callers hand in a bare namespace (see csid above).
+        documents = getattr(req, "documents", None) or []
 
         # Idempotency guard for a keyless submit — see _DUPLICATE_SUBMIT_WINDOW_SECONDS above.
         recent_duplicate = None if csid else (
@@ -198,6 +227,10 @@ class VisitService:
                 ),
             )
 
+        # After the contact-hours and geo-fence refusals, so an out-of-hours attempt still
+        # leaves its audit row, and before anything is written or taken over.
+        _check_evidence_keys(case.id, req)
+
         # Every refusal is behind us: only now may a same-day handover move the
         # case to the caller (scope.sync_assignee — never at the read, because
         # the contact-hours refusal above commits its audit row).
@@ -256,6 +289,10 @@ class VisitService:
             occupancy_status=req.occupancy_status,
             vehicle_present=req.vehicle_present,
             business_running=req.business_running,
+            escalation_notes=_typed(getattr(req, "escalation_notes", None)),
+            witness_present=getattr(req, "witness_present", None),
+            witness_name=_typed(getattr(req, "witness_name", None)) if getattr(req, "witness_present", None) else None,
+            documents=[d.model_dump(exclude_none=True) for d in documents] or None,
         )
         self.db.add(visit)
         case.visit_count = visit_num
@@ -429,7 +466,10 @@ class VisitService:
             # getattr keeps the original intent if the request ever gains the
             # field; notes is what the client actually sends today, and
             # RecordVisitPage already folds the customer statement into it.
-            escalation_detail = getattr(req, "agent_recording_transcript", None) or req.notes
+            # N1: what the agent typed in the escalation box comes first. Only a dispute
+            # writes the case's field (as before): ai_report_service inlines it in a prompt.
+            escalation_detail = (_typed(getattr(req, "escalation_notes", None))
+                                 or getattr(req, "agent_recording_transcript", None) or req.notes)
             if escalation_detail:
                 case.escalation_notes = escalation_detail
 
