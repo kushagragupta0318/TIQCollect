@@ -67,9 +67,11 @@ class PaymentReversalRequest(Base, UUIDPrimaryKey, TimestampMixin):
     decision_note: Mapped[str | None] = mapped_column(Text, nullable=True)   # a rejection's reason
 
     __table_args__ = (
-        ForeignKeyConstraint(["payment_id", "bank_id"],
-                             ["collections.payments.id", "collections.payments.bank_id"],
-                             ondelete="CASCADE"),
+        # Single-column FK: payments has no UNIQUE(id, bank_id), so a composite FK
+        # can't reference it. payment_id → the PK is enough; bank_id is denormalised
+        # and the service sets it from the payment, consistent with isolation being
+        # service-enforced today.
+        ForeignKeyConstraint(["payment_id"], ["collections.payments.id"], ondelete="CASCADE"),
         # Each stage, once passed, names who passed it and when. The agency approval
         # exists by PENDING_BANK; the bank approval by APPROVED.
         CheckConstraint(
