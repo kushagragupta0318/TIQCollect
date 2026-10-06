@@ -140,7 +140,8 @@ def test_overlapping_with_the_master_accounts_pass_is_harmless(db):
     bank admin can be both); applying the same password twice is a no-op."""
     a = demo.apply(db, password=MASTER, demo_mode=True,
                    accounts_raw="bank.admin@girivanfinance.test,manager.b@aravallifs.test,"
-                                "agent.a@aravallifs.test,bank.admin2@girivanfinance.test",
+                                "agent.a@aravallifs.test,bank.admin2@girivanfinance.test,"
+                                "agency.admin@aravallifs.test",
                    demo_domains="girivanfinance.test,aravallifs.test", max_users=100)
     assert a.applied, a.reason
     out = _apply(db)
@@ -186,13 +187,16 @@ def test_accounts_that_differ_only_by_case_are_refused(db):
 
 def test_main_calls_both_passes_and_the_second_is_off_by_default(db, monkeypatch):
     """main() reads settings; DEMO_STAFF_LOGIN_ENABLED unset must not expand
-    who gets the password beyond DEMO_MASTER_ACCOUNTS' four."""
+    who gets the password beyond DEMO_MASTER_ACCOUNTS' five."""
     from app.core import config, database
     for k, v in {"DEMO_MASTER_PASSWORD": MASTER, "DEMO_MODE": True, "DEMO_MASTER_KEEP_ACCOUNTS": "",
                  "DEMO_MASTER_DISABLE_OTHERS": "", "DEMO_STAFF_LOGIN_ENABLED": "", "DEMO_STAFF_BANK_CODE": BANK_CODE,
                  "DEMO_EMAIL_DOMAINS": "girivanfinance.test,aravallifs.test",
+                 # slot 5 is the pending agency's admin, so it is NOT the active
+                 # agency.admin the staff pass covers — the two passes stay distinct.
                  "DEMO_MASTER_ACCOUNTS": ("bank.admin@girivanfinance.test,manager.b@aravallifs.test,"
-                                         "agent.a@aravallifs.test,bank.admin2@girivanfinance.test")}.items():
+                                         "agent.a@aravallifs.test,bank.admin2@girivanfinance.test,"
+                                         "pending.admin@aravallifs.test")}.items():
         monkeypatch.setattr(config.settings, k, v)
     monkeypatch.setattr(database, "SessionLocal", Session)
     assert demo.main() == demo.EXIT_APPLIED
