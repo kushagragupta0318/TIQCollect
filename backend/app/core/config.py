@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     APP_NAME: str = "TIQCollect"
     APP_ENV: str = "development"
     DEBUG: bool = False
+    # SQLAlchemy statement logging. Was tied to DEBUG, which on dev logged every
+    # statement with full params (incl. 200+ element UUID IN-lists) and was the
+    # dominant dev-side request latency. Off by default; turn on only to debug SQL.
+    SQL_ECHO: bool = False
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15

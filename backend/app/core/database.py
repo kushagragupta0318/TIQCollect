@@ -52,7 +52,7 @@ engine = create_engine(
     max_overflow=settings.DB_MAX_OVERFLOW,
     pool_pre_ping=True,
     pool_recycle=3600,
-    echo=settings.DEBUG,
+    echo=settings.SQL_ECHO,
 )
 
 # The API's timeout until a Celery worker switches this process to the jobs'.
@@ -119,7 +119,7 @@ def apply_tenant_context(db: Session, *, bank_id, agency_id, scope: str, user_id
 analytics_engine = create_engine(
     settings.ANALYTICS_DATABASE_URL or settings.DATABASE_URL,
     poolclass=QueuePool, pool_size=2, max_overflow=3, pool_pre_ping=True, pool_recycle=3600,
-    echo=settings.DEBUG,
+    echo=settings.SQL_ECHO,
 )
 
 
