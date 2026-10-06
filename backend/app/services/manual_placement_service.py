@@ -168,6 +168,7 @@ class ManualPlacementService:
         v.placement_id, v.case_id, v.case_number = placement.id, case.id, case.case_number
         stage_audit(self.db, action=AuditAction.PLACEMENT_CREATED, user_id=actor_id,
                     entity_type="Placement", entity_id=placement.id,
+                    bank_id=placement.bank_id, agency_id=placement.agency_id,
                     details={"source": "MANUAL", "run_id": run.id, "loan_id": loan.id,
                              "agency_id": agency.id, "case_id": case.id},
                     ip_address=ip_address)
@@ -197,6 +198,7 @@ class ManualPlacementService:
             closed = self.rules.recall(placement, on=on, end_reason=MANUAL_RECALL, note=note, ended_by=actor_id)
             stage_audit(self.db, action=AuditAction.PLACEMENT_RECALLED, user_id=actor_id,
                         entity_type="Placement", entity_id=placement.id,
+                        bank_id=placement.bank_id, agency_id=placement.agency_id,
                         details={"source": "MANUAL", "reason": note, "agency_id": placement.agency_id,
                                  "loan_id": placement.loan_id, "cases_closed": [c.id for c in closed]},
                         ip_address=ip_address)

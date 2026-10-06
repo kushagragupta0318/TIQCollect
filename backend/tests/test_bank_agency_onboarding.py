@@ -573,6 +573,7 @@ def test_agency_activates_once_both_documents_verified_and_invite_accepted(w, mo
           .filter(AuditLog.entity_type == "Agency", AuditLog.entity_id == out["agency_id"],
                   AuditLog.action == AuditAction.AGENCY_ACTIVATED).first())
     assert row is not None
+    assert (row.bank_id, row.agency_id) == (agency.bank_id, agency.id)   # A13b: a system row carries its entity's tenant
 
 
 def test_activation_fires_only_once(w, monkeypatch):

@@ -561,7 +561,7 @@ def apply_run(db: Session, *, bank_id: str, run_id: str, actor_id: str, today: d
             end_reason = (d.score_breakdown.get("recall_rules") or [NO_ACTIVITY])[0]
             closed = rules.recall(p, on=today, end_reason=end_reason, note=d.reason, ended_by=actor_id)
             stage_audit(db, action=AuditAction.PLACEMENT_RECALLED, user_id=actor_id, entity_type="Placement",
-                        entity_id=p.id, ip_address=ip_address,
+                        entity_id=p.id, bank_id=p.bank_id, agency_id=p.agency_id, ip_address=ip_address,
                         details={"source": "ENGINE", "run_id": run.id, "rule": end_reason,
                                  "agency_id": p.agency_id, "loan_id": p.loan_id,
                                  "cases_closed": [c.id for c in closed]})
@@ -582,7 +582,7 @@ def apply_run(db: Session, *, bank_id: str, run_id: str, actor_id: str, today: d
             case = rules.open_case(p, loan, case_number=rules.case_number_for(p),
                                    target_amount=rules.case_target_amount(loan))
             stage_audit(db, action=AuditAction.PLACEMENT_CREATED, user_id=actor_id, entity_type="Placement",
-                        entity_id=p.id, ip_address=ip_address,
+                        entity_id=p.id, bank_id=p.bank_id, agency_id=p.agency_id, ip_address=ip_address,
                         details={"source": source, "run_id": run.id, "loan_id": loan.id,
                                  "agency_id": d.chosen_agency_id, "case_id": case.id})
             placed.append(p.id)

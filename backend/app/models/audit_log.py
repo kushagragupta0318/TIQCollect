@@ -78,6 +78,10 @@ class AuditAction(str, enum.Enum):
 class AuditLog(Base, UUIDPrimaryKey):
     """Immutable audit trail — no updates, no deletes. Required for RBI compliance."""
     __tablename__ = "audit_logs"
+    # A13b S1a: a row carries its ACTOR's tenant (filled by tenancy_listener);
+    # a row no user wrote passes its entity's tenant (core/audit.py). RLS's
+    # WITH CHECK refuses a NULL-bank row from any principal but PLATFORM.
+    __tenant_parents__ = (("user_id", "User"),)
 
     # Timestamps stored directly — no mixin (must be immutable)
     # 2026-09-24 (B11, lead-dev audit 3.11): no index=True here — it built a
