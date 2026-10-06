@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BANK_HOME_PATH, BANK_NAV_ITEMS, BANK_SECTIONS, bankHref, findNavItem } from "./navigation";
+import { BANK_HOME_PATH, BANK_NAV_ITEMS, BANK_SECTIONS, bankHref, findNavItem, isBuiltPath } from "./navigation";
 import { BANK_PORTAL_ROLES, BANK_ROLE_LABELS, isBankPortalRole } from "./bankRoles";
 import { PAGE_ENTRIES, searchEntries } from "./searchIndex";
 
@@ -57,14 +57,21 @@ describe("bank portal roles — plan §2.1", () => {
 });
 
 describe("top-bar search", () => {
-  it("indexes every page", () => {
-    expect(PAGE_ENTRIES).toHaveLength(BANK_NAV_ITEMS.length);
+  // 2026-10-01: the index is BUILT pages only. It indexed every nav item,
+  // which after the rail started hiding unbuilt items meant search was the one
+  // way left to reach "Not built yet".
+  it("indexes every built page, and nothing that has no page", () => {
+    expect(PAGE_ENTRIES).toHaveLength(BANK_NAV_ITEMS.filter((i) => isBuiltPath(i.path)).length);
+    expect(PAGE_ENTRIES.length).toBeLessThan(BANK_NAV_ITEMS.length);
+    expect(PAGE_ENTRIES.every((e) => isBuiltPath((e.path ?? "").replace(/^\/bank\//, "")))).toBe(true);
   });
 
   it("matches title or subtitle case-insensitively, capped at five, nothing for a blank query", () => {
-    expect(searchEntries(PAGE_ENTRIES, "mlops").map((r) => r.title)).toEqual(["MLOps"]);
-    expect(searchEntries(PAGE_ENTRIES, "/bank/admin").map((r) => r.title)).toEqual(["Bank Users", "Regions", "Settings", "Audit"]);
+    expect(searchEntries(PAGE_ENTRIES, "models").map((r) => r.title)).toEqual(["Models"]);
+    expect(searchEntries(PAGE_ENTRIES, "/bank/agencies").map((r) => r.title))
+      .toEqual(["Directory", "Performance", "Placement", "Onboard Agency"]);
     expect(searchEntries(PAGE_ENTRIES, "bank")).toHaveLength(5);
     expect(searchEntries(PAGE_ENTRIES, "   ")).toEqual([]);
+    expect(searchEntries(PAGE_ENTRIES, "mlops")).toEqual([]);   // built pages only
   });
 });
