@@ -56,6 +56,14 @@ export interface RecoveryPanels {
              recovery_vs_expected: number | null }[];
 }
 
+interface CostRow {
+  commission_inr: number; field_cost_inr: number | null; collected_inr: number; cost_per_100_inr: number | null;
+}
+export interface CostPanels {
+  by_month: (CostRow & { month_start: string })[];
+  by_agency: (CostRow & { agency_id: string; agency_name: string })[];
+}
+
 export interface CompliancePanels {
   breaches_over_time: { month_start: string; out_of_hours: number; geofence: number; consent_missing: number; fraud_confirmed: number }[];
   by_agency: { agency_id: string; agency_name: string; out_of_hours: number; geofence: number; visits: number;

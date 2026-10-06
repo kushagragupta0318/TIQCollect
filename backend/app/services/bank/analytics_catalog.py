@@ -37,6 +37,7 @@ TAB_VIEWS: dict[str, tuple[str, ...]] = {
     "migration": (TRANSITIONS,),
     "agencies": (SCORECARD,),
     "recovery": (SCORECARD,),
+    "cost": (SCORECARD,),
     "compliance": (FIELD,),
 }
 
@@ -139,6 +140,44 @@ def _recovery(adb: Session, bank_id: str, f: KpiFilter) -> dict:
     return {"available": True, "reason": None, "panels": {"by_month": by_month}}
 
 
+# ── Cost to collect ──────────────────────────────────────────────────────────
+def _cost(db: Session, adb: Session, bank_id: str, f: KpiFilter) -> dict:
+    """Channel economics (C04 task #4): commission and field cost, per month
+    bank-wide and per agency — the Agencies tab's own cost_per_100_inr
+    (agency_scorecard.compute_metrics), broken into its two components
+    instead of one blended ratio, and surfaced here as its own tab rather
+    than only buried in one scorecard column. field_cost is None (never 0)
+    when any visit that period has no FIELD_VISIT cost rate — unknown, not
+    free (agency_scorecard.py's own rule, same column)."""
+    from app.models.tenancy import Agency
+
+    clause, fp = f.clause(SCORECARD)
+    base = {"bank": bank_id, **fp}
+
+    def _rows(group_col: str) -> list[dict]:
+        rows = _read_rows(adb, f"""
+            SELECT {group_col} AS key, SUM(commission_accrued) AS commission_inr, SUM(field_cost) AS field_cost_inr,
+                   SUM(verified_collections) + SUM(bank_direct_collections) AS collected_inr
+            FROM analytics.{SCORECARD} WHERE bank_id = :bank {clause}
+            GROUP BY {group_col} ORDER BY {group_col}""", base)
+        for row in rows:
+            collected = row["collected_inr"]
+            row["cost_per_100_inr"] = (round((row["commission_inr"] + row["field_cost_inr"]) / collected * 100, 2)
+                                       if row["field_cost_inr"] is not None and collected else None)
+        return rows
+
+    by_month = _rows("month_start")
+    by_agency = _rows("agency_id")
+    for row in by_agency:
+        row["agency_id"] = row.pop("key")
+    for row in by_month:
+        row["month_start"] = row.pop("key")
+    names = {a.id: (a.trade_name or a.legal_name) for a in db.query(Agency).filter(Agency.bank_id == bank_id)}
+    for row in by_agency:
+        row["agency_name"] = names.get(row["agency_id"], row["agency_id"])
+    return {"available": True, "reason": None, "panels": {"by_month": by_month, "by_agency": by_agency}}
+
+
 # ── Agencies ─────────────────────────────────────────────────────────────────
 def _agencies(db: Session, adb: Session, bank_id: str, f: KpiFilter) -> dict:
     """A thin re-shape of agency_scorecard.py (§6.2's own scorecard
@@ -205,7 +244,7 @@ def _compliance(db: Session, adb: Session, bank_id: str, f: KpiFilter) -> dict:
            "panels": {"breaches_over_time": breaches_over_time, "by_agency": by_agency}}
 
 
-TABS = ("exposure", "migration", "agencies", "recovery", "compliance")
+TABS = ("exposure", "migration", "agencies", "recovery", "cost", "compliance")
 
 
 def compute_tab(db: Session, adb: Session, tab: str, bank_id: str, f: KpiFilter) -> dict:
@@ -225,6 +264,8 @@ def compute_tab(db: Session, adb: Session, tab: str, bank_id: str, f: KpiFilter)
         return _agencies(db, adb, bank_id, f)
     if tab == "recovery":
         return _recovery(adb, bank_id, f)
+    if tab == "cost":
+        return _cost(db, adb, bank_id, f)
     as_of = f.end if f.period == "custom" else latest_reading(adb, bank_id)
     if as_of is None:
         return _unavailable("no portfolio reading for this bank yet")
