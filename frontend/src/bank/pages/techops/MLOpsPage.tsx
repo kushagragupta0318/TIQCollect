@@ -3,10 +3,12 @@
 //
 // Two honesty rules are built into the page rather than left to whoever
 // writes the copy:
-//   1. The headline metrics are the LIVE-EQUIVALENT ones (ADR 0008 / ML-1).
-//      The artifact's own OOT figures describe a model measured with a
-//      borrower-stance feature the product never records, so they are shown
-//      only in a secondary row that says so, and never as "performance".
+//   1. The ONLY performance figures shown are the LIVE-EQUIVALENT ones
+//      (ADR 0008 / ML-1). The artifact's own OOT metrics describe a model
+//      measured with a borrower-stance feature the product never records, so
+//      they are not displayed at all -- owner's decision, 2026-10-07: this is
+//      a sales surface, and a screenshot of the flattering number travels
+//      without its caveat however carefully the caveat is written.
 //   2. Everything here was trained on SYNTHETIC borrowers. The warning comes
 //      from the artifact's own metadata and sits at the top, not in a
 //      footnote.
@@ -143,17 +145,12 @@ export function MLOpsPage() {
             </>
           ) : (
             <p className="mt-2 text-[11px] text-muted-foreground">
-              No live-equivalent measurement is published for this version. The artifact's own figures
-              are below and are NOT a substitute — they describe a model measured with an input this
-              product does not collect.
+              No live-equivalent measurement is published for this version, so no performance figure is
+              shown. The artifact's own development metrics are deliberately not displayed anywhere on
+              this page: they were measured with an input this product never records, and a figure that
+              cannot be reproduced in production is worse than none.
             </p>
           )}
-
-          <p className="mt-4 text-[11px] text-muted-foreground">
-            At build time, on held-out months, WITH the stance feature this product does not record —
-            development figures, not live ones: Gini {metric(rr.artifact_metrics?.gini)},
-            KS {metric(rr.artifact_metrics?.ks, 2)}, AUC {metric(rr.artifact_metrics?.auc)}.
-          </p>
         </div>
       </Panel>
 

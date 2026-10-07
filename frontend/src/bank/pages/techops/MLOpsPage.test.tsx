@@ -77,18 +77,24 @@ describe("MLOpsPage honesty", () => {
     expect(screen.getByText("35.74")).toBeTruthy();      // live-equivalent KS
   });
 
-  it("shows the artifact's figures ONLY as development-time, never as performance", async () => {
+  it("shows the artifact's OOT figures NOWHERE on the page", async () => {
+    // Owner's decision, 2026-10-07: this is a sales surface, and a screenshot
+    // of 0.5122 travels without its caveat however carefully the caveat is
+    // written. The page carries the live-equivalent number or none.
     show("BANK_TECHOPS");
-    await waitFor(() => expect(screen.getByText(/development figures, not live ones/)).toBeTruthy());
-    const line = screen.getByText(/development figures, not live ones/).textContent ?? "";
-    expect(line).toContain("0.512");                     // the artifact Gini lives in THAT sentence
-    expect(line).toContain("38.66");
+    await waitFor(() => expect(screen.getByText("Live-equivalent performance")).toBeTruthy());
+    const page = document.body.textContent ?? "";
+    expect(page).not.toContain("0.512");                 // artifact Gini
+    expect(page).not.toContain("38.66");                 // artifact KS
+    expect(page).not.toContain("0.756");                 // artifact AUC
   });
 
   it("refuses to fall back to the flattering number when there is no live-equivalent", async () => {
     show("BANK_TECHOPS", overview({ live_equivalent: null }));
     await waitFor(() => expect(screen.getByText(/No live-equivalent measurement is published/)).toBeTruthy());
-    expect(screen.getByText(/are NOT a substitute/)).toBeTruthy();
+    expect(screen.getByText(/deliberately not displayed/)).toBeTruthy();
+    // and still no artifact figure anywhere, which is the point of the branch
+    expect(document.body.textContent ?? "").not.toContain("0.512");
   });
 
   it("puts the synthetic-training warning on the page, not in a footnote", async () => {
