@@ -24,14 +24,15 @@
 #   function re-checks role as defence in depth (a future wiring mistake must
 #   fail closed, not leak).
 #
-#   AUDIT ENUM GAP (flagged to 43/coordinator): AuditAction has USER_DEACTIVATED
-#   but no USER_REACTIVATED / USER_ROLE_CHANGED member, and the enum (a native
-#   Postgres type, models/** + alembic owned by 43, migration-frozen on
-#   TIQCollect-app) cannot gain one from this lane. Reactivation and role change
-#   therefore record under USER_DEACTIVATED with an explicit `event` in
-#   `details` — exactly as agent_management_service records both suspend AND
-#   reactivate under the single AGENT_STATUS_CHANGED action. Deactivation uses
-#   USER_DEACTIVATED directly. Proper dedicated actions are a follow-up for 43.
+#   AUDIT ACTIONS (resolved 2026-10-07, v2_0032): reactivation and role change
+#   first shipped under USER_DEACTIVATED with an explicit `event` in `details`,
+#   because the enum had no member for either. That made the bank Audit page
+#   count every role flip and reactivation AS A DEACTIVATION — details.event
+#   does not appear in a count — so v2_0032 added USER_REACTIVATED and
+#   USER_ROLE_CHANGED and they are used here now. `details.event` is KEPT
+#   alongside the action: rows written before v2_0032 carry the old action and
+#   were deliberately NOT backfilled (this table's immutability is load-bearing),
+#   so `event` is the only field that reads the same on both sides of the split.
 # ────────────────────────────────────────────────────────────────────────────
 """Bank-side user administration (Admin > Bank Users, K01)."""
 from __future__ import annotations
@@ -155,7 +156,7 @@ def change_role(db: Session, admin: User, user_id: str, *, role: UserRole,
         return {**_user_dict(target), "changed": False}
     previous = target.role
     target.role = role
-    stage_audit(db, action=AuditAction.USER_DEACTIVATED, user_id=admin.id, entity_type="User",
+    stage_audit(db, action=AuditAction.USER_ROLE_CHANGED, user_id=admin.id, entity_type="User",
                 entity_id=target.id, bank_id=target.bank_id, ip_address=_client_ip(request),
                 details={"event": "USER_ROLE_CHANGED", "from_role": previous.value, "to_role": role.value})
     db.commit()
@@ -203,7 +204,7 @@ def reactivate_user(db: Session, admin: User, user_id: str, *, request: Request 
     target.is_active = True
     target.deactivated_at = None
     target.deactivated_by = None
-    stage_audit(db, action=AuditAction.USER_DEACTIVATED, user_id=admin.id, entity_type="User",
+    stage_audit(db, action=AuditAction.USER_REACTIVATED, user_id=admin.id, entity_type="User",
                 entity_id=target.id, bank_id=target.bank_id, ip_address=_client_ip(request),
                 details={"event": "USER_REACTIVATED", "is_active": True})
     db.commit()

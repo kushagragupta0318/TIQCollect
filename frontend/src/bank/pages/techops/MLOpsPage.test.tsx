@@ -58,7 +58,14 @@ function overview(over: Partial<model.ModelsOverview["recovery_risk"]> = {}): mo
 const CANDIDATE: model.CandidateRow = {
   candidate_id: "c1", model_name: "recovery_risk", candidate_version: "2.3.0",
   incumbent_version: "2.2.0", state: "PENDING_APPROVAL",
-  trigger_reasons: ["drift"], cohort_rows: 12000, created_at: "2026-10-06T00:00:00+00:00",
+  // The REAL shape ml/pipeline/monitor.py writes, artifact figures and all.
+  // The old fixture said ["drift"], which is why the page could echo these
+  // strings for a week without a test noticing.
+  trigger_reasons: [
+    "Gini has fallen 12% below its development value (0.421 against 0.512)",
+    "KS has fallen 9% below its development value (32.40 against 38.66)",
+  ],
+  cohort_rows: 12000, created_at: "2026-10-06T00:00:00+00:00",
 };
 
 function show(role: string, ov = overview(), candidates = [CANDIDATE]) {
@@ -75,6 +82,26 @@ describe("MLOpsPage honesty", () => {
     await waitFor(() => expect(screen.getByText("Live-equivalent performance")).toBeTruthy());
     expect(screen.getByText("0.480")).toBeTruthy();      // live-equivalent Gini, the headline
     expect(screen.getByText("35.74")).toBeTruthy();      // live-equivalent KS
+  });
+
+  it("never echoes a monitor reason, because monitor.py writes the figures into it", async () => {
+    show("BANK_TECHOPS");
+    await waitFor(() => expect(screen.getByText(/Discrimination \(Gini\)/)).toBeTruthy());
+    const page = document.body.textContent ?? "";
+    expect(page).not.toContain("0.512");      // the development Gini, inside the reason string
+    expect(page).not.toContain("38.66");      // the development KS, likewise
+    // "against 0." is the reason format's own giveaway, and the FIGURES are
+    // the real guarantee. Broader phrase matches kept catching this page's own
+    // copy -- the "Against" column header, and the labels themselves, which
+    // legitimately say "below its development value" without any number.
+    expect(page).not.toContain("against 0.");
+  });
+
+  it("falls back to a generic label for a reason it does not recognise", async () => {
+    show("BANK_TECHOPS", overview(),
+         [{ ...CANDIDATE, trigger_reasons: ["Something new nobody mapped (0.512 against 0.998)"] }]);
+    await waitFor(() => expect(screen.getByText("Monitoring threshold breached")).toBeTruthy());
+    expect(document.body.textContent ?? "").not.toContain("0.512");
   });
 
   it("shows the artifact's OOT figures NOWHERE on the page", async () => {
