@@ -26,6 +26,8 @@ from tests.pg.test_pg_demo_fixture import db, sql_text  # noqa: F401 -- the rest
 
 pytestmark = pytest.mark.filterwarnings("ignore")
 
+NEWLINE = chr(10)
+
 #: The implementation v2_0039 replaced, verbatim from before the change. Kept
 #: here rather than imported, because the point is to compare against
 #: something the new code cannot influence.
@@ -166,17 +168,39 @@ def test_the_latest_score_wins_and_a_same_day_tie_is_broken_by_scored_at(db):  #
     assert after_total == pytest.approx(old_total, abs=0.01)
 
 
-def test_the_read_uses_the_index_and_does_not_spill_to_disk(db):  # noqa: F811
-    """The defect in the two facts that name it: the old shape sorted 3.6 MB on
-    disk and read the prediction heap. The new one must touch neither."""
+def test_the_read_uses_the_index_and_never_scans_a_prediction_row(db):  # noqa: F811
+    """The defect in the facts that name it: the old shape sorted 3.6 MB on
+    disk and read 122,674 prediction rows from the heap. The new one must do
+    neither.
+
+    Asserted on the index's COLUMN SIGNATURE, not on its name: Postgres names
+    a partition's own index after the partition, so the plan says
+    `model_predictions_p202609_bank_id_model_name_loan_id_as_of__idx` and never
+    `ix_model_pred_latest_per_loan` -- a parent-name assertion passes only by
+    accident. And a zero-row Seq Scan on an EMPTY future partition is free and
+    expected, so what matters is not that no sequential scan appears but that
+    no sequential scan reads a row.
+    """
     as_of = _as_of(db)
     bank_id = _banks(db)[0]
     with db.connect() as c:
-        plan = "\n".join(r[0] for r in c.execute(
+        plan = NEWLINE.join(r[0] for r in c.execute(
             text("EXPLAIN (ANALYZE, BUFFERS) " + str(CF._RECOVERY_RISK_SQL)),
             _params(as_of, bank_id)))
-    assert "ix_model_pred_latest_per_loan" in plan, plan
-    assert "external merge" not in plan, plan
-    # Index Only Scan: the prediction rows themselves are never visited.
+
+    lines = [line.strip() for line in plan.splitlines()]
+
     assert "Index Only Scan" in plan, plan
-    assert "Seq Scan on model_predictions" not in plan, plan
+    assert "bank_id_model_name_loan_id_as_of" in plan, plan      # v2_0039's columns
+    assert "external merge" not in plan, plan
+    # Index-only means the prediction tuples themselves are never visited.
+    heap = [line for line in lines if line.startswith("Heap Fetches:")]
+    assert heap and all(line == "Heap Fetches: 0" for line in heap), plan
+
+    # Every sequential scan of a partition returned NOTHING -- they are the
+    # empty future months, not the book. `rows=` appears twice on a scan line
+    # (the estimate, then the actual); the last one is the actual.
+    scanned = [int(line.rsplit("rows=", 1)[1].split(" ")[0])
+               for line in lines
+               if "Seq Scan on model_predictions" in line and "actual" in line]
+    assert all(n == 0 for n in scanned), (scanned, plan)
