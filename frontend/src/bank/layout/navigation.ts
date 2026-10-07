@@ -257,6 +257,7 @@ export const BUILT_NAV_PATHS: ReadonlySet<string> = new Set([
   "admin/audit",
   "admin/regions",
   "admin/settings",
+  "tech-ops/mlops",
 ]);
 
 export const isBuiltPath = (path: string): boolean => BUILT_NAV_PATHS.has(path);
