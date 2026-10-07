@@ -24,6 +24,7 @@ from app.models.loan import DPDBucket, Loan, LoanStatus, LoanType
 from app.models.message import (
     EscalationIssue, IssueStatus, MessageThread, SenderSide, ThreadStatus, ThreadSubject,
 )
+from app.models.agent import Agent, AgentSpecialization, AgentStatus, AgentTier
 from app.models.payment import Payment, PaymentMode, PaymentStatus
 from app.models.payment_reversal import PaymentReversalRequest, ReversalStatus
 from app.models.tenancy import Agency, Bank
@@ -73,6 +74,16 @@ def _user(db, role, *, agency=AGENCY, bank=BANK):
              full_name=role.value, hashed_password="x", role=role, is_active=True, is_verified=True,
              bank_id=bank, agency_id=(None if role in _BANK_ROLES else agency))
     db.add(u); db.flush(); return u
+
+
+def _agent(db, mgr, *, agency=AGENCY, bank=BANK) -> Agent:
+    u = _user(db, UserRole.FIELD_AGENT, agency=agency, bank=bank)
+    a = Agent(id=_uid(), user_id=u.id, employee_code="E" + _uid()[:5], id_card_number="E-ID" + _uid()[:4],
+              manager_user_id=mgr.id, bank_id=bank, agency_id=agency, gender="M",
+              base_latitude=28.6, base_longitude=77.2, territory="Delhi", languages_spoken=["HINDI"],
+              status=AgentStatus.ON_DUTY, tier=AgentTier.TIER_1, specialization=AgentSpecialization.BOTH,
+              ranking_score=80.0, max_cases_per_day=5, current_month_collections=0.0)
+    db.add(a); db.flush(); return a, u
 
 
 def _reversal(db, *, bank=BANK, agency=AGENCY) -> PaymentReversalRequest:
@@ -243,6 +254,61 @@ def test_inbox_lists_threads_with_unread_and_pending_then_read_clears_unread(db)
     # pending filter narrows to awaiting-reply
     assert len(svc.list_inbox(_Ctx(bank, "BANK"), pending_only=True)) == 1
     assert svc.list_inbox(_Ctx(mgr, "AGENCY"), pending_only=True) == []   # agency spoke last
+
+
+def test_manager_and_agent_chat_one_thread(db):
+    mgr = _user(db, UserRole.AGENCY_MANAGER)
+    agent, agent_user = _agent(db, mgr)
+    svc = MessagingService(db)
+    # manager opens the chat to the agent
+    out = svc.post_message(_Ctx(mgr, "AGENCY"), ThreadSubject.AGENT_DIRECT.value, agent.id, "how's the day?")
+    assert out["thread"]["subject_type"] == ThreadSubject.AGENT_DIRECT.value
+    assert out["messages"][0]["sender_side"] == SenderSide.AGENCY.value
+    # the agent replies on their own thread
+    out2 = svc.post_message(_Ctx(agent_user, "AGENT"), ThreadSubject.AGENT_DIRECT.value, agent.id, "all good")
+    assert [m["sender_side"] for m in out2["messages"]] == [SenderSide.AGENCY.value, SenderSide.AGENT.value]
+    assert db.query(MessageThread).filter(
+        MessageThread.subject_type == ThreadSubject.AGENT_DIRECT.value).count() == 1
+
+
+def test_an_agent_sees_only_their_own_thread(db):
+    mgr = _user(db, UserRole.AGENCY_MANAGER)
+    a1, a1_user = _agent(db, mgr)
+    a2, _ = _agent(db, mgr)
+    svc = MessagingService(db)
+    svc.post_message(_Ctx(mgr, "AGENCY"), ThreadSubject.AGENT_DIRECT.value, a1.id, "to a1")
+    svc.post_message(_Ctx(mgr, "AGENCY"), ThreadSubject.AGENT_DIRECT.value, a2.id, "to a2")
+    # agent a1 cannot read a2's thread
+    with pytest.raises(HTTPException) as e:
+        svc.get_thread(_Ctx(a1_user, "AGENT"), ThreadSubject.AGENT_DIRECT.value, a2.id)
+    assert e.value.status_code == 404
+    # a1's own inbox shows exactly one (their own)
+    rows = svc.list_agent_threads(_Ctx(a1_user, "AGENT"))
+    assert len(rows) == 1 and rows[0]["subject_id"] == a1.id
+    assert rows[0]["counterparty"] == SenderSide.AGENCY.value
+
+
+def test_manager_inbox_lists_all_agency_agent_threads(db):
+    mgr = _user(db, UserRole.AGENCY_MANAGER)
+    a1, _ = _agent(db, mgr)
+    a2, _ = _agent(db, mgr)
+    svc = MessagingService(db)
+    svc.post_message(_Ctx(mgr, "AGENCY"), ThreadSubject.AGENT_DIRECT.value, a1.id, "hi a1")
+    svc.post_message(_Ctx(mgr, "AGENCY"), ThreadSubject.AGENT_DIRECT.value, a2.id, "hi a2")
+    rows = svc.list_agent_threads(_Ctx(mgr, "AGENCY"))
+    assert len(rows) == 2
+    assert all(r["counterparty"] == SenderSide.AGENT.value for r in rows)
+    assert {r["subject_id"] for r in rows} == {a1.id, a2.id}
+
+
+def test_a_manager_of_another_agency_cannot_reach_the_agent(db):
+    mgr = _user(db, UserRole.AGENCY_MANAGER)
+    agent, _ = _agent(db, mgr)
+    other_mgr = _user(db, UserRole.AGENCY_MANAGER, agency=OTHER_AGENCY)
+    with pytest.raises(HTTPException) as e:
+        MessagingService(db).post_message(_Ctx(other_mgr, "AGENCY"),
+                                          ThreadSubject.AGENT_DIRECT.value, agent.id, "not yours")
+    assert e.value.status_code == 404
 
 
 def test_empty_body_and_unwired_placement_are_refused(db):

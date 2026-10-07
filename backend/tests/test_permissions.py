@@ -117,6 +117,7 @@ def test_field_agent_holds_only_self_and_field_and_copilot():
         "copilot.use",
         "field.cases.read", "field.visit.record", "field.payment.collect", "field.ptp.manage",
         "field.call.log", "field.location.report", "field.leave.request", "field.sos",
+        "messaging.agent_chat",   # manager↔agent direct chat (agent side)
     }
 
 

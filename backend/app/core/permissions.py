@@ -156,6 +156,10 @@ _CATALOG: tuple[Capability, ...] = (
     # an escalation against an agency; the bank replies via messaging.send and may
     # change the issue's status.
     _cap("messaging.escalate", "open a general bank↔agency escalation", (AA, AM)),
+    # Manager↔agent 1:1 chat, within one agency. The agent and their manager/admin
+    # both read and post; per-agent isolation is service-enforced (agency-coarse
+    # RLS — a cutover-blocking gap, DATA-MODEL §8.6). No bank on this axis.
+    _cap("messaging.agent_chat", "manager↔agent direct chat within an agency", (FA, AA, AM)),
 
     _cap("placement.read", "placements received or made", (BA, BN, AA, AM)),
     _cap("placement.manual", "place loans by hand", (BA,), sensitive=True),

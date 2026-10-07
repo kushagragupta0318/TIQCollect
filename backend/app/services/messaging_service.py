@@ -20,12 +20,14 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import stage_audit
 from app.core.errors import AppException, ErrorCode
+from app.models.agent import Agent
 from app.models.audit_log import AuditAction
 from app.models.message import (
     ISSUE_STATUSES, EscalationIssue, IssueStatus, Message, MessageThread, SenderSide,
     ThreadRead, ThreadStatus, ThreadSubject,
 )
 from app.models.payment_reversal import PaymentReversalRequest
+from app.models.user import User
 
 _NOT_FOUND = "Conversation not found."
 _PREVIEW = 140   # inbox last-message preview length
@@ -142,6 +144,32 @@ class MessagingService:
         return (self.db.query(Message).filter(Message.thread_id == thread_id)
                 .order_by(Message.created_at.desc()).first())
 
+    # ── agent axis: manager↔agent 1:1 threads ─────────────────────────────────
+    def list_agent_threads(self, ctx) -> list[dict]:
+        """An AGENT sees only their own thread; a manager/admin sees every
+        AGENT_DIRECT thread for agents of their agency. Per-agent isolation is
+        SERVICE-enforced (agency-coarse RLS; see _subject_tenant / §8.6)."""
+        side = self._side(ctx)
+        q = (self.db.query(MessageThread)
+             .filter(MessageThread.subject_type == ThreadSubject.AGENT_DIRECT.value,
+                     MessageThread.bank_id == str(ctx.bank_id)))
+        if ctx.scope == "AGENT":
+            q = q.filter(MessageThread.subject_id == str(self._caller_agent_id(ctx) or ""))
+        elif ctx.scope == "AGENCY":
+            q = q.filter(MessageThread.agency_id == str(ctx.agency_id))
+        else:
+            return []
+        rows = [self._inbox_row(ctx, t, self._last_message(t.id), side,
+                                self._is_pending(t, self._last_message(t.id), side)) for t in q]
+        rows.sort(key=lambda r: r["last_message"]["at"] if r["last_message"] else r["_created"], reverse=True)
+        for r in rows:
+            r.pop("_created", None)
+        return rows
+
+    def _is_pending(self, thread: MessageThread, last: Message | None, side: SenderSide) -> bool:
+        return last is not None and thread.status == ThreadStatus.OPEN.value \
+            and last.sender_side != side.value
+
     # ── helpers ───────────────────────────────────────────────────────────────
     def _thread_for(self, subject_type: str, subject_id: str) -> MessageThread | None:
         return (self.db.query(MessageThread)
@@ -164,6 +192,25 @@ class MessagingService:
                 raise AppException(404, ErrorCode.NOT_FOUND, _NOT_FOUND)
             self._require_tenant(ctx, issue.bank_id, issue.agency_id)
             return issue.bank_id, issue.agency_id
+        if subject_type == ThreadSubject.AGENT_DIRECT.value:
+            # subject_id IS the agent. PER-AGENT scoping is SERVICE-ONLY: the
+            # _AGENCY_OWNED RLS policy is agency-coarse (no current_agent_id()), so
+            # after the tiq_app cutover an AGENT scope would read agency-mates'
+            # threads via the DB unless that GUC + a tightened policy land first —
+            # a CUTOVER-BLOCKING item in DATA-MODEL-V2 §8.6. Here the service is the
+            # enforcer: an agent reaches only their own thread.
+            agent = self.db.get(Agent, subject_id)
+            if agent is None or str(ctx.bank_id) != str(agent.bank_id):
+                raise AppException(404, ErrorCode.NOT_FOUND, _NOT_FOUND)
+            if ctx.scope == "AGENT":
+                if str(self._caller_agent_id(ctx)) != str(agent.id):
+                    raise AppException(404, ErrorCode.NOT_FOUND, _NOT_FOUND)
+            elif ctx.scope == "AGENCY":
+                if str(ctx.agency_id) != str(agent.agency_id):
+                    raise AppException(404, ErrorCode.NOT_FOUND, _NOT_FOUND)
+            else:                                   # bank / platform have no agent axis
+                raise AppException(404, ErrorCode.NOT_FOUND, _NOT_FOUND)
+            return agent.bank_id, agent.agency_id
         if subject_type == ThreadSubject.PLACEMENT.value:
             raise AppException(422, ErrorCode.VALIDATION_ERROR,
                                "Messaging on placements is not available yet.")
@@ -195,7 +242,15 @@ class MessagingService:
             return SenderSide.BANK
         if ctx.scope == "AGENCY":
             return SenderSide.AGENCY
-        raise AppException(403, ErrorCode.FORBIDDEN, "Messaging is for a bank or agency user.")
+        if ctx.scope == "AGENT":
+            return SenderSide.AGENT
+        raise AppException(403, ErrorCode.FORBIDDEN, "Messaging is for a bank, agency or agent user.")
+
+    def _caller_agent_id(self, ctx) -> str | None:
+        """The Agent.id of an AGENT-scoped caller (their own agent row), else None.
+        None fails closed: an AGENT with no agent row matches no thread."""
+        a = self.db.query(Agent).filter(Agent.user_id == ctx.user_id).first()
+        return a.id if a is not None else None
 
     def _mark_read(self, ctx, thread: MessageThread) -> None:
         """Upsert the caller's read marker for this thread (the inbox `unread`)."""
@@ -221,7 +276,18 @@ class MessagingService:
             return issue.title if issue is not None else "Escalation"
         if thread.subject_type == ThreadSubject.REVERSAL.value:
             return f"Reversal {str(thread.subject_id)[:8]}"
+        if thread.subject_type == ThreadSubject.AGENT_DIRECT.value:
+            agent = self.db.get(Agent, thread.subject_id)        # subject_id is the agent
+            user = self.db.get(User, agent.user_id) if agent is not None else None
+            return user.full_name if user is not None else "Agent"
         return thread.subject_type.title()
+
+    def _counterparty(self, thread: MessageThread, side: SenderSide) -> str:
+        """The other side of THIS thread, by axis. Agent axis is AGENT↔AGENCY;
+        every other axis is BANK↔AGENCY."""
+        if thread.subject_type == ThreadSubject.AGENT_DIRECT.value:
+            return SenderSide.AGENT.value if side is SenderSide.AGENCY else SenderSide.AGENCY.value
+        return SenderSide.AGENCY.value if side is SenderSide.BANK else SenderSide.BANK.value
 
     def _row_status(self, thread: MessageThread) -> str:
         """For an escalation the issue's status drives the row; otherwise the thread's."""
@@ -237,7 +303,7 @@ class MessagingService:
         return {
             "thread_id": thread.id, "subject_type": thread.subject_type, "subject_id": thread.subject_id,
             "title": self._title(thread), "status": self._row_status(thread),
-            "counterparty": (SenderSide.AGENCY.value if side is SenderSide.BANK else SenderSide.BANK.value),
+            "counterparty": self._counterparty(thread, side),
             "unread": self._unread(ctx, thread, last), "pending": pending, "message_count": int(count or 0),
             "last_message": ({"sender_side": last.sender_side, "preview": last.body[:_PREVIEW],
                               "at": last.created_at.isoformat() if last.created_at else None}
