@@ -43,7 +43,7 @@ def _case():
         loan=SimpleNamespace(loan_type="PERSONAL", bank_name="Girivan Finance", dpd=47,
                              dpd_bucket="BUCKET_2"),
         is_escalated=False, escalation_reason=None, escalation_notes=None,
-        target_amount=25000.0, collected_amount=0.0,
+        target_amount=25000.0, collected_amount=0.0, bank_id="bank-girivan",
     )
 
 

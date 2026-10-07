@@ -880,6 +880,7 @@ def extract_visit_fields(case_id: UUIDPath, body: VisitExtractionRequest, curren
     return visit_report_extraction.extract(
         body.transcript, remaining_amount=remaining,
         names=[c.full_name] if (c := getattr(case, "customer", None)) else [],
+        bank_id=case.bank_id,
     ).as_dict()
 
 
@@ -1022,7 +1023,7 @@ Based on all the above, generate a visit strategy brief. Respond ONLY with a val
     # should know whether their brief came from a model or from a rule.
     strategy: dict = {}
     _llm = llm.complete(
-        prompt, purpose="visit_strategy", json_mode=True,
+        prompt, purpose="visit_strategy", json_mode=True, bank_id=case.bank_id,
         temperature=0.4, max_tokens=1500,
         # The one name this prompt embeds. No pattern can find a person's
         # name, so the seam is told; it puts it back in the answer.

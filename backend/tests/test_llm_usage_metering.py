@@ -136,13 +136,23 @@ def test_a_recording_failure_never_changes_the_result(monkeypatch, db):
 
 
 def test_a_cached_reply_records_no_new_usage(monkeypatch, db):
-    """A cache hit cost nothing new; a row claiming otherwise would double the
-    page's totals for a call the provider was never asked to repeat."""
+    """A cache hit never calls the provider -- it costs nothing new, and a
+    row claiming otherwise would inflate the page's "Calls" count with
+    requests nobody was charged for (coordinator audit, 2026-10-07)."""
     monkeypatch.setattr(settings, "LLM_CACHE_TTL_SECONDS", 300)
     _use(monkeypatch, _RespWithUsage("hello", prompt_tokens=1000, completion_tokens=200))
     llm.complete("p", purpose="briefing", bank_id=BANK)
     llm.complete("p", purpose="briefing", bank_id=BANK)   # served from cache
-    rows = db.query(LLMCall).order_by(LLMCall.created_at).all()
-    assert len(rows) == 2
+    rows = db.query(LLMCall).all()
+    assert len(rows) == 1
     assert rows[0].input_tokens == 1000
-    assert rows[1].input_tokens == 0 and rows[1].cost == 0.0
+
+
+def test_a_call_that_never_reaches_the_provider_records_nothing(monkeypatch, db):
+    """NOT_CONFIGURED, RATE_LIMITED, TIMEOUT and the like never get a
+    response -- recording them as a "call" would count requests nobody was
+    charged for, the same reasoning as the cache-hit case above."""
+    monkeypatch.setattr(settings, "GROQ_API_KEY", "")   # resolves to NOT_CONFIGURED, no network
+    r = llm.complete("p", purpose="briefing", bank_id=BANK)
+    assert r.status == llm.NOT_CONFIGURED
+    assert db.query(LLMCall).count() == 0

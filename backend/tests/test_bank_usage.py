@@ -86,13 +86,16 @@ def test_a_bank_reads_only_its_own_calls(db):
 
 def test_another_banks_calls_are_never_returned(db):
     """The one that matters: a leak here is one lender reading another's cost
-    structure, not a wrong figure."""
+    structure, not a wrong figure -- checked on every shape the page shows,
+    not just the totals tile."""
     actor = _user(db, UserRole.BANK_ADMIN, bank_id=OURS)
-    _call(db, cost=0.01)
-    _call(db, bank_id=THEIRS, cost=99.0)
+    _call(db, feature="briefing", cost=0.01)
+    _call(db, bank_id=THEIRS, feature="case_ranking", cost=99.0)
     body = _client(db, actor).get("/api/v1/bank/usage").json()
     assert body["totals"]["calls"] == 1
     assert body["totals"]["cost_usd"] == pytest.approx(0.01)
+    assert {r["feature"] for r in body["by_feature"]} == {"briefing"}
+    assert sum(r["cost_usd"] for r in body["by_day"]) == pytest.approx(0.01)
 
 
 def test_an_unattributed_call_is_counted_not_charged_to_anyone(db):

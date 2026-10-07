@@ -6,11 +6,11 @@ same reason that file states: the list and any later export must not disagree
 about who may read what.
 
 WHAT THIS CANNOT SEE, stated rather than discovered: a row whose `bank_id` is
-NULL. core/llm.py's `complete()`/`chat()` default `bank_id` to None, and none
-of today's six call sites (agent.py, manager.py, case_service.py,
-visit_report_extraction.py, ai_report_service.py) pass one yet — a known,
-counted gap, the exact shape of AuditLog's own unattributed rows. Those calls
-still cost real money; they are just not yet provably this bank's, so
+NULL. core/llm.py's `complete()`/`chat()` default `bank_id` to None, and every
+row written before 2026-10-07 (the six call sites were wired that day) is one
+— a known, counted gap, the exact shape of AuditLog's own unattributed rows.
+A future seventh call site that forgets to pass `bank_id` lands here too.
+Those calls still cost real money; they are just not provably this bank's, so
 `coverage.pending_attribution` counts them platform-wide (same value shown to
 every bank) instead of guessing which bank to charge.
 
@@ -52,23 +52,28 @@ def _windowed(q, f: Filters):
     return q
 
 
-def scoped_query(db: Session, bank_id: str, f: Filters):
-    """This bank's own calls in the window, newest first. An unattributed
-    (bank_id NULL) row can never match — see the module docstring."""
-    q = db.query(LLMCall).filter(LLMCall.bank_id == bank_id)
-    return _windowed(q, f).order_by(LLMCall.created_at.desc())
+#: ONE definition of "this bank's own rows in the window" — totals/by_feature/
+#: by_day each used to re-filter LLMCall.bank_id == bank_id from scratch
+#: (coordinator audit, 2026-10-07); they now build on this and pick their own
+#: columns with `.with_entities()`, which keeps the filter without restating
+#: it. `pending_attribution` is deliberately NOT built on this: it reads
+#: bank_id IS NULL, a different scope, not a second copy of this one.
+def _scoped(db: Session, bank_id: str, f: Filters):
+    return _windowed(db.query(LLMCall).filter(LLMCall.bank_id == bank_id), f)
+
+
+_UNPRICED = func.coalesce(func.sum(case((LLMCall.cost.is_(None), 1), else_=0)), 0)
 
 
 def totals(db: Session, bank_id: str, f: Filters) -> dict:
-    q = _windowed(db.query(
+    calls, input_tokens, output_tokens, cache_tokens, cost_usd, unpriced = _scoped(db, bank_id, f).with_entities(
         func.count(LLMCall.id),
         func.coalesce(func.sum(LLMCall.input_tokens), 0),
         func.coalesce(func.sum(LLMCall.output_tokens), 0),
         func.coalesce(func.sum(LLMCall.cache_tokens), 0),
         func.coalesce(func.sum(LLMCall.cost), 0.0),
-        func.coalesce(func.sum(case((LLMCall.cost.is_(None), 1), else_=0)), 0),
-    ).filter(LLMCall.bank_id == bank_id), f)
-    calls, input_tokens, output_tokens, cache_tokens, cost_usd, unpriced = q.one()
+        _UNPRICED,
+    ).one()
     return {
         "calls": int(calls), "input_tokens": int(input_tokens), "output_tokens": int(output_tokens),
         "cache_tokens": int(cache_tokens), "cost_usd": float(cost_usd), "unpriced_calls": int(unpriced or 0),
@@ -76,25 +81,26 @@ def totals(db: Session, bank_id: str, f: Filters) -> dict:
 
 
 def by_feature(db: Session, bank_id: str, f: Filters) -> list[dict]:
-    q = _windowed(db.query(
+    q = _scoped(db, bank_id, f).with_entities(
         LLMCall.feature, func.count(LLMCall.id),
         func.coalesce(func.sum(LLMCall.input_tokens), 0), func.coalesce(func.sum(LLMCall.output_tokens), 0),
         func.coalesce(func.sum(LLMCall.cache_tokens), 0), func.coalesce(func.sum(LLMCall.cost), 0.0),
-    ).filter(LLMCall.bank_id == bank_id), f).group_by(LLMCall.feature)
+        _UNPRICED,
+    ).group_by(LLMCall.feature)
     return [
         {"feature": feature, "calls": int(calls), "input_tokens": int(it), "output_tokens": int(ot),
-         "cache_tokens": int(ct), "cost_usd": float(cost)}
-        for feature, calls, it, ot, ct, cost in q.order_by(func.sum(LLMCall.cost).desc().nullslast())
+         "cache_tokens": int(ct), "cost_usd": float(cost), "unpriced_calls": int(unpriced or 0)}
+        for feature, calls, it, ot, ct, cost, unpriced in q.order_by(func.sum(LLMCall.cost).desc().nullslast())
     ]
 
 
 def by_day(db: Session, bank_id: str, f: Filters) -> list[dict]:
     day = func.date(LLMCall.created_at)
-    q = _windowed(db.query(
-        day, func.count(LLMCall.id), func.coalesce(func.sum(LLMCall.cost), 0.0),
-    ).filter(LLMCall.bank_id == bank_id), f).group_by(day)
-    return [{"day": str(d), "calls": int(calls), "cost_usd": float(cost)}
-            for d, calls, cost in q.order_by(day.asc())]
+    q = _scoped(db, bank_id, f).with_entities(
+        day, func.count(LLMCall.id), func.coalesce(func.sum(LLMCall.cost), 0.0), _UNPRICED,
+    ).group_by(day)
+    return [{"day": str(d), "calls": int(calls), "cost_usd": float(cost), "unpriced_calls": int(unpriced or 0)}
+            for d, calls, cost, unpriced in q.order_by(day.asc())]
 
 
 def pending_attribution(db: Session, f: Filters) -> int:
