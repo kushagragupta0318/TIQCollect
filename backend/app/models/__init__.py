@@ -34,6 +34,7 @@ from app.models.strategy import CostRate, SimulationResult, SimulationRun
 from app.models.message import (
     Message, MessageThread, SenderSide, ThreadStatus, ThreadSubject,
 )
+from app.models.llm_call import LLMCall
 # Registers the before_flush tenant filler (one definition of §2.5).
 from app.models import tenancy_listener  # noqa: F401,E402
 
@@ -67,4 +68,5 @@ __all__ = [
     "CandidateState",
     "ModelPrediction",
     "LeaveRequest", "LeaveStatus", "LeaveType",
+    "LLMCall",
 ]

@@ -72,7 +72,7 @@ export function BankOverviewPage() {
 
       {ov.narrative.sentences.length > 0 && (
         <section className="border-l-2 border-border pl-4">
-          <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/80">
+          <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
             {narrativeCaption(ov.narrative.generated_by)}
           </p>
           <p className="text-[13px] leading-relaxed text-muted-foreground">{ov.narrative.sentences.join(" ")}</p>

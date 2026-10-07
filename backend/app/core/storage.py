@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import re
 import uuid
 from datetime import timedelta
@@ -102,6 +103,13 @@ def download_bytes(key: str) -> bytes:
     finally:
         resp.close()
         resp.release_conn()
+
+
+def upload_bytes(key: str, data: bytes, content_type: str) -> None:
+    """Server-side PUT — for an object the API renders itself (a report pack),
+    as opposed to one a client uploads directly via presigned_upload_url."""
+    ensure_bucket()
+    _client().put_object(BUCKET, key, io.BytesIO(data), length=len(data), content_type=content_type)
 
 
 def presigned_upload_url(key: str, content_type: str = "video/mp4", expires_minutes: int = 30) -> str:

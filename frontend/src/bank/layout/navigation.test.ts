@@ -72,6 +72,6 @@ describe("top-bar search", () => {
       .toEqual(["Directory", "Performance", "Placement", "Onboard Agency"]);
     expect(searchEntries(PAGE_ENTRIES, "bank")).toHaveLength(5);
     expect(searchEntries(PAGE_ENTRIES, "   ")).toEqual([]);
-    expect(searchEntries(PAGE_ENTRIES, "mlops")).toEqual([]);   // built pages only
+    expect(searchEntries(PAGE_ENTRIES, "scenario")).toEqual([]);   // built pages only (Scenario Lab unbuilt)
   });
 });

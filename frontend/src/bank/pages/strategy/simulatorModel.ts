@@ -10,6 +10,7 @@
 //  3. The word is "simulated", never "forecast" or "expected". The engine is
 //     UNCALIBRATED on this book (ADR 0014); scenario arithmetic is what it is.
 import type { Band, Ifrs9Stage, SimulationRun } from "@/api/bankStrategy";
+import type { PercentileRow } from "../../components/charts";
 import { pulseCr, pulseMoney } from "../../theme/format";
 
 /** monte_carlo.METRIC_UNITS, mirrored for display only (the server is the
@@ -135,6 +136,39 @@ export function stateShareRows(run: SimulationRun): StateShareRow[] {
   });
 }
 
+/** The same rows as `stateShareRows`, shaped for PercentileRangeChart (every
+ *  percentile as a plain number, not pre-formatted text). */
+export function stateShareChartRows(run: SimulationRun): PercentileRow[] {
+  const share = run.metrics.STATE_SHARE ?? {};
+  const known = STATE_ORDER.filter((s) => s in share);
+  const extra = Object.keys(share).filter((s) => !(STATE_ORDER as readonly string[]).includes(s));
+  return [...known, ...extra].map((state) => {
+    const b = share[state];
+    return { name: STATE_LABEL[state] ?? state, p5: b.p5, p10: b.p10, p50: b.p50, p90: b.p90, p95: b.p95 };
+  });
+}
+
+/** Gross NPA at the horizon, as the one row PercentileRangeChart needs. */
+export function gnpaChartRows(run: SimulationRun): PercentileRow[] {
+  const b = run.metrics.GNPA_PCT;
+  return [{ name: "Gross NPA", p5: b.p5, p10: b.p10, p50: b.p50, p90: b.p90, p95: b.p95 }];
+}
+
+/** The headline cash metrics, in crores, for one comparative chart — the
+ *  Tiles already show each on its own; this is the one place they sit next
+ *  to each other so their relative size actually reads. */
+export function cashChartRows(run: SimulationRun): PercentileRow[] {
+  const m = run.metrics;
+  const row = (name: string, b: Band): PercentileRow =>
+    ({ name, p5: b.p5 / CR, p10: b.p10 / CR, p50: b.p50 / CR, p90: b.p90 / CR, p95: b.p95 / CR });
+  return [
+    row("Cash recovered", m.RECOVERED_CASH),
+    row("Net of collection cost", m.NET_RECOVERY),
+    row("Written off", m.WRITE_OFFS),
+    row("Settlement cash", m.SETTLEMENT_CASH),
+  ];
+}
+
 // ── IFRS-9 staging ───────────────────────────────────────────────────────────
 
 export interface StageRow {
@@ -172,6 +206,30 @@ export function ifrs9Rows(run: SimulationRun): StageRow[] {
         coverage: fractionPct(s.COVERAGE),
         pd: fractionPct(s.PD),
         note: `ECL ${bandRange("INR", s.ECL)}`,
+      };
+    });
+}
+
+export interface Ifrs9ChartRow extends Record<string, string | number> {
+  stage: string;
+  ead: number;
+  ecl: number;
+  coverage: number;
+}
+
+/** EAD/ECL (crores) and Coverage (a percentage, not the raw fraction) per
+ *  stage, for GroupedBarLineChart. p50 only — the table beside this chart
+ *  still carries each one's full band for a reader who wants it. */
+export function ifrs9ChartRows(run: SimulationRun): Ifrs9ChartRow[] {
+  return (["stage1", "stage2", "stage3"] as const)
+    .filter((k) => run.ifrs9?.[k])
+    .map((k) => {
+      const s: Ifrs9Stage = run.ifrs9[k];
+      return {
+        stage: STAGE_LABEL[k]?.split(" — ")[0] ?? k,
+        ead: s.EAD.p50 / CR,
+        ecl: s.ECL.p50 / CR,
+        coverage: s.COVERAGE.p50 * 100,
       };
     });
 }
