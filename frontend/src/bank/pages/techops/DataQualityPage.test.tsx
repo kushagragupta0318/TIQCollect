@@ -50,8 +50,13 @@ function show(body: DataQualityPayload) {
 describe("DataQualityPage", () => {
   it("shows feed freshness and the quarantine breakdown", async () => {
     show(payload());
-    await waitFor(() => expect(screen.getByText("DAILY_BOOK")).toBeTruthy());
-    expect(screen.getByText("Unknown branch")).toBeTruthy();
+    // "DAILY_BOOK" and "Unknown branch" each appear twice on purpose: once in
+    // the Feed freshness tile / Quarantined-by-reason panel, once more in the
+    // quarantined sample row below (its own feed_type and reason) — the
+    // fixture's one sample row shares both values. getByText would throw on
+    // the ambiguity; getAllByText with an exact count asserts both renders.
+    await waitFor(() => expect(screen.getAllByText("DAILY_BOOK")).toHaveLength(2));
+    expect(screen.getAllByText("Unknown branch")).toHaveLength(2);
     expect(screen.getByText(/300 accepted/)).toBeTruthy();
   });
 
