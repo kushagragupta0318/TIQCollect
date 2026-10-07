@@ -79,6 +79,10 @@ class AuditAction(str, enum.Enum):
     # test_every_native_enum_holds_the_models_values_in_order fails.
     PAYMENT_REVERSAL_REQUESTED = "PAYMENT_REVERSAL_REQUESTED"
     PAYMENT_REVERSED = "PAYMENT_REVERSED"
+    # v2_0030 (2026-10-07, K01 Admin → Settings): a bank admin edited the bank's
+    # ops settings. Appended after reversal's — its migration (v2_0030) applies
+    # later than reversal's v2_0028, so this value is added to the enum last.
+    BANK_SETTINGS_UPDATED = "BANK_SETTINGS_UPDATED"
 
 
 class AuditLog(Base, UUIDPrimaryKey):

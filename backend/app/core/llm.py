@@ -236,6 +236,22 @@ _SDK_MODULE = {"groq": "openai", "openai": "openai", "anthropic": "anthropic"}
 
 
 @dataclass
+class Usage:
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+
+    @property
+    def cache_tokens(self) -> int:
+        """Read + creation, combined for metering: ai.llm_calls (F11) stores
+        one cache count, not two — the split still drives `_cost_usd` at the
+        point the row is written, where the row's `cost` column is the
+        authority and this combined count is description only."""
+        return self.cache_read_input_tokens + self.cache_creation_input_tokens
+
+
+@dataclass
 class LLMResult:
     """What a caller gets back. Never an exception."""
     status: str
@@ -258,6 +274,11 @@ class LLMResult:
     #: How many identifiers were replaced before the send, by kind. Evidence of
     #: what left the building; never the values themselves.
     redactions: dict[str, int] = field(default_factory=dict)
+    # 2026-10-07 (F11): complete() never read `value.usage` before this — only
+    # chat() did. Metering needs it on the path that actually carries nearly
+    # all production traffic, so it is captured here too, zero by default
+    # (no response reached parse(), nothing was billed).
+    usage: Usage = field(default_factory=Usage)
 
     @property
     def ai_generated(self) -> bool:
@@ -290,14 +311,6 @@ class ToolCall:
     # not parse, `arguments` is {} and this says why — the runtime should answer
     # the call with an error result rather than run the tool on nothing.
     arguments_error: str | None = None
-
-
-@dataclass
-class Usage:
-    input_tokens: int = 0
-    output_tokens: int = 0
-    cache_read_input_tokens: int = 0
-    cache_creation_input_tokens: int = 0
 
 
 @dataclass
@@ -992,17 +1005,22 @@ def _complete_one(name, provider, model, api_key, prompt, *, purpose, system, wa
     except Exception as exc:
         return fail(BAD_RESPONSE, _parse_failed(purpose, provider, model, exc))
 
+    # From here on a real response was received and is billed by the provider
+    # whether or not it turns out usable below — captured once, attached to
+    # every return path past this point (F11 metering).
+    usage = _usage_from(getattr(value, "usage", None))
+
     if stop == "refusal":
         logger.warning("llm.refused", purpose=purpose, provider=provider, model=model,
                        reason=refusal)
-        return fail(REFUSED, refusal or "refused", text=text, stop_reason=stop)
+        return fail(REFUSED, refusal or "refused", text=text, stop_reason=stop, usage=usage)
     if stop == "max_tokens" and not text:
         # The whole budget went on reasoning and no answer was started — the
         # gpt-oss failure LLM_REASONING_EFFORT exists for, seen from this side.
         logger.warning("llm.no_answer_in_budget", purpose=purpose, provider=provider,
                        model=model)
         return fail(BAD_RESPONSE, "Output budget ran out before an answer was written",
-                    stop_reason=stop)
+                    stop_reason=stop, usage=usage)
 
     data: dict[str, Any] = {}
     if want_json:

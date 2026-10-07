@@ -18,6 +18,7 @@ import { BankAnalyticsPage } from "./pages/BankAnalyticsPage";
 import { BankOverviewPage } from "./pages/BankOverviewPage";
 import { AuditPage } from "./pages/admin/AuditPage";
 import RegionsPage from "./pages/admin/RegionsPage";
+import SettingsPage from "./pages/admin/SettingsPage";
 import { BankPlacementPage } from "./pages/BankPlacementPage";
 import { BankPlaceholderPage } from "./pages/BankPlaceholderPage";
 import OnboardAgencyWizardPage from "./pages/onboarding/OnboardAgencyWizardPage";
@@ -40,7 +41,7 @@ const AGENCY_PERFORMANCE_PATH = "agencies/performance";
 const BUILT_PAGES: Record<string, ComponentType> = {
   overview: BankOverviewPage, analytics: BankAnalyticsPage, "agencies/placement": BankPlacementPage,
   "governance/models": ModelsPage, "strategy/monte-carlo": MonteCarloPage,
-  "admin/audit": AuditPage, "admin/regions": RegionsPage,
+  "admin/audit": AuditPage, "admin/regions": RegionsPage, "admin/settings": SettingsPage,
 };
 
 
