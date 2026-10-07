@@ -14,19 +14,17 @@ subject_type / status / sender_side are String + CHECK (not native enums:
 post-baseline native enums aren't tracked by the enum-drift test). The
 MESSAGE_SENT audit value was added separately in v2_0030.
 
-Chain v2_0029 reversal -> v2_0030 enum -> v2_0031. NOTE (73): at integration this
-renumbers behind Usage + 12's enum — enum add -> v2_0033, tables -> v2_0034 — and the
-down_revisions re-point to the then-current head. Numbers live only in these files;
-reparse the chain at merge, do not trust these.
-Revision ID: v2_0031
-Revises: v2_0030
+Chain (after merge-forward to 4df7096): v2_0033 Usage fix -> v2_0034 MESSAGE_SENT enum
+-> v2_0035 (this). Number lives only in this file.
+Revision ID: v2_0035
+Revises: v2_0034
 Create Date: 2026-10-07
 """
 import sqlalchemy as sa
 from alembic import op
 
-revision = "v2_0031"
-down_revision = "v2_0030"
+revision = "v2_0035"
+down_revision = "v2_0034"
 branch_labels = None
 depends_on = None
 

@@ -10,16 +10,18 @@ VALUE be used in the same transaction; the schema + tables follow in v2_0031.
 Downgrade: Postgres cannot drop an enum value; it stays harmlessly and a
 re-upgrade is a no-op (IF NOT EXISTS).
 
-Chains off v2_0029 (the reversal table), the single head. Number lives only in
-this file; re-point if the wave shifts at merge.
-Revision ID: v2_0030
-Revises: v2_0029
+Chains off v2_0033 (Usage's llm_calls token-default fix), the head after merge-forward
+to the cash-forecast integration (4df7096). MESSAGE_SENT is appended LAST — its
+migration runs after every other audit_action_enum value, matching the Python member
+order. Number lives only in this file.
+Revision ID: v2_0034
+Revises: v2_0033
 Create Date: 2026-10-07
 """
 from alembic import op
 
-revision = "v2_0030"
-down_revision = "v2_0029"
+revision = "v2_0034"
+down_revision = "v2_0033"
 branch_labels = None
 depends_on = None
 
