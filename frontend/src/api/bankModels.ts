@@ -30,7 +30,6 @@ export interface RecoveryRiskCard {
   method: string;
   features: { code: string; label: string }[];
   stored_probability_means: string;
-  artifact_metrics: { gini: number | null; ks: number | null; auc: number | null; brier: number | null; n: number | null };
   live_equivalent: { gini: number; ks: number; measured_on: string; basis: string } | null;
   stance: {
     feature: string;
@@ -47,7 +46,6 @@ export interface RecoveryRiskCard {
     sample_size: number | null;
   };
   abstention: { coverage_floor: number; latest_day_declined: number; latest_day_scored: number };
-  bands: { band: string | null; oot_n: number | null; oot_bad_rate: number | null }[];
   monitoring: {
     status: "ready" | "not_ready" | "unavailable";
     required_matured: number;

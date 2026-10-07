@@ -132,14 +132,19 @@ def test_the_six_layers_and_only_the_trained_one_is_modelled(w):
     assert "{" not in "".join(l["acts_on"] for l in body["layers"])            # every placeholder filled
 
 
-def test_the_model_card_quotes_the_live_equivalent_beside_the_artifact(w):
+def test_the_model_card_quotes_only_the_live_equivalent(w):
+    """F3: the artifact's own OOT figures (0.5122 / 38.66) described a model
+    scored with a borrower-stance feature the product never recorded — ADR
+    0008's "until stance capture ships" condition. Stance capture has
+    shipped, so they are not quoted anywhere any more, and not on the wire
+    either (defense in depth): a scrubbed UI over a payload that still
+    carries 0.5122 is one screenshot away from leaking it."""
     card = w["c"].get("/api/v1/bank/models", headers=_h(w["ba"])).json()["recovery_risk"]
     assert card["serving_version"] == SERVING
-    assert card["artifact_metrics"]["gini"] == 0.5122 and card["artifact_metrics"]["ks"] == 38.66
     assert card["live_equivalent"]["gini"] == 0.4796 and card["live_equivalent"]["ks"] == 35.74
+    assert "artifact_metrics" not in card and "bands" not in card
     assert "NO material payment" in card["stored_probability_means"]
     assert len(card["features"]) == 15 and {"code": "latest_disposition", "label": card["stance"]["feature_label"]} in card["features"]
-    assert [b["band"] for b in card["bands"]] == ["A", "B", "C", "D", "E"]
     assert card["stance"]["related_features"] == ["latest_disposition", "disposition_recency_class"]
 
 
@@ -150,7 +155,6 @@ def test_an_artifact_that_will_not_load_is_reported_not_hidden(w, monkeypatch):
     card = w["c"].get("/api/v1/bank/models", headers=_h(w["ba"])).json()["recovery_risk"]
     assert card["serving_version"] is None
     assert card["configured_version"] == SERVING and card["artifact_loaded"] is False
-    assert card["artifact_metrics"]["gini"] == 0.5122          # still read from the named artifact
 
 
 def test_the_synthetic_warning_travels_with_the_page(w):
