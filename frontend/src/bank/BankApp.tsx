@@ -17,6 +17,10 @@ import { BANK_NAV_ITEMS } from "./layout/navigation";
 import { BankAnalyticsPage } from "./pages/BankAnalyticsPage";
 import { BankOverviewPage } from "./pages/BankOverviewPage";
 import { AuditPage } from "./pages/admin/AuditPage";
+import RegionsPage from "./pages/admin/RegionsPage";
+import SettingsPage from "./pages/admin/SettingsPage";
+import { MLOpsPage } from "./pages/techops/MLOpsPage";
+import BankUsersPage from "./pages/admin/BankUsersPage";
 import { BankPlacementPage } from "./pages/BankPlacementPage";
 import { BankPlaceholderPage } from "./pages/BankPlaceholderPage";
 import OnboardAgencyWizardPage from "./pages/onboarding/OnboardAgencyWizardPage";
@@ -26,6 +30,7 @@ import AgencyProfilePage from "./pages/directory/AgencyProfilePage";
 import ModelsPage from "./pages/models/ModelsPage";
 import CustomerPage from "./pages/customer/CustomerPage";
 import MonteCarloPage from "./pages/strategy/MonteCarloPage";
+import BoardReportsPage from "./pages/strategy/BoardReportsPage";
 
 /** The nav items with a real page instead of the generic placeholder
  *  (D01-D03, D05, D06). Kept out of the BANK_NAV_ITEMS.map() below so their
@@ -39,7 +44,9 @@ const AGENCY_PERFORMANCE_PATH = "agencies/performance";
 const BUILT_PAGES: Record<string, ComponentType> = {
   overview: BankOverviewPage, analytics: BankAnalyticsPage, "agencies/placement": BankPlacementPage,
   "governance/models": ModelsPage, "strategy/monte-carlo": MonteCarloPage,
-  "admin/audit": AuditPage,
+  "strategy/board-reports": BoardReportsPage,
+  "admin/audit": AuditPage, "admin/regions": RegionsPage, "admin/settings": SettingsPage,
+  "tech-ops/mlops": MLOpsPage, "admin/users": BankUsersPage,
 };
 
 

@@ -5,9 +5,15 @@
 import { Fragment, type ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
 
-/** The page root: no max-width, CC's `space-y-6` rhythm. */
+/** The page root: no max-width, CC's `space-y-6` rhythm, and the one place
+ *  every bank page gets its enter transition (bank.css's own .page-fade-in —
+ *  a reduced-motion user already gets it collapsed to 1ms by bank.css's
+ *  global `@media (prefers-reduced-motion: reduce)` guard, nothing extra
+ *  needed here). This is a fresh element on every route change (<Outlet/>'s
+ *  child remounts; the layout around it does not), so it replays per page —
+ *  BankLayout's `main` cannot do that, it mounts once for the whole session. */
 export function PageRoot({ children }: { children: ReactNode }) {
-  return <div className="p-1 md:p-2 w-full mx-auto space-y-6">{children}</div>;
+  return <div className="page-fade-in p-1 md:p-2 w-full mx-auto space-y-6">{children}</div>;
 }
 
 export interface ExecutiveHeaderProps {

@@ -25,7 +25,8 @@ from app.core.ids import UUIDPath, UUIDQuery
 from app.core.permissions import require_perm
 from app.core.ratelimit import AUTH_LIMIT, limiter
 from app.models.user import User
-from app.services.bank import agency_profile_service, agency_scorecard, agency_service
+from app.schemas.bank_regions import RegionTreeResponse
+from app.services.bank import agency_profile_service, agency_scorecard, agency_service, region_service
 from app.services.scope import agency_or_404
 
 router = APIRouter(prefix="/bank", tags=["bank-agencies-admin"])
@@ -197,6 +198,16 @@ def list_regions_route(db: DbSession, current_user: User = require_perm("agency.
     reading the region hierarchy is closer to "who may set coverage" than
     "who may see an agency's onboarding progress"."""
     return agency_service.list_regions(db, current_user)
+
+
+@router.get("/regions/tree", response_model=RegionTreeResponse)
+def region_tree_route(db: DbSession, current_user: User = require_perm("bank.regions.manage")):
+    """Admin > Regions: the zone/region/state/city/branch tree with each
+    node's roll-up (loans, exposure, active-placement agency count).
+    `bank.regions.manage` is the only region-hierarchy capability
+    DATA-MODEL-V2.md §5.1 defines (BANK_ADMIN only) — no read-only sibling
+    exists there to gate this with instead."""
+    return region_service.region_tree(db, current_user)
 
 
 @router.get("/agencies-directory")

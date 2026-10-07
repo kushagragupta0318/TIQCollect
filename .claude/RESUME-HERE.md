@@ -1,62 +1,39 @@
-# RESUME CHECKPOINT — owner went offline 2026-09-30 ~18:00 IST
+# RESUME CHECKPOINT — 2026-10-07 (owner off the PC, build continues)
 
-## Where things stand
-- main (TIQCollect-app) = 1678e2b: bank-overview P0 fix (v2_0017/0018), directory, onboarding,
-  placements, prod stack, maps, lint, 2 docs (ONBOARDING, MOBILE-APP-PLAN), C08/C09 tasks added,
-  v1 dump removed. Repo PUBLIC. Dev DB upgraded to v2_0018.
-- Groq key IS in backend/.env (works — tested, PONG from groq). But redaction is NOT merged yet,
-  so DO NOT trigger AI features until l3-redaction merges (agent/borrower names would go unredacted).
+## Integration branch: TIQCollect-app @ ead163d (pushed personal/main). dev DB fieldops_v2 @ v2_0029.
+MERGED: everything through reversal. Chain single-head v2_0029.
+- Done+merged: l8-rls(0026), l7-n1(0027), D07/E05, analytics(8 tabs), Audit page(+nav wired),
+  REVERSAL two-stage (owner-authorized 2026-10-07, bank stage live, v2_0028/0029).
+- CI: green path (verify on resume).
 
-## Branches waiting to merge (CI was running when owner left; results will be on GitHub)
-- l3-redaction (4a2a3af): PII redaction + F12 + prompt fencing. Seam tests PASSED (273). SAFE to merge.
-  → After merging, recreate api container so redaction is live, THEN AI features are safe to use.
-- l5-bank-ui (1fcc14c): AI Models showcase page. Mutation-checked.
-- l8-rls-s1 (95b16b5) + l8-rls-s1b (f7d36e9) + l8-agency-decisions (6f48f0c): RLS + tenant-leak fix.
-- p4-strategy (9e64575): Monte Carlo E01 + ADR 0013/0014.
-- l9-agency-fixes: IST-date bug, leave-status, real QR (may be unpushed — check worktree C:/dev/tiq/l9).
-- l7-n1-evidence-honesty: fake-liveness / evidence honesty (unpushed — worktree C:/dev/tiq/l7).
-- l7-payment-idempotency: the CRITICAL payment double-count fix (in progress).
-- hotfix/collection-efficiency-scope: KPI per-agency abstain fix (I applied it, in CI).
+## FAST PROD DEMO APP: container tiq-prod :8500 (STALE — built at v2_0026). REBUILD after the page wave:
+  docker build -t tiqcollect:local .  &&  docker rm -f tiq-prod  &&  docker run -d --name tiq-prod \
+    --network tiqcollect_default -p 8500:8300 --env-file backend/.env \
+    -e DATABASE_URL="postgresql+psycopg2://fieldops:fieldops_dev_pass@postgres:5432/fieldops_v2" \
+    -e RUN_SEED=false -e WEB_CONCURRENCY=4 -e "ALLOWED_ORIGINS=http://192.168.1.217:8500,http://localhost:8500" tiqcollect:local
 
-## backend-pg CI note
-It's SLOW (~30 min), not hung — restores the 52MB fixture + full pg suite on 2-core runners.
-Merge a branch when its backend-pg goes green. If one passes 35 min, THEN it's a real hang.
+## BUILDING NOW (7 bank pages, fanned across lanes + 2 subagents):
+- 12 → MLOps console (Tech Ops) — reuse ModelCandidate/monitor.py/bank_models
+- 68 → Alerts(C06) then Data Quality(F10)
+- dd → Regions (admin)
+- 84 → (Board Reports or Cash Forecast)
+- ed → Board Reports(E10) — reuse parked/e09 engine (1eb224f)
+- subagent ac38304 → Settings
+- subagent afe1ed59 → Bank Users
+- NEW lane → Usage & Cost(F11, needs ai.llm_calls table)
+- 72 → MESSAGING (bank↔agency) after reversal merge
+NONE touch BankApp.tsx/navigation.ts — COORDINATOR wires nav in ONE pass per page (BUILT_PAGES in
+BankApp.tsx:38 + BUILT_NAV_PATHS in navigation.ts:248). Nav items already declared in navigation.ts.
 
-## Demo book (L6, tiqcollect-37) — the thing that fills the owner's empty portal
-- Rebuild DONE: 56MB, 8 active agencies, performing book + seasonality, real per-agency/agent perf.
-- collection_efficiency KPI fix applied (hotfix branch, in CI) — merge it before restore.
-- L6 building docs/DEMO-LOGINS.md (agencies + logins + performance) + apply_agency_staff() login mechanism.
-- ON RESUME: once hotfix merges + L6 confirms dump green (30/30), RESTORE the new book into
-  fieldops_dev_postgres/fieldops_v2 so owner sees agencies+logins+KPIs on localhost:5473. Owner pre-approved.
+## COORDINATOR LOOP (while owner away): on each "X green, head <sha>" ping →
+  1. merge the branch, 2. wire its nav (BUILT_PAGES + BUILT_NAV_PATHS), 3. if it adds a migration:
+  alembic upgrade head on fieldops_v2 (`docker compose run --rm --no-deps --entrypoint alembic api upgrade head`)
+  ELSE the stack crash-loops, 4. push. Migration numbers: give each lane the next free at merge.
+  Audit each page (tiq-auditor) before/after merge; lead-BD honesty pass at the end.
 
+## BLOCKED ON OWNER (do NOT route around — classifier guards shared-DB writes):
+- Placement backfill (Recovery tab + P(pay) column show data) — script ready, owner must approve the
+  write in 68's session or run it. Until then those two surfaces are honest-empty.
 
-## DEMO BOOK READY (added after checkpoint)
-- L6 dump + logins doc + staff mechanism all pushed: personal/l6-rebuild @ 70508d3.
-  f4c1b2d=fixture (56.2MB, perf book+seasonality, Awadh 30%/4%, Compliance 76.8),
-  b4f5b4f=apply_agency_staff() (off by default), 70508d3=docs/DEMO-LOGINS.md + generator.
-- 8 sections (bank + 7 agencies), unique emails, real per-agency + per-agent perf, shared demo password.
-- Aravalli shows collection_efficiency 'not available' honestly; other figures real.
-- RESTORE NOT DONE (laptop went offline mid-session — did not risk a mid-write). On resume:
-  merge hotfix/collection-efficiency-scope first, L6 merges it into l6-rebuild for genuine 30/30,
-  THEN restore l6-rebuild's dump into fieldops_dev_postgres/fieldops_v2. Owner pre-approved.
-
-## Owner's open decisions (in .claude/owner-tasks.md)
-- Where to keep an off-repo master copy of the v1 demo dump (removed from tree).
-- Payment REVERSAL path (PaymentStatus.REVERSED has no writer) — product decision.
-
-## CI backend-pg IS BROKEN (corrected — read this)
-backend-pg does NOT finish in 30min — it HANGS ~6h and is killed at GitHub's job limit, on EVERY
-branch, NOT fixed by v2_0017 (L8's evidence: fixture restore completes, then a query never returns;
--q + no per-test timeout meant nothing named it). So backend-pg has NEVER gone green in CI and
-cannot be used as a merge gate as-is. I added --timeout=900 -v --durations=20 + timeout-minutes:45
-to ci.yml (7c045d5) so the NEXT run names the hanging test in ~45min instead of burning 6h.
-ON RESUME: (1) read the newest backend-pg run — it will name the stuck pg test; fix that test.
-(2) Until then, merge gate = backend + frontend + docker green PLUS the lane's LOCAL pg run
-(--timeout=900) passing. L8's branches have local pg evidence: S1a 6+17, S1b 62, all pass as tiq_app.
-
-## RESUME SEQUENCE
-1. Check .claude/fullsuite.lock — if L6's stale, clear it. Check no orphan containers.
-2. Merge every branch whose backend-pg is green (l3-redaction first — unblocks safe AI use).
-3. After l3-redaction merges: docker compose up -d api celery_worker celery_beat (picks up redaction). Tell owner AI is safe.
-4. When L6 confirms dump green + hotfix merged: restore the new book into dev DB.
-5. Read .claude/owner-tasks.md and coord-state for the full picture.
+## ON RESUME: docker compose up -d + docker start tiq-prod; clear a stale .claude/fullsuite.lock;
+  continue merging page branches; rebuild :8500.

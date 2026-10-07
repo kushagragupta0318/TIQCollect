@@ -49,3 +49,18 @@ api_router.include_router(manager_agency_profile.router)
 from app.api.v1.endpoints import payment_reversals  # noqa: E402
 api_router.include_router(payment_reversals.agency_router)
 api_router.include_router(payment_reversals.bank_router)
+# 2026-10-07 (K01 Admin → Settings): the bank's config page, /bank/settings.
+# Own line, for the same merge reason as above.
+from app.api.v1.endpoints import bank_settings  # noqa: E402
+api_router.include_router(bank_settings.router)
+# 2026-10-07 (P3 K01): Admin > Bank Users, /bank/users (BANK_ADMIN only).
+# Own line, same merge reason as above.
+from app.api.v1.endpoints import bank_users_admin  # noqa: E402
+api_router.include_router(bank_users_admin.router)
+# 2026-10-07 (P4 E09/E10): the Board Reports page, /bank/reports/types and
+# /bank/reports/generate. Own line, for the same merge reason as above.
+from app.api.v1.endpoints import bank_reports  # noqa: E402
+api_router.include_router(bank_reports.router)
+# 2026-10-07 (F11 Tech Ops → Usage & Cost): /bank/usage. Own line, same reason.
+from app.api.v1.endpoints import bank_usage  # noqa: E402
+api_router.include_router(bank_usage.router)

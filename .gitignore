@@ -115,3 +115,4 @@ backend/docs/rollback/
 
 # Production database dumps (docker-compose.prod.yml mounts ./backups).
 backups/
+.worktrees/
