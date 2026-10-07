@@ -193,6 +193,13 @@ def test_build_cash_forecast_end_to_end():
     # every read was made with the caller's own bank id, not a default
     assert all(params.get("bank") == BANK for _sql, params in s.calls)
 
+    # totals() is the TOTAL's own band, narrower than summing each week's
+    # own p10/p90 would give (2026-10-07 audit finding).
+    totals = run.totals()
+    assert totals["p10"] <= totals["p50"] <= totals["p90"]
+    naive_spread = sum(run.p90) - sum(run.p10)
+    assert (totals["p90"] - totals["p10"]) < naive_spread
+
 
 def test_a_trailing_reporting_gap_does_not_flatline_the_bands_to_zero():
     """2026-10-07, demo-visible: on the live book, a ~2-week ingest lag at the

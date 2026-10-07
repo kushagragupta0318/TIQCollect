@@ -125,7 +125,10 @@ export interface CashForecastBacktest {
   mape: number | null;
   n_folds: number;
   calibrated: boolean;
+  /** Names the ceiling either way — cleared or missed, not just on failure. */
   reason: string;
+  calibration_ceiling: number;
+  min_folds: number;
 }
 
 export interface CashForecastRun {

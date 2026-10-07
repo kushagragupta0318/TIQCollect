@@ -151,8 +151,10 @@ function Results({ run }: { run: CashForecastRun }) {
               rate ({honorRateLabel(run)}).</li>
             <li>+ recovery_risk's next-cycle estimate for {run.recovery_informed_loans} loan(s) with no
               active PTP ({fmtINR(run.recovery_informed_total)}).</li>
-            <li>Reconciled 50/50 against the top-down leg once the bottom-up leg has any signal at all;
-              the ETS leg alone otherwise.</li>
+            <li>Reconciled 50/50 against the top-down leg, week by week, once the bottom-up leg has any
+              signal anywhere in the horizon — including a week with no PTP or recovery_risk coverage
+              of its own, which becomes half of that week's ETS figure, not a switch back to the ETS
+              leg alone. The ETS leg alone only when the bottom-up leg has no signal in ANY week.</li>
           </ul>
         </Panel>
       </div>

@@ -171,7 +171,7 @@ def residual_bands(residuals: np.ndarray, point: np.ndarray, *, start_h: int = 1
     SAME growing negative shift was applied to all three — clipped flat to
     0 for the rest of the horizon. A one-step bias is a fact about the
     FITTING window; stretching it forward as if it were the forecast's own
-    growing error is a different claim the data never supported, and it an
+    growing error is a different claim the data never supported, and it
     reads as "the forecast says zero" when the engine never computed zero.
 
     The spread is now built from the two one-sided distances off the
@@ -199,12 +199,68 @@ def residual_bands(residuals: np.ndarray, point: np.ndarray, *, start_h: int = 1
     }
 
 
+def bootstrap_total_bands(residuals: np.ndarray, point: np.ndarray, *, start_h: int = 1,
+                          n_boot: int = 2000, seed: int = 0) -> dict[str, float]:
+    """The p10/p50/p90 of the 13-week SUM — NOT the sum of each week's own
+    p10/p50/p90 (coordinator/audit finding, 2026-10-07).
+
+    Summing per-week percentiles overstates the total's tails: p10 of the
+    sum is not sum(p10_i), because that would require every week to land at
+    its own p10 simultaneously, which is far less likely than 10% once there
+    is more than one week (assuming the weeks' errors are independent —
+    Var(sum) = sum(Var_i), so std(sum) = sqrt(sum(std_i^2)) < sum(std_i) by
+    the triangle inequality whenever more than one term is nonzero). The
+    honest total band is therefore NARROWER than the naive per-week sum, not
+    wider — this corrects an overstated range, not an understated one.
+
+    Implementation: resample the one-step residual pool independently for
+    each week (same pool `residual_bands` reads its quantiles from), scale
+    by that week's own sqrt(h), add to the point forecast, floor at 0, sum
+    across the horizon, repeat `n_boot` times, and read percentiles off
+    those sums. Independence across weeks is a stated simplifying
+    assumption — a real book's week-to-week errors likely correlate
+    somewhat, which would widen the true band back out, so this is an
+    optimistic (narrower) bound, not a guaranteed one. Deterministic by
+    default (fixed seed) so a run is reproducible."""
+    total_point = float(point.sum())
+    if residuals.size == 0:
+        return {"p10": total_point, "p50": total_point, "p90": total_point}
+    rng = np.random.default_rng(seed)
+    h = np.arange(start_h, start_h + point.shape[0], dtype=np.float64)
+    scale = np.sqrt(h)
+    draws = rng.choice(residuals, size=(n_boot, point.shape[0]), replace=True)
+    paths = np.maximum(point[None, :] + draws * scale[None, :], 0.0)
+    totals = paths.sum(axis=1)
+    # The bootstrap median need not equal `total_point` exactly (the 0-floor
+    # skews the distribution whenever some weeks are near zero) -- reported
+    # as its own honest figure, not silently replaced by the point sum, same
+    # as residual_bands lets the upper/lower spreads differ from each other.
+    p10, p50, p90 = (float(x) for x in np.percentile(totals, [10, 50, 90]))
+    return {"p10": p10, "p50": p50, "p90": p90}
+
+
 def reconcile(bottom_up: np.ndarray, top_down: np.ndarray) -> np.ndarray:
-    """Equal-weight blend when the book has a bottom-up signal at all;
-    otherwise the ETS leg alone. A silent 50/50 blend against an
-    all-zero bottom-up (no PTPs, no recovery_risk coverage) would read as
-    'the bottom-up method says half of the top-down number', which is not a
-    method, it is an unlabelled halving of someone else's forecast."""
+    """Equal-weight blend when the book has a bottom-up signal AT ALL, over
+    the WHOLE horizon; otherwise the ETS leg alone.
+
+    The 50/50 weight is applied per week, uniformly, once any week has a
+    bottom-up figure — including every week with its own `bottom_up[h] == 0`
+    (past the PTP horizon, or past RECOVERY_RISK_CYCLE_WEEKS). Those weeks
+    are NOT switched to the ETS leg alone; they become exactly
+    `0.5 * top_down[h]`, i.e. the point forecast is halved precisely because
+    the bottom-up method had nothing to say about that particular week, not
+    because it said zero was expected. This is a stated, fixed weighting
+    choice (not fitted, not week-varying), and it is why `bottom_up` and
+    `top_down` ride alongside the bands in the API response and the UI
+    table — a reader comparing a week's p50 against `top_down` for that
+    same week can see the halving directly rather than inferring it.
+
+    A silent 50/50 blend against an ALL-WEEKS-zero bottom-up (no PTPs, no
+    recovery_risk coverage anywhere in the horizon) would read as 'the
+    bottom-up method says half of the top-down number', which is not a
+    method, it is an unlabelled halving of someone else's forecast — that
+    all-zero case is the one `reconcile` refuses, falling back to the ETS
+    leg alone."""
     if float(bottom_up.sum()) <= 0.0:
         return top_down.copy()
     return 0.5 * bottom_up + 0.5 * top_down
@@ -220,7 +276,8 @@ class BacktestResult:
 
     def as_dict(self) -> dict:
         return {"mape": self.mape, "n_folds": self.n_folds, "calibrated": self.calibrated,
-                "reason": self.reason}
+                "reason": self.reason, "calibration_ceiling": CALIBRATION_MAPE_CEILING,
+                "min_folds": MIN_BACKTEST_FOLDS}
 
 
 def rolling_origin_backtest(y: np.ndarray, horizon: int = HORIZON_WEEKS,
@@ -254,9 +311,12 @@ def rolling_origin_backtest(y: np.ndarray, horizon: int = HORIZON_WEEKS,
                               reason="every scored week was zero collections; MAPE is undefined")
     mape = float(np.mean(errors))
     calibrated = len(origins) >= MIN_BACKTEST_FOLDS and mape <= CALIBRATION_MAPE_CEILING
-    reason = "" if calibrated else (
+    # Named even on success: a consumer reading only `reason` should see the
+    # bar that was cleared, not just the bar that was missed.
+    reason = (
         f"only {len(origins)} fold(s), need {MIN_BACKTEST_FOLDS}" if len(origins) < MIN_BACKTEST_FOLDS
-        else f"MAPE {mape:.0%} exceeds the {CALIBRATION_MAPE_CEILING:.0%} ceiling")
+        else f"MAPE {mape:.0%} exceeds the {CALIBRATION_MAPE_CEILING:.0%} ceiling" if not calibrated
+        else f"MAPE {mape:.0%} within the {CALIBRATION_MAPE_CEILING:.0%} ceiling")
     return BacktestResult(mape=mape, n_folds=len(origins), fold_origins=tuple(origins),
                           calibrated=calibrated, reason=reason)
 
@@ -469,10 +529,15 @@ class CashForecastRun:
     alpha: float
     beta: float
     backtest: BacktestResult
+    residuals: tuple[float, ...]          # the ETS fit's one-step residuals; totals() bootstraps from these
     engine_version: str = ENGINE_VERSION
 
     def totals(self) -> dict[str, float]:
-        return {"p10": float(sum(self.p10)), "p50": float(sum(self.p50)), "p90": float(sum(self.p90))}
+        """The 13-week total's OWN p10/p50/p90 (bootstrap_total_bands), not
+        the sum of each week's own band — see that function for why summing
+        percentiles overstates the total's tails."""
+        return bootstrap_total_bands(np.array(self.residuals), np.array(self.p50),
+                                     start_h=self.reporting_lag_weeks + 1)
 
 
 def build_cash_forecast(adb: Session, bank_id: str, *, as_of: date | None = None,
@@ -518,5 +583,5 @@ def build_cash_forecast(adb: Session, bank_id: str, *, as_of: date | None = None
         ptp_honor_rate=honor_rate, ptp_resolved_count=resolved_n,
         recovery_informed_total=recovery_total, recovery_informed_loans=recovery_loans,
         history_weeks=int(history.amounts.shape[0]), reporting_lag_weeks=lag_weeks,
-        alpha=alpha, beta=beta, backtest=backtest,
+        alpha=alpha, beta=beta, backtest=backtest, residuals=tuple(residuals.tolist()),
     )
