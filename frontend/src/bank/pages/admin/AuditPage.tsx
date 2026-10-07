@@ -121,7 +121,10 @@ export function AuditPage() {
       ) : !data ? (
         <AnalyticsLoading />
       ) : (
-        <Panel title={`${data.total} recorded ${data.total === 1 ? "action" : "actions"}`}>
+        <Panel
+          title={`${data.total} recorded ${data.total === 1 ? "action" : "actions"}`}
+          hint={`Last ${data.coverage.window_days} days, newest first. Filter or widen the window with \`since\`.`}
+        >
           {data.entries.length === 0 ? (
             <p className="text-sm text-muted-foreground py-6 text-center">
               No recorded actions in this window.
@@ -148,9 +151,10 @@ export function AuditPage() {
           {data.coverage.pending_attribution > 0 && (
             <p className="text-[11px] mt-3 pt-3 border-t text-muted-foreground">
               <span className="font-semibold">
-                {data.coverage.pending_attribution} system {data.coverage.pending_attribution === 1 ? "event" : "events"} pending attribution
+                {data.coverage.pending_attribution} system {data.coverage.pending_attribution === 1 ? "event" : "events"} pending attribution, platform-wide
               </span>{" "}
-              — written with no actor and no tenant, so they cannot be shown to any one bank. {data.coverage.note}
+              — written with no actor and no tenant, so they cannot be shown to any one bank, and the
+              count cannot be narrowed to yours for the same reason. {data.coverage.note}
             </p>
           )}
         </Panel>

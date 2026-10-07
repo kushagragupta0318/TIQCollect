@@ -58,7 +58,10 @@ class AuditRowOut(BaseModel):
 class CoverageOut(BaseModel):
     declared_action_types: int
     sensitive_actions: list[str]
+    #: PLATFORM-WIDE, not this bank's: a row with no tenant cannot be counted
+    #: per bank. The page must label it as such.
     pending_attribution: int
+    window_days: int
     note: str
 
 

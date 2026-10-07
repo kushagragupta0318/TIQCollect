@@ -28,7 +28,9 @@ export interface AuditPayload {
   coverage: {
     declared_action_types: number;
     sensitive_actions: string[];
+    /** PLATFORM-WIDE, not this bank's — see the note. */
     pending_attribution: number;
+    window_days: number;
     note: string;
   };
 }
