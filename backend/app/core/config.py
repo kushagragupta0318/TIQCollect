@@ -93,6 +93,12 @@ class Settings(BaseSettings):
     MINIO_SECRET_KEY: str
     MINIO_BUCKET_DOCUMENTS: str = "tiq-documents"
     MINIO_SECURE: bool = False
+    # Set on both clients so minting a pre-signed URL is pure-local HMAC and never
+    # makes a GetBucketLocation call. Without it the signing client (which carries
+    # the PUBLIC host, e.g. localhost:19000) tries to reach that host from INSIDE
+    # the api container to look up the region and fails with MaxRetryError —
+    # exactly what broke Board Reports' download link. MinIO's default is us-east-1.
+    MINIO_REGION: str = "us-east-1"
 
     # Host the BROWSER uses for pre-signed upload/download URLs.
     #
@@ -510,6 +516,13 @@ class Settings(BaseSettings):
     # predicted against what happened. Separate from ML_SCORING_ENABLED so a
     # shadow deployment can record without acting.
     ML_LOG_PREDICTIONS: bool = True
+
+    # Bank Alerts (C06): the two rules with no existing threshold to reuse
+    # (SLA miss and roll-forward already fire off an existing KPI's own
+    # gate). The one place each number lives, so a rule and its test read
+    # the same value instead of a restated copy drifting from it.
+    ALERT_GNPA_PCT: float = Field(default=0.05, ge=0.0, le=1.0)
+    ALERT_EFFICIENCY_DROP_PCT: float = Field(default=0.20, ge=0.0, le=1.0)
 
     REPAYMENT_WRITE_RISK_SCORE: bool = False
     # KILL SWITCH, and OFF by design. Case.priority is written once at case

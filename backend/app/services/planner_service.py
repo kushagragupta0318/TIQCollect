@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import csv
 import io
+from app.core.csv_safe import csv_row
 import math
 import uuid
 from collections import defaultdict
@@ -959,19 +960,21 @@ class PlannerService:
 
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow([
+        writer.writerow(csv_row([
             "decision_id", "case_number", "outcome", "allocated_agent_code",
             "visit_priority_score", "fit_score", "reason", "created_at"
-        ])
+        ]))
 
         for d in decisions:
             case_num = d.case.case_number if d.case else ""
             agent_code = d.allocated_agent.employee_code if d.allocated_agent else ""
-            writer.writerow([
+            # csv_row: `reason` and an agent code off a bank feed are text
+            # somebody else supplied; a leading = + - @ executes on open.
+            writer.writerow(csv_row([
                 d.id, case_num, d.outcome, agent_code,
                 d.visit_priority_score, d.fit_score, d.reason,
                 d.created_at.isoformat() if d.created_at else ""
-            ])
+            ]))
 
         return output.getvalue()
 

@@ -44,6 +44,7 @@ function payload(over: Partial<AuditPayload> = {}): AuditPayload {
       declared_action_types: 52,
       sensitive_actions: ["MODEL_PROMOTED"],
       pending_attribution: 0,
+      window_days: 7,
       note: "Rows written with no actor and no entity tenant carry no bank.",
     },
     ...over,
@@ -79,9 +80,17 @@ describe("AuditPage", () => {
     expect(screen.getAllByText("sensitive")).toHaveLength(1);
   });
 
-  it("SAYS how many events are pending attribution", async () => {
+  it("SAYS how many events are pending attribution, and that the count is platform-wide", async () => {
     show(payload({ coverage: { ...payload().coverage, pending_attribution: 4 } }));
-    await waitFor(() => expect(screen.getByText(/4 system events pending attribution/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/4 system events pending attribution, platform-wide/)).toBeTruthy());
+    // Not "4 of YOUR events": the count cannot be narrowed to one bank, which
+    // is the whole reason those rows are unattributed.
+    expect(screen.getByText(/cannot be narrowed to yours/)).toBeTruthy();
+  });
+
+  it("states the window rather than implying it shows everything", async () => {
+    show(payload());
+    await waitFor(() => expect(screen.getByText(/Last 7 days, newest first/)).toBeTruthy());
   });
 
   it("says nothing about attribution when there is nothing to admit", async () => {

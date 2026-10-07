@@ -112,6 +112,23 @@ def test_an_unattributed_row_is_counted_not_listed(db):
     assert body["total"] == 1                                     # not listed
     assert body["coverage"]["pending_attribution"] == 1           # but declared
     assert "cannot be attributed" in body["coverage"]["note"]
+    # The count is PLATFORM-WIDE and the note must say so: it cannot be
+    # narrowed to this bank, because that is the attribution it lacks.
+    assert "PLATFORM-WIDE" in body["coverage"]["note"]
+    assert body["coverage"]["window_days"] == 7
+
+
+def test_a_tenantless_row_that_HAS_an_actor_is_not_counted_as_unattributed(db):
+    """The count's sentence says "written with no actor". A row with an actor
+    and no bank is a different fault — tenancy_listener should have filled it
+    from the actor — and counting it here made the number disagree with the
+    words beside it."""
+    actor = _user(db, UserRole.BANK_ADMIN, bank_id=OURS)
+    _row(db, action=AuditAction.LOGIN, user_id=actor.id)
+    _row(db, action=AuditAction.PTP_UPDATED, bank_id=None, user_id=None)        # counted
+    _row(db, action=AuditAction.LOGIN_FAILED, bank_id=None, user_id=actor.id)   # NOT counted
+    body = _client(db, actor).get("/api/v1/bank/audit").json()
+    assert body["coverage"]["pending_attribution"] == 1
 
 
 def test_the_window_and_the_filters_narrow_what_is_returned(db):

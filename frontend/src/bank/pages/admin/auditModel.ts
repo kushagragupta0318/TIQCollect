@@ -28,7 +28,9 @@ export interface AuditPayload {
   coverage: {
     declared_action_types: number;
     sensitive_actions: string[];
+    /** PLATFORM-WIDE, not this bank's — see the note. */
     pending_attribution: number;
+    window_days: number;
     note: string;
   };
 }
@@ -50,4 +52,16 @@ export function when(iso: string | null): string {
 export async function getAudit(params: Record<string, string | number>): Promise<AuditPayload> {
   const { data } = await api.get<AuditPayload>("/bank/audit", { params });
   return data;
+}
+
+/** The CSV, as a blob.
+ *
+ * NOT window.open on the URL: /bank/audit/export is authenticated, and a bare
+ * browser navigation carries no Authorization header, so it 401s and the user
+ * gets nothing. manager.ts's exportAuditLog has said so in a comment since the
+ * compliance page shipped; this page did it the broken way for a day.
+ */
+export async function exportAudit(params: Record<string, string>): Promise<Blob> {
+  const res = await api.get("/bank/audit/export", { params, responseType: "blob" });
+  return res.data;
 }

@@ -66,6 +66,33 @@ export interface CandidateRow {
   created_at?: string | null;
 }
 
+//: A monitor reason, reduced to a fixed label.
+//:
+//: ml/pipeline/monitor.py builds these strings WITH THE ARTIFACT'S OWN
+//: FIGURES in them -- "Gini has fallen 12% below its development value
+//: (0.421 against 0.512)" prints the development Gini this page is forbidden
+//: to show (owner, 2026-10-07). Rendering reasons raw put the number back on
+//: the page through a side door, and the test missed it because the fixture
+//: said ["drift"].
+//:
+//: So a reason is CLASSIFIED, never echoed. An unrecognised reason falls
+//: through to a generic label rather than its own text: fail closed, because
+//: the next reason somebody adds to monitor.py will also carry numbers and
+//: nobody will remember this rule.
+const REASON_LABELS: [RegExp, string][] = [
+  [/^POOLED across model versions/i, "Pooled across model versions"],
+  [/^Gini has fallen/i, "Discrimination (Gini) below its development value"],
+  [/^KS has fallen/i, "Separation (KS) below its development value"],
+  [/^Brier score has risen/i, "Calibration (Brier) worse than development"],
+  [/^calibration is off/i, "Predicted rate drifting from observed"],
+  [/^rank order is broken/i, "Rank order broken in the top deciles"],
+];
+
+export function reasonLabel(reason: string): string {
+  for (const [re, label] of REASON_LABELS) if (re.test(reason.trim())) return label;
+  return "Monitoring threshold breached";
+}
+
 /** The states a candidate moves through. PENDING_APPROVAL is where the
  *  two-person rule bites: approving is not promoting, and the promoter must be
  *  a different person (ml.approve / ml.promote are both second_person caps). */
