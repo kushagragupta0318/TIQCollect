@@ -85,6 +85,21 @@ def stamp_for_simulation(result, *, data_version: str, basis: str) -> HonestySta
     )
 
 
+def stamp_for_cash_forecast(run, *, data_version: str, basis: str) -> HonestyStamp:
+    """Read the stamp off a cash_forecast.CashForecastRun. `synthetic` is True
+    (every book this runs on today is the generated demo book, same as
+    stamp_for_simulation); `calibrated` is the run's own rolling-origin
+    backtest result, so the stamp cannot claim a coverage the backtest did
+    not measure."""
+    return HonestyStamp(
+        synthetic=True,
+        calibrated=bool(run.backtest.calibrated),
+        engine_version=run.engine_version,
+        data_version=data_version,
+        basis=basis,
+    )
+
+
 def stamp_for_backtest(report, *, data_version: str, basis: str) -> HonestyStamp:
     """Read the stamp off a backtest.BacktestReport. A backtest run on synthetic
     data is `synthetic=True`; `calibrated` is whether it passed, which is exactly

@@ -1,8 +1,10 @@
-"""The bank's strategy simulator: POST /bank/strategy/simulate (plan §7, ADR 0014).
+"""The bank's strategy simulator: POST /bank/strategy/simulate (plan §7, ADR 0014);
+the 13-week cash forecast: GET /bank/strategy/cash-forecast (plan §7, task E06).
 
 Thin — it validates the request, resolves the caller's bank, and calls
-strategy.service.run_simulation, which owns the orchestration. Gated by
-`strategy.simulate` (BANK_ADMIN and BANK_ANALYST; AGENCY_* never — the capability
+strategy.service.run_simulation / strategy.cash_forecast.build_cash_forecast,
+which own the orchestration. Gated by `strategy.simulate` / `strategy.forecast`
+respectively (BANK_ADMIN and BANK_ANALYST; AGENCY_* never — the capability
 seed already enforces this). Synchronous for now; the service seam is where E03's
 Celery/persistence wraps.
 
@@ -12,6 +14,7 @@ a number can never be read without what it rests on.
 from __future__ import annotations
 
 import math
+from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, status
@@ -21,6 +24,8 @@ from app.core.dependencies import AnalyticsDb, DbSession
 from app.core.permissions import require_perm
 from app.core.request_context import CurrentContext
 from app.models.user import User
+from app.strategy import cash_forecast as CF
+from app.strategy.honesty import stamp_for_cash_forecast
 from app.strategy.service import N_PATHS_CAP, SimulationInputs, run_simulation
 
 router = APIRouter(prefix="/bank/strategy", tags=["bank-strategy"])
@@ -86,4 +91,39 @@ def simulate_endpoint(body: SimulateIn, ctx: CurrentContext, db: DbSession, adb:
         # (month, state), not a flat per-month series, so its as_dict()
         # would be shaped differently from every other metric's.
         out["series"] = {m: b.as_dict() for m, b in run.result.summary.items() if m != "STATE_SHARE"}
+    return _json_safe(out)
+
+
+@router.get("/cash-forecast", summary="13-week forecast of weekly collection inflow, with p10/p50/p90 bands")
+def cash_forecast_endpoint(ctx: CurrentContext, adb: AnalyticsDb,
+                           as_of: Optional[date] = None,
+                           _user: User = require_perm("strategy.forecast")):
+    """Project the next 13 weeks of VERIFIED collections. A book with under
+    `cash_forecast.MIN_WEEKS_HISTORY` weeks of VERIFIED payments — including
+    none at all — ABSTAINS (422, INSUFFICIENT_HISTORY) rather than returning a
+    forecast built on invented history."""
+    bank_id = _bank_of(ctx)
+    run = CF.build_cash_forecast(adb, bank_id, as_of=as_of)
+    basis = (f"{run.history_weeks} week(s) of VERIFIED payments, Holt ETS "
+             f"(alpha={run.alpha}, beta={run.beta}), {run.ptp_resolved_count} resolved PTP(s) "
+             f"for the honor rate, {run.recovery_informed_loans} recovery_risk-scored loan(s) "
+             f"with no active PTP")
+    stamp = stamp_for_cash_forecast(run, data_version=(as_of or date.today()).isoformat(), basis=basis)
+    out = {
+        "weeks": [
+            {"week_start": run.week_starts[i].isoformat(), "p10": run.p10[i], "p50": run.p50[i],
+             "p90": run.p90[i], "ptp_scheduled": run.ptp_scheduled[i], "bottom_up": run.bottom_up[i],
+             "top_down": run.top_down[i]}
+            for i in range(len(run.week_starts))
+        ],
+        "totals": run.totals(),
+        "history_weeks": run.history_weeks,
+        "ptp_honor_rate": run.ptp_honor_rate,
+        "ptp_resolved_count": run.ptp_resolved_count,
+        "recovery_informed_total": run.recovery_informed_total,
+        "recovery_informed_loans": run.recovery_informed_loans,
+        "backtest": run.backtest.as_dict(),
+        "engine_version": run.engine_version,
+        **stamp.as_fields(),
+    }
     return _json_safe(out)
