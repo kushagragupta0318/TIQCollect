@@ -17,6 +17,7 @@ from app.core.request_context import CurrentContext
 from app.models.loan import DPDBucket, LoanType
 from app.models.tenancy import Agency, Bank, Region
 from app.models.user import User
+from app.services.bank.alerts import compute_alerts
 from app.services.bank.analytics_catalog import TABS as ANALYTICS_TABS
 from app.services.bank.analytics_catalog import compute_tab
 from app.services.bank.kpi_catalog import ROWS, compute_overview
@@ -148,6 +149,56 @@ def analytics_tab(tab: Literal["exposure", "migration", "agencies", "recovery", 
     assert tab in ANALYTICS_TABS, tab   # Literal above already refused anything else
     out = compute_tab(db, adb, tab, bank_id, f)
     return AnalyticsTabOut(tab=tab, available=out["available"], reason=out["reason"], panels=out["panels"])
+
+
+class AlertMetric(BaseModel):
+    label: str
+    value: str
+
+
+class AlertBreakdownItem(BaseModel):
+    label: str
+    value: float
+
+
+class AlertAccountRow(BaseModel):
+    accountId: str
+    product: str
+    bucket: str
+    state: str
+    exposure: float
+    monthsDelinquent: int
+    keepRatePct: float
+    model_config = {"extra": "allow"}   # DecisionAlert.rowExtra names one more column by key
+
+
+class AlertRowExtra(BaseModel):
+    key: str
+    label: str
+
+
+class AlertAction(BaseModel):
+    label: str
+    target: str
+
+
+class AlertOut(BaseModel):
+    id: str
+    severity: Literal["critical", "warning", "info"]
+    title: str
+    summary: str
+    metrics: list[AlertMetric]
+    breakdown: Optional[list[AlertBreakdownItem]] = None
+    rows: Optional[list[AlertAccountRow]] = None
+    rowExtra: Optional[AlertRowExtra] = None
+    actions: list[AlertAction]
+    basis: str
+
+
+@router.get("/alerts", response_model=list[AlertOut], summary="Alerts (plan §5.4, task C06)")
+def bank_alerts(ctx: CurrentContext, db: DbSession, adb: AnalyticsDb, _user: User = require_perm("cc.read")):
+    bank_id = _bank_of(ctx)
+    return compute_alerts(db, adb, bank_id)
 
 
 class Option(BaseModel):
