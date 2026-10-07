@@ -31,6 +31,10 @@ from app.models.model_prediction import ModelPrediction
 from app.models.leave_request import LeaveRequest, LeaveStatus, LeaveType
 from app.models.analytics import MvRefreshLog
 from app.models.strategy import CostRate, SimulationResult, SimulationRun
+from app.models.message import (
+    EscalationIssue, IssueStatus, Message, MessageThread, SenderSide, ThreadRead,
+    ThreadStatus, ThreadSubject,
+)
 from app.models.llm_call import LLMCall
 # Registers the before_flush tenant filler (one definition of §2.5).
 from app.models import tenancy_listener  # noqa: F401,E402

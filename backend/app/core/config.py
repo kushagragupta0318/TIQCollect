@@ -71,6 +71,18 @@ class Settings(BaseSettings):
     # per process, and PgBouncer in front for anything larger.
     DB_POOL_SIZE: int = 5
     DB_MAX_OVERFLOW: int = 5
+    # Analytics engine (core/database.analytics_engine): its own pool, because a
+    # bank screen (/overview, /analytics, /alerts, /cash-forecast) holds an
+    # AnalyticsDb connection for the WHOLE request. Sized larger than the primary
+    # so concurrent analytics users don't exhaust it (perf A2). Connection budget
+    # in docs/DEPLOY.md: (WEB_CONCURRENCY × (primary + analytics peak)) + Celery
+    # must stay under Postgres max_connections (100 by default).
+    ANALYTICS_POOL_SIZE: int = 5
+    ANALYTICS_MAX_OVERFLOW: int = 10
+    # A SHORT pool-checkout timeout (seconds) on BOTH engines: a saturated pool
+    # fails fast with a clean 503 instead of hanging on SQLAlchemy's 30s default
+    # (perf A2). Raise only with the connection budget in mind.
+    DB_POOL_TIMEOUT_S: int = 5
     # Statement timeouts, applied with SET LOCAL at the start of every
     # transaction (PgBouncer-safe: a session-level SET leaks or vanishes under
     # transaction pooling). The API's is short, a request never needs more; the
@@ -527,12 +539,17 @@ class Settings(BaseSettings):
     # shadow deployment can record without acting.
     ML_LOG_PREDICTIONS: bool = True
 
-    # Bank Alerts (C06): the two rules with no existing threshold to reuse
-    # (SLA miss and roll-forward already fire off an existing KPI's own
-    # gate). The one place each number lives, so a rule and its test read
-    # the same value instead of a restated copy drifting from it.
+    # Bank Alerts (C06): the rules with no existing threshold to reuse (SLA
+    # miss fires off an existing KPI's own gate -- any miss at all). The one
+    # place each number lives, so a rule and its test read the same value
+    # instead of a restated copy drifting from it.
     ALERT_GNPA_PCT: float = Field(default=0.05, ge=0.0, le=1.0)
     ALERT_EFFICIENCY_DROP_PCT: float = Field(default=0.20, ge=0.0, le=1.0)
+    # Percentage points, not kpi_catalog._trend's 0.05pp "is there a
+    # direction at all" floor -- that floor made the roll-forward alert fire
+    # on any wobble in the unfavourable direction, not a spike. 2pp in one
+    # month is the kind of move someone should actually see.
+    ALERT_ROLL_FORWARD_SPIKE_PP: float = Field(default=2.0, ge=0.0)
 
     REPAYMENT_WRITE_RISK_SCORE: bool = False
     # KILL SWITCH, and OFF by design. Case.priority is written once at case

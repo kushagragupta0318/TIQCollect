@@ -50,6 +50,7 @@ engine = create_engine(
     poolclass=QueuePool,
     pool_size=settings.DB_POOL_SIZE,
     max_overflow=settings.DB_MAX_OVERFLOW,
+    pool_timeout=settings.DB_POOL_TIMEOUT_S,   # fail fast (clean 503), not a 30s hang (A2)
     pool_pre_ping=True,
     pool_recycle=3600,
     echo=settings.SQL_ECHO,
@@ -115,10 +116,16 @@ def apply_tenant_context(db: Session, *, bank_id, agency_id, scope: str, user_id
 
 # The analytics read path (B14): a replica when ANALYTICS_DATABASE_URL is set,
 # else the primary; every transaction on it is READ ONLY, so a bank screen can
-# never write, whatever its code does. A small pool of its own.
+# never write, whatever its code does. Its own pool, sized LARGER than the primary
+# (A2): a bank screen holds an analytics connection for the whole request, so a
+# handful of concurrent analytics users would exhaust the old 2+3. Short
+# pool_timeout so a saturated pool 503s fast instead of hanging. Config-driven;
+# the connection budget is in docs/DEPLOY.md.
 analytics_engine = create_engine(
     settings.ANALYTICS_DATABASE_URL or settings.DATABASE_URL,
-    poolclass=QueuePool, pool_size=2, max_overflow=3, pool_pre_ping=True, pool_recycle=3600,
+    poolclass=QueuePool,
+    pool_size=settings.ANALYTICS_POOL_SIZE, max_overflow=settings.ANALYTICS_MAX_OVERFLOW,
+    pool_timeout=settings.DB_POOL_TIMEOUT_S, pool_pre_ping=True, pool_recycle=3600,
     echo=settings.SQL_ECHO,
 )
 

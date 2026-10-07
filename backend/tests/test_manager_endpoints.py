@@ -27,6 +27,7 @@ from app.core.database import Base, get_db
 from app.core.security import create_access_token
 from app.main import app
 from app.models.agent import Agent, AgentSpecialization, AgentStatus, AgentTier
+from app.core import audit_coverage
 from app.models.audit_log import AuditAction, AuditLog
 from app.models.beat import Beat, BeatStatus
 from app.models.case import Case, CaseStatus
@@ -677,16 +678,33 @@ def test_audit_log_omits_actor_less_system_rows_and_says_so(client, seeded, audi
 
 
 def test_audit_log_declares_which_actions_are_not_instrumented(client, seeded, audit_rows):
-    """A short log must be distinguishable from an uninstrumented one."""
+    """A short log must be distinguishable from an uninstrumented one.
+
+    This test used to assert that VISIT_RECORDED and PTP_SET were NOT
+    instrumented. Both have had write sites for weeks (visit_service.py,
+    payment_service.py), so the assertion was pinning a false claim on an RBI
+    compliance surface -- it told a lender that visits are not logged. The list
+    is now derived from the write sites, and the test asserts the derived set
+    rather than a copy of it: a copy is what went stale.
+    """
     body = client.get("/api/v1/manager/audit-log",
                       headers=auth_headers(seeded["manager"])).json()
     coverage = body["coverage"]
     assert coverage["declared_action_types"] == len(AuditAction)
-    assert "VISIT_RECORDED" in coverage["not_instrumented"]
-    assert "PTP_SET" in coverage["not_instrumented"]
-    # Anything actually emitted must NOT be listed as missing.
+    assert coverage["not_instrumented"] == list(audit_coverage.coverage().not_instrumented)
+    # The scan ran. A scan that could not read the source would report every
+    # action as instrumented, which is the comfortable direction to be wrong in.
+    assert coverage["instrumentation_write_sites"] > 50
+
+    # Named, because the derived set is only as good as the scan: these four
+    # are written by services this endpoint does not touch, and every one of
+    # them was on the old hand-written list.
+    for emitted in ("VISIT_RECORDED", "PTP_SET", "PAYMENT_SUBMITTED", "DATA_EXPORT"):
+        assert emitted not in coverage["not_instrumented"]
     assert "PAYMENT_VERIFIED" not in coverage["not_instrumented"]
     assert "LOGIN" not in coverage["not_instrumented"]
+    # And one that really has no write site anywhere in app/.
+    assert "BEAT_GENERATED" in coverage["not_instrumented"]
 
 
 def test_audit_log_paginates(client, seeded, audit_rows):

@@ -668,33 +668,29 @@ def _record_usage(purpose: str, bank_id: str | None, provider: str, model: str,
     (services/bank/audit_read.py): GET /bank/usage counts calls with no bank
     rather than guessing one.
 
-    RLS CUTOVER NOTE (flagged 2026-10-07, coordinator audit; not fixed here):
-    this opens a bare SessionLocal() with no `app.bank_id`/`app.scope` set.
-    RLS is dormant today (the API runs as `fieldops`, which bypasses it), so
-    the insert succeeds; once the API moves to `tiq_app` (RLS enforce step
-    2), this insert has no tenant context and the bank-only policy on
-    ai.llm_calls would reject it. Needs a tenant-aware session (or a
-    SECURITY DEFINER path) before that cutover, not before.
+    OFF THE REQUEST PATH (perf A3): the row is written by a Celery task
+    (app.workers.tasks.llm_usage), not inline, so an LLM call never checks out a
+    third pool connection on top of the request's db + analytics db. Fire-and-
+    forget: if the broker is unreachable the metering row is dropped and logged,
+    never raised — same best-effort contract as the inline write it replaces.
+    The task keeps the independent-transaction isolation this always had, and
+    (running as tiq_jobs) also settles the old RLS-cutover concern: the former
+    in-request bare session had no tenant and ai.llm_calls' policy would reject
+    it once the API runs as tiq_app; the worker bypasses RLS.
     """
     if provider in ("fake", "none") or _fake is not None:
         return
     if usage == Usage():
         return
     try:
-        from app.core.database import SessionLocal
-        from app.models.llm_call import LLMCall
-        db = SessionLocal()
-        try:
-            db.add(LLMCall(
-                bank_id=bank_id, provider=provider, model=model, feature=purpose,
-                input_tokens=usage.input_tokens, output_tokens=usage.output_tokens,
-                cache_tokens=usage.cache_tokens, cost=_cost_usd(model, usage),
-            ))
-            db.commit()
-        finally:
-            db.close()
+        from app.workers.tasks.llm_usage import record_llm_usage_task
+        record_llm_usage_task.delay(
+            bank_id=bank_id, provider=provider, model=model, feature=purpose,
+            input_tokens=usage.input_tokens, output_tokens=usage.output_tokens,
+            cache_tokens=usage.cache_tokens, cost=_cost_usd(model, usage),
+        )
     except Exception as exc:                                      # noqa: BLE001 — never raise
-        logger.warning("llm.usage_record_failed", purpose=purpose, model=model,
+        logger.warning("llm.usage_enqueue_failed", purpose=purpose, model=model,
                        error=str(exc), error_type=type(exc).__name__)
 
 

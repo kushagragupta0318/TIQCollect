@@ -37,6 +37,17 @@ export interface AuditPayload {
 
 export const PAGE = 50;
 
+/** The entity deep link, as query params — one definition, used by both the
+ *  list and the CSV so the export cannot be wider than the view.
+ *
+ *  entity_id alone is refused by the API (422): an id with no type matches
+ *  across every table that shares it. A type alone is allowed and lists every
+ *  row of that type. */
+export function entityQuery(entity: { type: string; id: string } | null): Record<string, string> {
+  if (!entity?.type) return {};
+  return { entity_type: entity.type, ...(entity.id ? { entity_id: entity.id } : {}) };
+}
+
 /** SCREAMING_SNAKE reads as shouting in a table; the action is the row's
  *  label, not its alarm. The sensitive badge carries the severity instead. */
 export function actionLabel(action: string): string {

@@ -154,11 +154,220 @@ def _undo(path: pathlib.Path) -> None:
         db.close()
 
 
+def _summary(day, visit_ids, payment_ids, ptp_ids, plan_rows) -> dict:
+    return {"day": day.isoformat(), "visits": len(visit_ids), "payments": len(payment_ids),
+            "ptps": len(ptp_ids), "planned": len(plan_rows),
+            "collected": round(sum(r[3] for r in plan_rows), 2)}
+
+
+def record_day(db, day, *, per_agent: int = 3, seed: int = 20260910, apply_changes: bool = False) -> dict:
+    """Record one DAY's field activity against that day's beats.
+
+    Extracted from main() unchanged (2026-10-07) so scripts/demo_catchup.py can
+    fill a gap of past days with THIS logic rather than a second copy of it.
+    Everything the header promises still holds: check-in coordinates at the
+    customer's address, geo_verified, contact hours derived from the IST
+    check-in time, VERIFIED payments with unique receipts, the
+    collected <= target invariant checked BEFORE the commit, and a rollback
+    manifest written for --undo.
+
+    `day` replaces the old `date.today()`; main() passes today, catch-up passes
+    each missing day. Returns a summary dict.
+    """
+    rng = random.Random(seed)
+    # IST, explicitly: the 9:00-17:00 window below is meant in Indian time.
+    # Built in UTC it was 14:30-22:30 IST, and 24 rows recorded on
+    # 2026-09-10 sat outside contact hours while flagged inside them.
+    day_start = datetime.combine(day, time(0, 0), tzinfo=IST)
+
+    beats = db.query(Beat).filter(Beat.beat_date == day).all()
+    if not beats:
+        print(f"no beats for {day} -- nothing to visit")
+        return _summary(day, [], [], [], [])
+
+    # A case already visited day is skipped. A second visit to the same
+    # case on the same day is not what this tool is for, and the duplicate
+    # guard in VisitService exists for the same reason.
+    visited_day = {
+        v.case_id for v in db.query(Visit.case_id)
+        .filter(Visit.check_in_time >= day_start).all()
+    }
+
+    # Receipt numbers are unique and this table holds several historical
+    # formats, so func.max() over the String column sorts lexicographically
+    # and returns the wrong row. Take the true numeric maximum and check
+    # every candidate against what is already there.
+    existing_receipts = {r[0] for r in db.query(Payment.receipt_number).all()}
+    n0 = max((int(re.sub(r"\D", "", r) or 0) for r in existing_receipts), default=0)
+
+    def _next_receipt() -> str:
+        nonlocal n0
+        while True:
+            n0 += 1
+            cand = f"RCP{n0}"
+            if cand not in existing_receipts:
+                existing_receipts.add(cand)
+                return cand
+
+    cases_before: dict[str, dict] = {}
+    agents_before: dict[str, dict] = {}
+    visit_ids: list[str] = []
+    payment_ids: list[str] = []
+    ptp_ids: list[str] = []
+    plan_rows: list[tuple] = []
+
+    for beat in sorted(beats, key=lambda b: b.agent_id):
+        agent = db.get(Agent, beat.agent_id)
+        if not agent:
+            continue
+        case_ids = [c for c in (beat.ordered_case_ids or []) if c not in visited_day]
+        chosen = case_ids[: per_agent]
+        if not chosen:
+            continue
+
+        if agent.id not in agents_before:
+            agents_before[agent.id] = {
+                "current_month_visits": agent.current_month_visits or 0,
+                "current_month_collections": float(agent.current_month_collections or 0.0),
+            }
+
+        for cid in chosen:
+            case = db.get(Case, cid)
+            if not case or not case.customer:
+                continue
+            remaining = round(float(case.target_amount or 0)
+                              - float(case.collected_amount or 0), 2)
+            outcome, pays, promises = _pick(rng)
+            # Nothing left to collect means nothing to collect. Fall back to
+            # a promise rather than writing a zero-rupee payment.
+            if pays and remaining <= 1.0:
+                outcome, pays, promises = VisitOutcome.PTP, False, True
+
+            amount = 0.0
+            if pays:
+                amount = (remaining if outcome == VisitOutcome.PAID_FULL
+                          else round(remaining * rng.uniform(0.10, 0.45), 2))
+                amount = min(amount, remaining)     # the invariant, enforced here
+
+            cases_before.setdefault(case.id, {
+                "collected_amount": float(case.collected_amount or 0.0),
+                "visit_count": case.visit_count or 0,
+                "status": case.status.value if hasattr(case.status, "value")
+                          else str(case.status),
+                "resolved_at": case.resolved_at.isoformat() if case.resolved_at else None,
+            })
+            plan_rows.append((agent.employee_code, case.case_number, outcome.value, amount))
+
+            if not apply_changes:
+                continue
+
+            when = day_start + timedelta(hours=9, minutes=rng.randint(0, 8 * 60))
+            cust = case.customer
+            visit = Visit(
+                id=_uid(), case_id=case.id, agent_id=agent.id,
+                check_in_latitude=(cust.latitude or 28.6139) + rng.uniform(-0.00025, 0.00025),
+                check_in_longitude=(cust.longitude or 77.2090) + rng.uniform(-0.00025, 0.00025),
+                check_in_time=when,
+                check_out_time=when + timedelta(minutes=rng.randint(8, 27)),
+                distance_from_customer_metres=rng.uniform(4.0, 38.0),
+                geo_verified=True, within_contact_hours=is_within_contact_hours(when),
+                customer_met=outcome != VisitOutcome.NOT_AVAILABLE,
+                person_met=(PersonMet.BORROWER
+                            if outcome != VisitOutcome.NOT_AVAILABLE else None),
+                outcome=outcome,
+                visit_number=(case.visit_count or 0) + 1,
+            )
+            db.add(visit)
+            db.flush()
+            visit_ids.append(visit.id)
+            case.visit_count = (case.visit_count or 0) + 1
+            agent.current_month_visits = (agent.current_month_visits or 0) + 1
+
+            if pays and amount > 0:
+                pay = Payment(
+                    id=_uid(), case_id=case.id, visit_id=visit.id, agent_id=agent.id,
+                    amount=amount, mode=rng.choice(MODES),
+                    status=PaymentStatus.VERIFIED, verified_at=when,
+                    receipt_number=_next_receipt(),
+                    payment_date=when, receipt_sms_sent=True,
+                )
+                db.add(pay)
+                db.flush()
+                payment_ids.append(pay.id)
+                case.collected_amount = round(float(case.collected_amount or 0) + amount, 2)
+                agent.current_month_collections = round(
+                    float(agent.current_month_collections or 0.0) + amount, 2)
+                if case.collected_amount >= float(case.target_amount) - 0.01:
+                    case.status = CaseStatus.PAID
+                    case.resolved_at = when
+                else:
+                    case.status = CaseStatus.PARTIALLY_PAID
+
+            if promises:
+                ptp = PTP(
+                    id=_uid(), case_id=case.id, visit_id=visit.id, agent_id=agent.id,
+                    # `committed_amount`, not `promised_amount` — the column
+                    # is named for what the borrower committed to, and the
+                    # first draft of this script guessed the other name.
+                    committed_amount=round(max(remaining - amount, 0.0)
+                                           * rng.uniform(0.3, 1.0), 2),
+                    committed_date=day + timedelta(days=rng.randint(2, 10)),
+                    status=PTPStatus.ACTIVE,
+                )
+                db.add(ptp)
+                db.flush()
+                ptp_ids.append(ptp.id)
+
+    agents_touched = len({r[0] for r in plan_rows})
+    paying = [r for r in plan_rows if r[3] > 0]
+    print(f"{len(plan_rows)} visits across {agents_touched} agents")
+    print(f"  {len(paying)} collect money, total Rs {sum(r[3] for r in paying):,.0f}")
+    for row in plan_rows[:8]:
+        money = f"Rs {row[3]:,.0f}" if row[3] else ""
+        print(f"    {row[0]}  {row[1]}  {row[2]:<14} {money}")
+    if len(plan_rows) > 8:
+        print(f"    ... and {len(plan_rows) - 8} more")
+
+    if not apply_changes:
+        print("\n(dry run -- nothing written; pass --apply to commit)")
+        return
+
+    # The invariant, checked BEFORE the commit rather than reported after it.
+    bad = [c for c in (db.get(Case, cid) for cid in cases_before)
+           if c and float(c.collected_amount or 0) > float(c.target_amount or 0) + 0.01]
+    if bad:
+        db.rollback()
+        raise SystemExit(f"REFUSED: {len(bad)} case(s) would exceed target "
+                         f"-- nothing written")
+
+    ROLLBACK_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    manifest = ROLLBACK_DIR / f"{day}-demo-visits-{stamp}.json"
+    manifest.write_text(json.dumps({
+        "written_at": datetime.now(timezone.utc).isoformat(),
+        "beat_date": day.isoformat(),
+        "seed": seed,
+        "visit_ids": visit_ids,
+        "payment_ids": payment_ids,
+        "ptp_ids": ptp_ids,
+        "cases_before": cases_before,
+        "agents_before": agents_before,
+    }, indent=2), encoding="utf-8")
+
+    db.commit()
+    print(f"\nwritten: {len(visit_ids)} visits, {len(payment_ids)} payments, "
+          f"{len(ptp_ids)} PTPs")
+    print(f"undo -> python -m scripts.demo_record_visits --undo {manifest}")
+    return _summary(day, visit_ids, payment_ids, ptp_ids, plan_rows)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Record demo field visits.")
     ap.add_argument("--apply", action="store_true", help="Commit (default is a dry run)")
     ap.add_argument("--per-agent", type=int, default=3, help="Cases to visit per agent")
     ap.add_argument("--seed", type=int, default=20260910)
+    ap.add_argument("--date", dest="day", default=None,
+                    help="The beat date to record against, ISO YYYY-MM-DD. Default: today in IST.")
     ap.add_argument("--undo", type=str, help="Path to a manifest from a previous run")
     args = ap.parse_args()
 
@@ -166,193 +375,12 @@ def main() -> None:
         _undo(pathlib.Path(args.undo))
         return
 
-    rng = random.Random(args.seed)
+    # IST, not date.today(): the book's business day is Indian, and a UTC
+    # "today" is yesterday for the first 5.5 hours of it.
+    day = date.fromisoformat(args.day) if args.day else datetime.now(IST).date()
     db = SessionLocal()
     try:
-        today = date.today()
-        # IST, explicitly: the 9:00-17:00 window below is meant in Indian time.
-        # Built in UTC it was 14:30-22:30 IST, and 24 rows recorded on
-        # 2026-09-10 sat outside contact hours while flagged inside them.
-        day_start = datetime.combine(today, time(0, 0), tzinfo=IST)
-
-        beats = db.query(Beat).filter(Beat.beat_date == today).all()
-        if not beats:
-            print(f"no beats for {today} -- nothing to visit")
-            return
-
-        # A case already visited today is skipped. A second visit to the same
-        # case on the same day is not what this tool is for, and the duplicate
-        # guard in VisitService exists for the same reason.
-        visited_today = {
-            v.case_id for v in db.query(Visit.case_id)
-            .filter(Visit.check_in_time >= day_start).all()
-        }
-
-        # Receipt numbers are unique and this table holds several historical
-        # formats, so func.max() over the String column sorts lexicographically
-        # and returns the wrong row. Take the true numeric maximum and check
-        # every candidate against what is already there.
-        existing_receipts = {r[0] for r in db.query(Payment.receipt_number).all()}
-        n0 = max((int(re.sub(r"\D", "", r) or 0) for r in existing_receipts), default=0)
-
-        def _next_receipt() -> str:
-            nonlocal n0
-            while True:
-                n0 += 1
-                cand = f"RCP{n0}"
-                if cand not in existing_receipts:
-                    existing_receipts.add(cand)
-                    return cand
-
-        cases_before: dict[str, dict] = {}
-        agents_before: dict[str, dict] = {}
-        visit_ids: list[str] = []
-        payment_ids: list[str] = []
-        ptp_ids: list[str] = []
-        plan_rows: list[tuple] = []
-
-        for beat in sorted(beats, key=lambda b: b.agent_id):
-            agent = db.get(Agent, beat.agent_id)
-            if not agent:
-                continue
-            case_ids = [c for c in (beat.ordered_case_ids or []) if c not in visited_today]
-            chosen = case_ids[: args.per_agent]
-            if not chosen:
-                continue
-
-            if agent.id not in agents_before:
-                agents_before[agent.id] = {
-                    "current_month_visits": agent.current_month_visits or 0,
-                    "current_month_collections": float(agent.current_month_collections or 0.0),
-                }
-
-            for cid in chosen:
-                case = db.get(Case, cid)
-                if not case or not case.customer:
-                    continue
-                remaining = round(float(case.target_amount or 0)
-                                  - float(case.collected_amount or 0), 2)
-                outcome, pays, promises = _pick(rng)
-                # Nothing left to collect means nothing to collect. Fall back to
-                # a promise rather than writing a zero-rupee payment.
-                if pays and remaining <= 1.0:
-                    outcome, pays, promises = VisitOutcome.PTP, False, True
-
-                amount = 0.0
-                if pays:
-                    amount = (remaining if outcome == VisitOutcome.PAID_FULL
-                              else round(remaining * rng.uniform(0.10, 0.45), 2))
-                    amount = min(amount, remaining)     # the invariant, enforced here
-
-                cases_before.setdefault(case.id, {
-                    "collected_amount": float(case.collected_amount or 0.0),
-                    "visit_count": case.visit_count or 0,
-                    "status": case.status.value if hasattr(case.status, "value")
-                              else str(case.status),
-                    "resolved_at": case.resolved_at.isoformat() if case.resolved_at else None,
-                })
-                plan_rows.append((agent.employee_code, case.case_number, outcome.value, amount))
-
-                if not args.apply:
-                    continue
-
-                when = day_start + timedelta(hours=9, minutes=rng.randint(0, 8 * 60))
-                cust = case.customer
-                visit = Visit(
-                    id=_uid(), case_id=case.id, agent_id=agent.id,
-                    check_in_latitude=(cust.latitude or 28.6139) + rng.uniform(-0.00025, 0.00025),
-                    check_in_longitude=(cust.longitude or 77.2090) + rng.uniform(-0.00025, 0.00025),
-                    check_in_time=when,
-                    check_out_time=when + timedelta(minutes=rng.randint(8, 27)),
-                    distance_from_customer_metres=rng.uniform(4.0, 38.0),
-                    geo_verified=True, within_contact_hours=is_within_contact_hours(when),
-                    customer_met=outcome != VisitOutcome.NOT_AVAILABLE,
-                    person_met=(PersonMet.BORROWER
-                                if outcome != VisitOutcome.NOT_AVAILABLE else None),
-                    outcome=outcome,
-                    visit_number=(case.visit_count or 0) + 1,
-                )
-                db.add(visit)
-                db.flush()
-                visit_ids.append(visit.id)
-                case.visit_count = (case.visit_count or 0) + 1
-                agent.current_month_visits = (agent.current_month_visits or 0) + 1
-
-                if pays and amount > 0:
-                    pay = Payment(
-                        id=_uid(), case_id=case.id, visit_id=visit.id, agent_id=agent.id,
-                        amount=amount, mode=rng.choice(MODES),
-                        status=PaymentStatus.VERIFIED, verified_at=when,
-                        receipt_number=_next_receipt(),
-                        payment_date=when, receipt_sms_sent=True,
-                    )
-                    db.add(pay)
-                    db.flush()
-                    payment_ids.append(pay.id)
-                    case.collected_amount = round(float(case.collected_amount or 0) + amount, 2)
-                    agent.current_month_collections = round(
-                        float(agent.current_month_collections or 0.0) + amount, 2)
-                    if case.collected_amount >= float(case.target_amount) - 0.01:
-                        case.status = CaseStatus.PAID
-                        case.resolved_at = when
-                    else:
-                        case.status = CaseStatus.PARTIALLY_PAID
-
-                if promises:
-                    ptp = PTP(
-                        id=_uid(), case_id=case.id, visit_id=visit.id, agent_id=agent.id,
-                        # `committed_amount`, not `promised_amount` — the column
-                        # is named for what the borrower committed to, and the
-                        # first draft of this script guessed the other name.
-                        committed_amount=round(max(remaining - amount, 0.0)
-                                               * rng.uniform(0.3, 1.0), 2),
-                        committed_date=today + timedelta(days=rng.randint(2, 10)),
-                        status=PTPStatus.ACTIVE,
-                    )
-                    db.add(ptp)
-                    db.flush()
-                    ptp_ids.append(ptp.id)
-
-        agents_touched = len({r[0] for r in plan_rows})
-        paying = [r for r in plan_rows if r[3] > 0]
-        print(f"{len(plan_rows)} visits across {agents_touched} agents")
-        print(f"  {len(paying)} collect money, total Rs {sum(r[3] for r in paying):,.0f}")
-        for row in plan_rows[:8]:
-            money = f"Rs {row[3]:,.0f}" if row[3] else ""
-            print(f"    {row[0]}  {row[1]}  {row[2]:<14} {money}")
-        if len(plan_rows) > 8:
-            print(f"    ... and {len(plan_rows) - 8} more")
-
-        if not args.apply:
-            print("\n(dry run -- nothing written; pass --apply to commit)")
-            return
-
-        # The invariant, checked BEFORE the commit rather than reported after it.
-        bad = [c for c in (db.get(Case, cid) for cid in cases_before)
-               if c and float(c.collected_amount or 0) > float(c.target_amount or 0) + 0.01]
-        if bad:
-            db.rollback()
-            raise SystemExit(f"REFUSED: {len(bad)} case(s) would exceed target "
-                             f"-- nothing written")
-
-        ROLLBACK_DIR.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-        manifest = ROLLBACK_DIR / f"{today}-demo-visits-{stamp}.json"
-        manifest.write_text(json.dumps({
-            "written_at": datetime.now(timezone.utc).isoformat(),
-            "beat_date": today.isoformat(),
-            "seed": args.seed,
-            "visit_ids": visit_ids,
-            "payment_ids": payment_ids,
-            "ptp_ids": ptp_ids,
-            "cases_before": cases_before,
-            "agents_before": agents_before,
-        }, indent=2), encoding="utf-8")
-
-        db.commit()
-        print(f"\nwritten: {len(visit_ids)} visits, {len(payment_ids)} payments, "
-              f"{len(ptp_ids)} PTPs")
-        print(f"undo -> python -m scripts.demo_record_visits --undo {manifest}")
+        record_day(db, day, per_agent=args.per_agent, seed=args.seed, apply_changes=args.apply)
     finally:
         db.close()
 

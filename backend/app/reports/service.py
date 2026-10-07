@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 
 from app.core import storage
 from app.core.audit import write_audit
+from app.core.errors import AppException, ErrorCode
 from app.models.audit_log import AuditAction
 from app.reports.payload import ReportPayload
 
@@ -86,8 +87,10 @@ def export(db: Session, payload: ReportPayload, fmt: str, *, user_id: str | None
            bank_id: str | None = None, agency_id: str | None = None,
            endpoint: str | None = None) -> ExportedReport:
     """Render, store, sign a download link, and only then audit. Raises if
-    rendering, the upload or the signing fails — and in each case writes no
-    audit row.
+    rendering, the upload, the signing, or the audit write fails — and never
+    hands out a link without a recorded row (the row IS the evidence an
+    export happened; a link with no row is the thing this module exists to
+    prevent).
 
     bank_id/agency_id are passed through to the audit row explicitly (the same
     reason bank_audit.py's own DATA_EXPORT writer does it): AuditLog carries no
@@ -98,15 +101,35 @@ def export(db: Session, payload: ReportPayload, fmt: str, *, user_id: str | None
     digest = hashlib.sha256(data).hexdigest()
     key = object_key(payload, fmt, digest)
 
-    storage.upload_bytes(key, data, content_type)
-    url = storage.presigned_download_url(key, expires_minutes=LINK_TTL_MINUTES)
+    try:
+        storage.upload_bytes(key, data, content_type)
+        url = storage.presigned_download_url(key, expires_minutes=LINK_TTL_MINUTES)
+    except Exception as exc:
+        logger.error("report.storage_failed", report_id=payload.report_id, fmt=fmt, key=key,
+                     error=str(exc), error_type=type(exc).__name__)
+        raise AppException(503, ErrorCode.SERVICE_UNAVAILABLE,
+                           "Could not store the report right now. Try again shortly.") from exc
 
-    write_audit(
+    # entity_id is audit.audit_logs.varchar(50); a board/agency_review report_id
+    # (bank.id + agency.id + a date, see report_templates.py) runs 53-97 chars
+    # and would DataError on Postgres (SQLite's test harness does not enforce
+    # the column length, which is how this went unnoticed). A short, stable
+    # hash stands in; the real id travels in `details`, which has no such cap.
+    entity_id = hashlib.sha256(payload.report_id.encode()).hexdigest()[:16]
+    audited = write_audit(
         db, action=AuditAction.DATA_EXPORT, user_id=user_id, bank_id=bank_id, agency_id=agency_id,
-        entity_type="Report", entity_id=payload.report_id,
-        details={"format": fmt, "template": payload.template, "key": key, "bytes": len(data),
-                 "sha256": digest, "period_start": payload.period_start.isoformat(),
+        entity_type="Report", entity_id=entity_id,
+        details={"report_id": payload.report_id, "format": fmt, "template": payload.template,
+                 "key": key, "bytes": len(data), "sha256": digest,
+                 "period_start": payload.period_start.isoformat(),
                  "period_end": payload.period_end.isoformat(), "endpoint": endpoint},
     )
+    if not audited:
+        # write_audit never raises -- it rolls back and returns False so the
+        # caller decides what a missing row means. Here it means the export
+        # did not happen: handing out the link anyway is exactly the silent
+        # gap this module's docstring says it closes.
+        raise AppException(500, ErrorCode.INTERNAL_ERROR,
+                           "The report rendered but could not be recorded. Try again.")
     logger.info("report.exported", report_id=payload.report_id, fmt=fmt, bytes=len(data), key=key)
     return ExportedReport(payload.report_id, fmt, key, content_type, len(data), digest, url, LINK_TTL_MINUTES)

@@ -24,14 +24,6 @@ class FeatureLabel(BaseModel):
     label: str
 
 
-class ArtifactMetrics(BaseModel):
-    gini: Optional[float] = None
-    ks: Optional[float] = None
-    auc: Optional[float] = None
-    brier: Optional[float] = None
-    n: Optional[int] = None
-
-
 class LiveEquivalent(BaseModel):
     gini: float
     ks: float
@@ -57,12 +49,6 @@ class Abstention(BaseModel):
     coverage_floor: float
     latest_day_declined: int
     latest_day_scored: int
-
-
-class BandRow(BaseModel):
-    band: Optional[str] = None
-    oot_n: Optional[int] = None
-    oot_bad_rate: Optional[float] = None
 
 
 class Monitoring(BaseModel):
@@ -93,11 +79,9 @@ class RecoveryRiskCard(BaseModel):
     method: str
     features: list[FeatureLabel]
     stored_probability_means: str
-    artifact_metrics: ArtifactMetrics
     live_equivalent: Optional[LiveEquivalent] = None
     stance: StanceCoverage
     abstention: Abstention
-    bands: list[BandRow]
     monitoring: Monitoring
     governance: Governance
     scoring_versions: dict[str, str]

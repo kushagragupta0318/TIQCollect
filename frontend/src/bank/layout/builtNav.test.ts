@@ -55,8 +55,7 @@ describe("the rail and the router agree", () => {
 
   it("hides the unbuilt items and drops a section left empty", () => {
     const shown = BUILT_BANK_SECTIONS.flatMap((s) => s.items.map((i) => i.path));
-    // Still unbuilt as of this wave (Data Quality, Scenario Lab, AI Agents).
-    expect(shown).not.toContain("tech-ops/data-quality");
+    // Still unbuilt as of this wave (Scenario Lab, AI Agents).
     expect(shown).not.toContain("strategy/scenario-lab");
     expect(shown).not.toContain("tech-ops/agents");
     // The invariant that survives any build state: a rendered section is never empty.

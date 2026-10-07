@@ -76,11 +76,27 @@ class AuditPageOut(BaseModel):
     coverage: CoverageOut
 
 
+#: entity_id is a UUIDQuery, so it is normalised to the lower-case hyphenated
+#: form the database stores and a malformed one is refused before any query.
+#: The cost, stated: `entity_type="Route"` rows (permissions.py writes
+#: ROLE_VIOLATION_ATTEMPT with entity_id = "GET /some/path") cannot be pinned
+#: to ONE id. Filtering by entity_type alone still lists them, which is the
+#: question anyone actually asks of those rows.
+ENTITY_TYPE_MAX = 50     # the column's own width; a longer value matched nothing anyway
+
+
 def _filters(action: Optional[str], actor_id: Optional[str],
-             since: Optional[datetime], until: Optional[datetime]) -> ar.Filters:
+             since: Optional[datetime], until: Optional[datetime],
+             entity_type: Optional[str] = None, entity_id: Optional[str] = None) -> ar.Filters:
     if since and until and until < since:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "`until` is before `since`")
-    return ar.Filters(action=action, actor_id=actor_id, since=since, until=until)
+    # An entity_id without its type would match an id across every table that
+    # happens to share it. Refused rather than silently widened.
+    if entity_id and not entity_type:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            "`entity_id` needs `entity_type` — an id alone is not unique across entities.")
+    return ar.Filters(action=action, actor_id=actor_id, since=since, until=until,
+                      entity_type=entity_type, entity_id=entity_id)
 
 
 @router.get("/audit", response_model=AuditPageOut, summary="The bank's audit trail")
@@ -88,6 +104,8 @@ def bank_audit(
     ctx: CurrentContext, db: DbSession,
     action: Optional[str] = None,
     actor_id: UUIDQuery = None,
+    entity_type: Optional[str] = Query(None, max_length=ENTITY_TYPE_MAX),
+    entity_id: UUIDQuery = None,
     since: Optional[datetime] = None,
     until: Optional[datetime] = None,
     limit: int = Query(ar.PAGE_SIZE, ge=1, le=ar.MAX_PAGE_SIZE),
@@ -101,7 +119,7 @@ def bank_audit(
     here would get slower forever.
     """
     bank_id = _bank_of(ctx)
-    f = _filters(action, actor_id, since, until)
+    f = _filters(action, actor_id, since, until, entity_type, entity_id)
     base = ar.scoped_query(db, bank_id, f)
     total = base.count()
     rows = base.offset(offset).limit(limit).all()
@@ -120,6 +138,8 @@ def bank_audit_export(
     ctx: CurrentContext, db: DbSession,
     action: Optional[str] = None,
     actor_id: UUIDQuery = None,
+    entity_type: Optional[str] = Query(None, max_length=ENTITY_TYPE_MAX),
+    entity_id: UUIDQuery = None,
     since: Optional[datetime] = None,
     until: Optional[datetime] = None,
     _user: User = require_perm("bank.audit.read"),
@@ -133,7 +153,7 @@ def bank_audit_export(
     over a short file that looks complete.
     """
     bank_id = _bank_of(ctx)
-    f = _filters(action, actor_id, since, until)
+    f = _filters(action, actor_id, since, until, entity_type, entity_id)
     rows = ar.scoped_query(db, bank_id, f).limit(MAX_EXPORT_ROWS + 1).all()
     truncated = len(rows) > MAX_EXPORT_ROWS
     rows = rows[:MAX_EXPORT_ROWS]
@@ -171,6 +191,7 @@ def bank_audit_export(
                  "since": f.window_start().isoformat(),
                  "until": f.until.isoformat() if f.until else None,
                  "action_filter": f.action, "actor_filter": f.actor_id,
+                 "entity_filter": f"{f.entity_type}:{f.entity_id}" if f.entity_type else None,
                  "endpoint": "/bank/audit/export"},
     )
     db.commit()

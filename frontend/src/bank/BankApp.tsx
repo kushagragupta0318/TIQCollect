@@ -22,6 +22,7 @@ import RegionsPage from "./pages/admin/RegionsPage";
 import SettingsPage from "./pages/admin/SettingsPage";
 import { MLOpsPage } from "./pages/techops/MLOpsPage";
 import UsageCostPage from "./pages/techops/UsageCostPage";
+import DataQualityPage from "./pages/techops/DataQualityPage";
 import BankUsersPage from "./pages/admin/BankUsersPage";
 import { BankPlacementPage } from "./pages/BankPlacementPage";
 import { BankPlaceholderPage } from "./pages/BankPlaceholderPage";
@@ -29,6 +30,7 @@ import OnboardAgencyWizardPage from "./pages/onboarding/OnboardAgencyWizardPage"
 import AgencyDirectoryPage from "./pages/directory/AgencyDirectoryPage";
 import AgencyPerformancePage from "./pages/performance/AgencyPerformancePage";
 import AgencyProfilePage from "./pages/directory/AgencyProfilePage";
+import AgencyMessagingPage from "./pages/agencies/AgencyMessagingPage";
 import ModelsPage from "./pages/models/ModelsPage";
 import CustomerPage from "./pages/customer/CustomerPage";
 import MonteCarloPage from "./pages/strategy/MonteCarloPage";
@@ -49,7 +51,9 @@ const BUILT_PAGES: Record<string, ComponentType> = {
   "governance/models": ModelsPage, "strategy/monte-carlo": MonteCarloPage,
   "strategy/board-reports": BoardReportsPage, "strategy/cash-forecast": CashForecastPage,
   "admin/audit": AuditPage, "admin/regions": RegionsPage, "admin/settings": SettingsPage,
-  "tech-ops/mlops": MLOpsPage, "tech-ops/usage": UsageCostPage, "admin/users": BankUsersPage,
+  "tech-ops/mlops": MLOpsPage, "tech-ops/usage": UsageCostPage, "tech-ops/data-quality": DataQualityPage,
+  "agencies/messaging": AgencyMessagingPage,
+  "admin/users": BankUsersPage,
 };
 
 
@@ -100,6 +104,7 @@ export default function BankApp() {
         {/* D07: the agency profile a Directory row opens to (not in
             navigation.ts — reached from a row, same as customers above). */}
         <Route path="agencies/profile/:agencyId" element={<AgencyProfilePage />} />
+        {/* bank<->agency comms: reversal disputes + agency escalations. */}
         {BankComponentGalleryPage && (
           <Route
             path="_gallery"

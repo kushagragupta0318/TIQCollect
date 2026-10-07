@@ -149,12 +149,27 @@ Verify, from outside the host:
   $C run --rm --entrypoint alembic api downgrade v2_0011
   $C run --rm --entrypoint alembic api upgrade head
   ```
-- **Connection budget.** Each process holds up to `DB_POOL_SIZE + DB_MAX_OVERFLOW` (5 + 5)
-  connections, plus 2 + 3 for the analytics read pool, which uses the primary unless
-  `ANALYTICS_DATABASE_URL` names a replica. That is 15 per process. Keep (API workers + Celery
-  worker processes + 1 beat) × 15 under Postgres' `max_connections` (100 by default). Past about 6 processes, put PgBouncer in front,
-  in transaction mode. Statement timeouts are `SET LOCAL` per transaction, which PgBouncer
-  tolerates.
+- **Connection budget.** Each API process holds up to `DB_POOL_SIZE + DB_MAX_OVERFLOW` (5 + 5)
+  primary connections **plus** `ANALYTICS_POOL_SIZE + ANALYTICS_MAX_OVERFLOW` (5 + 10) analytics
+  connections — **25 per API worker at peak**. The analytics pool is larger on purpose (perf A2):
+  a bank screen (`/overview`, `/analytics`, `/alerts`, `/cash-forecast`) holds an analytics
+  connection for the whole request, so a handful of concurrent analytics users would exhaust the
+  old 2 + 3. A Celery worker/beat process holds only the primary 5 + 5 = 10 (no analytics pool).
+  The budget to keep under Postgres' `max_connections` (100 by default):
+
+  ```
+  WEB_CONCURRENCY × 25  +  (Celery worker procs + 1 beat) × 10   <   max_connections
+  e.g. 2 API × 25 (=50) + (1 worker + 1 beat) × 10 (=20) = 70  <  100   ✓
+  ```
+
+  **Low-resource box:** if `max_connections` is lower, or you raise `WEB_CONCURRENCY`, turn the
+  pools down via env (`ANALYTICS_POOL_SIZE`, `ANALYTICS_MAX_OVERFLOW`, `DB_POOL_SIZE`,
+  `DB_MAX_OVERFLOW`) so the arithmetic above still holds, or put PgBouncer in front (transaction
+  mode) past ~6 processes. A saturated pool now fails fast: `DB_POOL_TIMEOUT_S` (5s, both engines)
+  returns a clean 503 instead of SQLAlchemy's 30s default hang. Statement timeouts are `SET LOCAL`
+  per transaction (`API_STATEMENT_TIMEOUT_MS` 15s), which PgBouncer tolerates; pair a tighter
+  statement timeout with the short pool timeout on a small box so one slow query can't pin a
+  connection long enough to starve the pool.
 - **Migrations never run at boot on a populated database.** Every container checks the
   database against the code's head and **refuses to start** on a mismatch, printing both
   revisions. Upgrading is a release step (§5).

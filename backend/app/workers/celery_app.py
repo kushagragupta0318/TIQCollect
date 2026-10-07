@@ -28,6 +28,7 @@ celery_app = Celery(
         "app.workers.tasks.model_retraining",
         "app.workers.tasks.partition_maintenance",
         "app.workers.tasks.analytics_refresh",
+        "app.workers.tasks.llm_usage",
     ],
 )
 

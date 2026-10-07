@@ -48,17 +48,51 @@ SENSITIVE_ACTIONS: tuple[str, ...] = (
     "PLACEMENT_CREATED", "PLACEMENT_RECALLED", "PLACEMENT_ENDED",
     "MODEL_CANDIDATE_APPROVED", "MODEL_CANDIDATE_REJECTED", "MODEL_PROMOTED",
     "LOGIN_FAILED", "ROLE_VIOLATION_ATTEMPT", "DEVICE_MISMATCH", "SESSION_REVOKED",
+    # v2_0032 added these and I did not add them here -- a PRIVILEGE CHANGE
+    # stopped being highlighted on the page that exists to highlight them.
+    "USER_ROLE_CHANGED", "USER_REACTIVATED",
     "DATA_EXPORT", "BANK_SETTINGS_UPDATED",
     "PAYMENT_REVERSAL_REQUESTED", "PAYMENT_REVERSED",
     "AGENCY_ONBOARDED", "AGENCY_ACTIVATED", "AGENCY_SUSPENDED", "AGENCY_OFFBOARDED",
     "CONTRACT_CHANGED", "USER_DEACTIVATED", "PASSWORD_RESET", "MFA_DISABLED",
+    # Found by the completeness tripwire below, not by reading the list: every
+    # one of these is a credential or an RBI-rule event, and each was missing
+    # only because it shipped after this list was first written.
+    "PASSWORD_CHANGED", "PASSWORD_RESET_ISSUED", "MFA_ENABLED", "MFA_FAILED",
+    "CONTACT_HOUR_VIOLATION_ATTEMPT",
 )
+
+#: Actions whose NAME reads as security-relevant and which are deliberately
+#: NOT highlighted, with the reason. The point is the tripwire in
+#: test_bank_audit.py: a new AuditAction matching a risk word must be put in
+#: SENSITIVE_ACTIONS or in here, so the next one cannot be forgotten the way
+#: USER_ROLE_CHANGED was. A waiver is a decision on the record, not a silence.
+NOT_SENSITIVE: dict[str, str] = {
+    "DOCUMENT_REJECTED": (
+        "The reject half of ordinary document verification. Approving and "
+        "rejecting a KYC document is caseworker workflow, not a privilege "
+        "change, and highlighting it would bury the rows that are."
+    ),
+    "INVITE_REVOKED": (
+        "The GRANT half of the invite lifecycle (INVITE_SENT, INVITE_ACCEPTED) "
+        "is the access-control event and is not highlighted either; "
+        "highlighting only the revoke would show an auditor the safe half of "
+        "the pair. Whether the whole lifecycle belongs here is the bank page "
+        "owner's call -- raised, not decided here, 2026-10-07."
+    ),
+}
 
 
 @dataclass(frozen=True)
 class Filters:
     action: str | None = None
     actor_id: str | None = None
+    #: One entity's own rows: what a thread, a reversal or a candidate did.
+    #: Without these a caller wanting "this thread's messages" had to ask for
+    #: every MESSAGE_SENT in the bank and filter client-side, which is both
+    #: slower and a bigger answer than the question.
+    entity_type: str | None = None
+    entity_id: str | None = None
     since: datetime | None = None
     until: datetime | None = None
 
@@ -82,6 +116,13 @@ def scoped_query(db: Session, bank_id: str, f: Filters):
         q = q.filter(AuditLog.action == f.action)
     if f.actor_id:
         q = q.filter(AuditLog.user_id == f.actor_id)
+    # entity_type is compared case-insensitively: it is written by hand at 30+
+    # call sites ("MessageThread", "Payment", "AuditLog") and a caller linking
+    # from a page should not have to guess the casing a service chose.
+    if f.entity_type:
+        q = q.filter(func.lower(AuditLog.entity_type) == f.entity_type.lower())
+    if f.entity_id:
+        q = q.filter(AuditLog.entity_id == f.entity_id)
     return q.order_by(AuditLog.created_at.desc())
 
 

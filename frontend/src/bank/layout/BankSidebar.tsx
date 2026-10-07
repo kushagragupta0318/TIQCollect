@@ -14,6 +14,7 @@ import { Link, useLocation } from "react-router";
 import { LogOut, PanelLeft, PanelLeftClose } from "lucide-react";
 import { Sidebar as SidebarRoot, SidebarContent, SidebarFooter, SidebarHeader } from "../ui/sidebar";
 import { useSidebar } from "../ui/sidebarContext";
+import { useUnreadMessagingCount } from "@/lib/useMessagingInbox";
 import { BANK_HOME_PATH, BUILT_BANK_SECTIONS, bankHref, type BankNavItem, type BankNavSection } from "./navigation";
 import logo from "../assets/logo.png";
 import IQ from "../assets/IQ_Logo.png";
@@ -24,8 +25,13 @@ export interface BankPersona {
   geography: string;
 }
 
+const MESSAGING_PATH = "agencies/messaging";
+
 function ItemLink({ item, active, onNavigate }: { item: BankNavItem; active: boolean; onNavigate?: () => void }) {
   const Icon = item.icon;
+  // Same query key as the Messaging page's own inbox poll (useMessagingInbox)
+  // — calling it here too costs no second request, shared cache either way.
+  const unreadMessages = useUnreadMessagingCount();
   return (
     <Link
       to={bankHref(item)}
@@ -36,13 +42,18 @@ function ItemLink({ item, active, onNavigate }: { item: BankNavItem; active: boo
         active ? "bg-accent text-primary font-semibold" : "text-muted-foreground hover:bg-muted hover:text-foreground",
       ].join(" ")}
     >
-      <Icon
-        aria-hidden="true"
-        className={[
-          "size-[17px] shrink-0",
-          active ? "text-primary" : "text-muted-foreground group-hover/i:text-foreground",
-        ].join(" ")}
-      />
+      <span className="relative inline-flex shrink-0">
+        <Icon
+          aria-hidden="true"
+          className={[
+            "size-[17px] shrink-0",
+            active ? "text-primary" : "text-muted-foreground group-hover/i:text-foreground",
+          ].join(" ")}
+        />
+        {item.path === MESSAGING_PATH && unreadMessages > 0 && (
+          <span aria-label="Unread messages" className="absolute -right-0.5 -top-0.5 size-2 rounded-full bg-primary ring-2 ring-card" />
+        )}
+      </span>
       <span className="truncate">{item.name}</span>
     </Link>
   );

@@ -2,6 +2,9 @@
 # 2026-09-24 — New file. E09: how a figure is written, once, for all three
 #   renderers. The platform's reports printed "Rs" because their PDF font had
 #   no rupee glyph; this product embeds one (fonts/), so the sign is "₹".
+# 2026-10-07 — kpi_delta() added (the render lift): a KPI card's delta
+#   direction/colour, computed once here instead of in both the PDF and the
+#   PPTX renderer (ADR 0001 — one definition per rule).
 # ───────────────────────────────────────────────────────────────────────────
 """Indian number formatting. Grouping is lakh/crore (12,34,567), compact
 amounts use L and Cr, and a missing value is an em dash — never 0."""
@@ -9,7 +12,7 @@ from __future__ import annotations
 
 import math
 
-from app.reports.payload import ReportPayload, Unit
+from app.reports.payload import Direction, ReportPayload, Unit
 
 RUPEE = "₹"
 MISSING = "—"
@@ -120,6 +123,21 @@ def delta(value: float | None, prior: float | None, unit: Unit) -> str | None:
     if prior == 0:
         return None
     return f"{(value - prior) / abs(prior) * 100:+.1f}%"
+
+
+def kpi_delta(value: float | None, prior: float | None, direction: Direction,
+             unit: Unit) -> tuple[str, bool, bool | None] | None:
+    """(signed text, is_up, is_good) for a KPI card's delta — None when
+    there is no prior to compare (delta() already returns None then; never
+    fabricated by either renderer). `is_good` is None for a NEUTRAL
+    direction: there is no "better" side to colour."""
+    d = delta(value, prior, unit)
+    if d is None:
+        return None
+    up = d.startswith("+")
+    good = (up if direction is Direction.HIGHER_IS_BETTER
+           else (not up if direction is Direction.LOWER_IS_BETTER else None))
+    return d, up, good
 
 
 # Excel number formats, so an XLSX cell keeps its number AND reads like the PDF.

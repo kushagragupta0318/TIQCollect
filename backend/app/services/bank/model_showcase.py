@@ -195,7 +195,6 @@ def models_overview(db: Session, ctx) -> dict:
     serving = serving_version(TRAINED_MODEL)
     version = serving or configured
     meta = _read_metadata(version) if version else {}
-    oot = (meta.get("metrics") or {}).get("oot") or {}
     labels = (meta.get("reason_codes") or {}).get("labels") or {}
     day = _latest_scoring_day(db, bank_id, version)
 
@@ -220,9 +219,6 @@ def models_overview(db: Session, ctx) -> dict:
                                           eb_low=EB_BOUNDS[0], eb_high=EB_BOUNDS[1])
         layers.append({**layer, "acts_on": acts_on, "version": v})
 
-    bands = [{"band": b.get("band"), "oot_n": b.get("count"), "oot_bad_rate": b.get("bad_rate")}
-             for b in (meta.get("bands_oot") or []) if isinstance(b, dict)]
-
     return {
         "synthetic_warning": meta.get("SYNTHETIC_WARNING")
         or "No artifact metadata was readable; treat every figure as unverified.",
@@ -237,8 +233,6 @@ def models_overview(db: Session, ctx) -> dict:
                       "monotone where a direction is declared, calibrated on validation months.",
             "features": [{"code": f, "label": labels.get(f, f)} for f in meta.get("selected_features") or []],
             "stored_probability_means": "the chance of NO material payment in the next cycle (higher = riskier)",
-            "artifact_metrics": {"gini": oot.get("gini"), "ks": oot.get("ks"), "auc": oot.get("auc"),
-                                 "brier": oot.get("brier"), "n": oot.get("n")},
             "live_equivalent": LIVE_EQUIVALENT.get(version or ""),
             "stance": {
                 "feature": STANCE_FEATURE,
@@ -255,7 +249,6 @@ def models_overview(db: Session, ctx) -> dict:
             },
             "abstention": {"coverage_floor": MIN_FEATURE_COVERAGE, "latest_day_declined": day.declined,
                            "latest_day_scored": day.scored},
-            "bands": bands,
             "monitoring": {
                 "status": monitoring_status,
                 "required_matured": MIN_MATURED_FOR_MONITORING,

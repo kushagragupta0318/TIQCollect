@@ -137,22 +137,44 @@ def _migration(adb: Session, bank_id: str, as_of: date, f: KpiFilter) -> dict:
 def _recovery(adb: Session, bank_id: str, f: KpiFilter) -> dict:
     """Recovery vs Expected, bank-wide, by month — the Agencies tab's own
     ratio (agency_scorecard.compute_metrics's recovery_vs_expected), summed
-    over every agency instead of one. Same NULL-is-unknown rule: a month
-    where no row carries an expected_recovery_inr (no recovery_risk score
-    was in force for any placement that month) reports unknown, not zero —
-    SQL SUM() already drops NULLs and returns NULL only when every row is
-    NULL, which is exactly agency_scorecard._sum_or_none's rule."""
+    over every agency instead of one. The view coalesces a (agency, month)
+    cell with no priced placement to 0, never NULL (v2_0013's `pn` CTE,
+    `coalesce(sum(expected_recovery_inr), 0)`) -- 0 is this column's own
+    "unpriced" sentinel, same job NULL does for `field_cost` in `_cost()`
+    below, which genuinely stays NULL at the view (measured directly,
+    test_unpriced_visits_read_null_until_a_rate_exists). Bank-wide SUM()
+    across many agencies' zero-and-nonzero cells is never itself 0 unless
+    EVERY cell that month is unpriced, which is what the `if expected else
+    None` below reports as unknown.
+
+    The RATIO's own numerator and denominator must come from the SAME rows
+    (coordinator audit, 2026-10-07; agency_scorecard.py:140's own rule for
+    its collection_efficiency, not applied here before this fix): a month
+    where one agency's placement is unpriced (expected_recovery_inr = 0 on
+    that cell) still has that agency's own collections, so plain SUM(...)
+    counted them in actual_inr's numerator while the ratio's denominator
+    only ever reflected the priced cells -- numerator-from-every-agency
+    over denominator-from-only-the-priced-ones, not the same window's
+    ratio. `actual_known_expected_inr` restricts the numerator to the cells
+    the denominator actually counted (expected_recovery_inr <> 0, not a
+    NULL check -- this column is never NULL at the view); `actual_inr`
+    itself is left unfiltered because it is a displayed total, not a ratio
+    term."""
     clause, fp = f.clause(SCORECARD)
     base = {"bank": bank_id, **fp}
     by_month = _read_rows(adb, f"""
         SELECT month_start,
                SUM(verified_collections) + SUM(bank_direct_collections) AS actual_inr,
-               SUM(expected_recovery_inr) AS expected_inr
+               SUM(expected_recovery_inr) AS expected_inr,
+               SUM(verified_collections) FILTER (WHERE expected_recovery_inr <> 0)
+                 + SUM(bank_direct_collections) FILTER (WHERE expected_recovery_inr <> 0)
+                 AS actual_known_expected_inr
         FROM analytics.{SCORECARD} WHERE bank_id = :bank {clause}
         GROUP BY month_start ORDER BY month_start""", base)
     for row in by_month:
         expected = row["expected_inr"]
-        row["recovery_vs_expected"] = round(row["actual_inr"] / expected, 4) if expected else None
+        actual_known = row.pop("actual_known_expected_inr")
+        row["recovery_vs_expected"] = round(actual_known / expected, 4) if expected else None
     return {"available": True, "reason": None, "panels": {"by_month": by_month}}
 
 
@@ -173,13 +195,27 @@ def _cost(db: Session, adb: Session, bank_id: str, f: KpiFilter) -> dict:
     def _rows(group_col: str) -> list[dict]:
         rows = _read_rows(adb, f"""
             SELECT {group_col} AS key, SUM(commission_accrued) AS commission_inr, SUM(field_cost) AS field_cost_inr,
-                   SUM(verified_collections) + SUM(bank_direct_collections) AS collected_inr
+                   SUM(verified_collections) + SUM(bank_direct_collections) AS collected_inr,
+                   SUM(verified_collections) FILTER (WHERE field_cost IS NOT NULL)
+                     + SUM(bank_direct_collections) FILTER (WHERE field_cost IS NOT NULL)
+                     AS collected_known_cost_inr
             FROM analytics.{SCORECARD} WHERE bank_id = :bank {clause}
             GROUP BY {group_col} ORDER BY {group_col}""", base)
         for row in rows:
-            collected = row["collected_inr"]
-            row["cost_per_100_inr"] = (round((row["commission_inr"] + row["field_cost_inr"]) / collected * 100, 2)
-                                       if row["field_cost_inr"] is not None and collected else None)
+            # Same-rows pairing (coordinator audit, 2026-10-07; agency_scorecard.py:140's
+            # own rule, not applied here before this fix): a group spanning several
+            # agencies/months can have SOME rows with no FIELD_VISIT rate (field_cost
+            # NULL) and others with one. Plain SUM(field_cost) already drops the
+            # unknown rows from the numerator; collected_inr's plain SUM did not drop
+            # them from the denominator, understating cost_per_100_inr whenever any
+            # row in the group lacked a rate. collected_known_cost_inr restricts the
+            # denominator to the rows the numerator actually counted; collected_inr
+            # itself is left unfiltered because it is a displayed total, not a ratio
+            # term.
+            collected_known = row.pop("collected_known_cost_inr")
+            row["cost_per_100_inr"] = (
+                round((row["commission_inr"] + row["field_cost_inr"]) / collected_known * 100, 2)
+                if row["field_cost_inr"] is not None and collected_known else None)
         return rows
 
     by_month = _rows("month_start")
@@ -222,7 +258,11 @@ def _compliance(db: Session, adb: Session, bank_id: str, f: KpiFilter) -> dict:
     # no fraud column on this view (its grain is visits/calls/PTPs/payments
     # per agent-day). Fraud verdicts live on collections.fraud_reviews, which
     # carries its own bank_id/agency_id directly, so a plain filtered count,
-    # no join needed.
+    # no join needed. `clause`/`base` apply to fraud_reviews too (both carry
+    # the same agency_id column FIELD_DIMENSIONS gates on) -- they used to be
+    # skipped here while the breach columns above honoured them, so a bank
+    # filtering to one agency saw that agency's own breaches next to every
+    # agency's fraud count (coordinator audit, 2026-10-07).
     clause, fp = f.clause(FIELD)
     base = {"bank": bank_id, **fp}
     breaches_over_time = _read_rows(adb, f"""
@@ -231,10 +271,10 @@ def _compliance(db: Session, adb: Session, bank_id: str, f: KpiFilter) -> dict:
                SUM(consent_missing_visits) AS consent_missing
         FROM analytics.{FIELD} WHERE bank_id = :bank {clause}
         GROUP BY 1 ORDER BY 1""", base)
-    fraud_by_month = _read_rows(adb, """
+    fraud_by_month = _read_rows(adb, f"""
         SELECT date_trunc('month', reviewed_at)::date AS month_start, count(*) AS fraud_confirmed
         FROM collections.fraud_reviews WHERE bank_id = :bank AND verdict = 'CONFIRMED' AND reviewed_at IS NOT NULL
-        GROUP BY 1 ORDER BY 1""", {"bank": bank_id})
+        {clause} GROUP BY 1 ORDER BY 1""", base)
     for row in breaches_over_time:
         row["fraud_confirmed"] = next((r["fraud_confirmed"] for r in fraud_by_month
                                        if r["month_start"] == row["month_start"]), 0)
@@ -242,9 +282,9 @@ def _compliance(db: Session, adb: Session, bank_id: str, f: KpiFilter) -> dict:
         SELECT agency_id, SUM(out_of_hours_attempts) AS out_of_hours, SUM(geo_unverified_visits) AS geofence,
                SUM(visits) AS visits
         FROM analytics.{FIELD} WHERE bank_id = :bank {clause} GROUP BY agency_id""", base)
-    fraud_by_agency = _read_rows(adb, """
+    fraud_by_agency = _read_rows(adb, f"""
         SELECT agency_id, count(*) AS fraud_confirmed FROM collections.fraud_reviews
-        WHERE bank_id = :bank AND verdict = 'CONFIRMED' GROUP BY agency_id""", {"bank": bank_id})
+        WHERE bank_id = :bank AND verdict = 'CONFIRMED' {clause} GROUP BY agency_id""", base)
     for row in by_agency:
         row["fraud_confirmed"] = next((r["fraud_confirmed"] for r in fraud_by_agency
                                        if r["agency_id"] == row["agency_id"]), 0)

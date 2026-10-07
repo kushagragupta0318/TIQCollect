@@ -35,6 +35,7 @@ const ManagerBeatPlanPage = lazy(() => import("@/pages/manager/ManagerBeatPlanPa
 const ManagerCasesPage = lazy(() => import("@/pages/manager/ManagerCasesPage"));
 const ManagerAnalyticsPage = lazy(() => import("@/pages/manager/ManagerAnalyticsPage"));
 const ManagerCompliancePage = lazy(() => import("@/pages/manager/ManagerCompliancePage"));
+const ManagerMessagingPage = lazy(() => import("@/pages/manager/ManagerMessagingPage"));
 const AgencyProfilePage = lazy(() => import("@/pages/manager/AgencyProfilePage"));
 
 // Mobile app simulator (standalone plan P0). A demo/dev tool: on in the Vite
@@ -184,6 +185,7 @@ export default function App() {
               <Route path="cases" element={<ManagerCasesPage />} />
               <Route path="analytics" element={<ManagerAnalyticsPage />} />
               <Route path="compliance" element={<ManagerCompliancePage />} />
+              <Route path="messaging" element={<ManagerMessagingPage />} />
               <Route path="agency-profile" element={<AgencyProfilePage />} />
             </Route>
 

@@ -26,13 +26,13 @@ def seed():
 
 def test_the_seed_is_well_formed(seed):
     codes = [c for c, *_ in seed.PERMISSIONS]
-    assert len(codes) == len(set(codes)) == 77   # +3 payment.reversal.* (ADR 0015)
+    assert len(codes) == len(set(codes)) == 81   # +3 reversal, +2 messaging, +1 escalate, +1 agent_chat
     assert all(cat == code.split(".", 1)[0] for code, cat, *_ in seed.PERMISSIONS)      # category = first segment
     assert all(len(code) <= 64 and len(cat) <= 30 for code, cat, *_ in seed.PERMISSIONS)  # the column widths
     roles = {r.value for r in UserRole}
     assert all(r in roles for r, _ in seed.ROLE_GRANTS)
     assert all(c in set(codes) for _, c in seed.ROLE_GRANTS)                              # every grant names a capability
-    assert len(seed.ROLE_GRANTS) == len(set(seed.ROLE_GRANTS)) == 142   # +4 reversal grants (ADR 0015)
+    assert len(seed.ROLE_GRANTS) == len(set(seed.ROLE_GRANTS)) == 156   # +4 rev, +9 msg, +2 escalate, +3 agent_chat
 
 
 def test_the_removed_field_ops_capability_is_not_seeded(seed):

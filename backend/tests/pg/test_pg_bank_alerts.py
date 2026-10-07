@@ -38,7 +38,10 @@ def test_at_least_one_rule_fires_on_the_real_book(views):
     from app.demo.roster import BANK
     from app.services.bank.alerts import compute_alerts
     with _session(views, BANK["id"]) as s:
-        alerts = compute_alerts(s, s, BANK["id"])
+        out = compute_alerts(s, s, BANK["id"])
+    assert out["rules_failed"] == [], f"rule(s) errored: {out['rules_failed']}"
+    assert out["rules_total"] == 6
+    alerts = out["alerts"]
     assert alerts, "no alert fired on a book that should have at least a GNPA breach"
     for a in alerts:
         assert a["severity"] in ("critical", "warning", "info")
@@ -51,7 +54,7 @@ def test_alerts_sort_most_severe_first(views):
     from app.demo.roster import BANK
     from app.services.bank.alerts import compute_alerts
     with _session(views, BANK["id"]) as s:
-        alerts = compute_alerts(s, s, BANK["id"])
+        alerts = compute_alerts(s, s, BANK["id"])["alerts"]
     order = {"critical": 0, "warning": 1, "info": 2}
     severities = [order[a["severity"]] for a in alerts]
     assert severities == sorted(severities)
@@ -62,7 +65,7 @@ def test_gnpa_breach_fires_with_the_configured_threshold_in_its_own_text(views):
     from app.demo.roster import BANK
     from app.services.bank.alerts import compute_alerts
     with _session(views, BANK["id"]) as s:
-        alerts = compute_alerts(s, s, BANK["id"])
+        alerts = compute_alerts(s, s, BANK["id"])["alerts"]
     gnpa = next((a for a in alerts if a["id"] == "gnpa_breach"), None)
     assert gnpa is not None, "GNPA breach did not fire on the real book"
     assert f"{settings.ALERT_GNPA_PCT * 100:.0f}%" in gnpa["title"]
@@ -74,9 +77,9 @@ def test_another_bank_sees_only_its_own_alerts(views):
     from app.demo.roster import BANK, KUMAON_BANK
     from app.services.bank.alerts import compute_alerts
     with _session(views, BANK["id"]) as s:
-        girivan = compute_alerts(s, s, BANK["id"])
+        girivan = compute_alerts(s, s, BANK["id"])["alerts"]
     with _session(views, KUMAON_BANK["id"]) as s:
-        kumaon = compute_alerts(s, s, KUMAON_BANK["id"])
+        kumaon = compute_alerts(s, s, KUMAON_BANK["id"])["alerts"]
     girivan_ids = {a["id"] for a in girivan}
     kumaon_ids = {a["id"] for a in kumaon}
     # Same RULE ids can legitimately fire for both banks (GNPA breach is a
@@ -88,18 +91,20 @@ def test_another_bank_sees_only_its_own_alerts(views):
     assert girivan_ids or kumaon_ids   # sanity: the fixture gave us something to compare
 
 
-def test_a_rule_that_raises_is_skipped_not_fatal(views, monkeypatch):
+def test_a_rule_that_raises_is_counted_failed_not_fatal_and_not_hidden(views, monkeypatch):
     """One bad rule must not take the whole feed down (compute_overview's
-    own per-KPI savepoint discipline, extended here to two sessions)."""
+    own per-KPI savepoint discipline, extended here to two sessions) --
+    AND must not read as "nothing is firing": it is named in rules_failed."""
     from app.demo.roster import BANK
     from app.services.bank import alerts as A
 
     def boom(adb, bank_id):
         raise RuntimeError("deliberate rule failure")
 
-    monkeypatch.setattr(A, "_roll_forward_spike", boom)
     monkeypatch.setattr(A, "RULES", (A._gnpa_breach, A._efficiency_drop, A._sla_miss,
                                      A._fraud_and_fence, A._pending_placement, boom))
     with _session(views, BANK["id"]) as s:
-        alerts = A.compute_alerts(s, s, BANK["id"])   # must not raise
-    assert isinstance(alerts, list)
+        out = A.compute_alerts(s, s, BANK["id"])   # must not raise
+    assert isinstance(out["alerts"], list)
+    assert out["rules_total"] == 6
+    assert out["rules_failed"] == ["boom"]   # no RULE_LABELS entry for a test double; falls back to the name

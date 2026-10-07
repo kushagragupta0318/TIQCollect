@@ -4,6 +4,13 @@
 #   formatted text), wearing the Excel format for its unit, so a reader can
 #   sum, sort and pivot it. Every table is a sheet, and so is every chart's
 #   data — the table view the charts' low-contrast hues rely on (theme.py).
+# 2026-10-07 — Every string cell now goes through core/csv_safe.csv_cell
+#   first (the render lift's security fix). openpyxl stores a leading "=" as
+#   a formula with no sanitising of its own; a string reaching this file can
+#   originate off a bank/agency's own data (a trade name, an LLM narrative)
+#   and later open in the EXPORTING bank's own spreadsheet app — the same
+#   cross-tenant path manager.py/bank_audit.py/planner_service.py's CSV
+#   exports already close with the same function. One definition, imported.
 # ───────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 
@@ -14,6 +21,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
+from app.core.csv_safe import csv_cell
 from app.reports import theme
 from app.reports.formatting import XLSX_FORMATS, delta, period_label
 from app.reports.payload import SYNTHETIC_WARNING, Chart, ReportPayload, Table, Unit
@@ -39,7 +47,7 @@ def sheet_name(title: str, used: set[str]) -> str:
 
 def _header(ws, row: int, labels: list[str]) -> None:
     for ci, label in enumerate(labels, start=1):
-        cell = ws.cell(row=row, column=ci, value=label)
+        cell = ws.cell(row=row, column=ci, value=csv_cell(label))
         cell.font, cell.fill, cell.border = HEAD_FONT, HEAD_FILL, HEAD_RULE
 
 
@@ -50,7 +58,7 @@ def _widths(ws, min_w: int = 8, max_w: int = 60) -> None:
 
 
 def _value_cell(ws, row: int, col: int, value, unit: Unit):
-    cell = ws.cell(row=row, column=col, value=value)
+    cell = ws.cell(row=row, column=col, value=csv_cell(value))
     if value is not None and unit is not Unit.TEXT:
         cell.number_format = XLSX_FORMATS[unit]
     return cell
@@ -68,8 +76,8 @@ def _report_sheet(ws, p: ReportPayload) -> None:
     if p.data_note:
         meta.append(("Note", p.data_note))
     for r, (k, v) in enumerate(meta, start=1):
-        ws.cell(row=r, column=1, value=k).font = Font(bold=True)
-        ws.cell(row=r, column=2, value=v)
+        ws.cell(row=r, column=1, value=csv_cell(k)).font = Font(bold=True)
+        ws.cell(row=r, column=2, value=csv_cell(v))
     ws.cell(row=1, column=2).font = Font(bold=True, size=14)
 
     r = len(meta) + 2
@@ -80,14 +88,14 @@ def _report_sheet(ws, p: ReportPayload) -> None:
         _header(ws, r, ["Section", "KPI", "KPI id", "Value", "Prior", "Change", "Unit", "Basis"])
         for s, k in kpis:
             r += 1
-            ws.cell(row=r, column=1, value=s.title)
-            ws.cell(row=r, column=2, value=k.label)
-            ws.cell(row=r, column=3, value=k.kpi_id)
+            ws.cell(row=r, column=1, value=csv_cell(s.title))
+            ws.cell(row=r, column=2, value=csv_cell(k.label))
+            ws.cell(row=r, column=3, value=csv_cell(k.kpi_id))
             _value_cell(ws, r, 4, k.value, k.unit)
             _value_cell(ws, r, 5, k.prior, k.unit)
-            ws.cell(row=r, column=6, value=delta(k.value, k.prior, k.unit))
+            ws.cell(row=r, column=6, value=csv_cell(delta(k.value, k.prior, k.unit)))
             ws.cell(row=r, column=7, value=k.unit.value)
-            ws.cell(row=r, column=8, value=k.basis)
+            ws.cell(row=r, column=8, value=csv_cell(k.basis))
         r += 2
 
     narratives = [s for s in p.sections if s.narrative]
@@ -97,9 +105,9 @@ def _report_sheet(ws, p: ReportPayload) -> None:
         _header(ws, r, ["Section", "Written by", "Text"])
         for s in narratives:
             r += 1
-            ws.cell(row=r, column=1, value=s.title)
+            ws.cell(row=r, column=1, value=csv_cell(s.title))
             ws.cell(row=r, column=2, value="AI (figures from the report data)" if s.narrative.ai_generated else "Template")
-            ws.cell(row=r, column=3, value=s.narrative.text).alignment = Alignment(wrap_text=True, vertical="top")
+            ws.cell(row=r, column=3, value=csv_cell(s.narrative.text)).alignment = Alignment(wrap_text=True, vertical="top")
     _widths(ws)
     ws.column_dimensions["C"].width = max(ws.column_dimensions["C"].width, 24)
 
@@ -113,14 +121,15 @@ def _table_sheet(ws, t: Table) -> None:
     if t.rows:
         ws.auto_filter.ref = f"A1:{get_column_letter(len(t.columns))}{len(t.rows) + 1}"
     if t.note:
-        ws.cell(row=len(t.rows) + 3, column=1, value=t.note).font = Font(italic=True, color=theme.TEXT_MUTED.lstrip("#"))
+        ws.cell(row=len(t.rows) + 3, column=1, value=csv_cell(t.note)).font = Font(
+            italic=True, color=theme.TEXT_MUTED.lstrip("#"))
     _widths(ws)
 
 
 def _chart_sheet(ws, c: Chart) -> None:
     _header(ws, 1, ["Category", *[s.name + (" (reference)" if s.reference else "") for s in c.series]])
     for ri, cat in enumerate(c.categories, start=2):
-        ws.cell(row=ri, column=1, value=cat)
+        ws.cell(row=ri, column=1, value=csv_cell(cat))
         for si, s in enumerate(c.series, start=2):
             _value_cell(ws, ri, si, s.values[ri - 2], c.unit)
     ws.freeze_panes = "A2"

@@ -2804,6 +2804,10 @@ router at the v1-main merge; it listed 76 capabilities.)*
 | `payment.reversal.request` | request to reverse a mistaken collection | |
 | `payment.reversal.approve.agency` | the agency's approval of a reversal (routes it to the bank) | |
 | `payment.reversal.approve.bank` | the bank's fiduciary final sign-off; the ledger unwinds here | S |
+| `messaging.read` | read bank↔agency message threads | |
+| `messaging.send` | post a message to a bank↔agency thread | |
+| `messaging.escalate` | open a general bank↔agency escalation | |
+| `messaging.agent_chat` | manager↔agent direct chat within an agency | |
 | `fraud.review` | confirm or dismiss anomaly findings | |
 | `disputes.manage` | work disputes and complaints | |
 | `settlements.propose` | propose a settlement | |
@@ -2870,6 +2874,10 @@ Legend:
 | `payment.reversal.request` | · | · | · | · | · | Y | · | · |
 | `payment.reversal.approve.agency` | · | · | · | · | Y | Y | · | · |
 | `payment.reversal.approve.bank` | · | Y | · | · | · | · | · | · |
+| `messaging.read` | · | Y | Y | Y | Y | Y | · | · |
+| `messaging.send` | · | Y | · | Y | Y | Y | · | · |
+| `messaging.escalate` | · | · | · | · | Y | Y | · | · |
+| `messaging.agent_chat` | · | · | · | · | Y | Y | Y | · |
 | `settlements.approve` | · | Y | · | · | · | · | · | · |
 | `agency.audit.read` | · | · | · | · | Y | · | · | · |
 | `field.*` (8) | · | · | · | · | · | · | S | · |
@@ -3260,6 +3268,7 @@ safer than giving the API a bypass role.
 - **(MED) Sessions without a tenant.** The analytics session (`get_analytics_db`) and every Celery task have no tenant context.
   Apply the context to the analytics session (B13b does this for the API's analytics reads), and run the workers as `tiq_jobs`.
 - **(LOW) Token lookups.** `SELECT` on `password_reset_tokens` and `used_quick_login_tokens` moves behind `SECURITY DEFINER`, like the other pre-auth lookups.
+- **(HIGH, CUTOVER-BLOCKING) Per-agent isolation on the AGENT_DIRECT messaging axis.** `collections.message_threads`/`messages` carry the agency-coarse `_AGENCY_OWNED` policy, which cannot isolate one agent from another within an agency (there is no `current_agent_id()`). Today an agent's manager↔agent chat (`subject_type = 'AGENT_DIRECT'`, one thread per agent) is kept agent-private by the SERVICE only (`MessagingService`'s AGENT branch restricts to the caller's own `agent_id`). After the `tiq_app` flip, an `AGENT`-scoped session under `_AGENCY_OWNED` would read **every** thread in its agency — its agency-mates' direct chats, and the bank↔agency escalations — via the DB. Before `FORCE`: add a `current_agent_id()` GUC (bound like `app.agency_id`) and a tightened policy on these tables so an `AGENT` scope matches only `subject_type = 'AGENT_DIRECT' AND subject_id = current_agent_id()`, and add a `tests/pg` test (AS `tiq_app`, `SET ROLE` + the agent GUC) proving one agent cannot read another's thread. Until then the AGENT axis must not go live under enforced RLS.
 
 **Tables with no policy, justified.** The drift test lists each of these as `NO_RLS` on purpose.
 - `planning.allocation_outcomes` and `planning.placement_outcomes` are lookups: code, label, sort order, flags.

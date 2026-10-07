@@ -17,6 +17,7 @@ import {
   Gauge,
   LayoutDashboard,
   Map as MapIcon,
+  MessageSquare,
   ScrollText,
   Settings,
   ShieldCheck,
@@ -141,6 +142,13 @@ export const BANK_SECTIONS: BankNavSection[] = [
         summary: "Six steps: identity, coverage, contract, documents, master login, review.",
         tasks: "D01–D03",
       },
+      {
+        name: "Messaging",
+        path: "agencies/messaging",
+        icon: MessageSquare,
+        summary: "Threads with your agencies — reversal disputes and escalations, every message audited.",
+        tasks: "L07",
+      },
     ],
   },
   {
@@ -253,6 +261,7 @@ export const BUILT_NAV_PATHS: ReadonlySet<string> = new Set([
   "agencies/performance",
   "agencies/placement",
   "agencies/onboard",
+  "agencies/messaging",
   "governance/models",
   "strategy/monte-carlo",
   "strategy/board-reports",
@@ -263,6 +272,7 @@ export const BUILT_NAV_PATHS: ReadonlySet<string> = new Set([
   "admin/users",
   "tech-ops/mlops",
   "tech-ops/usage",
+  "tech-ops/data-quality",
 ]);
 
 export const isBuiltPath = (path: string): boolean => BUILT_NAV_PATHS.has(path);
