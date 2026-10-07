@@ -20,6 +20,7 @@ import { AuditPage } from "./pages/admin/AuditPage";
 import RegionsPage from "./pages/admin/RegionsPage";
 import SettingsPage from "./pages/admin/SettingsPage";
 import { MLOpsPage } from "./pages/techops/MLOpsPage";
+import BankUsersPage from "./pages/admin/BankUsersPage";
 import { BankPlacementPage } from "./pages/BankPlacementPage";
 import { BankPlaceholderPage } from "./pages/BankPlaceholderPage";
 import OnboardAgencyWizardPage from "./pages/onboarding/OnboardAgencyWizardPage";
@@ -43,7 +44,7 @@ const BUILT_PAGES: Record<string, ComponentType> = {
   overview: BankOverviewPage, analytics: BankAnalyticsPage, "agencies/placement": BankPlacementPage,
   "governance/models": ModelsPage, "strategy/monte-carlo": MonteCarloPage,
   "admin/audit": AuditPage, "admin/regions": RegionsPage, "admin/settings": SettingsPage,
-  "tech-ops/mlops": MLOpsPage,
+  "tech-ops/mlops": MLOpsPage, "admin/users": BankUsersPage,
 };
 
 
