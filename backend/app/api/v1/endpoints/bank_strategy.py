@@ -45,6 +45,47 @@ class SimulateIn(BaseModel):
     series: bool = False
 
 
+class CashForecastWeekOut(BaseModel):
+    week_start: str
+    p10: float
+    p50: float
+    p90: float
+    ptp_scheduled: float
+    bottom_up: float
+    top_down: float
+
+
+class CashForecastBacktestOut(BaseModel):
+    mape: Optional[float]
+    n_folds: int
+    calibrated: bool
+    reason: str
+
+
+class CashForecastOut(BaseModel):
+    """Every field `cash_forecast_endpoint` actually builds, named here once.
+    A bare dict (the /simulate route's own style) is an allowlist with no
+    list — the next field someone adds to the handler's `out` dict would be
+    silently dropped by a response_model written AFTER the fact without
+    re-reading what the handler returns; this one is read off the handler
+    below, not guessed."""
+    weeks: list[CashForecastWeekOut]
+    totals: dict[str, float]
+    history_weeks: int
+    ptp_honor_rate: Optional[float]
+    ptp_resolved_count: int
+    recovery_informed_total: float
+    recovery_informed_loans: int
+    backtest: CashForecastBacktestOut
+    engine_version: str
+    # The honesty stamp (strategy/honesty.py.HonestyStamp.as_fields()).
+    synthetic: bool
+    calibrated: bool
+    data_version: str
+    basis: str
+    text: str
+
+
 def _bank_of(ctx) -> str:
     if not ctx.bank_id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "No bank on this account")
@@ -94,7 +135,8 @@ def simulate_endpoint(body: SimulateIn, ctx: CurrentContext, db: DbSession, adb:
     return _json_safe(out)
 
 
-@router.get("/cash-forecast", summary="13-week forecast of weekly collection inflow, with p10/p50/p90 bands")
+@router.get("/cash-forecast", response_model=CashForecastOut,
+           summary="13-week forecast of weekly collection inflow, with p10/p50/p90 bands")
 def cash_forecast_endpoint(ctx: CurrentContext, adb: AnalyticsDb,
                            as_of: Optional[date] = None,
                            _user: User = require_perm("strategy.forecast")):

@@ -343,8 +343,11 @@ _RECOVERY_RISK_SQL = text("""
        AND l.status = 'ACTIVE'
        AND l.overdue_amount > 0
        AND NOT EXISTS (
+             -- ptps has no loan_id of its own: it hangs off the case, so the
+             -- loan a PTP belongs to is reached through collections.cases.
              SELECT 1 FROM collections.ptps p
-              WHERE p.loan_id = mp.loan_id
+              JOIN collections.cases c ON c.id = p.case_id
+              WHERE c.loan_id = mp.loan_id
                 AND p.status = 'ACTIVE'
                 AND p.committed_date >= :as_of
                 AND p.committed_date < :horizon_end

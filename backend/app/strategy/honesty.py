@@ -90,7 +90,12 @@ def stamp_for_cash_forecast(run, *, data_version: str, basis: str) -> HonestySta
     (every book this runs on today is the generated demo book, same as
     stamp_for_simulation); `calibrated` is the run's own rolling-origin
     backtest result, so the stamp cannot claim a coverage the backtest did
-    not measure."""
+    not measure. Unlike stamp_for_simulation/stamp_for_backtest, `synthetic`
+    is hardcoded rather than read off the run, because CashForecastRun does
+    not carry its own synthetic flag — read_weekly_payments has no caller
+    today that is not the demo book. Flip this to read a real flag once a
+    real book can reach this function; hardcoding fails safe in the
+    meantime (it can only over-claim synthetic, never under-claim it)."""
     return HonestyStamp(
         synthetic=True,
         calibrated=bool(run.backtest.calibrated),
