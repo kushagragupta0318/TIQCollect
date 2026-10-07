@@ -45,7 +45,7 @@ from datetime import date, datetime
 
 from sqlalchemy import (
     Boolean, CheckConstraint, Date, DateTime, Float, Index, Integer, SmallInteger, String,
-    UniqueConstraint, func,
+    UniqueConstraint, func, text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -169,5 +169,16 @@ class ModelPrediction(Base, UUIDPrimaryKey):
         Index(None, "case_id", "as_of_date"),
         Index(None, "entity_id"),
         Index(None, "bank_id", "as_of_date"),
+        # The cash forecast's recovery-risk term: the LATEST modelled score per
+        # loan for one bank. Equality on (bank_id, model_name, loan_id) then the
+        # recency columns DESC, so LIMIT 1 stops on the first index entry;
+        # INCLUDE + the partial predicate make it index-only (Heap Fetches: 0).
+        # Declared here as well as in v2_0039 because seed_data and
+        # ingest_daily build the schema with create_all and would otherwise
+        # produce a database where that read is 15 s (known issue 4).
+        Index("ix_model_pred_latest_per_loan", "bank_id", "model_name", "loan_id",
+              text("as_of_date DESC"), text("scored_at DESC"),
+              postgresql_include=["probability"],
+              postgresql_where=text("is_modelled AND probability IS NOT NULL")),
         {"schema": "ml"},
     )

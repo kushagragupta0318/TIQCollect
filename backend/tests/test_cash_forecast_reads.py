@@ -11,6 +11,7 @@ decide beyond "run the query".
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 
 import numpy as np
 import pytest
@@ -29,6 +30,14 @@ class _FakeResult:
 
     def all(self):
         return self._rows
+
+    def one(self):
+        """Raises on anything but exactly one row, as SQLAlchemy's Result does
+        -- a read written to expect one row must break here, not quietly take
+        the first of several."""
+        if len(self._rows) != 1:
+            raise AssertionError(f"one() on {len(self._rows)} rows")
+        return self._rows[0]
 
     def mappings(self):
         return self
@@ -130,33 +139,57 @@ def test_ptp_honor_rate_is_none_with_no_resolved_history():
 
 
 # ── recovery_risk leg ────────────────────────────────────────────────────────
-# The SQL itself excludes PTP'd loans and keeps only each loan's latest
-# prediction (tested against real Postgres in tests/pg); here the row shape
-# is already "the latest prediction per loan, with no active PTP", and what
-# this function owns is the money math and the de-duplication fallback.
+# SINCE 2026-10-07 (audit A1) THE ARITHMETIC IS IN THE SQL. The read used to
+# pull every prediction in the window and do (1 - p) * overdue, plus the
+# latest-per-loan de-dup, in a Python loop -- 122,674 rows and 15.4 s on the
+# dev book, over the statement_timeout, which is what made the endpoint 500.
+# It now returns one aggregated row.
+#
+# So the money math is no longer testable from here, and these tests do not
+# pretend to test it: they cover what this function still owns -- the window it
+# asks for and the coercion of what comes back. The arithmetic and the
+# latest-per-loan rule are pinned against real Postgres in
+# tests/pg/test_pg_recovery_risk_equivalence.py, which runs the old
+# implementation beside the new one and asserts the same number.
 
-def test_recovery_risk_monetises_one_minus_probability_times_overdue():
-    rows = [("loan-1", 0.3, 8000.0)]   # P(pay) = 0.7
-    s = _FakeSession({CF._RECOVERY_RISK_SQL: rows})
+def test_recovery_risk_returns_what_the_aggregate_computed():
+    # One row: (total expected INR, loans counted).
+    s = _FakeSession({CF._RECOVERY_RISK_SQL: [(5600.0, 1)]})
     total, n = CF.read_recovery_risk_next_cycle(s, BANK, as_of=AS_OF)
-    assert n == 1
-    assert total == pytest.approx(0.7 * 8000.0)
+    assert (total, n) == (5600.0, 1)
 
 
-def test_recovery_risk_keeps_only_the_first_row_seen_per_loan():
-    # newest-first ordering is the SQL's job; this proves the de-dup itself
-    # keeps the FIRST row per loan_id and ignores a repeat.
-    rows = [("loan-1", 0.2, 10000.0), ("loan-1", 0.9, 10000.0)]
-    s = _FakeSession({CF._RECOVERY_RISK_SQL: rows})
+def test_recovery_risk_coerces_the_numeric_sum_to_float():
+    """overdue_amount is NUMERIC, so psycopg2 hands back a Decimal and the
+    count a long. Every caller does float arithmetic on these; a Decimal
+    reaching numpy is a TypeError at the point the bands are built."""
+    s = _FakeSession({CF._RECOVERY_RISK_SQL: [(Decimal("5600.50"), 3)]})
     total, n = CF.read_recovery_risk_next_cycle(s, BANK, as_of=AS_OF)
-    assert n == 1
-    assert total == pytest.approx(0.8 * 10000.0)
+    assert isinstance(total, float) and total == pytest.approx(5600.50)
+    assert isinstance(n, int) and n == 3
 
 
-def test_recovery_risk_is_zero_not_an_abstain_with_no_rows():
-    s = _FakeSession({CF._RECOVERY_RISK_SQL: []})
+def test_recovery_risk_is_zero_not_an_abstain_with_no_covered_loans():
+    """COALESCE means the aggregate always returns a row, and (0, 0) is a real
+    answer -- no recovery_risk coverage for PTP-free loans contributes nothing,
+    which is not the same failure as having no payment history at all."""
+    s = _FakeSession({CF._RECOVERY_RISK_SQL: [(None, 0)]})
     total, n = CF.read_recovery_risk_next_cycle(s, BANK, as_of=AS_OF)
     assert total == 0.0 and n == 0
+
+
+def test_recovery_risk_asks_for_the_recency_window_and_the_horizon():
+    """The window is the one thing the Python still decides, and both ends
+    matter: `recency_start` is how far back a score may be and still count,
+    and `horizon_end` bounds the PTP exclusion, so the PTP leg and this leg
+    can never both claim the same loan."""
+    s = _FakeSession({CF._RECOVERY_RISK_SQL: [(0.0, 0)]})
+    CF.read_recovery_risk_next_cycle(s, BANK, as_of=AS_OF)
+    _sql, params = s.calls[0]
+    assert params["bank"] == BANK
+    assert params["recency_start"] == AS_OF - timedelta(days=CF.RECOVERY_RISK_RECENCY_DAYS)
+    assert params["as_of"] == AS_OF
+    assert params["horizon_end"] == AS_OF + timedelta(weeks=CF.HORIZON_WEEKS)
 
 
 # ── end-to-end build_cash_forecast on a small, complete book ────────────────
@@ -170,7 +203,7 @@ def test_build_cash_forecast_end_to_end():
     ]
     ptp_schedule_rows = [(AS_OF + timedelta(days=5), 3000.0)]
     ptp_honor_rows = [("HONORED", 2000.0, 2000.0)]
-    recovery_rows = [("loan-2", 0.4, 6000.0)]
+    recovery_rows = [(0.6 * 6000.0, 1)]      # the aggregate's one row
 
     table = {
         CF._PAYMENTS_SQL: payment_rows,
@@ -221,7 +254,7 @@ def test_a_trailing_reporting_gap_does_not_flatline_the_bands_to_zero():
                     for i, v in enumerate(history)]
     table = {
         CF._PAYMENTS_SQL: payment_rows,
-        CF._PTP_SCHEDULE_SQL: [], CF._PTP_HONOR_SQL: [], CF._RECOVERY_RISK_SQL: [],
+        CF._PTP_SCHEDULE_SQL: [], CF._PTP_HONOR_SQL: [], CF._RECOVERY_RISK_SQL: [(0.0, 0)],
     }
     run = CF.build_cash_forecast(_FakeSession(table), BANK, as_of=AS_OF)
 

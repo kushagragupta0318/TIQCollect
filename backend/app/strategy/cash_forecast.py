@@ -448,27 +448,43 @@ def read_ptp_honor_rate(adb: Session, bank_id: str, *, as_of: date | None = None
 
 
 _RECOVERY_RISK_SQL = text("""
-    SELECT mp.loan_id, mp.probability, l.overdue_amount
-      FROM ml.model_predictions mp
-      JOIN lending.loans l ON l.id = mp.loan_id
-     WHERE mp.bank_id = :bank
-       AND mp.model_name = 'recovery_risk'
-       AND mp.is_modelled = TRUE
-       AND mp.probability IS NOT NULL
-       AND mp.as_of_date >= :recency_start
-       AND l.status = 'ACTIVE'
-       AND l.overdue_amount > 0
-       AND NOT EXISTS (
-             -- ptps has no loan_id of its own: it hangs off the case, so the
-             -- loan a PTP belongs to is reached through collections.cases.
-             SELECT 1 FROM collections.ptps p
-              JOIN collections.cases c ON c.id = p.case_id
-              WHERE c.loan_id = mp.loan_id
-                AND p.status = 'ACTIVE'
-                AND p.committed_date >= :as_of
-                AND p.committed_date < :horizon_end
-           )
-     ORDER BY mp.loan_id, mp.as_of_date DESC, mp.scored_at DESC
+    SELECT COALESCE(SUM((1.0 - s.probability) * s.overdue_amount), 0.0) AS expected_inr,
+           COUNT(s.probability)                                        AS loans
+      FROM (
+            SELECT l.overdue_amount,
+                   -- The loan's LATEST prediction in the recency window, as a
+                   -- correlated scalar subquery rather than a LATERAL: the
+                   -- shape is identical to Postgres and is also valid SQLite,
+                   -- so there is no dialect branch to keep in step. NULL when
+                   -- the loan has no modelled prediction, which COUNT and SUM
+                   -- both skip -- that loan contributes nothing and is not
+                   -- counted, exactly as the row-by-row version did.
+                   (SELECT mp.probability
+                      FROM ml.model_predictions mp
+                     WHERE mp.bank_id = :bank
+                       AND mp.model_name = 'recovery_risk'
+                       AND mp.loan_id = l.id
+                       AND mp.is_modelled = TRUE
+                       AND mp.probability IS NOT NULL
+                       AND mp.as_of_date >= :recency_start
+                     ORDER BY mp.as_of_date DESC, mp.scored_at DESC
+                     LIMIT 1) AS probability
+              FROM lending.loans l
+             WHERE l.bank_id = :bank
+               AND l.status = 'ACTIVE'
+               AND l.overdue_amount > 0
+               AND NOT EXISTS (
+                     -- ptps has no loan_id of its own: it hangs off the case, so
+                     -- the loan a PTP belongs to is reached through
+                     -- collections.cases.
+                     SELECT 1 FROM collections.ptps p
+                      JOIN collections.cases c ON c.id = p.case_id
+                      WHERE c.loan_id = l.id
+                        AND p.status = 'ACTIVE'
+                        AND p.committed_date >= :as_of
+                        AND p.committed_date < :horizon_end
+                   )
+           ) s
 """)
 
 
@@ -482,31 +498,48 @@ def read_recovery_risk_next_cycle(adb: Session, bank_id: str, *, as_of: date | N
     `mp.probability` is P(no material payment) (ml/pipeline/config.py's y=1
     convention), so P(pay) = 1 - probability; monetised against the loan's
     own overdue_amount (what is actually delinquent), not total_outstanding
-    (which includes money not yet due). The latest prediction per loan is
-    kept by reading rows ordered newest-first and taking the first one seen
-    per loan_id in Python — simpler than a window function and portable to
-    the SQLite test harness, which has no `DISTINCT ON`.
+    (which includes money not yet due).
 
     Returns (total expected INR, loans counted). (0.0, 0) is a normal,
-    honest answer — a book with no live recovery_risk coverage for
+    honest answer -- a book with no live recovery_risk coverage for
     PTP-free loans contributes nothing from this leg, which is not the
     same failure as having no payment history at all.
+
+    PERFORMANCE, 2026-10-07 (audit A1). This used to read every prediction in
+    the 45-day window newest-first and keep the first row per loan in Python:
+    122,674 rows transferred to find 7,844 loans' latest scores, a 3.6 MB
+    external merge sort, and 15.4 s measured on the dev book -- over the 15 s
+    statement_timeout, so GET /bank/strategy/cash-forecast 500'd with a
+    QueryCanceled for a single user. It now returns ONE row, aggregated in
+    Postgres, driven by the 5,345 active overdue loans rather than by the
+    125,362 predictions, and reads the latest score per loan through
+    ix_model_pred_latest_per_loan (v2_0039). The index is not optional: without
+    it this shape is SLOWER than the one it replaced (5.5 s vs 2.5 s warm),
+    because every per-loan lookup falls back to a Merge Append across eight
+    partitions with a heap fetch for the filter columns. Measured in the
+    commit message.
+
+    The arithmetic is unchanged: SUM((1 - p) * overdue) over the same loans,
+    with the same latest-per-loan rule (as_of_date DESC, then scored_at DESC)
+    and the same PTP exclusion. tests/pg/test_pg_recovery_risk_equivalence.py
+    runs the old row-by-row implementation beside this one against real
+    Postgres and asserts both numbers match.
+
+    `l.bank_id = :bank` is new and is defence in depth, not arithmetic: the old
+    shape scoped only `mp.bank_id`, so a prediction row carrying the wrong
+    tenant would have pulled another bank's loan into this bank's forecast.
+    Measured on the dev book: 0 predictions disagree with their loan's bank_id,
+    so the figure does not move today.
     """
     as_of = as_of or date.today()
     recency_start = as_of - timedelta(days=recency_days)
     horizon_end = as_of + timedelta(weeks=horizon_weeks)
-    rows = adb.execute(_RECOVERY_RISK_SQL, {
+    total, loans = adb.execute(_RECOVERY_RISK_SQL, {
         "bank": bank_id, "recency_start": recency_start,
         "as_of": as_of, "horizon_end": horizon_end,
-    }).all()
-    seen: set[str] = set()
-    total = 0.0
-    for loan_id, probability, overdue_amount in rows:
-        if loan_id in seen:
-            continue
-        seen.add(loan_id)
-        total += (1.0 - float(probability)) * float(overdue_amount)
-    return total, len(seen)
+    }).one()
+    # Numeric -> Decimal from psycopg2; every caller does float arithmetic.
+    return float(total or 0.0), int(loans or 0)
 
 
 # ── Orchestration ────────────────────────────────────────────────────────────
