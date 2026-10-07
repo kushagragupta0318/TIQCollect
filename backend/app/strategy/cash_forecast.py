@@ -49,7 +49,10 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import AppException, ErrorCode
 
-ENGINE_VERSION = "cf-1.0.0"
+# cf-1.0.0 = 128a46e. cf-1.1.0 (2026-10-07): residual_bands no longer shifts
+# p50 by a growing, possibly-negative bias (see its docstring); a trailing
+# reporting-lag gap is trimmed before fitting (trim_trailing_reporting_lag).
+ENGINE_VERSION = "cf-1.1.0"
 
 HORIZON_WEEKS = 13
 MIN_WEEKS_HISTORY = 8          # shortest span Holt's trend is fit on at all
@@ -64,6 +67,13 @@ RECOVERY_RISK_CYCLE_WEEKS = 4
 # bank whose book barely supports one fold should not get a confident stamp
 # from it. Chosen, not fitted — the same spirit as transitions.py's MIN_MONTHS.
 MIN_BACKTEST_FOLDS = 2
+# How many trailing all-zero weeks trim_trailing_reporting_lag will treat as
+# "not yet reported" rather than "collections stopped". Bounded: a gap this
+# short is a plausible ingest lag (CLAUDE.md — scripts/ingest_daily.py is run
+# by hand, not scheduled); a longer run of zeros is left in the fit rather
+# than trimmed without limit, since nothing in the data distinguishes a long
+# lag from a book that genuinely went quiet.
+MAX_REPORTING_LAG_WEEKS = 6
 # A nominal bar for "the point forecast tracks what happened", not a
 # statistical guarantee. Stated so a reviewer can see exactly what calibrated
 # means here rather than reverse-engineering it from the code.
@@ -115,6 +125,30 @@ def fit_holt(y: np.ndarray) -> tuple[float, float, np.ndarray, float, float]:
     return level, trend, residuals, a, b
 
 
+def trim_trailing_reporting_lag(amounts: np.ndarray) -> tuple[np.ndarray, int]:
+    """Drop a trailing run of EXACT zero weeks before fitting, up to
+    MAX_REPORTING_LAG_WEEKS and never below MIN_WEEKS_HISTORY remaining.
+
+    2026-10-07 (demo-visible): `read_weekly_payments` buckets every week up
+    to `as_of` on a fixed 7-day grid, so the one or two most recent weeks
+    are routinely a real reporting lag (the bank-file ingest is run by
+    hand, not scheduled) rather than a real stop in collections — but the
+    bucketing cannot tell the difference on its own, and a naive fit reads
+    "no rows yet" as "collections went to zero", dragging Holt's level and
+    trend down to match. Trimming only EXACT zeros (never a merely low
+    week) and only at the very end (never a zero week buried in the
+    middle, which IS a real zero) is the one distinction the data actually
+    supports; it is still a stated assumption, not a certainty, which is
+    why the trimmed count travels with the run (`reporting_lag_weeks`) and
+    into the basis string rather than being silently absorbed."""
+    n = amounts.shape[0]
+    cap = min(MAX_REPORTING_LAG_WEEKS, n - MIN_WEEKS_HISTORY)
+    lag = 0
+    while lag < cap and amounts[n - 1 - lag] == 0.0:
+        lag += 1
+    return (amounts[: n - lag], lag) if lag else (amounts, 0)
+
+
 def forecast_holt(level: float, trend: float, horizon: int) -> np.ndarray:
     """h-step-ahead point forecasts, h = 1..horizon. Collections cannot be
     negative, so the point forecast is floored at 0 (a strong downward trend
@@ -123,24 +157,46 @@ def forecast_holt(level: float, trend: float, horizon: int) -> np.ndarray:
     return np.maximum(level + h * trend, 0.0)
 
 
-def residual_bands(residuals: np.ndarray, point: np.ndarray) -> dict[str, np.ndarray]:
-    """p10/p50/p90 around `point`, widened by sqrt(h) — the random-walk growth
-    rate for forecast-error variance, not a tuned width. Degenerate when there
-    is only one residual (p10 == p50 == p90 == point): MIN_WEEKS_HISTORY
-    guarantees several, so this is a defensive floor, not the normal path."""
+def residual_bands(residuals: np.ndarray, point: np.ndarray, *, start_h: int = 1) -> dict[str, np.ndarray]:
+    """p10/p90 spread OUT from `point` by sqrt(h) on each side; p50 IS `point`,
+    always — never shifted.
+
+    2026-10-07 (demo-visible, found on the live book): the first version set
+    `p50 = point + median(residuals) * sqrt(h)`, i.e. it shifted the CENTRE
+    line by the model's own one-step bias, growing with the horizon. On a
+    book whose recent weeks under-ran the model's fit (residuals skew
+    negative — exactly what a few weeks of reporting lag produces, see
+    read_weekly_payments), that shift compounded with h until it crossed
+    zero and every band — p10, p50, and eventually even p90, since the
+    SAME growing negative shift was applied to all three — clipped flat to
+    0 for the rest of the horizon. A one-step bias is a fact about the
+    FITTING window; stretching it forward as if it were the forecast's own
+    growing error is a different claim the data never supported, and it an
+    reads as "the forecast says zero" when the engine never computed zero.
+
+    The spread is now built from the two one-sided distances off the
+    residual MEDIAN (lower = median - p10, upper = p90 - median), each
+    non-negative by construction, so p10 <= point <= p90 always holds
+    without a clip, and `point` itself — already floored at 0 by
+    forecast_holt/reconcile — is never pulled down by a biased tail.
+
+    `start_h`: the first point is `start_h` steps past the fitting window,
+    not necessarily 1 — trim_trailing_reporting_lag moves the fit's own
+    origin back by the lag it trims, and the band width must keep growing
+    from THAT origin, not reset to h=1 as if the forecast started fresh at
+    today (a reporting gap narrows the uncertainty of nothing)."""
     if residuals.size == 0:
-        p10 = p50 = p90 = point
-    else:
-        r10, r50, r90 = np.percentile(residuals, [10, 50, 90])
-        h = np.arange(1, point.shape[0] + 1, dtype=np.float64)
-        scale = np.sqrt(h)
-        p10 = np.maximum(point + r10 * scale, 0.0)
-        p50 = np.maximum(point + r50 * scale, 0.0)
-        p90 = np.maximum(point + r90 * scale, 0.0)
-    # Clipping each band at 0 independently cannot invert their order: all
-    # three are shifted by the same monotone r10 <= r50 <= r90 before the
-    # clip, and max(x, 0) is monotone.
-    return {"p10": p10, "p50": np.maximum(p50, p10), "p90": np.maximum(p90, p50)}
+        return {"p10": point.copy(), "p50": point.copy(), "p90": point.copy()}
+    r10, r50, r90 = np.percentile(residuals, [10, 50, 90])
+    lower_spread = max(r50 - r10, 0.0)
+    upper_spread = max(r90 - r50, 0.0)
+    h = np.arange(start_h, start_h + point.shape[0], dtype=np.float64)
+    scale = np.sqrt(h)
+    return {
+        "p10": np.maximum(point - lower_spread * scale, 0.0),
+        "p50": point,
+        "p90": point + upper_spread * scale,
+    }
 
 
 def reconcile(bottom_up: np.ndarray, top_down: np.ndarray) -> np.ndarray:
@@ -409,6 +465,7 @@ class CashForecastRun:
     recovery_informed_total: float
     recovery_informed_loans: int
     history_weeks: int
+    reporting_lag_weeks: int
     alpha: float
     beta: float
     backtest: BacktestResult
@@ -427,8 +484,12 @@ def build_cash_forecast(adb: Session, bank_id: str, *, as_of: date | None = None
     see their own docstrings)."""
     as_of = as_of or date.today()
     history = read_weekly_payments(adb, bank_id, as_of=as_of)
-    level, trend, residuals, alpha, beta = fit_holt(history.amounts)
-    top_down = forecast_holt(level, trend, horizon_weeks)
+    fit_amounts, lag_weeks = trim_trailing_reporting_lag(history.amounts)
+    level, trend, residuals, alpha, beta = fit_holt(fit_amounts)
+    # The fit's own origin is `lag_weeks` before as_of: ask for that many
+    # extra steps and drop them, so the kept horizon is real calendar weeks
+    # from as_of, not from wherever the trimmed series happened to end.
+    top_down = forecast_holt(level, trend, horizon_weeks + lag_weeks)[lag_weeks:]
 
     ptp_scheduled = read_ptp_schedule(adb, bank_id, as_of=as_of, horizon_weeks=horizon_weeks)
     honor_rate, resolved_n = read_ptp_honor_rate(adb, bank_id, as_of=as_of)
@@ -443,7 +504,7 @@ def build_cash_forecast(adb: Session, bank_id: str, *, as_of: date | None = None
 
     bottom_up = ptp_expected + recovery_per_week
     reconciled = reconcile(bottom_up, top_down)
-    bands = residual_bands(residuals, reconciled)
+    bands = residual_bands(residuals, reconciled, start_h=lag_weeks + 1)
 
     backtest = rolling_origin_backtest(history.amounts, horizon=horizon_weeks)
     week_starts = tuple(as_of + timedelta(weeks=i) for i in range(horizon_weeks))
@@ -456,6 +517,6 @@ def build_cash_forecast(adb: Session, bank_id: str, *, as_of: date | None = None
         top_down=tuple(top_down.tolist()),
         ptp_honor_rate=honor_rate, ptp_resolved_count=resolved_n,
         recovery_informed_total=recovery_total, recovery_informed_loans=recovery_loans,
-        history_weeks=int(history.amounts.shape[0]), alpha=alpha, beta=beta,
-        backtest=backtest,
+        history_weeks=int(history.amounts.shape[0]), reporting_lag_weeks=lag_weeks,
+        alpha=alpha, beta=beta, backtest=backtest,
     )

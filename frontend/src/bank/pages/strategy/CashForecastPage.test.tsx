@@ -39,6 +39,7 @@ function run(o: Partial<CashForecastRun> = {}): CashForecastRun {
     weeks: Array.from({ length: 13 }, (_, i) => week(i)),
     totals: { p10: 5200000, p50: 6500000, p90: 8450000 },
     history_weeks: 20,
+    reporting_lag_weeks: 0,
     ptp_honor_rate: 0.62,
     ptp_resolved_count: 14,
     recovery_informed_total: 180000,
@@ -100,5 +101,21 @@ describe("Cash Forecast page", () => {
     renderPage();
 
     expect(await screen.findByText("No PTP history yet")).toBeTruthy();
+  });
+
+  it("names a trailing reporting lag instead of letting it read as a real drop to zero", async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: run({ reporting_lag_weeks: 2 }) });
+    renderPage();
+
+    expect(await screen.findByText(/most recent 2 weeks/)).toBeTruthy();
+    expect(screen.getByText(/not as collections dropping to zero/)).toBeTruthy();
+  });
+
+  it("says nothing about a reporting lag when there is none", async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: run() });
+    renderPage();
+
+    await screen.findByText(CAVEAT);
+    expect(screen.queryByText(/not yet reported/)).toBeNull();
   });
 });

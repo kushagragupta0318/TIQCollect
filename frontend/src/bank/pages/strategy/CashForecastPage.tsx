@@ -21,7 +21,9 @@ import { AnalyticsLoading, Panel, Tile } from "../../components/analytics";
 import { PageRoot, ToolHeader } from "../../components/PageTemplate";
 import { BRAND, chartMargin, gridProps } from "../../theme/chartTheme";
 import { fmtINR } from "../../theme/format";
-import { backtestCaption, chartRows, headlineTiles, honorRateLabel } from "./cashForecastModel";
+import {
+  backtestCaption, chartRows, headlineTiles, honorRateLabel, reportingLagNote,
+} from "./cashForecastModel";
 
 /** The run's own caveat, rendered verbatim — identical framing to
  *  MonteCarloPage's HonestyNote, so the two tools read as one product. */
@@ -111,9 +113,17 @@ function WeeklyTable({ run }: { run: CashForecastRun }) {
 
 function Results({ run }: { run: CashForecastRun }) {
   const tiles = headlineTiles(run);
+  const lagNote = reportingLagNote(run);
   return (
     <>
       <HonestyNote run={run} />
+
+      {lagNote && (
+        <div role="note" className="flex gap-3 rounded-card border border-border/60 bg-muted/30 px-5 py-4 text-[12.5px] leading-relaxed text-foreground">
+          <Info className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+          <p>{lagNote}</p>
+        </div>
+      )}
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {tiles.map((t) => <Tile key={t.key} label={t.label} value={t.value} sub={t.sub} />)}
@@ -132,7 +142,9 @@ function Results({ run }: { run: CashForecastRun }) {
         <Panel title="Forecast-vs-actual tracker" hint="Rolling-origin backtest on this book's own history">
           <p className="text-[12.5px] leading-relaxed text-foreground">{backtestCaption(run)}</p>
         </Panel>
-        <Panel title="What this reconciles" hint={`${run.history_weeks} week(s) of VERIFIED payment history`}>
+        <Panel title="What this reconciles"
+              hint={`${run.history_weeks} week(s) of VERIFIED payment history`
+                + (run.reporting_lag_weeks ? ` (last ${run.reporting_lag_weeks} not yet reported)` : "")}>
           <ul className="space-y-2 text-[12.5px] text-foreground">
             <li>Top-down: a Holt ETS fit on weekly VERIFIED collections.</li>
             <li>Bottom-up: ACTIVE PTPs due in the next 13 weeks, de-rated by the bank's own honor
