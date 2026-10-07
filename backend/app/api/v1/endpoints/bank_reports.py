@@ -23,6 +23,7 @@ from pydantic import BaseModel
 
 from app.core.dependencies import AnalyticsDb, DbSession
 from app.core.errors import AppException, ErrorCode
+from app.core.ids import UUIDStr
 from app.core.permissions import require_perm
 from app.core.request_context import CurrentContext
 from app.models.tenancy import Agency, Bank
@@ -75,7 +76,9 @@ class GenerateReportIn(BaseModel):
     start: Optional[date] = None
     end: Optional[date] = None
     #: Required for agency_review; ignored for board (the board pack is bank-wide).
-    agency_id: Optional[str] = None
+    #: UUIDStr: a malformed id is a 422 here, never a Postgres DataError 500
+    #: (db.get(Agency, ...) against a uuid column) the way plain str let through.
+    agency_id: Optional[UUIDStr] = None
 
 
 class GeneratedReportOut(BaseModel):
