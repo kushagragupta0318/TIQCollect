@@ -41,15 +41,15 @@ MAX_PAGE_SIZE = 200
 #: these, and `coverage.sensitive_actions` tells it which without hardcoding
 #: the list in the page.
 #:
-#: Payment reversal is deliberately ABSENT: PAYMENT_REVERSAL_REQUESTED and
-#: PAYMENT_REVERSED do not exist on AuditAction yet, they arrive with the
-#: reversal lane's v2_0028, and naming a member that is not there would be an
-#: AttributeError at import. Add them when that lands.
+#: The reversal and settings actions landed with v2_0028 and v2_0030 and are
+#: included now. test_the_sensitive_list_names_only_actions_that_exist keeps
+#: this honest in both directions.
 SENSITIVE_ACTIONS: tuple[str, ...] = (
     "PLACEMENT_CREATED", "PLACEMENT_RECALLED", "PLACEMENT_ENDED",
     "MODEL_CANDIDATE_APPROVED", "MODEL_CANDIDATE_REJECTED", "MODEL_PROMOTED",
     "LOGIN_FAILED", "ROLE_VIOLATION_ATTEMPT", "DEVICE_MISMATCH", "SESSION_REVOKED",
-    "DATA_EXPORT",
+    "DATA_EXPORT", "BANK_SETTINGS_UPDATED",
+    "PAYMENT_REVERSAL_REQUESTED", "PAYMENT_REVERSED",
     "AGENCY_ONBOARDED", "AGENCY_ACTIVATED", "AGENCY_SUSPENDED", "AGENCY_OFFBOARDED",
     "CONTRACT_CHANGED", "USER_DEACTIVATED", "PASSWORD_RESET", "MFA_DISABLED",
 )
@@ -88,10 +88,22 @@ def scoped_query(db: Session, bank_id: str, f: Filters):
 def pending_attribution(db: Session, f: Filters) -> int:
     """Rows in the window that belong to NO bank, so no bank can read them.
 
-    Counted, never listed: the count is the honest statement that the trail is
-    incomplete, and listing them would hand one bank another's events.
+    PLATFORM-WIDE, necessarily: a row with no tenant cannot be counted per
+    bank, because deciding whose it is would be the very attribution it lacks.
+    The page must therefore say "platform-wide" and not imply the number is
+    this bank's -- it was mislabelled when first shipped.
+
+    `user_id IS NULL` as well: a row WITH an actor should have been given that
+    actor's tenant by models/tenancy_listener, so one that has an actor and no
+    bank is a different fault (a listener that did not fire, a user since
+    deleted) and does not belong in a count whose sentence says "written with
+    no actor". Counting it here made the number disagree with the words next
+    to it.
+
+    Counted, never listed: listing them would hand one bank another's events.
     """
     q = db.query(func.count(AuditLog.id)).filter(AuditLog.bank_id.is_(None),
+                                                 AuditLog.user_id.is_(None),
                                                  AuditLog.created_at >= f.window_start())
     if f.until is not None:
         q = q.filter(AuditLog.created_at <= f.until)
@@ -138,10 +150,12 @@ def coverage(db: Session, f: Filters) -> dict:
         "declared_action_types": len(AuditAction),
         "sensitive_actions": list(SENSITIVE_ACTIONS),
         "pending_attribution": unattributed,
+        "window_days": WINDOW_DAYS,
         "note": (
             "Rows written with no actor and no entity tenant carry no bank and cannot be "
-            "attributed to one, so they are counted here rather than listed "
-            f"({unattributed} in this window). Immutability is enforced by convention only: "
-            "there is no database trigger and no revoked UPDATE/DELETE grant."
+            "attributed to one, so they are counted rather than listed. The count is "
+            f"PLATFORM-WIDE ({unattributed} in this window), not this bank's: deciding whose "
+            "they are is the attribution they lack. Immutability is enforced by convention "
+            "only: there is no database trigger and no revoked UPDATE/DELETE grant."
         ),
     }

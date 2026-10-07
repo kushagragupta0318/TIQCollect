@@ -52,6 +52,7 @@ from app.ml.recovery_scorecard import (
 from app.models.payment import Payment, PaymentMode, PaymentStatus
 from app.models.ptp import PTP, PTPStatus
 from app.core.permissions import require_perm
+from app.core.csv_safe import csv_row
 from app.models.user import User
 from app.models.visit import Visit, VisitOutcome
 from app.services.brand import brand_for
@@ -2336,16 +2337,18 @@ def export_audit_log_csv(current_user: ManagerOnly, db: DbSession):
 
     out = io.StringIO()
     writer = csv.writer(out)
-    writer.writerow(["timestamp", "actor", "action", "entity_type", "entity_id",
-                     "success", "failure_reason", "ip_address"])
+    writer.writerow(csv_row(["timestamp", "actor", "action", "entity_type", "entity_id",
+                             "success", "failure_reason", "ip_address"]))
     for r in rows:
-        writer.writerow([
+        # csv_row: an actor's name is typed by a person, and a spreadsheet
+        # treats a cell starting with = + - @ as a FORMULA, not as text.
+        writer.writerow(csv_row([
             r.created_at.isoformat() if r.created_at else "",
             names.get(r.user_id, "") if r.user_id else "",
             r.action.value if hasattr(r.action, "value") else str(r.action),
             r.entity_type or "", r.entity_id or "",
             "yes" if r.success else "no", r.failure_reason or "", r.ip_address or "",
-        ])
+        ]))
 
     stamp = date.today().isoformat()
 

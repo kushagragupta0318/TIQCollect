@@ -83,6 +83,12 @@ class AuditAction(str, enum.Enum):
     # ops settings. Appended after reversal's — its migration (v2_0030) applies
     # later than reversal's v2_0028, so this value is added to the enum last.
     BANK_SETTINGS_UPDATED = "BANK_SETTINGS_UPDATED"
+    # v2_0032 (K01). Appended, in the order the migration adds them: the DB's
+    # enumsortorder is compared against this class's order by
+    # test_every_native_enum_holds_the_models_values_in_order, and ALTER TYPE
+    # ADD VALUE appends. Inserting either of these higher up fails that test.
+    USER_REACTIVATED = "USER_REACTIVATED"
+    USER_ROLE_CHANGED = "USER_ROLE_CHANGED"
 
 
 class AuditLog(Base, UUIDPrimaryKey):

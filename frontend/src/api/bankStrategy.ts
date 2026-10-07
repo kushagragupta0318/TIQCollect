@@ -100,3 +100,55 @@ export async function runSimulation(body: SimulateRequest): Promise<SimulationRu
   // endpoint uses.
   return (await api.post<SimulationRun>("/bank/strategy/simulate", body, { timeout: LONG_RUNNING_MS })).data;
 }
+
+// ── GET /bank/strategy/cash-forecast (E06): 13-week collection inflow ───────
+// backend/app/strategy/cash_forecast.py. Bottom-up (PTP schedule x the bank's
+// own honor rate, plus a recovery_risk-informed estimate for loans with no
+// active PTP) reconciled with a top-down ETS fit on weekly VERIFIED payment
+// history. `top_down` and `bottom_up` ride alongside the bands for
+// transparency — they are what was reconciled, not a second forecast.
+
+export interface CashForecastWeek {
+  week_start: string;
+  p10: number;
+  p50: number;
+  p90: number;
+  /** Raw ACTIVE-PTP commitments due that week, before the honor-rate de-rating. */
+  ptp_scheduled: number;
+  /** The reconciled bottom-up leg: de-rated PTPs + the recovery_risk term. */
+  bottom_up: number;
+  /** The ETS leg alone. */
+  top_down: number;
+}
+
+export interface CashForecastBacktest {
+  mape: number | null;
+  n_folds: number;
+  calibrated: boolean;
+  reason: string;
+}
+
+export interface CashForecastRun {
+  weeks: CashForecastWeek[];
+  totals: { p10: number; p50: number; p90: number };
+  history_weeks: number;
+  /** null when no PTP has resolved yet in the lookback window — not a rate of 0 or 1. */
+  ptp_honor_rate: number | null;
+  ptp_resolved_count: number;
+  recovery_informed_total: number;
+  recovery_informed_loans: number;
+  backtest: CashForecastBacktest;
+  engine_version: string;
+  // The honesty stamp (strategy/honesty.py). `text` is the one caption; no
+  // surface writes its own.
+  synthetic: boolean;
+  calibrated: boolean;
+  data_version: string;
+  basis: string;
+  text: string;
+}
+
+export async function getCashForecast(asOf?: string): Promise<CashForecastRun> {
+  return (await api.get<CashForecastRun>("/bank/strategy/cash-forecast",
+    asOf ? { params: { as_of: asOf } } : undefined)).data;
+}

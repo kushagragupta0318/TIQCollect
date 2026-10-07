@@ -511,6 +511,13 @@ class Settings(BaseSettings):
     # shadow deployment can record without acting.
     ML_LOG_PREDICTIONS: bool = True
 
+    # Bank Alerts (C06): the two rules with no existing threshold to reuse
+    # (SLA miss and roll-forward already fire off an existing KPI's own
+    # gate). The one place each number lives, so a rule and its test read
+    # the same value instead of a restated copy drifting from it.
+    ALERT_GNPA_PCT: float = Field(default=0.05, ge=0.0, le=1.0)
+    ALERT_EFFICIENCY_DROP_PCT: float = Field(default=0.20, ge=0.0, le=1.0)
+
     REPAYMENT_WRITE_RISK_SCORE: bool = False
     # KILL SWITCH, and OFF by design. Case.priority is written once at case
     # creation (seed_data.py:1577, ingest_daily.py:437) and has never been

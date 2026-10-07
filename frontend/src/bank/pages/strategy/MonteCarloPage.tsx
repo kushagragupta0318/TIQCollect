@@ -14,7 +14,10 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { FlaskConical, Info, Play, TriangleAlert } from "lucide-react";
 import { runSimulation, type SimulationRun } from "@/api/bankStrategy";
 import { errorCode, errorDetail, errorStatus } from "@/lib/apiError";
-import { AnalyticsLoading, Bar100, Panel, Tile } from "../../components/analytics";
+import { AnalyticsLoading, Panel, Tile } from "../../components/analytics";
+import { GroupedBarLineChart, PercentileRangeChart } from "../../components/charts";
+import { BRAND } from "../../theme/chartTheme";
+import { cr1 } from "../../theme/format";
 import { PageRoot, ToolHeader } from "../../components/PageTemplate";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
@@ -22,8 +25,8 @@ import { Label } from "../../ui/label";
 import { Select } from "../../ui/select";
 import {
   BAND_NOTE, DEFAULT_FORM, HORIZONS, LEVER_FIELDS, PATH_COUNTS, PRESETS, STAGING_NOTE,
-  changedLevers, headlineTiles, ifrs9Rows, leverErrors, requestFor, runSummary, scenarioChanges,
-  stateShareRows, type SimulatorForm,
+  cashChartRows, changedLevers, gnpaChartRows, headlineTiles, ifrs9ChartRows, ifrs9Rows, leverErrors,
+  requestFor, runSummary, scenarioChanges, stateShareChartRows, stateShareRows, type SimulatorForm,
 } from "./simulatorModel";
 
 /** The run's own caveat, rendered verbatim. The wording lives in the engine
@@ -167,6 +170,11 @@ function Results({ run }: { run: SimulationRun }) {
   const tiles = headlineTiles(run);
   const states = stateShareRows(run);
   const stages = ifrs9Rows(run);
+  const gnpaBand = gnpaChartRows(run);
+  const cashBand = cashChartRows(run);
+  const stateBand = stateShareChartRows(run);
+  const stageChart = ifrs9ChartRows(run);
+  const pct = (v: number) => `${v.toFixed(1)}%`;
 
   return (
     <>
@@ -181,19 +189,20 @@ function Results({ run }: { run: SimulationRun }) {
       </p>
 
       <div className="grid gap-5 xl:grid-cols-2">
-        <Panel title="The book at the horizon" hint={`Share of accounts after ${run.horizon_months} months`}>
-          <div className="space-y-3">
-            {states.map((s) => (
-              <div key={s.state}>
-                <div className="flex items-baseline justify-between gap-3 text-[12.5px]">
-                  <span className="text-foreground">{s.label}</span>
-                  <span className="tabular-nums font-semibold">{s.value}</span>
-                </div>
-                <Bar100 pct={s.pct} />
-                <p className="mt-1 text-[11px] text-muted-foreground">{s.range}</p>
-              </div>
-            ))}
-          </div>
+        <Panel title="Gross NPA at the horizon" hint="p5-p95 across the simulated paths">
+          <PercentileRangeChart rows={gnpaBand} color={BRAND.destructive} format={pct} domainFrom0 height={70} />
+        </Panel>
+        <Panel title="Cash at the horizon" hint="p5-p95, ₹ crore">
+          <PercentileRangeChart rows={cashBand} color={BRAND.success} format={cr1} />
+        </Panel>
+      </div>
+
+      <div className="grid gap-5 xl:grid-cols-2">
+        <Panel title="The book at the horizon" hint={`Share of accounts after ${run.horizon_months} months, p5-p95`}>
+          <PercentileRangeChart rows={stateBand} color={BRAND.primary} format={pct} domainFrom0 />
+          <ul className="mt-4 space-y-1 text-[11px] text-muted-foreground">
+            {states.map((s) => <li key={s.state}>{s.label}: {s.value} ({s.range})</li>)}
+          </ul>
         </Panel>
 
         <Panel title="The scenario it ran" hint={run.scenario.name}>
@@ -205,6 +214,19 @@ function Results({ run }: { run: SimulationRun }) {
       </div>
 
       <Panel title="IFRS-9 staging at the horizon" hint={STAGING_NOTE}>
+        {stageChart.length > 0 && (
+          <div className="mb-5">
+            <GroupedBarLineChart
+              data={stageChart}
+              xKey="stage"
+              bars={[
+                { key: "ead", name: "Exposure (₹ Cr)", color: BRAND.primary },
+                { key: "ecl", name: "ECL (₹ Cr)", color: BRAND.destructive },
+              ]}
+              line={{ key: "coverage", name: "Coverage (%)", color: BRAND.warning }}
+            />
+          </div>
+        )}
         <div className="overflow-x-auto">
           <table className="w-full text-[12.5px]">
             <thead>
