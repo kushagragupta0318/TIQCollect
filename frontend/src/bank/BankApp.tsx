@@ -22,6 +22,7 @@ import RegionsPage from "./pages/admin/RegionsPage";
 import SettingsPage from "./pages/admin/SettingsPage";
 import { MLOpsPage } from "./pages/techops/MLOpsPage";
 import UsageCostPage from "./pages/techops/UsageCostPage";
+import DataQualityPage from "./pages/techops/DataQualityPage";
 import BankUsersPage from "./pages/admin/BankUsersPage";
 import { BankPlacementPage } from "./pages/BankPlacementPage";
 import { BankPlaceholderPage } from "./pages/BankPlaceholderPage";
@@ -49,7 +50,8 @@ const BUILT_PAGES: Record<string, ComponentType> = {
   "governance/models": ModelsPage, "strategy/monte-carlo": MonteCarloPage,
   "strategy/board-reports": BoardReportsPage, "strategy/cash-forecast": CashForecastPage,
   "admin/audit": AuditPage, "admin/regions": RegionsPage, "admin/settings": SettingsPage,
-  "tech-ops/mlops": MLOpsPage, "tech-ops/usage": UsageCostPage, "admin/users": BankUsersPage,
+  "tech-ops/mlops": MLOpsPage, "tech-ops/usage": UsageCostPage, "tech-ops/data-quality": DataQualityPage,
+  "admin/users": BankUsersPage,
 };
 
 
