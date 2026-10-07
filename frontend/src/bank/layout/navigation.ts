@@ -255,6 +255,7 @@ export const BUILT_NAV_PATHS: ReadonlySet<string> = new Set([
   "governance/models",
   "strategy/monte-carlo",
   "strategy/board-reports",
+  "strategy/cash-forecast",
   "admin/audit",
   "admin/regions",
   "admin/settings",
