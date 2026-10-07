@@ -70,10 +70,10 @@ def _user(db, role: UserRole, **tenant) -> User:
 
 
 def _row(db, *, action=AuditAction.LOGIN, bank_id=OURS, agency_id=None, user_id=None,
-         minutes_ago=5, entity_type="User", success=True):
+         minutes_ago=5, entity_type="User", entity_id=None, success=True):
     r = AuditLog(created_at=datetime.now(timezone.utc) - timedelta(minutes=minutes_ago),
                  action=action, user_id=user_id, bank_id=bank_id, agency_id=agency_id,
-                 entity_type=entity_type, entity_id=None, success=success, details={})
+                 entity_type=entity_type, entity_id=entity_id, success=success, details={})
     db.add(r)
     db.commit()
     return r
@@ -182,3 +182,116 @@ def test_the_sensitive_list_names_only_actions_that_exist():
     highlight nothing, silently."""
     declared = {a.value for a in AuditAction}
     assert set(ar.SENSITIVE_ACTIONS) <= declared, set(ar.SENSITIVE_ACTIONS) - declared
+
+
+THREAD = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+OTHER_THREAD = "aaaaaaaa-bbbb-cccc-dddd-ffffffffffff"
+
+
+def test_the_entity_filter_narrows_to_one_entitys_rows(db):
+    """What the filter exists for: a thread panel linking to THIS thread's
+    messages, instead of asking for every MESSAGE_SENT in the bank."""
+    actor = _user(db, UserRole.BANK_ADMIN, bank_id=OURS)
+    _row(db, action=AuditAction.MESSAGE_SENT, user_id=actor.id,
+         entity_type="MessageThread", entity_id=THREAD)
+    _row(db, action=AuditAction.MESSAGE_SENT, user_id=actor.id,
+         entity_type="MessageThread", entity_id=THREAD)
+    _row(db, action=AuditAction.MESSAGE_SENT, user_id=actor.id,
+         entity_type="MessageThread", entity_id=OTHER_THREAD)
+    _row(db, action=AuditAction.LOGIN, user_id=actor.id, entity_type="User", entity_id=actor.id)
+    c = _client(db, actor)
+    assert c.get("/api/v1/bank/audit").json()["total"] == 4
+    assert c.get(f"/api/v1/bank/audit?entity_type=MessageThread&entity_id={THREAD}"
+                 ).json()["total"] == 2
+    assert c.get("/api/v1/bank/audit?entity_type=MessageThread").json()["total"] == 3
+    # Casing is the service's choice at 30+ write sites; a caller linking from
+    # a page should not have to reproduce it.
+    assert c.get(f"/api/v1/bank/audit?entity_type=messagethread&entity_id={THREAD}"
+                 ).json()["total"] == 2
+
+
+def test_the_entity_filter_cannot_reach_another_banks_rows(db):
+    """The filter must narrow INSIDE the tenancy, never widen out of it: an id
+    is guessable, so a caller who knows another bank's thread id must still see
+    nothing."""
+    actor = _user(db, UserRole.BANK_ADMIN, bank_id=OURS)
+    _row(db, action=AuditAction.MESSAGE_SENT, bank_id=THEIRS,
+         entity_type="MessageThread", entity_id=THREAD)
+    body = _client(db, actor).get(
+        f"/api/v1/bank/audit?entity_type=MessageThread&entity_id={THREAD}").json()
+    assert body["total"] == 0 and body["entries"] == []
+
+
+def test_an_entity_id_without_its_type_is_refused(db):
+    """An id alone matches across every table that happens to share it. 422
+    rather than a quietly wider answer."""
+    actor = _user(db, UserRole.BANK_ADMIN, bank_id=OURS)
+    r = _client(db, actor).get(f"/api/v1/bank/audit?entity_id={THREAD}")
+    assert r.status_code == 422
+
+
+def test_a_malformed_entity_id_is_refused_before_the_query(db):
+    actor = _user(db, UserRole.BANK_ADMIN, bank_id=OURS)
+    r = _client(db, actor).get("/api/v1/bank/audit?entity_type=MessageThread&entity_id=not-a-uuid")
+    assert r.status_code == 404        # core/ids: malformed reads exactly like foreign
+
+
+def test_the_export_takes_the_entity_filter_and_records_it(db):
+    """The two paths share _filters, so a filter present on the list and absent
+    from the CSV would be the disagreement this module exists to prevent -- and
+    the self-audit row must say what was actually taken, not more."""
+    actor = _user(db, UserRole.BANK_ADMIN, bank_id=OURS)
+    _row(db, action=AuditAction.MESSAGE_SENT, user_id=actor.id,
+         entity_type="MessageThread", entity_id=THREAD)
+    _row(db, action=AuditAction.MODEL_PROMOTED, user_id=actor.id, entity_type="Model")
+    r = _client(db, actor).get(
+        f"/api/v1/bank/audit/export?entity_type=MessageThread&entity_id={THREAD}")
+    assert r.status_code == 200
+    assert "MESSAGE_SENT" in r.text and "MODEL_PROMOTED" not in r.text
+    written = db.query(AuditLog).filter(AuditLog.action == AuditAction.DATA_EXPORT).one()
+    assert written.details["entity_filter"] == f"MessageThread:{THREAD}"
+    assert written.details["rows"] == 1
+
+
+#: Words that make an action name a security or compliance event. Matched on
+#: the NAME, deliberately: a tripwire that needed its own curated list of
+#: sensitive actions would be the same list it is checking.
+_RISK_WORDS = (
+    "ROLE", "PRIVILEGE", "PERMISSION", "DEACTIVAT", "REACTIVAT", "DELET",
+    "REVERS", "PASSWORD", "MFA", "EXPORT", "PROMOT", "SUSPEND", "OFFBOARD",
+    "RECALL", "REVOK", "FAIL", "VIOLATION", "OVERRIDE", "BYPASS", "SETTINGS",
+    "APPROV", "REJECT", "MISMATCH", "DISABL", "LOCK",
+)
+
+
+def test_every_risky_action_is_either_sensitive_or_waived_with_a_reason():
+    """COMPLETENESS, not existence. The existing test checks that the names in
+    SENSITIVE_ACTIONS are real; it could not see the opposite fault, and the
+    opposite fault happened: v2_0032 added USER_ROLE_CHANGED and the bank's
+    compliance page stopped highlighting privilege changes, silently.
+
+    So: an action whose name reads as a security event must be highlighted, or
+    be waived in NOT_SENSITIVE with a reason. Adding one forces that decision
+    at the point it is added, which is the only point anyone is thinking about
+    it.
+    """
+    sensitive, waived = set(ar.SENSITIVE_ACTIONS), set(ar.NOT_SENSITIVE)
+    risky = {a.value for a in AuditAction if any(w in a.value for w in _RISK_WORDS)}
+    undecided = risky - sensitive - waived
+    assert not undecided, (
+        f"{sorted(undecided)}: security-relevant by name and neither highlighted on the bank "
+        f"Audit page nor waived. Add to audit_read.SENSITIVE_ACTIONS, or to NOT_SENSITIVE with "
+        f"the reason it should not be highlighted."
+    )
+    assert not (sensitive & waived), sorted(sensitive & waived)
+    assert all(len(r) > 40 for r in ar.NOT_SENSITIVE.values()), "a waiver needs a real reason"
+
+
+def test_the_two_user_lifecycle_actions_v2_0032_added_are_highlighted():
+    """Named, not just covered by the pattern above: USER_ROLE_CHANGED is a
+    privilege change on a lender's own staff, and USER_DEACTIVATED was carrying
+    both of these before v2_0032 -- so the Audit page counted every role flip
+    as a deactivation."""
+    for name in ("USER_ROLE_CHANGED", "USER_REACTIVATED"):
+        assert name in {a.value for a in AuditAction}, f"{name} missing from AuditAction"
+        assert name in ar.SENSITIVE_ACTIONS

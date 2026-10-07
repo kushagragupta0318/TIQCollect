@@ -13,6 +13,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router";
 
 import { AuditPage } from "./AuditPage";
 import { actionLabel, when, type AuditPayload } from "./auditModel";
@@ -51,14 +52,26 @@ function payload(over: Partial<AuditPayload> = {}): AuditPayload {
   };
 }
 
-function show(body: AuditPayload) {
+/** MemoryRouter, not optional: the page reads its deep-link defaults with
+ *  useSearchParams, which throws outside a Router. Every test here rendered
+ *  without one and so every test here was failing -- the file went red when
+ *  the `action` deep link landed and nothing said so. `at` is the URL the
+ *  reader arrived on. */
+function show(body: AuditPayload, at = "/bank/audit") {
   api.get.mockResolvedValue({ data: body });
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
-    <QueryClientProvider client={qc}>
-      <AuditPage />
-    </QueryClientProvider>,
+    <MemoryRouter initialEntries={[at]}>
+      <QueryClientProvider client={qc}>
+        <AuditPage />
+      </QueryClientProvider>
+    </MemoryRouter>,
   );
+}
+
+/** The params the page sent on its last request. */
+function lastParams(): Record<string, unknown> {
+  return (api.get.mock.calls.at(-1)?.[1]?.params ?? {}) as Record<string, unknown>;
 }
 
 describe("AuditPage", () => {
@@ -114,5 +127,31 @@ describe("helpers", () => {
   it("renders a missing or unparseable timestamp as a dash", () => {
     expect(when(null)).toBe("—");
     expect(when("not a date")).toBe("—");
+  });
+
+  it("asks for one entity's rows when it is deep-linked to one", async () => {
+    // What dd's thread panel links to: this thread's own entries, not every
+    // MESSAGE_SENT in the bank filtered client-side.
+    show(payload(), "/bank/audit?entity_type=MessageThread&entity_id=aaaa-bbbb");
+    await waitFor(() => expect(screen.getByText("Model promoted")).toBeTruthy());
+    expect(lastParams().entity_type).toBe("MessageThread");
+    expect(lastParams().entity_id).toBe("aaaa-bbbb");
+  });
+
+  it("SAYS it is pinned to one entity, and offers the whole trail", async () => {
+    // A pinned view that does not say so reads as a quiet week, which is the
+    // same fault as hiding the pending-attribution count.
+    show(payload(), "/bank/audit?entity_type=MessageThread&entity_id=aaaa-bbbb");
+    await waitFor(() => expect(screen.getByRole("note")).toBeTruthy());
+    expect(screen.getByRole("note").textContent).toMatch(/not the whole trail/);
+    expect(screen.getByText("Show everything")).toBeTruthy();
+  });
+
+  it("sends no entity params when it was not deep-linked", async () => {
+    show(payload());
+    await waitFor(() => expect(screen.getByText("Model promoted")).toBeTruthy());
+    expect("entity_type" in lastParams()).toBe(false);
+    expect("entity_id" in lastParams()).toBe(false);
+    expect(screen.queryByRole("note")).toBeNull();
   });
 });

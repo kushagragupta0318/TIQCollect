@@ -13,7 +13,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Download, ScrollText } from "lucide-react";
 
 import { errorDetail } from "@/lib/apiError";
-import { PAGE, actionLabel, exportAudit, getAudit, when, type AuditRow } from "./auditModel";
+import { PAGE, actionLabel, entityQuery, exportAudit, getAudit, when, type AuditRow } from "./auditModel";
 import { AnalyticsError, AnalyticsLoading, Panel } from "../../components/analytics";
 import { DataTable, type DataColumn } from "../../components/DataTable";
 import { PageRoot, ToolHeader, ToolHeaderAction } from "../../components/PageTemplate";
@@ -29,15 +29,25 @@ export function AuditPage() {
   const [searchParams] = useSearchParams();
   const [action, setAction] = useState(() => searchParams.get("action") ?? "");
   const [actorId, setActorId] = useState("");
+  // A deep link from somewhere that knows ONE entity -- a message thread, a
+  // reversal -- pins the page to that entity's own rows. Read once, like
+  // `action`, and cleared by the banner rather than by a filter control:
+  // nobody types a thread's uuid, they arrive holding one.
+  const [entity, setEntity] = useState(() => {
+    const type = searchParams.get("entity_type") ?? "";
+    const id = searchParams.get("entity_id") ?? "";
+    return type ? { type, id } : null;
+  });
   const [offset, setOffset] = useState(0);
   const [exportError, setExportError] = useState<string | null>(null);
 
   const q = useQuery({
-    queryKey: ["bank", "audit", action, actorId, offset],
+    queryKey: ["bank", "audit", action, actorId, entity?.type, entity?.id, offset],
     queryFn: () => getAudit({
       limit: PAGE, offset,
       ...(action ? { action } : {}),
       ...(actorId ? { actor_id: actorId } : {}),
+      ...entityQuery(entity),
     }),
     placeholderData: keepPreviousData,
   });
@@ -76,6 +86,7 @@ export function AuditPage() {
       const blob = await exportAudit({
         ...(action ? { action } : {}),
         ...(actorId ? { actor_id: actorId } : {}),
+        ...entityQuery(entity),       // the CSV is the view, not a wider one
       });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -98,6 +109,18 @@ export function AuditPage() {
         description="Every recorded action by this bank and its agencies. Immutable by convention; exports are themselves audited."
         actions={<ToolHeaderAction icon={Download} onClick={exportCsv}>Export CSV</ToolHeaderAction>}
       />
+      {entity && (
+        // Said on the page, not only in the URL: 3 rows out of thousands,
+        // unlabelled, reads as "nothing happened here".
+        <p role="note" className="rounded-[12px] border border-border bg-muted/40 px-4 py-2.5 text-[12.5px] text-muted-foreground">
+          Pinned to one {entity.type.toLowerCase()}
+          {entity.id ? "" : " (every id of that type)"} — this is not the whole trail.
+          <button type="button" className="ml-2 font-medium underline"
+                  onClick={() => { setEntity(null); setOffset(0); }}>
+            Show everything
+          </button>
+        </p>
+      )}
 
       {exportError && <p className="text-[12px] font-medium text-danger-600">{exportError}</p>}
 
