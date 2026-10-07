@@ -1,7 +1,7 @@
 // Tech Ops › Data Quality — the bank-feed's own staging and quarantine
 // tables (lending.bank_feed_batches / bank_feed_rows, scripts/ingest_daily.py's
 // one quarantine() call site), plus two structural sanity checks over the
-// live book. Read-only, tenant-scoped, gated on data_quality.read. F10.
+// current book. Read-only, tenant-scoped, gated on data_quality.read. F10.
 import { useQuery } from "@tanstack/react-query";
 import { Database } from "lucide-react";
 
@@ -33,7 +33,7 @@ export function DataQualityPage() {
       <ToolHeader
         title="Data Quality"
         icon={Database}
-        description="The bank feed's own staging and quarantine queue, plus a couple of structural checks over the live book."
+        description="The bank feed's own staging and quarantine queue, plus a couple of structural checks over the current book."
       />
 
       {q.isError ? (
