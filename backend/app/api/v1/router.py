@@ -49,6 +49,10 @@ api_router.include_router(manager_agency_profile.router)
 from app.api.v1.endpoints import payment_reversals  # noqa: E402
 api_router.include_router(payment_reversals.agency_router)
 api_router.include_router(payment_reversals.bank_router)
+# bank↔agency messaging: one shared router (/messaging); both tenants reach it,
+# caps gate access and the service derives the sender's side. Own line (merge).
+from app.api.v1.endpoints import messaging  # noqa: E402
+api_router.include_router(messaging.router)
 # 2026-10-07 (K01 Admin → Settings): the bank's config page, /bank/settings.
 # Own line, for the same merge reason as above.
 from app.api.v1.endpoints import bank_settings  # noqa: E402

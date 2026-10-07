@@ -147,6 +147,11 @@ _CATALOG: tuple[Capability, ...] = (
     _cap("payment.reversal.request", "request to reverse a mistaken collection", (AM,)),
     _cap("payment.reversal.approve.agency", "the agency's approval of a reversal (routes it to the bank)", (AM, AA)),
     _cap("payment.reversal.approve.bank", "the bank's fiduciary final sign-off; the ledger unwinds here", (BA,), sensitive=True),
+    # Bank↔agency messaging: a thread hangs off a shared approval item (a reversal
+    # now). Both tenants read; send excludes BANK_ANALYST, which is read-only
+    # everywhere else (cf. agency.read vs agency.update).
+    _cap("messaging.read", "read bank↔agency message threads", (BA, BN, BT, AA, AM)),
+    _cap("messaging.send", "post a message to a bank↔agency thread", (BA, BT, AA, AM)),
 
     _cap("placement.read", "placements received or made", (BA, BN, AA, AM)),
     _cap("placement.manual", "place loans by hand", (BA,), sensitive=True),

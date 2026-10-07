@@ -2804,6 +2804,8 @@ router at the v1-main merge; it listed 76 capabilities.)*
 | `payment.reversal.request` | request to reverse a mistaken collection | |
 | `payment.reversal.approve.agency` | the agency's approval of a reversal (routes it to the bank) | |
 | `payment.reversal.approve.bank` | the bank's fiduciary final sign-off; the ledger unwinds here | S |
+| `messaging.read` | read bank↔agency message threads | |
+| `messaging.send` | post a message to a bank↔agency thread | |
 | `fraud.review` | confirm or dismiss anomaly findings | |
 | `disputes.manage` | work disputes and complaints | |
 | `settlements.propose` | propose a settlement | |
@@ -2870,6 +2872,8 @@ Legend:
 | `payment.reversal.request` | · | · | · | · | · | Y | · | · |
 | `payment.reversal.approve.agency` | · | · | · | · | Y | Y | · | · |
 | `payment.reversal.approve.bank` | · | Y | · | · | · | · | · | · |
+| `messaging.read` | · | Y | Y | Y | Y | Y | · | · |
+| `messaging.send` | · | Y | · | Y | Y | Y | · | · |
 | `settlements.approve` | · | Y | · | · | · | · | · | · |
 | `agency.audit.read` | · | · | · | · | Y | · | · | · |
 | `field.*` (8) | · | · | · | · | · | · | S | · |

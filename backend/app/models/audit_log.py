@@ -89,6 +89,10 @@ class AuditAction(str, enum.Enum):
     # ADD VALUE appends. Inserting either of these higher up fails that test.
     USER_REACTIVATED = "USER_REACTIVATED"
     USER_ROLE_CHANGED = "USER_ROLE_CHANGED"
+    # bank↔agency messaging: one row per message sent (append-only, carries the
+    # thread's bank_id/agency_id). APPENDED last — its migration (v2_0034) runs
+    # after every value above, so the Python order matches the DB's.
+    MESSAGE_SENT = "MESSAGE_SENT"
 
 
 class AuditLog(Base, UUIDPrimaryKey):
