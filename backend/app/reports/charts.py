@@ -36,7 +36,7 @@ def _nan(v: float | None) -> float:
     return math.nan if v is None else float(v)
 
 
-def chart_png(chart: Chart, *, width_in: float = 6.6, height_in: float = 2.9, dpi: int = 200) -> bytes:
+def chart_png(chart: Chart, *, width_in: float = 6.6, height_in: float = 3.4, dpi: int = 200) -> bytes:
     _ensure_fonts()
     fig = Figure(figsize=(width_in, height_in), dpi=dpi, facecolor=theme.SURFACE)
     FigureCanvasAgg(fig)
@@ -72,9 +72,9 @@ def chart_png(chart: Chart, *, width_in: float = 6.6, height_in: float = 2.9, dp
                     if v is not None:
                         ax.annotate(fmt(v, chart.unit, compact=True), (b.get_x() + b.get_width() / 2, b.get_height()),
                                     xytext=(0, 3), textcoords="offset points", ha="center", va="bottom",
-                                    fontsize=7, color=theme.INK, fontfamily=theme.FONT_FAMILY)
+                                    fontsize=8.5, fontweight="bold", color=theme.INK, fontfamily=theme.FONT_FAMILY)
 
-    ax.set_xticks(x, chart.categories, fontsize=7.5, color=theme.TEXT_MUTED, fontfamily=theme.FONT_FAMILY)
+    ax.set_xticks(x, chart.categories, fontsize=8.5, color=theme.TEXT_MUTED, fontfamily=theme.FONT_FAMILY)
     peak = max((abs(v) for s in chart.series for v in s.values if v is not None), default=0.0)
     if chart.kind is ChartKind.STACKED_BAR:
         peak = max((sum(v or 0.0 for v in col) for col in zip(*(s.values for s in data_series))), default=peak)
@@ -82,7 +82,7 @@ def chart_png(chart: Chart, *, width_in: float = 6.6, height_in: float = 2.9, dp
     ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _p: axis_tick(v, chart.unit, divisor, suffix)))
     for label in ax.get_yticklabels():
         label.set_fontfamily(theme.FONT_FAMILY)
-    ax.tick_params(axis="y", labelsize=7, colors=theme.TEXT_MUTED, length=0)
+    ax.tick_params(axis="y", labelsize=8, colors=theme.TEXT_MUTED, length=0)
     ax.tick_params(axis="x", length=0)
     ax.grid(axis="y", color=theme.GRID, linestyle=(0, (3, 3)), linewidth=0.8, zorder=0)
     for side in ("top", "right", "left"):
@@ -92,7 +92,7 @@ def chart_png(chart: Chart, *, width_in: float = 6.6, height_in: float = 2.9, dp
         ax.set_ylim(bottom=0)
     if len(chart.series) >= 2:
         ax.legend(loc="upper left", bbox_to_anchor=(0, 1.16), ncol=len(chart.series), frameon=False,
-                  prop={**font, "size": 7.5}, handlelength=1.2, columnspacing=1.2, labelcolor=theme.INK)
+                  prop={**font, "size": 8.5}, handlelength=1.2, columnspacing=1.2, labelcolor=theme.INK)
 
     fig.tight_layout(pad=0.4)
     buf = io.BytesIO()
