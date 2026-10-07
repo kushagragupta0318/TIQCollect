@@ -110,7 +110,9 @@ def _board_narrative(ov: Overview, bank_name: str) -> Narrative:
         f"Bank: {bank_name}\n"
         f"This period's KPIs, already summarised by rule: {template_text}"
     )
-    result = llm.complete(prompt, purpose="board_report_commentary", max_tokens=220, temperature=0.3)
+    # names=[]: the prompt embeds the bank's own name, an organisation, never a person
+    # (test_llm_redaction.py's tripwire requires every complete() call to say so explicitly).
+    result = llm.complete(prompt, purpose="board_report_commentary", max_tokens=220, temperature=0.3, names=[])
     if result.ai_generated and result.text:
         return Narrative(text=result.text.strip(), ai_generated=True)
     return Narrative(text=template_text, ai_generated=False)
@@ -203,7 +205,9 @@ def _agency_narrative(card: dict, agency_name: str, bank_name: str) -> Narrative
         "Use ONLY the figures given below; never invent a number.\n\n"
         f"Bank: {bank_name}\nAgency: {agency_name}\nThis period's scorecard: {template_text}"
     )
-    result = llm.complete(prompt, purpose="agency_review_commentary", max_tokens=220, temperature=0.3)
+    # names=[]: bank_name/agency_name are organisations, never a person (same rule as
+    # _board_narrative's own call, above).
+    result = llm.complete(prompt, purpose="agency_review_commentary", max_tokens=220, temperature=0.3, names=[])
     if result.ai_generated and result.text:
         return Narrative(text=result.text.strip(), ai_generated=True)
     return Narrative(text=template_text, ai_generated=False)
