@@ -152,6 +152,10 @@ _CATALOG: tuple[Capability, ...] = (
     # everywhere else (cf. agency.read vs agency.update).
     _cap("messaging.read", "read bank↔agency message threads", (BA, BN, BT, AA, AM)),
     _cap("messaging.send", "post a message to a bank↔agency thread", (BA, BT, AA, AM)),
+    # Open a general escalation (agency→bank). Agency-only: the bank must not open
+    # an escalation against an agency; the bank replies via messaging.send and may
+    # change the issue's status.
+    _cap("messaging.escalate", "open a general bank↔agency escalation", (AA, AM)),
 
     _cap("placement.read", "placements received or made", (BA, BN, AA, AM)),
     _cap("placement.manual", "place loans by hand", (BA,), sensitive=True),

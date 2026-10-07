@@ -2806,6 +2806,7 @@ router at the v1-main merge; it listed 76 capabilities.)*
 | `payment.reversal.approve.bank` | the bank's fiduciary final sign-off; the ledger unwinds here | S |
 | `messaging.read` | read bank↔agency message threads | |
 | `messaging.send` | post a message to a bank↔agency thread | |
+| `messaging.escalate` | open a general bank↔agency escalation | |
 | `fraud.review` | confirm or dismiss anomaly findings | |
 | `disputes.manage` | work disputes and complaints | |
 | `settlements.propose` | propose a settlement | |
@@ -2874,6 +2875,7 @@ Legend:
 | `payment.reversal.approve.bank` | · | Y | · | · | · | · | · | · |
 | `messaging.read` | · | Y | Y | Y | Y | Y | · | · |
 | `messaging.send` | · | Y | · | Y | Y | Y | · | · |
+| `messaging.escalate` | · | · | · | · | Y | Y | · | · |
 | `settlements.approve` | · | Y | · | · | · | · | · | · |
 | `agency.audit.read` | · | · | · | · | Y | · | · | · |
 | `field.*` (8) | · | · | · | · | · | · | S | · |
