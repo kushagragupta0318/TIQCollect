@@ -42,7 +42,7 @@ function RatioTile({ label, value, sub }: { label: string; value: number | null;
       <div className="mt-3">
         <Bar100 pct={percentBarWidth(value)} />
       </div>
-      {sub && <p className="mt-2 truncate text-[11px] text-muted-foreground/80">{sub}</p>}
+      {sub && <p className="mt-2 truncate text-[11px] text-muted-foreground">{sub}</p>}
     </div>
   );
 }

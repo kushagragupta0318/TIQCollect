@@ -79,7 +79,14 @@
     --popover:            0 0% 100%;
     --popover-foreground: 240 10% 12%;
     --muted:              240 5% 95%;
-    --muted-foreground:   240 4% 46%;
+    /* 215 16% 47% = #64748B, Tailwind slate-500 exactly — the manager and
+       agent views' own muted/secondary text color (text-slate-500, grep-
+       confirmed their dominant token). CC's ported value here was 240 4%
+       46%: same lightness, but a third the saturation, which reads flatter
+       next to manager/agent's slightly warmer grey even though raw
+       contrast math barely moves. One number, matching what's already
+       used twice over in the rest of the product. */
+    --muted-foreground:   215 16% 47%;
     --accent:             213 100% 96%;   /* soft blue tint — used sparingly */
     --accent-foreground:  213 100% 32%;
     --border:             240 6% 90%;     /* always at 0.6 opacity, never solid */
@@ -563,7 +570,12 @@
   --foreground: 220 43% 11%;
   --card: 0 0% 100%;
   --muted: 220 18% 97%;
-  --muted-foreground: 218 15% 46%;
+  /* This block wins the cascade (same .bank-root specificity, later in the
+     file — see the file's own header note on CC's "Soft Card" override).
+     215 16% 47% = slate-500 exactly, same reasoning as the other
+     --muted-foreground above: one real number, not two near-duplicates
+     that happened to almost agree. */
+  --muted-foreground: 215 16% 47%;
   --accent: 242 80% 96%;
   --accent-foreground: 243 75% 59%;
   --border: 230 14% 94%;
