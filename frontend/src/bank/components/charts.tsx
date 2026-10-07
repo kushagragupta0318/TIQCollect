@@ -19,6 +19,7 @@ import {
 } from "recharts";
 import { useId } from "react";
 import { usePrefersReducedMotion } from "../../hooks/useMediaQuery";
+import { percentileDomain, percentileSegments, type PercentileRow } from "./chartMath";
 import {
   analyticsLegendStyle,
   analyticsTick,
@@ -171,35 +172,13 @@ export function BarLineChart({
    invisible [0,p5] base, a light [p5,p10], a solid [p10,p50) / (p50,p90]
    split either side of a thin marker tick at p50, and a light [p90,p95] —
    never a Scatter overlay, which would need a second geometry on a
-   categorical axis the other three chart shapes here don't use either. ── */
+   categorical axis the other three chart shapes here don't use either.
+   The math (segment widths, axis domain) lives in chartMath.ts, not here —
+   a components file can only export components (react-refresh), and the
+   domain logic is worth testing directly, not only through a rendered
+   chart jsdom can't actually measure. ── */
 
-export interface PercentileRow {
-  name: string;
-  p5: number;
-  p10: number;
-  p50: number;
-  p90: number;
-  p95: number;
-}
-
-function percentileSegments(r: PercentileRow) {
-  const span = Math.max(r.p95 - r.p5, 0);
-  // The marker tick: visible but never wide enough to eat the band it sits
-  // in. A degenerate band (p95 === p5, e.g. a metric with no simulated
-  // spread) collapses every segment to 0 — an honest "nothing to show",
-  // not a divide-by-zero.
-  const eps = Math.min(span * 0.015, (r.p90 - r.p10) / 4);
-  const preMarker = Math.max(r.p50 - eps, r.p10);
-  const postMarker = Math.max(r.p90 - preMarker - 2 * eps, 0);
-  return {
-    base: r.p5,
-    lowOuter: Math.max(r.p10 - r.p5, 0),
-    preMarker: Math.max(preMarker - r.p10, 0),
-    marker: Math.max(Math.min(2 * eps, r.p90 - preMarker), 0),
-    postMarker,
-    highOuter: Math.max(r.p95 - r.p90, 0),
-  };
-}
+export type { PercentileRow } from "./chartMath";
 
 function PercentileTooltip({ active, payload, format }: {
   active?: boolean;
@@ -237,9 +216,7 @@ export function PercentileRangeChart({
   const reduceMotion = usePrefersReducedMotion();
   const gradId = `bank-pct-${useId().replace(/:/g, "")}`;
   const data = rows.map((r) => ({ ...r, ...percentileSegments(r) }));
-  const domain: [number, number] = domainFrom0
-    ? [0, Math.max(...rows.map((r) => r.p95)) * 1.05]
-    : [Math.min(...rows.map((r) => r.p5)) * 0.95, Math.max(...rows.map((r) => r.p95)) * 1.05];
+  const domain = percentileDomain(rows, domainFrom0);
   const rowHeight = 40;
   return (
     <ResponsiveContainer width="100%" height={height ?? Math.max(130, rows.length * rowHeight)}>
