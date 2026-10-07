@@ -101,7 +101,7 @@ def _model_performance_table() -> Table | None:
     )
 
 
-def _board_narrative(ov: Overview, bank_name: str) -> Narrative:
+def _board_narrative(ov: Overview, bank_name: str, bank_id: str) -> Narrative:
     template_text = " ".join(ov.narrative) or "No KPI could be computed for this bank in this period."
     prompt = (
         "You write the opening paragraph of a bank's board collections report. Write 2-3 sentences, "
@@ -112,7 +112,8 @@ def _board_narrative(ov: Overview, bank_name: str) -> Narrative:
     )
     # names=[]: the prompt embeds the bank's own name, an organisation, never a person
     # (test_llm_redaction.py's tripwire requires every complete() call to say so explicitly).
-    result = llm.complete(prompt, purpose="board_report_commentary", max_tokens=220, temperature=0.3, names=[])
+    result = llm.complete(prompt, purpose="board_report_commentary", max_tokens=220, temperature=0.3, names=[],
+                          bank_id=bank_id)
     if result.ai_generated and result.text:
         return Narrative(text=result.text.strip(), ai_generated=True)
     return Narrative(text=template_text, ai_generated=False)
@@ -134,7 +135,7 @@ def build_board_payload(adb: Session, bank: Bank, f: KpiFilter, *,
         tables.append(model_table)
 
     section = Section(section_id="portfolio_overview", title="Portfolio Overview",
-                      narrative=_board_narrative(ov, bank.display_name),
+                      narrative=_board_narrative(ov, bank.display_name, bank.id),
                       kpis=_headline_kpis(ov), tables=tables)
     data_note = None if ov.as_of else "No portfolio reading exists yet for this bank; every KPI abstains."
 
@@ -194,7 +195,7 @@ def _scorecard_detail_table(card: dict) -> Table:
     )
 
 
-def _agency_narrative(card: dict, agency_name: str, bank_name: str) -> Narrative:
+def _agency_narrative(card: dict, agency_name: str, bank_name: str, bank_id: str) -> Narrative:
     facts = ", ".join(
         f"{_SCORECARD_LABEL[k]} {fmt(card.get(k))}" for k, fmt in _SCORECARD_DETAIL_FMT.items()
     ) if card.get("n_rows") else "no scorecard rows in this window"
@@ -207,7 +208,8 @@ def _agency_narrative(card: dict, agency_name: str, bank_name: str) -> Narrative
     )
     # names=[]: bank_name/agency_name are organisations, never a person (same rule as
     # _board_narrative's own call, above).
-    result = llm.complete(prompt, purpose="agency_review_commentary", max_tokens=220, temperature=0.3, names=[])
+    result = llm.complete(prompt, purpose="agency_review_commentary", max_tokens=220, temperature=0.3, names=[],
+                          bank_id=bank_id)
     if result.ai_generated and result.text:
         return Narrative(text=result.text.strip(), ai_generated=True)
     return Narrative(text=template_text, ai_generated=False)
@@ -241,7 +243,7 @@ def build_agency_review_payload(adb: Session, bank: Bank, agency: Agency, *,
         data_note = "No scorecard rows for this agency in the latest available month."
 
     section = Section(section_id="agency_scorecard", title=f"{name} — Scorecard",
-                      narrative=_agency_narrative(card, name, bank.display_name),
+                      narrative=_agency_narrative(card, name, bank.display_name, bank.id),
                       kpis=_scorecard_kpis(card) if has_data else [],
                       tables=[_scorecard_detail_table(card)] if has_data else [])
 

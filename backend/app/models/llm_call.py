@@ -3,12 +3,14 @@ core/llm.py's own best-effort `_record_usage` — never by a caller, and never
 inside the caller's own transaction, so a metering failure cannot roll back
 the feature that made the call.
 
-UNATTRIBUTED ROWS ARE EXPECTED, NOT A BUG. None of today's six call sites
-(agent.py, manager.py, case_service.py, visit_report_extraction.py,
-ai_report_service.py) pass `bank_id` yet, so every row from them lands here
-with bank_id NULL — a known, counted gap, the same shape as AuditLog's own
-unattributed rows (services/bank/audit_read.py's `pending_attribution`).
-GET /bank/usage reports that count rather than guessing a bank for them.
+UNATTRIBUTED ROWS ARE EXPECTED, NOT A BUG. Every row written before
+2026-10-07 (the nine call sites across agent.py, manager.py,
+case_service.py, visit_report_extraction.py, ai_report_service.py and
+report_templates.py were wired that day) has bank_id NULL, and any future
+caller that omits it lands here too — a known, counted gap, the same shape
+as AuditLog's own unattributed rows (services/bank/audit_read.py's
+`pending_attribution`). GET /bank/usage reports that count rather than
+guessing a bank for them.
 
 `cost` is computed once, at write time, from the provider's own published
 price per token (core/llm.py's `_PRICE_PER_MTOK_USD`) — never recomputed on

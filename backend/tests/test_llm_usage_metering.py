@@ -99,7 +99,8 @@ def test_a_completion_records_a_usage_row(monkeypatch, db):
 
 
 def test_no_bank_id_records_an_unattributed_row(monkeypatch, db):
-    """Every call site today omits bank_id -- the known gap services/bank/
+    """A caller that omits bank_id (every call site today passes it; this is
+    what happens if a future one does not) -- the known gap services/bank/
     usage_read.py's coverage block states, reproduced at the source."""
     _use(monkeypatch, _RespWithUsage("hello"))
     llm.complete("p", purpose="briefing")
@@ -156,3 +157,44 @@ def test_a_call_that_never_reaches_the_provider_records_nothing(monkeypatch, db)
     r = llm.complete("p", purpose="briefing", bank_id=BANK)
     assert r.status == llm.NOT_CONFIGURED
     assert db.query(LLMCall).count() == 0
+
+
+def test_every_call_site_declares_the_bank_it_spends_on():
+    """A tripwire, not a proof -- the same shape as test_llm_redaction.py's
+    names= rule. A new complete()/chat() call that forgets bank_id= is
+    exactly how the next unattributed-by-accident row gets in: it passes
+    every existing test (the seam still returns OK), and only GET /bank/usage
+    would ever show the gap, as a count nobody is looking at until a bank
+    asks why its total looks low (coordinator audit, 2026-10-07).
+
+    Add to ALLOWED_WITHOUT_BANK_ID only for a call with no tenant to charge
+    -- none exist today; every one of the nine call sites has a bank, an
+    agent, or a case in hand."""
+    import ast
+    import pathlib
+
+    ALLOWED_WITHOUT_BANK_ID: set[str] = set()
+    app_dir = pathlib.Path(__file__).resolve().parents[1] / "app"
+    missing: list[str] = []
+    for path in sorted(app_dir.rglob("*.py")):
+        if path.name == "llm.py":
+            continue
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+            if name not in ("complete", "chat"):
+                # complete() is also HANDED to something else to call — the
+                # extraction path submits it to a thread pool.
+                handed = any(
+                    (a.attr if isinstance(a, ast.Attribute) else getattr(a, "id", "")) in ("complete", "chat")
+                    for a in node.args)
+                if not handed:
+                    continue
+            where = f"{path.relative_to(app_dir).as_posix()}:{node.lineno}"
+            if where in ALLOWED_WITHOUT_BANK_ID:
+                continue
+            if not any(kw.arg == "bank_id" for kw in node.keywords):
+                missing.append(where)
+    assert missing == [], f"complete()/chat() without bank_id=: {missing}"

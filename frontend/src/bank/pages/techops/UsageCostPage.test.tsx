@@ -84,6 +84,12 @@ describe("UsageCostPage", () => {
     expect(screen.queryByText(/unknown price/)).toBeNull();
   });
 
+  it("marks a fully-unpriced day distinctly rather than letting it read as empty", async () => {
+    show(payload({ by_day: [{ day: "2026-10-05", calls: 4, cost_usd: 0, unpriced_calls: 4 }] }));
+    await waitFor(() => expect(screen.getByTitle(/unpriced \(4\), 4 calls/)).toBeTruthy());
+    expect(screen.getByTitle(/unpriced \(4\), 4 calls/).querySelector(".border-dashed")).not.toBeNull();
+  });
+
   it("SAYS how many calls are pending attribution", async () => {
     show(payload({ coverage: { ...payload().coverage, pending_attribution: 7 } }));
     await waitFor(() => expect(screen.getByText(/7 calls pending attribution/)).toBeTruthy());

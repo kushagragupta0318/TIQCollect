@@ -74,14 +74,24 @@ export function UsageCostPage() {
               <p className="text-sm text-muted-foreground py-6 text-center">No calls in this window.</p>
             ) : (
               <div className="flex items-end gap-1.5 h-32">
-                {data.by_day.map((d) => (
-                  <div key={d.day} className="flex-1 flex flex-col items-center gap-1"
-                      title={`${formatDay(d.day)}: ${costCellLabel(d.cost_usd, d.unpriced_calls)}, ${d.calls} calls`}>
-                    <div className="w-full rounded-t bg-primary/70"
-                        style={{ height: `${Math.max(2, (d.cost_usd / maxDayCost) * 100)}%` }} />
-                    <span className="text-[10px] text-muted-foreground">{formatDay(d.day)}</span>
-                  </div>
-                ))}
+                {data.by_day.map((d) => {
+                  // A day with real activity but no priced cost must not look
+                  // identical to an empty day — height-by-cost alone would
+                  // flatten it to the same near-invisible sliver either way.
+                  const allUnpriced = d.calls > 0 && d.unpriced_calls === d.calls;
+                  return (
+                    <div key={d.day} className="flex-1 flex flex-col items-center gap-1"
+                        title={`${formatDay(d.day)}: ${costCellLabel(d.cost_usd, d.unpriced_calls)}, ${d.calls} calls`}>
+                      <div
+                        className={allUnpriced
+                          ? "w-full rounded-t border-2 border-dashed border-muted-foreground/40 bg-transparent"
+                          : "w-full rounded-t bg-primary/70"}
+                        style={{ height: allUnpriced ? "15%" : `${Math.max(2, (d.cost_usd / maxDayCost) * 100)}%` }}
+                      />
+                      <span className="text-[10px] text-muted-foreground">{formatDay(d.day)}</span>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </Panel>

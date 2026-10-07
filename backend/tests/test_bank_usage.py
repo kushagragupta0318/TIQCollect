@@ -99,8 +99,9 @@ def test_another_banks_calls_are_never_returned(db):
 
 
 def test_an_unattributed_call_is_counted_not_charged_to_anyone(db):
-    """None of today's call sites pass bank_id yet (core/llm.py) — a known,
-    counted gap, not a leak and not a silent free ride."""
+    """A row from before every call site was wired (2026-10-07), or any
+    future caller that omits bank_id — a known, counted gap, not a leak and
+    not a silent free ride."""
     actor = _user(db, UserRole.BANK_ADMIN, bank_id=OURS)
     _call(db, cost=0.01)
     _call(db, bank_id=None, cost=5.0)
@@ -117,6 +118,21 @@ def test_a_call_with_no_known_price_is_flagged_not_zeroed(db):
     body = _client(db, actor).get("/api/v1/bank/usage").json()
     assert body["totals"]["calls"] == 2
     assert body["totals"]["cost_usd"] == pytest.approx(0.01)     # the unknown one excluded, not zeroed-in
+    assert body["totals"]["unpriced_calls"] == 1
+
+
+def test_unpriced_calls_are_flagged_on_the_breakdowns_too(db):
+    """Not just the totals tile -- the same row the by-feature table and the
+    by-day chart render must say "unpriced", end to end through the API,
+    not only inside usage_read.py's own return value."""
+    actor = _user(db, UserRole.BANK_ADMIN, bank_id=OURS)
+    _call(db, feature="briefing", cost=0.01)
+    _call(db, feature="briefing", model="some-future-model", cost=None)
+    body = _client(db, actor).get("/api/v1/bank/usage").json()
+    briefing = next(r for r in body["by_feature"] if r["feature"] == "briefing")
+    assert briefing["unpriced_calls"] == 1
+    assert briefing["cost_usd"] == pytest.approx(0.01)
+    assert sum(d["unpriced_calls"] for d in body["by_day"]) == 1
     assert body["totals"]["unpriced_calls"] == 1
 
 

@@ -116,7 +116,7 @@ def coverage(db: Session, f: Filters) -> dict:
         "note": (
             "Calls with no bank recorded cannot be charged to one, so they are counted here "
             f"rather than added to any bank's total ({unattributed} in this window). They still "
-            "cost real money — this is a metering gap (known: today's callers do not pass "
-            "bank_id yet), not evidence those calls were free."
+            "cost real money — this is a metering gap (rows from before 2026-10-07, or any "
+            "caller that omits bank_id), not evidence those calls were free."
         ),
     }
