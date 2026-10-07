@@ -42,9 +42,23 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getMe } from "@/api/auth";
 import { useLiveEvents, WORK_EVENTS } from "@/hooks/useLiveEvents";
 import { useModalA11y } from "@/hooks/useModalA11y";
+import { useUnreadMessagingCount } from "@/lib/useMessagingInbox";
 import {
   MANAGER_NAV, MOBILE_MORE, MOBILE_PRIMARY, activeMoreItem, isSheetOpen, moreButtonActive,
 } from "@/components/layout/managerNav";
+
+const MESSAGING_PATH = "/manager/messaging";
+
+/** A themed dot, not a raw colour literal repeated at every call site — one
+ *  place decides what "unread, somewhere in the nav" looks like. */
+function NavUnreadDot() {
+  return (
+    <span
+      aria-label="Unread messages"
+      className="absolute -right-0.5 -top-0.5 size-2 rounded-full bg-primary ring-2 ring-white"
+    />
+  );
+}
 
 const SIDEBAR_KEY   = "tiq:sidebar";
 const SIDEBAR_W     = 252;
@@ -98,6 +112,10 @@ export default function ManagerLayout() {
   // 2026-09-21 — pending leave requests ride the same 30 s poll, so a request
   // filed from a phone reaches the bell on whatever page the manager is on.
   const [leavePending, setLeavePending] = useState<LeaveRequest[]>([]);
+  // Its own 6s poll (useMessagingInbox), not this file's 30s one — shared
+  // with whichever Messaging page/badge is also mounted, via the same query
+  // key, so this never adds a second request alongside an open inbox.
+  const unreadMessages = useUnreadMessagingCount();
 
   const fetchSOS = useCallback(() => {
     api.get("/manager/dashboard")
@@ -206,7 +224,10 @@ export default function ManagerLayout() {
             >
               {({ isActive }) => (
                 <div style={navItemStyle(isActive, open)}>
-                  <Icon size={17} style={{ flexShrink: 0, color: isActive ? "#2563EB" : "#98A2B3" }} />
+                  <span style={{ position: "relative", display: "inline-flex", flexShrink: 0 }}>
+                    <Icon size={17} style={{ flexShrink: 0, color: isActive ? "#2563EB" : "#98A2B3" }} />
+                    {to === MESSAGING_PATH && unreadMessages > 0 && <NavUnreadDot />}
+                  </span>
                   <span style={{ fontSize: 11.5, fontWeight: isActive ? 600 : 500, opacity: open ? 1 : 0, maxWidth: open ? 160 : 0, overflow: "hidden", transition: "opacity 150ms, max-width 200ms" }}>{label}</span>
                 </div>
               )}
@@ -373,6 +394,9 @@ function TabCell({ icon: Icon, label, active }: { icon: LucideIcon; label: strin
 function MoreSheet({ onClose }: { onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   useModalA11y(true, ref, onClose);
+  // Same shared query as the rail's own badge (useMessagingInbox's key) —
+  // calling the hook again here costs no second request.
+  const unreadMessages = useUnreadMessagingCount();
   // Back/Forward while open (the Android back button, most often): close in
   // its own commit first, for the same scroll reason as the links below.
   // Without it the page Back lands on opened at this page's offset — 800 px
@@ -418,7 +442,10 @@ function MoreSheet({ onClose }: { onClose: () => void }) {
             >
               {({ isActive }) => (
                 <div style={navItemStyle(isActive, true)}>
-                  <Icon size={17} style={{ flexShrink: 0, color: isActive ? "#2563EB" : "#98A2B3" }} />
+                  <span style={{ position: "relative", display: "inline-flex", flexShrink: 0 }}>
+                    <Icon size={17} style={{ flexShrink: 0, color: isActive ? "#2563EB" : "#98A2B3" }} />
+                    {to === MESSAGING_PATH && unreadMessages > 0 && <NavUnreadDot />}
+                  </span>
                   <span style={{ fontSize: 13, fontWeight: isActive ? 600 : 500 }}>{label}</span>
                 </div>
               )}
