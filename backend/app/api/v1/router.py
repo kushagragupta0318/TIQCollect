@@ -44,3 +44,8 @@ api_router.include_router(bank_strategy.router)
 # Own line, same reason as bank_placements above.
 from app.api.v1.endpoints import manager_agency_profile  # noqa: E402
 api_router.include_router(manager_agency_profile.router)
+# 2026-10-01 (#2, L7): payment reversal, two-stage agency→bank. Agency routes under
+# /manager, bank routes under /bank. Own lines, for the same merge reason as above.
+from app.api.v1.endpoints import payment_reversals  # noqa: E402
+api_router.include_router(payment_reversals.agency_router)
+api_router.include_router(payment_reversals.bank_router)

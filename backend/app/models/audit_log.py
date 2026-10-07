@@ -73,6 +73,12 @@ class AuditAction(str, enum.Enum):
     # v2_0016 (2026-09-29, P3): the bank feed ended a placement (paid direct / settled -> RESOLVED,
     # written off -> RETURNED); a recall is PLACEMENT_RECALLED
     PLACEMENT_ENDED = "PLACEMENT_ENDED"
+    # #2 payment reversal: the two-stage agency→bank void of a mistaken collection.
+    # APPENDED at the end — audit_action_enum is a native Postgres enum and
+    # ALTER TYPE ADD VALUE appends, so the Python order must match the DB's or
+    # test_every_native_enum_holds_the_models_values_in_order fails.
+    PAYMENT_REVERSAL_REQUESTED = "PAYMENT_REVERSAL_REQUESTED"
+    PAYMENT_REVERSED = "PAYMENT_REVERSED"
 
 
 class AuditLog(Base, UUIDPrimaryKey):

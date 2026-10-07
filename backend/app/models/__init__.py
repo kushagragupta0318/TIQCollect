@@ -13,6 +13,7 @@ from app.models.case import Case, CaseStatus, CasePriority, ClosureReason, Escal
 from app.models.placement import Dispute, Placement, SettlementOffer
 from app.models.visit import Visit, VisitOutcome, PersonMet, DefaultReason, NotMetReason
 from app.models.payment import Payment, PaymentMode, PaymentStatus
+from app.models.payment_reversal import PaymentReversalRequest, ReversalStatus
 from app.models.ptp import PTP, PTPStatus
 from app.models.beat import Beat, BeatStatus
 from app.models.call_log import CallLog, CallOutcome

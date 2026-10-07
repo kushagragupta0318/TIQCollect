@@ -83,6 +83,9 @@ PERMISSIONS = (
     ('ml.read', 'ml', 'MLOps console', False, False),
     ('ml.retrain', 'ml', 'start a retrain job', False, True),
     ('payments.verify', 'payments', 'verify or reject payments', False, True),
+    ('payment.reversal.request', 'payment', 'request to reverse a mistaken collection', False, False),
+    ('payment.reversal.approve.agency', 'payment', "the agency's approval of a reversal (routes it to the bank)", False, False),
+    ('payment.reversal.approve.bank', 'payment', "the bank's fiduciary final sign-off; the ledger unwinds here", False, True),
     ('placement.manual', 'placement', 'place loans by hand', False, True),
     ('placement.read', 'placement', 'placements received or made', False, False),
     ('placement.recall', 'placement', 'recall placements', False, True),
@@ -108,6 +111,10 @@ PERMISSIONS = (
 )
 ROLE_GRANTS = (
     ('AGENCY_ADMIN', 'agency.audit.read'),
+    ('AGENCY_ADMIN', 'payment.reversal.approve.agency'),
+    ('AGENCY_MANAGER', 'payment.reversal.request'),
+    ('AGENCY_MANAGER', 'payment.reversal.approve.agency'),
+    ('BANK_ADMIN', 'payment.reversal.approve.bank'),
     ('AGENCY_ADMIN', 'agency.profile.read'),
     ('AGENCY_ADMIN', 'agency.users.manage'),
     ('AGENCY_ADMIN', 'agents.import'),
