@@ -45,7 +45,6 @@ function overview(over: Partial<model.ModelsOverview["recovery_risk"]> = {}): mo
       artifact_sha256: "abc",
       method: "GAM",
       features: [],
-      artifact_metrics: { gini: 0.5122, ks: 38.66, auc: 0.7561 },
       live_equivalent: { gini: 0.4796, ks: 35.74, measured_on: "2026-09-24", basis: null },
       monitoring: { status: "not_ready", matured: 0, required_matured: 500,
                     horizon_days: 30, first_outcomes_mature_from: "2026-10-08" },

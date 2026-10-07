@@ -15,12 +15,6 @@
 // have one rather than quietly falling back to the flattering number.
 import api from "@/api/axios";
 
-export interface Metrics {
-  gini?: number | null;
-  ks?: number | null;
-  auc?: number | null;
-}
-
 export interface LiveEquivalent {
   gini?: number | null;
   ks?: number | null;
@@ -39,7 +33,6 @@ export interface ModelsOverview {
     artifact_sha256: string | null;
     method: string;
     features: { code: string; label: string }[];
-    artifact_metrics: Metrics;
     live_equivalent: LiveEquivalent | null;
     monitoring: {
       status?: string;

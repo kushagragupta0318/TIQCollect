@@ -8,7 +8,6 @@ import { ExecutiveHeader, PageFailure, PageLoading, PageRoot } from "../../compo
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../ui/card";
 import { Badge } from "../../ui/badge";
 import { Button } from "../../ui/button";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../ui/table";
 import { Tile } from "../../components/analytics";
 import { getModelsOverview, type ModelsOverview, type ScoringLayer } from "@/api/bankModels";
 import { errorDetail, errorStatus } from "@/lib/apiError";
@@ -44,7 +43,6 @@ function LayerCard({ layer }: { layer: ScoringLayer }) {
 function ModelCard({ data }: { data: ModelsOverview }) {
   const m = data.recovery_risk;
   const live = m.live_equivalent;
-  const art = m.artifact_metrics;
   const stanceFeatures = new Set(m.stance.related_features);
   return (
     <Card>
@@ -65,7 +63,7 @@ function ModelCard({ data }: { data: ModelsOverview }) {
           <Tile label="Gini, on the data the product records" value={fixed(live?.gini, 3)}
                 sub={live ? `Out of time, synthetic · measured ${live.measured_on}` : "No such figure for this version"} />
           <Tile label="KS, on the data the product records" value={fixed(live?.ks, 1)}
-                sub={live ? `Artifact's own: ${fixed(art.ks, 2)} with the stance on record` : "—"} />
+                sub={live ? `Out of time, synthetic · measured ${live.measured_on}` : "No such figure for this version"} />
           <Tile label="Borrower stance recorded" value={pct(m.stance.share, 1)}
                 sub={m.stance.latest_scoring_day ? `Of accounts scored ${m.stance.latest_scoring_day}` : "Nothing scored yet"} />
           <Tile label="Declined to score" value={`${m.abstention.latest_day_declined.toLocaleString("en-IN")}`}
@@ -73,13 +71,10 @@ function ModelCard({ data }: { data: ModelsOverview }) {
         </div>
 
         <section className="space-y-2 text-[12.5px] leading-relaxed text-muted-foreground">
-          <h3 className="text-[13px] font-semibold text-foreground">Why two sets of figures</h3>
+          <h3 className="text-[13px] font-semibold text-foreground">Borrower stance coverage</h3>
           <p>
-            The artifact's own out-of-time figures are Gini {fixed(art.gini, 4)} and KS {fixed(art.ks, 2)} on
-            {" "}{art.n?.toLocaleString("en-IN") ?? "—"} accounts. They assume the borrower's stance (will pay, hardship,
-            refuses…) is on record, and that is the model's strongest behavioural input. The product began recording it
-            on {m.stance.capture_since}. {live ? `Scored with ${live.basis}, the same model measures Gini ${fixed(live.gini, 4)} and KS ${fixed(live.ks, 2)}. ` : ""}
-            Those are the figures to quote until enough accounts carry a recorded stance.
+            Scored the way the product actually records a borrower's stance (will pay, hardship, refuses…), which the
+            product has captured since {m.stance.capture_since}.
           </p>
           <p>{stanceCoverageText(m.stance)}</p>
         </section>
@@ -108,24 +103,6 @@ function ModelCard({ data }: { data: ModelsOverview }) {
           </div>
         </section>
 
-        <section className="space-y-2">
-          <h3 className="text-[13px] font-semibold text-foreground">Risk bands, out of time</h3>
-          <Table>
-            <TableHeader>
-              <TableRow><TableHead>Band</TableHead><TableHead>Accounts</TableHead><TableHead>Share with no payment</TableHead></TableRow>
-            </TableHeader>
-            <TableBody>
-              {m.bands.map((b) => (
-                <TableRow key={b.band ?? "?"}>
-                  <TableCell className="font-semibold">{b.band}{b.band === "A" ? " (safest)" : b.band === "E" ? " (riskiest)" : ""}</TableCell>
-                  <TableCell className="tabular-nums">{b.oot_n?.toLocaleString("en-IN") ?? "—"}</TableCell>
-                  <TableCell className="tabular-nums">{pct(b.oot_bad_rate, 1)}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </section>
-
         <section className="space-y-2 text-[12.5px] leading-relaxed text-muted-foreground">
           <h3 className="text-[13px] font-semibold text-foreground">Monitoring and control</h3>
           <p>{monitoringText(m.monitoring)}</p>
@@ -150,8 +127,6 @@ function ModelCard({ data }: { data: ModelsOverview }) {
                 <dd className="font-mono break-all">{v}</dd>
               </div>
             ))}
-            <dt className="text-muted-foreground">AUC / Brier (artifact)</dt>
-            <dd className="tabular-nums">{fixed(art.auc, 4)} / {fixed(art.brier, 5)}</dd>
           </dl>
         </details>
       </CardContent>
