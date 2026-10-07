@@ -147,7 +147,7 @@ export const BANK_SECTIONS: BankNavSection[] = [
         path: "agencies/messaging",
         icon: MessageSquare,
         summary: "Threads with your agencies — reversal disputes and escalations, every message audited.",
-        tasks: "bank<->agency comms",
+        tasks: "L07",
       },
     ],
   },

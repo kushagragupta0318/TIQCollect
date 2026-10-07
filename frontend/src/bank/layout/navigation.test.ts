@@ -8,7 +8,7 @@ describe("bank navigation — plan §5.1", () => {
     expect(BANK_SECTIONS.map((s) => [s.label, s.items.map((i) => i.name)])).toEqual([
       ["Command Center", ["Overview", "Analytics", "Alerts"]],
       ["AI Strategy", ["Monte Carlo Simulator", "Cash Forecast", "Scenario Lab", "Board Reports"]],
-      ["Agencies", ["Directory", "Performance", "Placement", "Onboard Agency"]],
+      ["Agencies", ["Directory", "Performance", "Placement", "Onboard Agency", "Messaging"]],
       ["Governance", ["Models"]],
       ["Tech Ops", ["AI Agents", "MLOps", "Data Quality", "Usage & Cost"]],
       ["Admin", ["Bank Users", "Regions", "Settings", "Audit"]],
@@ -69,7 +69,7 @@ describe("top-bar search", () => {
   it("matches title or subtitle case-insensitively, capped at five, nothing for a blank query", () => {
     expect(searchEntries(PAGE_ENTRIES, "models").map((r) => r.title)).toEqual(["Models"]);
     expect(searchEntries(PAGE_ENTRIES, "/bank/agencies").map((r) => r.title))
-      .toEqual(["Directory", "Performance", "Placement", "Onboard Agency"]);
+      .toEqual(["Directory", "Performance", "Placement", "Onboard Agency", "Messaging"]);
     expect(searchEntries(PAGE_ENTRIES, "bank")).toHaveLength(5);
     expect(searchEntries(PAGE_ENTRIES, "   ")).toEqual([]);
     expect(searchEntries(PAGE_ENTRIES, "scenario")).toEqual([]);   // built pages only (Scenario Lab unbuilt)

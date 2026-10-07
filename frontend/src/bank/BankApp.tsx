@@ -52,6 +52,7 @@ const BUILT_PAGES: Record<string, ComponentType> = {
   "strategy/board-reports": BoardReportsPage, "strategy/cash-forecast": CashForecastPage,
   "admin/audit": AuditPage, "admin/regions": RegionsPage, "admin/settings": SettingsPage,
   "tech-ops/mlops": MLOpsPage, "tech-ops/usage": UsageCostPage, "tech-ops/data-quality": DataQualityPage,
+  "agencies/messaging": AgencyMessagingPage,
   "admin/users": BankUsersPage,
 };
 
@@ -104,7 +105,6 @@ export default function BankApp() {
             navigation.ts — reached from a row, same as customers above). */}
         <Route path="agencies/profile/:agencyId" element={<AgencyProfilePage />} />
         {/* bank<->agency comms: reversal disputes + agency escalations. */}
-        <Route path="agencies/messaging" element={<AgencyMessagingPage />} />
         {BankComponentGalleryPage && (
           <Route
             path="_gallery"
