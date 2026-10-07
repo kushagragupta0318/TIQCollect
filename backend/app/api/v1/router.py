@@ -57,3 +57,7 @@ api_router.include_router(bank_settings.router)
 # Own line, same merge reason as above.
 from app.api.v1.endpoints import bank_users_admin  # noqa: E402
 api_router.include_router(bank_users_admin.router)
+# 2026-10-07 (P4 E09/E10): the Board Reports page, /bank/reports/types and
+# /bank/reports/generate. Own line, for the same merge reason as above.
+from app.api.v1.endpoints import bank_reports  # noqa: E402
+api_router.include_router(bank_reports.router)
