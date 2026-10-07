@@ -8,6 +8,7 @@
 // week to the one person whose job is noticing that it was not. The server
 // counts them; this page says so out loud.
 import { useState } from "react";
+import { useSearchParams } from "react-router";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Download, ScrollText } from "lucide-react";
 
@@ -22,7 +23,11 @@ import { Label } from "../../ui/label";
 import { Select } from "../../ui/select";
 
 export function AuditPage() {
-  const [action, setAction] = useState("");
+  // Read once on mount, same as a normal default — not synced back to the
+  // URL on every filter change, so this is a deep-link landing value, not a
+  // second source of truth to keep in step with `action`'s own state.
+  const [searchParams] = useSearchParams();
+  const [action, setAction] = useState(() => searchParams.get("action") ?? "");
   const [actorId, setActorId] = useState("");
   const [offset, setOffset] = useState(0);
   const [exportError, setExportError] = useState<string | null>(null);
