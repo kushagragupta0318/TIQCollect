@@ -21,9 +21,25 @@ from __future__ import annotations
 
 import uuid
 from datetime import date
+from decimal import Decimal
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+
+
+def numberize(obj):
+    """Postgres ``numeric`` columns arrive as ``Decimal``. ``AnalyticsTabOut.panels``
+    is an untyped ``dict``, and Pydantic v2 serialises a ``Decimal`` inside one as a
+    JSON *string* ("2.63"); the frontend formats these as numbers (``.toFixed``),
+    which throws on a string and white-screens the tab. Convert every ``Decimal`` to
+    ``float`` so the wire matches the typed ``number`` contract the panels declare."""
+    if isinstance(obj, Decimal):
+        return float(obj)
+    if isinstance(obj, dict):
+        return {k: numberize(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [numberize(v) for v in obj]
+    return obj
 
 from app.services.bank.agency_scorecard import agency_scorecard, latest_month
 from app.services.bank.kpi_catalog import FIELD, PORTFOLIO, SCORECARD, TRANSITIONS, available_views, latest_reading

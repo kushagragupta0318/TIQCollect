@@ -43,7 +43,7 @@ export function AnalyticsTabBar<T extends string>({
           role="tab"
           aria-selected={active === t.id}
           onClick={() => onChange(t.id)}
-          className={`flex-1 whitespace-nowrap rounded-xl px-3.5 py-2 text-center text-[11.5px] font-semibold transition-all duration-200 ${
+          className={`tap-target-h flex-1 whitespace-nowrap rounded-xl px-3.5 py-2 text-center text-[11.5px] font-semibold transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25 focus-visible:ring-offset-2 ${
             active === t.id
               ? "border border-border/40 bg-card text-foreground shadow-[0_1px_3px_rgba(0,0,0,0.04)]"
               : "text-muted-foreground hover:text-foreground"
@@ -107,7 +107,7 @@ export function Tile({ label, value, sub, color }: { label: ReactNode; value: Re
       <p className="mt-2.5 text-[22px] font-bold leading-none tracking-tight tabular-nums" style={color ? { color } : undefined}>
         {value}
       </p>
-      {sub && <p className="mt-2 truncate text-[11px] text-muted-foreground/80">{sub}</p>}
+      {sub && <p className="mt-2 truncate text-[11px] text-muted-foreground">{sub}</p>}
     </div>
   );
 }

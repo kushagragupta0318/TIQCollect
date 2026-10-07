@@ -22,6 +22,7 @@ from pydantic import BaseModel
 from app.core.audit import write_audit
 from app.core.csv_safe import csv_row
 from app.core.dependencies import DbSession
+from app.core.ids import UUIDQuery
 from app.core.permissions import require_perm
 from app.core.request_context import CurrentContext
 from app.models.audit_log import AuditAction
@@ -86,7 +87,7 @@ def _filters(action: Optional[str], actor_id: Optional[str],
 def bank_audit(
     ctx: CurrentContext, db: DbSession,
     action: Optional[str] = None,
-    actor_id: Optional[str] = None,
+    actor_id: UUIDQuery = None,
     since: Optional[datetime] = None,
     until: Optional[datetime] = None,
     limit: int = Query(ar.PAGE_SIZE, ge=1, le=ar.MAX_PAGE_SIZE),
@@ -118,7 +119,7 @@ def bank_audit(
 def bank_audit_export(
     ctx: CurrentContext, db: DbSession,
     action: Optional[str] = None,
-    actor_id: Optional[str] = None,
+    actor_id: UUIDQuery = None,
     since: Optional[datetime] = None,
     until: Optional[datetime] = None,
     _user: User = require_perm("bank.audit.read"),

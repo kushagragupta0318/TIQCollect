@@ -110,3 +110,8 @@ seaborn==0.13.2
 # 2026-09-28 (P1 A08, d4): Fernet for TOTP secrets (services/mfa_service). It was only transitive
 # via python-jose[cryptography]; pinned at the version the fieldops-test image resolves.
 cryptography==50.0.1
+# 2026-10-07 (E09/E10, report engine): board/agency-review packs as PDF, PPTX and XLSX
+# (app/reports/). matplotlib is already pinned above for charts.py.
+reportlab==4.5.1
+python-pptx==1.0.2
+openpyxl==3.1.5

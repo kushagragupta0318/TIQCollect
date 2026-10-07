@@ -5,7 +5,15 @@
 import { cva, type VariantProps } from "../lib/cva";
 
 export const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-control border bg-card text-sm font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0",
+  // tap-target: a touch/narrow-viewport-only 44px floor (index.css) — every
+  // size variant below is already that tall on desktop, so this only grows
+  // the smaller ones (xs/sm) where they actually need it, same floor
+  // manager's own buttons apply by hand per button.
+  // motion-safe:hover/active: a 1px lift and a press-in, gated so a
+  // prefers-reduced-motion user gets the state change with no transform at
+  // all rather than a cancelled one (motion-reduce: would still lose a
+  // same-specificity race against the hover/active rules it's meant to beat).
+  "tap-target inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-control border bg-card text-sm font-medium transition-[color,background-color,transform] duration-150 motion-safe:hover:-translate-y-px motion-safe:active:translate-y-0 motion-safe:active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0",
   {
     variants: {
       variant: {
