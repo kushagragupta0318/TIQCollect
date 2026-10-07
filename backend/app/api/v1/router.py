@@ -40,3 +40,7 @@ api_router.include_router(bank_strategy.router)
 # Own line, same reason as bank_placements above.
 from app.api.v1.endpoints import manager_agency_profile  # noqa: E402
 api_router.include_router(manager_agency_profile.router)
+# 2026-10-07 (K01 Admin → Settings): the bank's config page, /bank/settings.
+# Own line, for the same merge reason as above.
+from app.api.v1.endpoints import bank_settings  # noqa: E402
+api_router.include_router(bank_settings.router)

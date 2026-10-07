@@ -73,6 +73,9 @@ class AuditAction(str, enum.Enum):
     # v2_0016 (2026-09-29, P3): the bank feed ended a placement (paid direct / settled -> RESOLVED,
     # written off -> RETURNED); a recall is PLACEMENT_RECALLED
     PLACEMENT_ENDED = "PLACEMENT_ENDED"
+    # v2_0028 (2026-10-07, K01 Admin → Settings): a bank admin edited the bank's
+    # ops settings (contact hours, geo-fence, SLA). Appended, never reordered.
+    BANK_SETTINGS_UPDATED = "BANK_SETTINGS_UPDATED"
 
 
 class AuditLog(Base, UUIDPrimaryKey):
