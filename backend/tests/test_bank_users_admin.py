@@ -109,6 +109,11 @@ def test_another_banks_user_is_invisible_the_uniform_404(world):
                                                  reason="x", request=_request()),
         lambda: bank_user_service.reactivate_user(world["db"], world["bank_admin"], world["bank2_analyst"].id,
                                                   request=_request()),
+        # reset_login belongs in this loop most of all: it is the one that
+        # TEXTS a credential link, so a missing scope here does not leak a row,
+        # it sends another bank's user a way into an account.
+        lambda: bank_user_service.reset_login(world["db"], world["bank_admin"], world["bank2_analyst"].id,
+                                              request=_request()),
     ):
         with pytest.raises(AppException) as e:
             fn()
@@ -142,15 +147,19 @@ def test_role_change_moves_analyst_to_techops(world):
     assert out["changed"] is True and out["role"] == "BANK_TECHOPS"
     world["db"].expire_all()
     assert world["db"].get(User, world["analyst"].id).role == UserRole.BANK_TECHOPS
-    row = _audits(world["db"], AuditAction.USER_DEACTIVATED)[0]
+    # v2_0032: its own action, not USER_DEACTIVATED with a details hint. The
+    # bank Audit page counts by action, so a role flip filed as a deactivation
+    # told a compliance screen something false.
+    row = _audits(world["db"], AuditAction.USER_ROLE_CHANGED)[0]
     assert row.details["event"] == "USER_ROLE_CHANGED" and row.details["to_role"] == "BANK_TECHOPS"
+    assert _audits(world["db"], AuditAction.USER_DEACTIVATED) == []      # nobody was deactivated
 
 
 def test_role_change_to_the_same_role_is_a_no_op_not_an_error(world):
     out = bank_user_service.change_role(world["db"], world["bank_admin"], world["analyst"].id,
                                         role=UserRole.BANK_ANALYST, request=_request())
     assert out["changed"] is False
-    assert _audits(world["db"], AuditAction.USER_DEACTIVATED) == []
+    assert _audits(world["db"], AuditAction.USER_ROLE_CHANGED) == []
 
 
 def test_role_change_cannot_promote_to_bank_admin(world):
@@ -186,6 +195,9 @@ def test_deactivate_ends_sessions_and_reactivate_restores(world):
 
     back = bank_user_service.reactivate_user(db, world["bank_admin"], world["analyst"].id, request=_request())
     assert back["is_active"] is True
+    rerow = _audits(db, AuditAction.USER_REACTIVATED)[0]                  # v2_0032, its own action
+    assert rerow.details["event"] == "USER_REACTIVATED"
+    assert len(_audits(db, AuditAction.USER_DEACTIVATED)) == 1            # still just the one
     db.expire_all()
     assert world["analyst"].is_active is True and world["analyst"].deactivated_at is None
 
@@ -258,3 +270,39 @@ def test_the_bank_admin_reaches_the_routes(world):
     d = c.post(f"/api/v1/bank/users/{world['analyst'].id}/deactivate", headers=_hdr(world["bank_admin"]),
                json={"reason": "offboarding"})
     assert d.status_code == 200 and d.json()["is_active"] is False
+
+
+def test_the_invite_response_still_carries_the_link_fields(world, monkeypatch):
+    """Rule 18's trap: response_model is an ALLOWLIST. A model that omits a
+    field the service returns DROPS it, and every service-level test above
+    still passes because they never go through the route. The LINK channel
+    exists to hand back `token` and `path`; an invite response without them is
+    an invite nobody can accept."""
+    c = TestClient(app)
+    r = c.post("/api/v1/bank/users/invite", headers=_hdr(world["bank_admin"]),
+               json={"full_name": "New Analyst", "email": "new.analyst@example.in",
+                     "phone": "9811111222", "role": "BANK_ANALYST", "channel": "LINK"})
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["token"] and body["path"], body
+    assert body["invite"]["email"] == "new.analyst@example.in"
+
+
+def test_the_reset_login_response_says_whether_it_sent(world, monkeypatch):
+    """Same trap: admin_reset returns {sent, expires_at}, and a model that
+    invented other field names would have returned nulls for both."""
+    # Same stubs the service-level reset test uses: without PUBLIC_BASE_URL and
+    # a stubbed sender the route 503s on delivery, which would make this test
+    # about Twilio rather than about the response contract.
+    from app.core.config import settings
+    from app.services import notification_service, password_service
+    monkeypatch.setattr(settings, "PUBLIC_BASE_URL", "https://fieldops.example.in")
+    monkeypatch.setattr(password_service, "claim_cooldown", lambda *a, **k: True)
+    monkeypatch.setattr(notification_service.NotificationService, "send_sms",
+                        staticmethod(lambda *a, **k: True))
+    c = TestClient(app)
+    r = c.post(f"/api/v1/bank/users/{world['analyst'].id}/reset-login", headers=_hdr(world["bank_admin"]))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "sent" in body and isinstance(body["sent"], bool)
+    assert body["expires_at"]
