@@ -151,3 +151,24 @@ def test_the_case_ranking_prompt_fences_the_call_note():
     assert "fence(f\"call note for case {i}\"" in src
     assert "signals.append(call.customer_response_notes[:60])" not in src
     assert "DATA_RULE" in src
+
+
+def test_the_visit_strategy_response_is_gated_by_the_figure_and_tone_guards():
+    """2026-10-07 (RAG + guardrails build): a response the LLM seam itself
+    calls OK can still be rejected by check_figures/check_tone, and the
+    `ai_generated` the agent sees must track that rejection, not the raw
+    seam result -- the same reason the sibling test above is asserted on
+    the source rather than built against a live route: the property under
+    test is how the branch is WIRED, and check_figures/check_tone's own
+    behaviour is already covered by tests/test_guardrails.py."""
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parents[1]
+           / "app" / "api" / "v1" / "endpoints" / "agent.py").read_text(encoding="utf-8")
+    assert "guardrails.check_figures(_llm.text, prompt)" in src
+    assert "guardrails.check_tone(_llm.text)" in src
+    # The accepted/rejected decision, not the seam's own flag, must be what
+    # reaches the agent -- the exact bug this guard's own wiring could
+    # reintroduce if someone later "simplifies" it back to `_llm.ai_generated`.
+    assert 'strategy["ai_generated"] = _ai_accepted' in src
+    assert 'strategy["ai_generated"] = _llm.ai_generated' not in src
+    assert "rag.reference_block(" in src

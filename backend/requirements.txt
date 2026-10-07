@@ -115,3 +115,12 @@ cryptography==50.0.1
 reportlab==4.5.1
 python-pptx==1.0.2
 openpyxl==3.1.5
+# 2026-10-07 (owner-directed build): local RAG grounding for the narrative LLM
+# calls (core/rag/). CPU-only ONNX embeddings, not sentence-transformers/torch
+# — torch is exactly the dependency weight RESTRUCTURE-PLAN 1.7 removes
+# xgboost to get away from. Pulls in onnxruntime + huggingface_hub as
+# transitives; the embedding model itself (Qdrant/bge-small-en-v1.5-onnx-Q,
+# ~65MB quantized) downloads from Hugging Face on first use and is cached,
+# not committed — core/rag.py degrades to no grounding, never an error, if
+# that download or this package is ever unavailable (local-first).
+fastembed==0.8.1
