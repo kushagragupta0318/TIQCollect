@@ -224,7 +224,7 @@ def own_case(db, agent_id: str, case_id: str):
 # ── Public entry point ───────────────────────────────────────────────────────
 def extract(transcript: str, *, today: date | None = None,
             remaining_amount: float | None = None,
-            names: Iterable[str] = ()) -> ExtractionResult:
+            names: Iterable[str] = (), bank_id: str | None = None) -> ExtractionResult:
     """Suggested form values for one transcript. Never raises.
 
     `remaining_amount` is the case's target less what is collected; the route
@@ -233,13 +233,15 @@ def extract(transcript: str, *, today: date | None = None,
     `names` are the people the transcript is likely to name (the borrower).
     A dictated note is the freest text the product sends a model, so the seam
     is told what to pseudonymise beyond what its patterns can see.
+
+    `bank_id` (F11): the case's own bank, for usage/cost attribution.
     """
     text = _normalise(transcript)[:MAX_TRANSCRIPT_CHARS]
     today = today or datetime.now(IST).date()
     if not text:
         return ExtractionResult(source=SOURCE_NONE, failure_reason="Empty transcript")
 
-    res = _ask_llm(text, today, names=names)
+    res = _ask_llm(text, today, names=names, bank_id=bank_id)
     if res.ai_generated:
         candidates = _from_llm_payload(res.data)
         if candidates is not None:
@@ -293,7 +295,8 @@ LLM_DEADLINE_SECONDS = 25.0
 _POOL = None
 
 
-def _ask_llm(text: str, today: date, *, names: Iterable[str] = ()) -> llm.LLMResult:
+def _ask_llm(text: str, today: date, *, names: Iterable[str] = (),
+             bank_id: str | None = None) -> llm.LLMResult:
     """The only LLM call in this module. Not cached: the prompt is verbatim
     borrower speech, and an hour in Redis buys nothing for a one-off note.
 
@@ -311,6 +314,7 @@ def _ask_llm(text: str, today: date, *, names: Iterable[str] = ()) -> llm.LLMRes
     fut = _POOL.submit(
         llm.complete, _prompt(text, today), purpose="visit_extraction", system=_SYSTEM,
         json_mode=True, max_tokens=1200, temperature=0.0, cache_ttl=0, names=list(names),
+        bank_id=bank_id,
     )
     try:
         return fut.result(timeout=LLM_DEADLINE_SECONDS)

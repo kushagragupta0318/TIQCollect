@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 
+import numpy as np
 import pytest
 
 from app.core.errors import AppException, ErrorCode
@@ -191,3 +192,42 @@ def test_build_cash_forecast_end_to_end():
     assert run.backtest.n_folds >= 1
     # every read was made with the caller's own bank id, not a default
     assert all(params.get("bank") == BANK for _sql, params in s.calls)
+
+
+def test_a_trailing_reporting_gap_does_not_flatline_the_bands_to_zero():
+    """2026-10-07, demo-visible: on the live book, a ~2-week ingest lag at the
+    tail (the most recent weeks bucket to literal 0, not because collections
+    stopped) made p10/p50 and eventually even p90 collapse to a flat 0 line
+    from mid-horizon on. Reproduced here with a declining, noisy 44-week
+    series ending in two exact-zero weeks, with no bottom-up signal at all
+    (so `reconciled` IS the ETS leg, isolating the engine's own bands from
+    the blend). The fix: trim_trailing_reporting_lag + residual_bands'
+    start_h keep the bands centred on the point forecast and growing, not
+    collapsing."""
+    rng = np.random.default_rng(1)
+    n = 44
+    base = np.linspace(3_000_000.0, 1_000_000.0, n)
+    noise = rng.normal(0, 400_000.0, n)
+    history = np.maximum(base + noise, 0.0)
+    history[-2:] = 0.0   # the reporting-lag tail
+    payment_rows = [(AS_OF - timedelta(weeks=n - i) + timedelta(days=2), float(v))
+                    for i, v in enumerate(history)]
+    table = {
+        CF._PAYMENTS_SQL: payment_rows,
+        CF._PTP_SCHEDULE_SQL: [], CF._PTP_HONOR_SQL: [], CF._RECOVERY_RISK_SQL: [],
+    }
+    run = CF.build_cash_forecast(_FakeSession(table), BANK, as_of=AS_OF)
+
+    assert run.reporting_lag_weeks == 2
+    assert run.history_weeks == n
+    # p50 is the point forecast itself, never clipped to a flat 0 by a biased
+    # residual median.
+    assert list(run.p50) == list(run.top_down)
+    # The SPREAD above p50 (not p90's raw level, which also carries the
+    # ETS point forecast's own declining trend) must keep widening through
+    # the whole horizon -- that growth is what collapsed to a flat 0 in the
+    # reported bug, regardless of what the point forecast itself was doing.
+    p50, p90 = np.array(run.p50), np.array(run.p90)
+    spread = p90 - p50
+    assert (np.diff(spread) >= -1e-6).all(), f"the p90 spread must not shrink week over week: {spread.tolist()}"
+    assert p90[-1] > 0.0, "p90 at week 13 collapsed to zero"

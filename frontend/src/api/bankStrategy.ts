@@ -132,6 +132,10 @@ export interface CashForecastRun {
   weeks: CashForecastWeek[];
   totals: { p10: number; p50: number; p90: number };
   history_weeks: number;
+  /** Trailing weeks of history treated as not-yet-reported (an ingest lag),
+   *  not real zero collections, and excluded from the ETS fit. 0 when the
+   *  book's most recent week carried a VERIFIED payment. */
+  reporting_lag_weeks: number;
   /** null when no PTP has resolved yet in the lookback window — not a rate of 0 or 1. */
   ptp_honor_rate: number | null;
   ptp_resolved_count: number;

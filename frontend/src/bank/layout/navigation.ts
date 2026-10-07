@@ -248,6 +248,7 @@ export const BANK_NAV_ITEMS: BankNavItem[] = BANK_SECTIONS.flatMap((s) => s.item
 export const BUILT_NAV_PATHS: ReadonlySet<string> = new Set([
   "overview",
   "analytics",
+  "alerts",
   "agencies/directory",
   "agencies/performance",
   "agencies/placement",
@@ -261,6 +262,7 @@ export const BUILT_NAV_PATHS: ReadonlySet<string> = new Set([
   "admin/settings",
   "admin/users",
   "tech-ops/mlops",
+  "tech-ops/usage",
 ]);
 
 export const isBuiltPath = (path: string): boolean => BUILT_NAV_PATHS.has(path);

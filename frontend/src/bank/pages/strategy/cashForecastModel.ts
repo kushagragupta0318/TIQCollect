@@ -56,6 +56,16 @@ export function honorRateLabel(run: CashForecastRun): string {
   return run.ptp_honor_rate === null ? "No PTP history yet" : `${(run.ptp_honor_rate * 100).toFixed(0)}%`;
 }
 
+/** Read off the run, never guessed: whether and how many trailing weeks were
+ *  treated as not-yet-reported rather than as a real drop to zero. Empty
+ *  when there is no lag — this is furniture only when it applies. */
+export function reportingLagNote(run: CashForecastRun): string | null {
+  if (!run.reporting_lag_weeks) return null;
+  const weeks = run.reporting_lag_weeks === 1 ? "1 week" : `${run.reporting_lag_weeks} weeks`;
+  return `The most recent ${weeks} of this book carried no VERIFIED payment yet. Treated as not-yet-reported ` +
+    `(an ingest lag), not as collections dropping to zero, and excluded from the fit.`;
+}
+
 /** The forecast-vs-actual tracker's own words — never a second copy of the
  *  calibrated/MAPE wording elsewhere, since BAND_NOTE-style duplication is
  *  exactly what strategy/honesty.py exists to prevent for the headline

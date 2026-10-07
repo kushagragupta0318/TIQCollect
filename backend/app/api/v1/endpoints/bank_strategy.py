@@ -72,6 +72,7 @@ class CashForecastOut(BaseModel):
     weeks: list[CashForecastWeekOut]
     totals: dict[str, float]
     history_weeks: int
+    reporting_lag_weeks: int
     ptp_honor_rate: Optional[float]
     ptp_resolved_count: int
     recovery_informed_total: float
@@ -146,7 +147,9 @@ def cash_forecast_endpoint(ctx: CurrentContext, adb: AnalyticsDb,
     forecast built on invented history."""
     bank_id = _bank_of(ctx)
     run = CF.build_cash_forecast(adb, bank_id, as_of=as_of)
-    basis = (f"{run.history_weeks} week(s) of VERIFIED payments, Holt ETS "
+    lag_note = (f", last {run.reporting_lag_weeks} week(s) treated as not-yet-reported"
+               if run.reporting_lag_weeks else "")
+    basis = (f"{run.history_weeks} week(s) of VERIFIED payments{lag_note}, Holt ETS "
              f"(alpha={run.alpha}, beta={run.beta}), {run.ptp_resolved_count} resolved PTP(s) "
              f"for the honor rate, {run.recovery_informed_loans} recovery_risk-scored loan(s) "
              f"with no active PTP")
@@ -160,6 +163,7 @@ def cash_forecast_endpoint(ctx: CurrentContext, adb: AnalyticsDb,
         ],
         "totals": run.totals(),
         "history_weeks": run.history_weeks,
+        "reporting_lag_weeks": run.reporting_lag_weeks,
         "ptp_honor_rate": run.ptp_honor_rate,
         "ptp_resolved_count": run.ptp_resolved_count,
         "recovery_informed_total": run.recovery_informed_total,

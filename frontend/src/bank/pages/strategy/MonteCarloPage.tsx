@@ -224,6 +224,8 @@ function Results({ run }: { run: SimulationRun }) {
                 { key: "ecl", name: "ECL (₹ Cr)", color: BRAND.destructive },
               ]}
               line={{ key: "coverage", name: "Coverage (%)", color: BRAND.warning }}
+              barFormat={cr1}
+              lineFormat={pct}
             />
           </div>
         )}

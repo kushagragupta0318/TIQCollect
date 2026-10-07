@@ -3334,6 +3334,7 @@ def ai_briefing(current_user: ManagerOnly, db: DbSession, refresh: bool = False)
         _brief_llm = _llm.complete(
             f"Operational data: {_ctx}",
             purpose="briefing", json_mode=True, temperature=0.25, max_tokens=1200,
+            bank_id=current_user.bank_id,
             # The staff names this blob carries; the seam restores them in the answer.
             names=_ctx["stalled_names"],
             system=(
@@ -3636,6 +3637,7 @@ def agent_ai_insight(agent_id: UUIDPath, current_user: ManagerOnly, db: DbSessio
         _insight_llm = _llm.complete(
             f"Agent data: {_ctx}",
             purpose="agent_insight", json_mode=True, temperature=0.25, max_tokens=1200,
+            bank_id=current_user.bank_id,
             names=[agent_name],
             system=(
                     "You are a collections operations analyst. Analyse a field agent's full performance profile. "
@@ -4417,6 +4419,7 @@ def get_monthly_report(
     report_text = scope_stats  # rich fallback when the model cannot answer
     _report_llm = _llm.complete(
         prompt, purpose="monthly_report", max_tokens=900, temperature=0.3,
+        bank_id=current_user.bank_id,
         names=prompt_names,
     )
     if _report_llm.ai_generated and _report_llm.text:

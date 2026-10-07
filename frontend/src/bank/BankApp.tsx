@@ -16,10 +16,12 @@ import { BANK_PORTAL_ROLES, BANK_ROLE_LABELS, isBankPortalRole } from "./layout/
 import { BANK_NAV_ITEMS } from "./layout/navigation";
 import { BankAnalyticsPage } from "./pages/BankAnalyticsPage";
 import { BankOverviewPage } from "./pages/BankOverviewPage";
+import AlertsPage from "./pages/AlertsPage";
 import { AuditPage } from "./pages/admin/AuditPage";
 import RegionsPage from "./pages/admin/RegionsPage";
 import SettingsPage from "./pages/admin/SettingsPage";
 import { MLOpsPage } from "./pages/techops/MLOpsPage";
+import UsageCostPage from "./pages/techops/UsageCostPage";
 import BankUsersPage from "./pages/admin/BankUsersPage";
 import { BankPlacementPage } from "./pages/BankPlacementPage";
 import { BankPlaceholderPage } from "./pages/BankPlaceholderPage";
@@ -43,11 +45,11 @@ const AGENCY_PERFORMANCE_PATH = "agencies/performance";
 
 // Screens that are built; every other nav item renders its placeholder.
 const BUILT_PAGES: Record<string, ComponentType> = {
-  overview: BankOverviewPage, analytics: BankAnalyticsPage, "agencies/placement": BankPlacementPage,
+  overview: BankOverviewPage, analytics: BankAnalyticsPage, alerts: AlertsPage, "agencies/placement": BankPlacementPage,
   "governance/models": ModelsPage, "strategy/monte-carlo": MonteCarloPage,
   "strategy/board-reports": BoardReportsPage, "strategy/cash-forecast": CashForecastPage,
   "admin/audit": AuditPage, "admin/regions": RegionsPage, "admin/settings": SettingsPage,
-  "tech-ops/mlops": MLOpsPage, "admin/users": BankUsersPage,
+  "tech-ops/mlops": MLOpsPage, "tech-ops/usage": UsageCostPage, "admin/users": BankUsersPage,
 };
 
 

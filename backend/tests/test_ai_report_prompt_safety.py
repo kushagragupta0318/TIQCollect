@@ -43,7 +43,7 @@ def _case():
         loan=SimpleNamespace(loan_type="PERSONAL", bank_name="Girivan Finance", dpd=47,
                              dpd_bucket="BUCKET_2"),
         is_escalated=False, escalation_reason=None, escalation_notes=None,
-        target_amount=25000.0, collected_amount=0.0,
+        target_amount=25000.0, collected_amount=0.0, bank_id="bank-girivan",
     )
 
 
@@ -113,6 +113,16 @@ def test_the_borrowers_name_is_still_declared_for_redaction(sent):
     """The privacy fix and this one have to hold at the same time."""
     ai_report_service.AIReportService.generate_visit_report(_visit(), _case())
     assert sent["kwargs"]["names"] == ["Farhan Siddiqui"]
+
+
+def test_the_calls_own_bank_is_charged_not_a_default_or_another_ones(sent):
+    """case_service and this module both swallow exceptions around the
+    complete() call, so a wrong or missing bank_id would pass every other
+    test here silently -- this is the one that would actually catch it
+    (coordinator audit, 2026-10-07)."""
+    case = _case()
+    ai_report_service.AIReportService.generate_visit_report(_visit(), case)
+    assert sent["kwargs"]["bank_id"] == case.bank_id
 
 
 # ── The rest of the family: the other two prompts that quote people ─────────
