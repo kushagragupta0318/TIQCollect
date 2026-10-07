@@ -13,7 +13,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from tests.pg.test_pg_analytics_b import A2, B1, CUST, IST, _insert, _refresh, book  # noqa: F401 — the hand-built book
+from tests.pg.test_pg_analytics_b import A1, A2, AGENT1, B1, CASE1, CUST, IST, _insert, _refresh, book  # noqa: F401 — the hand-built book
 from tests.pg.test_pg_demo_fixture import db, sql_text  # noqa: F401 — the restored fixture
 
 pytestmark = pytest.mark.filterwarnings("ignore")
@@ -359,3 +359,61 @@ def test_an_unsupported_dimension_abstains_the_whole_tab_not_a_silent_ignore(vie
     with _session(views, BANK["id"]) as s:
         out = compute_tab(s, s, "agencies", BANK["id"], KpiFilter(bucket="NPA"))
     assert not out["available"] and "bucket" in out["reason"].lower()
+
+
+def test_bank_and_manager_report_the_same_collection_efficiency(book):  # noqa: F811
+    """The exact gap the audit found (F1, 2026-10-07): GET /bank/analytics/
+    agencies and GET /manager/analytics used to show two different "how well
+    is this agency collecting" numbers for the same agency and month -- the
+    bank's collectible-due-based collection_efficiency vs the manager's live,
+    target-based rate, ~13x apart on real data. Both now read
+    collection_efficiency from the SAME function (agency_scorecard); this
+    pins them equal, calling each side's own endpoint function directly
+    (no HTTP layer -- a FastAPI route is a plain callable) against the same
+    Postgres connection."""
+    import app.api.v1.endpoints.manager as manager_module
+    from app.api.v1.endpoints.manager import analytics as manager_analytics
+    from app.core import database
+    from app.services.bank.agency_scorecard import agency_scorecard
+
+    manager_id = str(uuid.uuid4())
+    with book.begin() as conn:
+        conn.execute(text("SET LOCAL session_replication_role = replica"))
+        _insert(conn, "tenancy.users", id=manager_id, bank_id=B1, agency_id=A1, role="AGENCY_MANAGER")
+        conn.execute(text("UPDATE workforce.agents SET manager_user_id = :m WHERE id = :a"),
+                    {"m": manager_id, "a": AGENT1})
+    _refresh(book)
+
+    class _FixedToday(date):
+        """_effective_today() falls back to date.today() when the agent has
+        no beats (true for AGENT1 in this book) -- the book's own data is
+        dated January 2025, so "today" must land there for the manager's
+        6-month trailing window to ever see it."""
+        @classmethod
+        def today(cls):
+            return date(2025, 1, 31)
+
+    with book.connect() as conn:
+        with conn.begin():
+            conn.execute(text("SET LOCAL ROLE tiq_app"))
+            database._set_tenant(conn, {"user_id": manager_id, "bank_id": B1, "agency_id": A1, "scope": "AGENCY"})
+            adb = Session(bind=conn)
+            row = conn.execute(text("SELECT id, bank_id, agency_id FROM tenancy.users WHERE id = :m"),
+                              {"m": manager_id}).mappings().one()
+            fake_user = type("FakeManager", (), dict(row))()
+            mp = pytest.MonkeyPatch()
+            try:
+                mp.setattr(manager_module, "date", _FixedToday)
+                result = manager_analytics(current_user=fake_user, db=adb, adb=adb)
+            finally:
+                mp.undo()
+    jan = next(r for r in result["monthly_trend"] if r["month"] == "2025-01")
+
+    with book.connect() as conn:
+        with conn.begin():
+            conn.execute(text("SET LOCAL ROLE tiq_app"))
+            database._set_tenant(conn, {"user_id": "t", "bank_id": B1, "agency_id": None, "scope": "BANK"})
+            card = agency_scorecard(Session(bind=conn), bank_id=B1, agency_id=A1, month_start=date(2025, 1, 1))
+
+    assert card.get("collection_efficiency") is not None, "fixture drifted: no collectible_due this month"
+    assert jan["collection_efficiency_pct"] == round(card["collection_efficiency"] * 100, 1)
