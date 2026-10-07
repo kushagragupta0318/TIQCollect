@@ -3,7 +3,7 @@ scoped to the caller's own bank (RequestContext.bank_id, read from the user row
 on every request, never from the token)."""
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query, status
@@ -19,6 +19,7 @@ from app.models.tenancy import Agency, Bank, Region
 from app.models.user import User
 from app.services.bank.analytics_catalog import TABS as ANALYTICS_TABS
 from app.services.bank.analytics_catalog import compute_tab, numberize
+from app.services.bank.data_quality import compute_data_quality
 from app.services.bank.kpi_catalog import ROWS, compute_overview
 from app.services.bank.kpi_filter import PERIODS, FilterError, KpiFilter
 from app.services import portfolio_breakdown
@@ -226,3 +227,68 @@ def breakdown(ctx: CurrentContext, db: DbSession,
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     return [BreakdownRowOut(**vars(r)) for r in rows]
+
+
+class FeedFreshnessOut(BaseModel):
+    feed_type: str
+    last_business_date: Optional[date] = None
+    last_received_at: Optional[datetime] = None
+    rows_total: Optional[int] = None
+    rows_accepted: Optional[int] = None
+    rows_quarantined: Optional[int] = None
+    rows_skipped: Optional[int] = None
+    days_stale: Optional[int] = None
+
+
+class QuarantinedByReasonOut(BaseModel):
+    reason: str
+    rows: int
+
+
+class QuarantinedRowOut(BaseModel):
+    row_no: int
+    loan_account_number: Optional[str] = None
+    customer_ref: Optional[str] = None
+    case_number: Optional[str] = None
+    feed_type: str
+    business_date: date
+    dq_errors: list[dict]
+    created_at: datetime
+
+
+class DuplicateCustomerPhoneOut(BaseModel):
+    phone_primary: str
+    customers: int
+
+
+class OutOfRangeLoanOut(BaseModel):
+    loan_id: str
+    loan_account_number: str
+    overdue_amount: float
+    total_outstanding: float
+    outstanding_principal: float
+
+
+class DuplicatesOut(BaseModel):
+    count: int
+    sample: list[DuplicateCustomerPhoneOut]
+
+
+class OutOfRangeOut(BaseModel):
+    count: int
+    sample: list[OutOfRangeLoanOut]
+
+
+class DataQualityOut(BaseModel):
+    feed_freshness: list[FeedFreshnessOut]
+    quarantined_by_reason: list[QuarantinedByReasonOut]
+    quarantined_sample: list[QuarantinedRowOut]
+    duplicate_customer_phones: DuplicatesOut
+    out_of_range_loans: OutOfRangeOut
+
+
+@router.get("/data-quality", response_model=DataQualityOut, summary="Feed data quality (Tech Ops, task F10)")
+def data_quality(ctx: CurrentContext, db: DbSession, adb: AnalyticsDb,
+                 _user: User = require_perm("data_quality.read")):
+    bank_id = _bank_of(ctx)
+    return compute_data_quality(db, adb, bank_id)
