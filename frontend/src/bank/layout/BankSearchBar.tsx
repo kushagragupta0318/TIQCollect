@@ -157,7 +157,11 @@ export function BankSearchBar({ extra = [] }: { extra?: SearchEntry[] }) {
 
       {/* Dropdown */}
       {open && (
-        <div className="absolute top-full left-0 right-0 mt-1.5 bg-card border border-border rounded-inner shadow-menu overflow-hidden z-50 animate-slide-up">
+        // animate-slide-up is undefined (same inert class as PulseKpiFlow.tsx
+        // and DecisionAlerts.tsx) — page-fade-in's lighter 6px rise fits a
+        // dropdown anchored right under the input better than card-enter's
+        // 18px, which is tuned for a grid tile, not a menu.
+        <div className="absolute top-full left-0 right-0 mt-1.5 bg-card border border-border rounded-inner shadow-menu overflow-hidden z-50 page-fade-in">
           {results.length === 0 && query.trim().length > 0 && (
             <div className="px-4 py-6 text-center">
               <p className="text-[13px] text-muted-foreground">
