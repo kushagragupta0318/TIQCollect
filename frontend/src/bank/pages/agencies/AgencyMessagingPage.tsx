@@ -12,10 +12,15 @@
 import { useState } from "react";
 import { useNavigate } from "react-router";
 import { MessageSquare, ScrollText, Send } from "lucide-react";
-import { type InboxThread, type ThreadStatus, type ThreadSubjectType } from "@/api/messaging";
+import {
+  getThread, postMessage, setEscalationStatus,
+  type InboxThread, type ThreadStatus, type ThreadSubjectType,
+} from "@/api/messaging";
 import { errorDetail } from "@/lib/apiError";
-import { useMessagingInbox } from "@/lib/useMessagingInbox";
-import { handleComposeKeyDown, useAutoScrollOnChange, useMessagingThread } from "@/lib/useMessagingThread";
+import { MESSAGING_INBOX_KEY, useMessagingInbox } from "@/lib/useMessagingInbox";
+import {
+  handleComposeKeyDown, useAutoScrollOnChange, useMessagingThread, type ThreadEndpoints,
+} from "@/lib/useMessagingThread";
 import { AnalyticsError, AnalyticsLoading, Panel } from "../../components/analytics";
 import { PageRoot, ToolHeader } from "../../components/PageTemplate";
 import { Badge } from "../../ui/badge";
@@ -60,7 +65,16 @@ function InboxRow({ row, active, onSelect }: { row: InboxThread; active: boolean
 
 function ThreadPanel({ subjectType, subjectId }: { subjectType: ThreadSubjectType; subjectId: string }) {
   const [body, setBody] = useState("");
-  const t = useMessagingThread(subjectType, subjectId, "BANK");
+  const endpoints: ThreadEndpoints = {
+    getThread: () => getThread(subjectType, subjectId),
+    postMessage: (b) => postMessage(subjectType, subjectId, b),
+    setStatus: subjectType === "ISSUE"
+      ? (status) => setEscalationStatus(subjectId, status).then((r) => ({
+          thread: r.thread, subject_type: subjectType, subject_id: subjectId, messages: r.messages,
+        }))
+      : undefined,
+  };
+  const t = useMessagingThread(["messaging", "thread", subjectType, subjectId], "BANK", endpoints, MESSAGING_INBOX_KEY);
   const bottomRef = useAutoScrollOnChange(t.messages.length);
 
   if (t.isLoading) return <AnalyticsLoading label="Loading the conversation…" />;

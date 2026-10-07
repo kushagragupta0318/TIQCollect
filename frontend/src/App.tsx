@@ -27,6 +27,7 @@ const AgentProfilePage = lazy(() => import("@/pages/agent/AgentProfilePage"));
 const AgentCaseDetailPage = lazy(() => import("@/pages/agent/AgentCaseDetailPage"));
 const RecordVisitPage = lazy(() => import("@/pages/agent/RecordVisitPage"));
 const BeatMapPage = lazy(() => import("@/pages/agent/BeatMapPage"));
+const AgentMessagingPage = lazy(() => import("@/pages/agent/AgentMessagingPage"));
 
 const ManagerOverviewPage = lazy(() => import("@/pages/manager/ManagerOverviewPage"));
 const ManagerAgentsPage = lazy(() => import("@/pages/manager/ManagerAgentsPage"));
@@ -165,6 +166,7 @@ export default function App() {
               <Route path="cases" element={<AgentCasesPage />} />
               <Route path="cases/:id" element={<AgentCaseDetailPage />} />
               <Route path="beat" element={<BeatMapPage />} />
+              <Route path="messaging" element={<AgentMessagingPage />} />
               <Route path="profile" element={<AgentProfilePage />} />
             </Route>
 
