@@ -527,3 +527,36 @@ export async function listAgencyLeaderboard(filters: LeaderboardFilters = {}): P
   const { data } = await api.get<PerformanceIndex[]>("/bank/agencies-leaderboard", { params: filters });
   return data;
 }
+
+/** One node of the region tree (zone/region/state/city) or a leaf branch.
+ *  Every count/exposure/agency figure is already rolled up over this node's
+ *  own branches plus every descendant's — nothing here sums the children. */
+export interface RegionTreeNode {
+  id: string;
+  /** ZONE | REGION | STATE | CITY | BRANCH */
+  level: string;
+  code: string;
+  name: string;
+  loan_count: number;
+  exposure: number;
+  /** Agencies with an ACTIVE placement anywhere in this node's subtree. */
+  agency_count: number;
+  children: RegionTreeNode[];
+}
+
+export interface RegionTreeResponse {
+  roots: RegionTreeNode[];
+  /** Branches with no region assigned yet — never folded into the tree as
+   *  if they had one. Zeroed (not the real count) for a region-limited
+   *  caller: an unassigned branch is outside any subtree they may see. */
+  unassigned: {
+    branch_count: number;
+    loan_count: number;
+    exposure: number;
+  };
+}
+
+export async function getRegionTree(): Promise<RegionTreeResponse> {
+  const { data } = await api.get<RegionTreeResponse>("/bank/regions/tree");
+  return data;
+}
