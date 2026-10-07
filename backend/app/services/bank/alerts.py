@@ -39,7 +39,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.services.bank.agency_scorecard import agency_scorecard, latest_month
+from app.services.bank.agency_scorecard import compute_metrics, fetch_rows, latest_month
 from app.services.bank.analytics_catalog import compute_tab
 from app.services.bank.kpi_catalog import FIELD, KPIS, TRANSITIONS, compute_overview, latest_reading
 from app.services.bank.kpi_filter import KpiFilter
@@ -87,19 +87,33 @@ def _efficiency_drop(db: Session, adb: Session, bank_id: str) -> dict | None:
     if last is None:
         return None
     prior = _month_back(last, 1)
+    # ONE read of the scorecard window for ALL agencies, both months, instead of
+    # 9 agencies × 2 months × agency_scorecard() (each of which re-read the whole
+    # bank's window AND computed a Performance Index this rule never uses). The
+    # collection_efficiency number is identical — compute_metrics is still the one
+    # definition, now fed the rows already in hand (perf B1).
+    rows = fetch_rows(adb, bank_id=bank_id, first_month=prior, last_month=last)
+    by_agency: dict[str, list] = {}
+    for r in rows:
+        by_agency.setdefault(r.agency_id, []).append(r)
+
+    def _month(arows, m):   # rows of one agency in month m (any region)
+        return [r for r in arows if (r.month_start.year, r.month_start.month) == (m.year, m.month)]
+
     worst = None
-    for agency in db.query(Agency).filter(Agency.bank_id == bank_id):
-        now = agency_scorecard(adb, bank_id=bank_id, agency_id=agency.id, month_start=last)
-        then = agency_scorecard(adb, bank_id=bank_id, agency_id=agency.id, month_start=prior)
-        ce_now, ce_then = now.get("collection_efficiency"), then.get("collection_efficiency")
+    for agency_id, arows in by_agency.items():
+        ce_now = compute_metrics(_month(arows, last)).get("collection_efficiency")
+        ce_then = compute_metrics(_month(arows, prior)).get("collection_efficiency")
         if ce_now is None or ce_then is None or ce_then <= 0:
             continue
         drop = (ce_then - ce_now) / ce_then
         if drop >= settings.ALERT_EFFICIENCY_DROP_PCT and (worst is None or drop > worst["drop"]):
-            worst = {"agency": agency, "ce_now": ce_now, "ce_then": ce_then, "drop": drop, "row": now}
+            worst = {"agency_id": agency_id, "ce_now": ce_now, "ce_then": ce_then, "drop": drop}
     if worst is None:
         return None
-    a, row = worst["agency"], worst["row"]
+    a = db.get(Agency, worst["agency_id"])
+    if a is None:
+        return None
     name = a.trade_name or a.legal_name
     return {
         "id": "agency_efficiency_drop", "severity": "warning",
