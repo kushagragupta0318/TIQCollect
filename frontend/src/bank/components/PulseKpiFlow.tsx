@@ -35,7 +35,7 @@ export function KpiCard({ kpi, index = 0, onSelect }: { kpi: Kpi; index?: number
         <span className="truncate">{kpi.trend}</span>
       </div>
 
-      <p className="mt-2.5 text-[11px] font-normal leading-snug text-muted-foreground/80">{kpi.sub}</p>
+      <p className="mt-2.5 text-[11px] font-normal leading-snug text-muted-foreground">{kpi.sub}</p>
     </button>
   );
 }
@@ -72,7 +72,7 @@ export function PulseKpiFlow({ kpis, rows, title = "Portfolio Health", frameLabe
       <div className="space-y-5">
         {rows.map((row, r) => (
           <div key={row.id}>
-            <p className="mb-2.5 px-1 text-[11px] font-medium text-muted-foreground/70">{row.caption}</p>
+            <p className="mb-2.5 px-1 text-[11px] font-medium text-muted-foreground">{row.caption}</p>
             <div className="grid grid-cols-2 gap-3.5 sm:grid-cols-3 xl:grid-cols-6">
               {row.kpis
                 .filter((id) => byId.has(id))

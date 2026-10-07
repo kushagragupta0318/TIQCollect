@@ -47,7 +47,11 @@ export function BankLayout({ persona, onSignOut, standingAlert }: BankLayoutProp
               standingAlert={standingAlert}
               onRaiseQuery={() => setQueryOpen(true)}
             />
-            <main className="app-content flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-5 page-fade-in bg-background w-full rounded-card">
+            {/* page-fade-in lives on PageTemplate's PageRoot, not here: `main`
+               never remounts across a route change (only <Outlet/>'s child
+               does), so putting it here meant every page after the first
+               navigated with no enter transition at all. */}
+            <main className="app-content flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-5 bg-background w-full rounded-card">
               <div className="w-full mx-auto">
                 <BankErrorBoundary key={`${location.pathname}${location.search}`}>
                   <Outlet />
