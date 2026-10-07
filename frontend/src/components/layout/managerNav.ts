@@ -19,7 +19,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import {
-  BarChart2, Briefcase, Compass, LayoutDashboard, MapPin, Shield, Users,
+  BarChart2, Briefcase, Compass, LayoutDashboard, MapPin, MessageSquare, Shield, Users,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -42,6 +42,7 @@ export const MANAGER_NAV: readonly ManagerNavItem[] = [
   { to: "/manager/cases",      icon: Briefcase,       label: "Cases",      primary: true },
   { to: "/manager/analytics",  icon: BarChart2,       label: "Analytics",  primary: false },
   { to: "/manager/compliance", icon: Shield,          label: "Compliance", primary: false },
+  { to: "/manager/messaging",  icon: MessageSquare,   label: "Messages",   primary: false },
 ];
 
 /** The phone's bottom bar, before the More button. */

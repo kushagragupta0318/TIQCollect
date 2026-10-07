@@ -29,6 +29,7 @@ import OnboardAgencyWizardPage from "./pages/onboarding/OnboardAgencyWizardPage"
 import AgencyDirectoryPage from "./pages/directory/AgencyDirectoryPage";
 import AgencyPerformancePage from "./pages/performance/AgencyPerformancePage";
 import AgencyProfilePage from "./pages/directory/AgencyProfilePage";
+import AgencyMessagingPage from "./pages/agencies/AgencyMessagingPage";
 import ModelsPage from "./pages/models/ModelsPage";
 import CustomerPage from "./pages/customer/CustomerPage";
 import MonteCarloPage from "./pages/strategy/MonteCarloPage";
@@ -100,6 +101,8 @@ export default function BankApp() {
         {/* D07: the agency profile a Directory row opens to (not in
             navigation.ts — reached from a row, same as customers above). */}
         <Route path="agencies/profile/:agencyId" element={<AgencyProfilePage />} />
+        {/* bank<->agency comms: reversal disputes + agency escalations. */}
+        <Route path="agencies/messaging" element={<AgencyMessagingPage />} />
         {BankComponentGalleryPage && (
           <Route
             path="_gallery"
