@@ -59,11 +59,11 @@ def test_the_database_carries_search_path_and_timezone(pg_url):
 
 def test_the_permission_seed_is_loaded(pg_engine):
     with pg_engine.connect() as conn:
-        # 74 + 3 (payment.reversal.request/.approve.agency/.approve.bank, v2_0029);
-        # 138 + 4 (AM→request, AM/AA→approve.agency, BA→approve.bank). Cumulative at
-        # merge: if l8-rls/l7-n1 add caps ahead of this branch, bump by their delta too.
-        assert conn.execute(text("SELECT count(*) FROM tenancy.permissions")).scalar() == 77
-        assert conn.execute(text("SELECT count(*) FROM tenancy.role_permissions")).scalar() == 142
+        # 74 + 3 reversal (ADR 0015) + 2 messaging.read/.send = 79;
+        # 138 + 4 reversal + 9 messaging (read: BA/BN/BT/AA/AM, send: BA/BT/AA/AM) = 151.
+        # Cumulative at merge: if another lane adds caps ahead of this branch, add its delta.
+        assert conn.execute(text("SELECT count(*) FROM tenancy.permissions")).scalar() == 79
+        assert conn.execute(text("SELECT count(*) FROM tenancy.role_permissions")).scalar() == 151
 
 
 def test_v2_0010_releases_only_the_bindings_that_have_no_secret():

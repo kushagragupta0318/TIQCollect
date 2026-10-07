@@ -79,6 +79,9 @@ class AuditAction(str, enum.Enum):
     # test_every_native_enum_holds_the_models_values_in_order fails.
     PAYMENT_REVERSAL_REQUESTED = "PAYMENT_REVERSAL_REQUESTED"
     PAYMENT_REVERSED = "PAYMENT_REVERSED"
+    # bank↔agency messaging: one row per message sent (append-only, carries the
+    # thread's bank_id/agency_id). APPENDED at the end — see the note above.
+    MESSAGE_SENT = "MESSAGE_SENT"
 
 
 class AuditLog(Base, UUIDPrimaryKey):

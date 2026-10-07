@@ -62,7 +62,12 @@ ENUMS = (
 # CREATE lands in public (infrastructure: demo_baseline) rather than in
 # whichever domain schema happened to lead, and unqualified reads of a domain
 # table still resolve because table names are globally unique across schemas.
-SEARCH_PATH = "public, tenancy, lending, collections, workforce, planning, ml, ai, strategy, audit, analytics"
+# `messaging` is listed here (kept == core.database.SEARCH_PATH) though its schema
+# is created later, in v2_0031: a search_path may name a schema that does not exist
+# yet (Postgres ignores it until it does), and v2_0031 both creates it and re-sets
+# this path for databases deployed before it.
+SEARCH_PATH = ("public, tenancy, lending, collections, workforce, planning, ml, ai, strategy, "
+               "audit, analytics, messaging")
 
 
 def _literal(v: str) -> str:
