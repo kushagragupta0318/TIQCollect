@@ -39,3 +39,11 @@ export function useMediaQuery(query: string): boolean {
 // ladder. Keep in sync if the config changes.
 export const useIsMobile  = () => useMediaQuery("(max-width: 639px)");   // below sm
 export const useIsBelowLg = () => useMediaQuery("(max-width: 1023px)");  // below lg — nav + tables switch here
+
+// Recharts animates in JS (its own Animate component), not CSS — the
+// motion-safe:/motion-reduce: Tailwind variants and bank.css's global
+// `@media (prefers-reduced-motion: reduce)` guard (which forces
+// animation-duration: 1ms !important) never reach it, so a chart needs this
+// read directly and passed to isAnimationActive. A genuine behaviour change
+// (animate or don't), which is exactly what this hook is for.
+export const usePrefersReducedMotion = () => useMediaQuery("(prefers-reduced-motion: reduce)");
