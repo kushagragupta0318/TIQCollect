@@ -195,7 +195,15 @@ class AlertOut(BaseModel):
     basis: str
 
 
-@router.get("/alerts", response_model=list[AlertOut], summary="Alerts (plan §5.4, task C06)")
+class AlertsOut(BaseModel):
+    alerts: list[AlertOut]
+    #: So the page can say "N of 6 rules couldn't be evaluated" instead of
+    #: reading a crashed rule as "nothing is firing" (coordinator audit).
+    rules_total: int
+    rules_failed: list[str]
+
+
+@router.get("/alerts", response_model=AlertsOut, summary="Alerts (plan §5.4, task C06)")
 def bank_alerts(ctx: CurrentContext, db: DbSession, adb: AnalyticsDb, _user: User = require_perm("cc.read")):
     bank_id = _bank_of(ctx)
     return compute_alerts(db, adb, bank_id)
