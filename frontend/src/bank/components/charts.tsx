@@ -18,6 +18,7 @@ import {
   YAxis,
 } from "recharts";
 import { useId } from "react";
+import { usePrefersReducedMotion } from "../../hooks/useMediaQuery";
 import {
   analyticsLegendStyle,
   analyticsTick,
@@ -28,6 +29,13 @@ import {
   simulatorAxisTick,
   simulatorTooltipStyle,
 } from "../theme/chartTheme";
+
+// Apple-grade = subtle, never bouncy: one duration, one easing, everywhere a
+// chart in this file animates. `false` under prefers-reduced-motion — a
+// chart must render fully and correctly with it off, nothing here depends
+// on the animation completing.
+const ENTER_MS = 500;
+const ENTER_EASE = "ease-out";
 
 export interface ChartSeries {
   key: string;
@@ -226,24 +234,40 @@ export function PercentileRangeChart({
   domainFrom0?: boolean;
   height?: number;
 }) {
+  const reduceMotion = usePrefersReducedMotion();
+  const gradId = `bank-pct-${useId().replace(/:/g, "")}`;
   const data = rows.map((r) => ({ ...r, ...percentileSegments(r) }));
   const domain: [number, number] = domainFrom0
     ? [0, Math.max(...rows.map((r) => r.p95)) * 1.05]
     : [Math.min(...rows.map((r) => r.p5)) * 0.95, Math.max(...rows.map((r) => r.p95)) * 1.05];
-  const rowHeight = 34;
+  const rowHeight = 40;
   return (
-    <ResponsiveContainer width="100%" height={height ?? Math.max(120, rows.length * rowHeight)}>
-      <BarChart data={data} layout="vertical" margin={chartMargin} barCategoryGap={8}>
+    <ResponsiveContainer width="100%" height={height ?? Math.max(130, rows.length * rowHeight)}>
+      <BarChart data={data} layout="vertical" margin={{ ...chartMargin, top: 12, right: 16, bottom: 4 }} barCategoryGap={12}>
+        <defs>
+          {/* A soft top-to-bottom sheen on the solid inner segments only —
+             the outer p5-p10/p90-p95 tails stay flat (fillOpacity), since a
+             gradient on an already-translucent fill reads muddy. */}
+          <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity={1} />
+            <stop offset="100%" stopColor={color} stopOpacity={0.82} />
+          </linearGradient>
+        </defs>
         <CartesianGrid {...gridProps} horizontal={false} />
         <XAxis type="number" domain={domain} tick={simulatorAxisTick} axisLine={false} tickLine={false} tickFormatter={format} />
         <YAxis type="category" dataKey="name" tick={simulatorAxisTick} axisLine={false} tickLine={false} width={150} />
         <Tooltip content={<PercentileTooltip format={format} />} cursor={false} />
         <Bar dataKey="base" stackId="p" fill="transparent" isAnimationActive={false} />
-        <Bar dataKey="lowOuter" stackId="p" fill={color} fillOpacity={0.25} isAnimationActive={false} />
-        <Bar dataKey="preMarker" stackId="p" fill={color} fillOpacity={0.65} isAnimationActive={false} />
-        <Bar dataKey="marker" stackId="p" fill={BRAND.ink} isAnimationActive={false} />
-        <Bar dataKey="postMarker" stackId="p" fill={color} fillOpacity={0.65} isAnimationActive={false} />
-        <Bar dataKey="highOuter" stackId="p" fill={color} fillOpacity={0.25} radius={[0, 3, 3, 0]} isAnimationActive={false} />
+        <Bar dataKey="lowOuter" stackId="p" fill={color} fillOpacity={0.22} radius={[3, 0, 0, 3]}
+            isAnimationActive={!reduceMotion} animationDuration={ENTER_MS} animationEasing={ENTER_EASE} />
+        <Bar dataKey="preMarker" stackId="p" fill={`url(#${gradId})`}
+            isAnimationActive={!reduceMotion} animationDuration={ENTER_MS} animationEasing={ENTER_EASE} />
+        <Bar dataKey="marker" stackId="p" fill={BRAND.ink} stroke="#fff" strokeWidth={1}
+            isAnimationActive={!reduceMotion} animationDuration={ENTER_MS} animationEasing={ENTER_EASE} />
+        <Bar dataKey="postMarker" stackId="p" fill={`url(#${gradId})`}
+            isAnimationActive={!reduceMotion} animationDuration={ENTER_MS} animationEasing={ENTER_EASE} />
+        <Bar dataKey="highOuter" stackId="p" fill={color} fillOpacity={0.22} radius={[0, 3, 3, 0]}
+            isAnimationActive={!reduceMotion} animationDuration={ENTER_MS} animationEasing={ENTER_EASE} />
       </BarChart>
     </ResponsiveContainer>
   );
@@ -260,27 +284,58 @@ export function GroupedBarLineChart({
   xKey,
   bars,
   line,
+  /** Units for the two axes' ticks and the tooltip — Recharts' own default
+   *  would print raw numbers with no unit at all. */
+  barFormat = (v: number) => String(v),
+  lineFormat = (v: number) => String(v),
   height = 230,
 }: {
   data: Row[];
   xKey: string;
   bars: ChartSeries[];
   line: ChartSeries;
+  barFormat?: (v: number) => string;
+  lineFormat?: (v: number) => string;
   height?: number;
 }) {
+  const reduceMotion = usePrefersReducedMotion();
+  const gradId = `bank-gbl-${useId().replace(/:/g, "")}`;
+  const names = new Map([...bars.map((b) => [b.key, b.name] as const), [line.key, line.name]]);
+  const formatByKey = (key: string) => (key === line.key ? lineFormat : barFormat);
   return (
     <ResponsiveContainer width="100%" height={height}>
-      <ComposedChart data={data} margin={chartMargin}>
+      <ComposedChart data={data} margin={{ ...chartMargin, top: 12, right: 16, bottom: 4 }}>
+        <defs>
+          {bars.map((b) => (
+            <linearGradient key={b.key} id={`${gradId}-${b.key}`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={b.color} stopOpacity={0.95} />
+              <stop offset="100%" stopColor={b.color} stopOpacity={0.65} />
+            </linearGradient>
+          ))}
+        </defs>
         <CartesianGrid {...gridProps} />
         <XAxis dataKey={xKey} tick={simulatorAxisTick} axisLine={false} tickLine={false} />
-        <YAxis yAxisId="l" tick={simulatorAxisTick} axisLine={false} tickLine={false} />
-        <YAxis yAxisId="r" orientation="right" tick={simulatorAxisTick} axisLine={false} tickLine={false} />
-        <Tooltip contentStyle={simulatorTooltipStyle} />
+        <YAxis yAxisId="l" tick={simulatorAxisTick} axisLine={false} tickLine={false} tickFormatter={barFormat} />
+        <YAxis yAxisId="r" orientation="right" tick={simulatorAxisTick} axisLine={false} tickLine={false} tickFormatter={lineFormat} />
+        <Tooltip
+          contentStyle={simulatorTooltipStyle}
+          formatter={(value, _n, item) => {
+            const key = String(item?.dataKey ?? "");
+            return [formatByKey(key)(Number(value) || 0), names.get(key) ?? _n];
+          }}
+        />
         <Legend iconSize={8} iconType="circle" wrapperStyle={analyticsLegendStyle} />
         {bars.map((b) => (
-          <Bar key={b.key} yAxisId="l" dataKey={b.key} name={b.name} fill={b.color} radius={[3, 3, 0, 0]} maxBarSize={36} />
+          <Bar
+            key={b.key} yAxisId="l" dataKey={b.key} name={b.name} fill={`url(#${gradId}-${b.key})`}
+            radius={[3, 3, 0, 0]} maxBarSize={36}
+            isAnimationActive={!reduceMotion} animationDuration={ENTER_MS} animationEasing={ENTER_EASE}
+          />
         ))}
-        <Line yAxisId="r" type="monotone" dataKey={line.key} name={line.name} stroke={line.color} strokeWidth={2} dot={{ r: 3 }} />
+        <Line
+          yAxisId="r" type="monotone" dataKey={line.key} name={line.name} stroke={line.color} strokeWidth={2} dot={{ r: 3 }}
+          isAnimationActive={!reduceMotion} animationDuration={ENTER_MS} animationEasing={ENTER_EASE}
+        />
       </ComposedChart>
     </ResponsiveContainer>
   );
