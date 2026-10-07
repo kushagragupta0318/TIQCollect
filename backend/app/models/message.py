@@ -27,7 +27,7 @@ from __future__ import annotations
 import enum
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, ForeignKeyConstraint, Index, String, Text, text
+from sqlalchemy import CheckConstraint, DateTime, Index, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, CreatedAtMixin, TimestampMixin, UUIDPrimaryKey, UUIDType, uuid_fk
@@ -36,10 +36,17 @@ from app.models.base import Base, CreatedAtMixin, TimestampMixin, UUIDPrimaryKey
 class ThreadSubject(str, enum.Enum):
     REVERSAL = "REVERSAL"      # a payment_reversal_requests row (live)
     PLACEMENT = "PLACEMENT"    # a placement decision (reserved; wired later)
+    ISSUE = "ISSUE"            # a general agency→bank escalation (collections.escalation_issues)
 
 
 class ThreadStatus(str, enum.Enum):
     OPEN = "OPEN"
+    CLOSED = "CLOSED"
+
+
+class IssueStatus(str, enum.Enum):
+    OPEN = "OPEN"
+    RESOLVED = "RESOLVED"
     CLOSED = "CLOSED"
 
 
@@ -51,6 +58,7 @@ class SenderSide(str, enum.Enum):
 SUBJECT_TYPES = tuple(s.value for s in ThreadSubject)
 THREAD_STATUSES = tuple(s.value for s in ThreadStatus)
 SENDER_SIDES = tuple(s.value for s in SenderSide)
+ISSUE_STATUSES = tuple(s.value for s in IssueStatus)
 
 
 def _check_in(col: str, values: tuple[str, ...]) -> str:
@@ -96,5 +104,47 @@ class Message(Base, UUIDPrimaryKey, CreatedAtMixin):
     __table_args__ = (
         CheckConstraint(_check_in("sender_side", SENDER_SIDES), name="sender_side"),
         Index(None, "thread_id", "created_at"),
+        {"schema": "collections"},
+    )
+
+
+class EscalationIssue(Base, UUIDPrimaryKey, TimestampMixin):
+    """A general agency→bank escalation — "escalate any issue", not tied to a
+    reversal or placement. The agency opens it (messaging.escalate); it is the
+    subject of exactly one ISSUE thread (subject_id = this id). The bank or the
+    owning agency can change its status; every change is audited."""
+    __tablename__ = "escalation_issues"
+
+    bank_id: Mapped[str] = mapped_column(UUIDType, nullable=False)
+    agency_id: Mapped[str] = mapped_column(UUIDType, nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(10), default=IssueStatus.OPEN.value, server_default=text("'OPEN'"), nullable=False)
+    created_by_user_id: Mapped[str] = uuid_fk("tenancy.users.id")
+
+    __table_args__ = (
+        CheckConstraint(_check_in("status", ISSUE_STATUSES), name="status"),
+        Index(None, "agency_id", "status"),
+        Index(None, "bank_id", "status"),
+        {"schema": "collections"},
+    )
+
+
+class ThreadRead(Base, UUIDPrimaryKey):
+    """Per-user read marker for a thread: the inbox's `unread` flag. The service
+    upserts the caller's row when they open the thread; unread = the thread's last
+    message is newer than this. Carries the thread's tenant for _AGENCY_OWNED RLS."""
+    __tablename__ = "thread_reads"
+    __tenant_parents__ = (("thread_id", "MessageThread"),)
+
+    bank_id: Mapped[str] = mapped_column(UUIDType, nullable=False)
+    agency_id: Mapped[str] = mapped_column(UUIDType, nullable=False)
+    thread_id: Mapped[str] = uuid_fk("collections.message_threads.id", ondelete="CASCADE")
+    user_id: Mapped[str] = uuid_fk("tenancy.users.id")
+    last_read_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        # One read marker per (thread, user): the service upserts on this.
+        Index("uq_thread_read_per_user", "thread_id", "user_id", unique=True),
         {"schema": "collections"},
     )

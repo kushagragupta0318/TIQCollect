@@ -21,7 +21,9 @@ from app.models.audit_log import AuditAction, AuditLog  # noqa: F401  (AuditLog 
 from app.models.case import Case, CaseStatus
 from app.models.customer import Customer
 from app.models.loan import DPDBucket, Loan, LoanStatus, LoanType
-from app.models.message import MessageThread, SenderSide, ThreadStatus, ThreadSubject
+from app.models.message import (
+    EscalationIssue, IssueStatus, MessageThread, SenderSide, ThreadStatus, ThreadSubject,
+)
 from app.models.payment import Payment, PaymentMode, PaymentStatus
 from app.models.payment_reversal import PaymentReversalRequest, ReversalStatus
 from app.models.tenancy import Agency, Bank
@@ -184,6 +186,63 @@ def test_sender_side_fails_closed_on_an_unexpected_scope(db):
     with pytest.raises(HTTPException) as e:
         MessagingService(db)._side(_Ctx(mgr, "PLATFORM"))
     assert e.value.status_code == 403
+
+
+def test_agency_opens_a_general_escalation(db):
+    mgr = _user(db, UserRole.AGENCY_MANAGER)
+    out = MessagingService(db).open_escalation(_Ctx(mgr, "AGENCY"), "Wrong allocation batch", "please check")
+    assert out["issue"]["title"] == "Wrong allocation batch" and out["issue"]["status"] == IssueStatus.OPEN.value
+    assert out["thread"]["subject_type"] == ThreadSubject.ISSUE.value
+    assert out["thread"]["subject_id"] == out["issue"]["id"]
+    assert len(out["messages"]) == 1 and out["messages"][0]["sender_side"] == SenderSide.AGENCY.value
+    assert db.query(AuditLog).filter(AuditLog.action == AuditAction.MESSAGE_SENT).count() == 1
+
+
+def test_bank_cannot_open_escalation_but_replies_and_resolves(db):
+    mgr = _user(db, UserRole.AGENCY_MANAGER)
+    bank = _user(db, UserRole.BANK_ADMIN)
+    svc = MessagingService(db)
+    issue_id = svc.open_escalation(_Ctx(mgr, "AGENCY"), "Dispute", "opening")["issue"]["id"]
+    # bank cannot OPEN an agency escalation
+    with pytest.raises(HTTPException) as e:
+        svc.open_escalation(_Ctx(bank, "BANK"), "x", "y")
+    assert e.value.status_code == 403
+    # bank CAN reply on the issue thread, and resolve it
+    svc.post_message(_Ctx(bank, "BANK"), ThreadSubject.ISSUE.value, issue_id, "looking into it")
+    out = svc.change_status(_Ctx(bank, "BANK"), issue_id, IssueStatus.RESOLVED.value)
+    assert out["issue"]["status"] == IssueStatus.RESOLVED.value
+    assert db.get(EscalationIssue, issue_id).status == IssueStatus.RESOLVED.value
+    assert db.query(AuditLog).filter(AuditLog.action == AuditAction.ESCALATION_STATUS_CHANGED).count() == 1
+
+
+def test_another_agency_cannot_change_status(db):
+    mgr = _user(db, UserRole.AGENCY_MANAGER)
+    other = _user(db, UserRole.AGENCY_MANAGER, agency=OTHER_AGENCY)
+    svc = MessagingService(db)
+    issue_id = svc.open_escalation(_Ctx(mgr, "AGENCY"), "mine", "body")["issue"]["id"]
+    with pytest.raises(HTTPException) as e:
+        svc.change_status(_Ctx(other, "AGENCY"), issue_id, IssueStatus.CLOSED.value)
+    assert e.value.status_code == 404
+
+
+def test_inbox_lists_threads_with_unread_and_pending_then_read_clears_unread(db):
+    mgr = _user(db, UserRole.AGENCY_MANAGER)
+    bank = _user(db, UserRole.BANK_ADMIN)
+    svc = MessagingService(db)
+    issue_id = svc.open_escalation(_Ctx(mgr, "AGENCY"), "Need help", "please respond")["issue"]["id"]
+    inbox = svc.list_inbox(_Ctx(bank, "BANK"))
+    assert len(inbox) == 1
+    row = inbox[0]
+    assert row["title"] == "Need help" and row["subject_type"] == ThreadSubject.ISSUE.value
+    assert row["counterparty"] == SenderSide.AGENCY.value
+    assert row["unread"] is True and row["pending"] is True and row["message_count"] == 1
+    # bank opens the thread -> read clears; still pending (bank hasn't replied)
+    svc.get_thread(_Ctx(bank, "BANK"), ThreadSubject.ISSUE.value, issue_id)
+    row2 = svc.list_inbox(_Ctx(bank, "BANK"))[0]
+    assert row2["unread"] is False and row2["pending"] is True
+    # pending filter narrows to awaiting-reply
+    assert len(svc.list_inbox(_Ctx(bank, "BANK"), pending_only=True)) == 1
+    assert svc.list_inbox(_Ctx(mgr, "AGENCY"), pending_only=True) == []   # agency spoke last
 
 
 def test_empty_body_and_unwired_placement_are_refused(db):
