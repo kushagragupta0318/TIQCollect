@@ -1,4 +1,10 @@
-export type UserRole = "FIELD_AGENT" | "AGENCY_MANAGER" | "AGENCY_ADMIN";
+// Every role backend/app/models/user.py declares. The bank and platform
+// roles were missing while only the agent app read this type, so a bank
+// page gating on its own role got "no overlap" from tsc and one test had
+// to cast with `as never` to set BANK_ADMIN. Kept in the backend's order.
+export type UserRole =
+  | "FIELD_AGENT" | "AGENCY_MANAGER" | "AGENCY_ADMIN"
+  | "PLATFORM_ADMIN" | "BANK_ADMIN" | "BANK_ANALYST" | "BANK_TECHOPS" | "SERVICE";
 
 export interface AuthUser {
   id: string;
