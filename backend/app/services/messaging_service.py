@@ -13,13 +13,12 @@ the same one the reversal bank stage uses. Isolation is SERVICE-enforced today
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.audit import stage_audit
 from app.core.errors import AppException, ErrorCode
-from app.models.audit_log import AuditAction, AuditLog
+from app.models.audit_log import AuditAction
 from app.models.message import Message, MessageThread, SenderSide, ThreadStatus, ThreadSubject
 from app.models.payment_reversal import PaymentReversalRequest
 
@@ -58,12 +57,15 @@ class MessagingService:
                       sender_user_id=ctx.user_id, sender_side=side.value, body=body.strip())
         self.db.add(msg)
         self.db.flush()
-        self.db.add(AuditLog(
-            created_at=datetime.now(timezone.utc), user_id=ctx.user_id, action=AuditAction.MESSAGE_SENT,
-            entity_type="MessageThread", entity_id=thread.id,
-            details={"thread_id": thread.id, "subject_type": subject_type, "subject_id": subject_id,
-                     "sender_side": side.value, "bank_id": thread.bank_id, "agency_id": thread.agency_id},
-            success=True))
+        # One construction of an audit row (core/audit). stage_audit takes the
+        # thread's tenant explicitly, so the row carries the thread's bank_id AND
+        # agency_id — a bank user's message on an agency thread is still visible to
+        # that agency's audit read (not left to be inferred from the actor).
+        stage_audit(self.db, action=AuditAction.MESSAGE_SENT, user_id=ctx.user_id,
+                    entity_type="MessageThread", entity_id=thread.id,
+                    bank_id=thread.bank_id, agency_id=thread.agency_id,
+                    details={"thread_id": thread.id, "subject_type": subject_type,
+                             "subject_id": subject_id, "sender_side": side.value})
         self.db.commit()
         self.db.refresh(thread)
         return self._dump(thread)
@@ -118,10 +120,15 @@ class MessagingService:
         return q
 
     def _side(self, ctx) -> SenderSide:
-        """DERIVED from scope, never trusted from the client. A BANK session posts
-        as the bank; anything else that reached here (require_perm gated it to bank
-        and agency roles) posts as the agency."""
-        return SenderSide.BANK if ctx.scope == "BANK" else SenderSide.AGENCY
+        """DERIVED from scope, never trusted from the client. Fail CLOSED on an
+        unexpected scope: today the caps gate this to bank/agency roles, but a
+        future grant (e.g. PLATFORM support, Q20) must never be silently recorded
+        as the agency on an append-only money-dispute thread — raise instead."""
+        if ctx.scope == "BANK":
+            return SenderSide.BANK
+        if ctx.scope == "AGENCY":
+            return SenderSide.AGENCY
+        raise AppException(403, ErrorCode.FORBIDDEN, "Messaging is for a bank or agency user.")
 
     def _dump(self, thread: MessageThread) -> dict:
         msgs = (self.db.execute(select(Message).where(Message.thread_id == thread.id)

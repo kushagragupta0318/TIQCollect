@@ -17,7 +17,7 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy import insert
 
-from app.models.audit_log import AuditAction, AuditLog
+from app.models.audit_log import AuditAction, AuditLog  # noqa: F401  (AuditLog used in assertions)
 from app.models.case import Case, CaseStatus
 from app.models.customer import Customer
 from app.models.loan import DPDBucket, Loan, LoanStatus, LoanType
@@ -163,6 +163,27 @@ def test_get_thread_is_empty_before_the_first_message(db):
     mgr = _user(db, UserRole.AGENCY_MANAGER)
     out = MessagingService(db).get_thread(_Ctx(mgr, "AGENCY"), ThreadSubject.REVERSAL.value, rev.id)
     assert out["thread"] is None and out["messages"] == []
+
+
+def test_message_sent_audit_row_carries_the_thread_tenant(db):
+    """A bank user (agency_id None) posting on an agency thread still files an audit
+    row with the thread's agency_id — so an agency audit read sees it (not left to
+    be inferred from the actor). The row goes through core/audit.stage_audit."""
+    rev = _reversal(db)
+    bank = _user(db, UserRole.BANK_ADMIN)
+    assert bank.agency_id is None
+    MessagingService(db).post_message(_Ctx(bank, "BANK"), ThreadSubject.REVERSAL.value, rev.id, "bank opens it")
+    row = db.query(AuditLog).filter(AuditLog.action == AuditAction.MESSAGE_SENT).one()
+    assert row.bank_id == BANK and row.agency_id == AGENCY     # the thread's tenant, not the actor's
+
+
+def test_sender_side_fails_closed_on_an_unexpected_scope(db):
+    """_side raises rather than defaulting to AGENCY for a scope that is neither
+    BANK nor AGENCY (a future PLATFORM/SERVICE grant must not be mislabelled)."""
+    mgr = _user(db, UserRole.AGENCY_MANAGER)
+    with pytest.raises(HTTPException) as e:
+        MessagingService(db)._side(_Ctx(mgr, "PLATFORM"))
+    assert e.value.status_code == 403
 
 
 def test_empty_body_and_unwired_placement_are_refused(db):
