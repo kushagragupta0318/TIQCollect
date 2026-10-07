@@ -97,11 +97,37 @@ describe("AgencyMessagingPage", () => {
     fireEvent.click(await screen.findByText("Settlement discount not applied"));
     await screen.findByText("Can you check the last three accounts?");
 
-    fireEvent.change(screen.getByPlaceholderText("Reply…"), { target: { value: "Checked — refund issued." } });
+    fireEvent.change(screen.getByPlaceholderText(/^Reply…/), { target: { value: "Checked — refund issued." } });
     fireEvent.click(screen.getByRole("button", { name: /Send/ }));
 
     await waitFor(() => expect(vi.mocked(api.post)).toHaveBeenCalledWith(
       "/messaging/threads/ISSUE/issue-1/messages", { body: "Checked — refund issued." }));
+  });
+
+  it("shows the reply instantly and clears the input, before the server responds", async () => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/messaging/threads") return Promise.resolve({ data: { threads: INBOX } });
+      if (url === "/messaging/threads/ISSUE/issue-1") return Promise.resolve({ data: ISSUE_THREAD });
+      return Promise.reject(new Error(`unexpected GET ${url}`));
+    });
+    // The mocked round trip never resolves during this test — if the bubble
+    // and the cleared textarea only appeared after it, this would time out
+    // waiting for them instead of finding them straight away.
+    vi.mocked(api.post).mockReturnValue(new Promise(() => {}));
+    renderPage();
+
+    fireEvent.click(await screen.findByText("Settlement discount not applied"));
+    await screen.findByText("Can you check the last three accounts?");
+
+    const box = screen.getByPlaceholderText(/^Reply…/) as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: "On it, checking now." } });
+    fireEvent.click(screen.getByRole("button", { name: /Send/ }));
+
+    expect(await screen.findByText("On it, checking now.")).toBeTruthy();
+    // Both the bubble's own timestamp line and the Send button itself say
+    // "Sending…" while this is in flight — either is fine proof of it.
+    expect(screen.getAllByText("Sending…").length).toBeGreaterThan(0);
+    expect(box.value).toBe("");
   });
 
   it("offers no status control on a REVERSAL thread (status lives on the issue, not the thread)", async () => {

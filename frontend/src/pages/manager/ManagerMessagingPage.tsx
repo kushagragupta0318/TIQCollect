@@ -3,14 +3,19 @@
 // open a new general escalation to the bank (messaging.escalate — agency-only;
 // the bank replies but never opens one). Every message is part of the audit
 // record (MESSAGE_SENT, stage_audit) — said on screen, not left implied.
+//
+// Reads live: both the inbox and an open thread poll every 6s
+// (useMessagingInbox/useMessagingThread), and the bank's own reply or a new
+// escalation reaching the inbox needs no manual refresh. Sending is
+// optimistic — the bubble and the cleared input appear before the server
+// round trip returns, reconciled against the real response.
 import { useState } from "react";
-import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { MessageSquarePlus, ScrollText, Send } from "lucide-react";
-import {
-  getThread, listThreads, postMessage, raiseEscalation, setEscalationStatus,
-  type InboxThread, type ThreadStatus, type ThreadSubjectType,
-} from "@/api/messaging";
+import { raiseEscalation, type InboxThread, type ThreadStatus, type ThreadSubjectType } from "@/api/messaging";
 import { errorDetail } from "@/lib/apiError";
+import { MESSAGING_INBOX_KEY, useMessagingInbox } from "@/lib/useMessagingInbox";
+import { handleComposeKeyDown, useAutoScrollOnChange, useMessagingThread } from "@/lib/useMessagingThread";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 
@@ -33,7 +38,7 @@ function InboxRow({ row, active, onSelect }: { row: InboxThread; active: boolean
       }`}
     >
       <div className="flex items-center justify-between gap-2">
-        <p className="truncate text-[13px] font-semibold text-slate-900">{row.title}</p>
+        <p className={`truncate text-[13px] text-slate-900 ${row.unread ? "font-bold" : "font-semibold"}`}>{row.title}</p>
         {row.unread && <span className="size-2 shrink-0 rounded-full bg-primary" aria-label="Unread" />}
       </div>
       <div className="mt-1 flex items-center gap-2">
@@ -41,7 +46,7 @@ function InboxRow({ row, active, onSelect }: { row: InboxThread; active: boolean
         <span className="text-[11px] text-slate-500">Bank</span>
         {row.pending && <Badge variant="orange">Awaiting your reply</Badge>}
       </div>
-      <p className="mt-1.5 truncate text-[12px] text-slate-500">
+      <p className={`mt-1.5 truncate text-[12px] ${row.unread ? "font-medium text-slate-700" : "text-slate-500"}`}>
         {row.last_message.sender_side === "AGENCY" ? "You: " : "Them: "}{row.last_message.preview}
       </p>
       <p className="mt-1 text-[10.5px] text-slate-400">{when(row.last_message.at)}</p>
@@ -49,25 +54,17 @@ function InboxRow({ row, active, onSelect }: { row: InboxThread; active: boolean
   );
 }
 
-function ThreadPanel({ subjectType, subjectId, onChanged }: {
-  subjectType: ThreadSubjectType; subjectId: string; onChanged: () => void;
+function ThreadPanel({ subjectType, subjectId }: {
+  subjectType: ThreadSubjectType; subjectId: string;
 }) {
   const [body, setBody] = useState("");
-  const q = useQuery({ queryKey: ["messaging", "thread", subjectType, subjectId], queryFn: () => getThread(subjectType, subjectId) });
+  const t = useMessagingThread(subjectType, subjectId, "AGENCY");
+  const bottomRef = useAutoScrollOnChange(t.messages.length);
 
-  const send = useMutation({
-    mutationFn: () => postMessage(subjectType, subjectId, body),
-    onSuccess: () => { setBody(""); q.refetch(); onChanged(); },
-  });
-  const changeStatus = useMutation({
-    mutationFn: (status: ThreadStatus) => setEscalationStatus(subjectId, status),
-    onSuccess: () => { q.refetch(); onChanged(); },
-  });
+  if (t.isLoading) return <p className="py-10 text-center text-[13px] text-slate-500">Loading the conversation…</p>;
+  if (t.isError) return <p className="py-10 text-center text-[13px] text-rose-600">{errorDetail(t.error, "This conversation could not load.")}</p>;
 
-  if (q.isLoading) return <p className="py-10 text-center text-[13px] text-slate-500">Loading the conversation…</p>;
-  if (q.isError) return <p className="py-10 text-center text-[13px] text-rose-600">{errorDetail(q.error, "This conversation could not load.")}</p>;
-  const data = q.data;
-  if (!data) return null;
+  const doSend = () => { if (!body.trim()) return; t.send(body.trim()); setBody(""); };
 
   return (
     <div className="flex h-full flex-col">
@@ -76,12 +73,12 @@ function ThreadPanel({ subjectType, subjectId, onChanged }: {
           <ScrollText className="size-3.5" aria-hidden="true" />
           Every message here is part of the audit record.
         </p>
-        {subjectType === "ISSUE" && data.thread && (
+        {subjectType === "ISSUE" && t.thread && (
           <select
             className="input text-[12px] py-1.5 px-2.5 w-auto tap-target-h"
-            value={data.thread.status}
-            onChange={(e) => changeStatus.mutate(e.target.value as ThreadStatus)}
-            disabled={changeStatus.isPending}
+            value={t.thread.status}
+            onChange={(e) => t.changeStatus(e.target.value as ThreadStatus)}
+            disabled={t.statusPending}
           >
             <option value="OPEN">Open</option>
             <option value="RESOLVED">Resolved</option>
@@ -91,18 +88,19 @@ function ThreadPanel({ subjectType, subjectId, onChanged }: {
       </div>
 
       <div className="flex-1 space-y-3 overflow-y-auto py-4">
-        {data.messages.map((m) => (
-          <div key={m.id} className={`max-w-[80%] rounded-control px-3.5 py-2.5 ${
-            m.sender_side === "AGENCY" ? "ml-auto bg-primary/5" : "bg-[#F7F8FA]"
-          }`}>
+        {t.messages.map((m) => (
+          <div key={m.id} className={`motion-safe:animate-card-enter max-w-[80%] rounded-control px-3.5 py-2.5 ${
+            m.sender_side === "AGENCY" ? "ml-auto bg-primary/10" : "bg-[#F7F8FA]"
+          } ${m.pending ? "opacity-60" : ""}`}>
             <p className="text-[11px] font-semibold text-slate-500">{m.sender_side === "AGENCY" ? "You" : "Bank"}</p>
             <p className="mt-0.5 whitespace-pre-wrap text-[13px] text-slate-900">{m.body}</p>
-            <p className="mt-1 text-[10.5px] text-slate-400">{when(m.created_at)}</p>
+            <p className="mt-1 text-[10.5px] text-slate-400">{m.pending ? "Sending…" : when(m.created_at)}</p>
           </div>
         ))}
-        {data.messages.length === 0 && (
+        {t.messages.length === 0 && (
           <p className="py-8 text-center text-[12.5px] text-slate-500">No messages yet.</p>
         )}
+        <div ref={bottomRef} />
       </div>
 
       <div className="border-t border-[#E1E3E9] pt-3">
@@ -110,12 +108,17 @@ function ThreadPanel({ subjectType, subjectId, onChanged }: {
           className="input text-[13px] w-full"
           value={body}
           onChange={(e) => setBody(e.target.value)}
-          placeholder="Reply…"
+          onKeyDown={(e) => handleComposeKeyDown(e, body, doSend)}
+          placeholder="Reply… (Enter to send, Shift+Enter for a new line)"
           rows={3}
         />
         <div className="mt-2 flex justify-end">
-          <Button onClick={() => send.mutate()} disabled={!body.trim() || send.isPending}>
-            <Send className="size-4" /> Send
+          <Button onClick={doSend} disabled={!body.trim()} loading={t.sendPending}>
+            {/* shrink-0: this Button has no [&_svg] guard the way bank's
+               does, and this is the first icon+text usage of it anywhere in
+               manager — without it, flex gives the icon a share of any
+               squeeze instead of leaving it fixed size. */}
+            {!t.sendPending && <Send className="size-4 shrink-0" />} Send
           </Button>
         </div>
       </div>
@@ -135,7 +138,7 @@ function EscalateForm({ onOpened }: { onOpened: (subjectId: string) => void }) {
   if (!open) {
     return (
       <Button variant="secondary" onClick={() => setOpen(true)}>
-        <MessageSquarePlus className="size-4" /> Escalate an issue
+        <MessageSquarePlus className="size-4 shrink-0" /> Escalate an issue
       </Button>
     );
   }
@@ -159,8 +162,8 @@ function EscalateForm({ onOpened }: { onOpened: (subjectId: string) => void }) {
 export default function ManagerMessagingPage() {
   const qc = useQueryClient();
   const [selected, setSelected] = useState<{ subjectType: ThreadSubjectType; subjectId: string } | null>(null);
-  const q = useQuery({ queryKey: ["messaging", "inbox"], queryFn: () => listThreads() });
-  const refreshInbox = () => qc.invalidateQueries({ queryKey: ["messaging", "inbox"] });
+  const q = useMessagingInbox();
+  const refreshInbox = () => qc.invalidateQueries({ queryKey: MESSAGING_INBOX_KEY });
 
   return (
     <div className="space-y-5 p-4 sm:p-6">
@@ -184,14 +187,14 @@ export default function ManagerMessagingPage() {
               key={row.thread_id}
               row={row}
               active={selected?.subjectId === row.subject_id && selected?.subjectType === row.subject_type}
-              onSelect={() => { setSelected({ subjectType: row.subject_type, subjectId: row.subject_id }); refreshInbox(); }}
+              onSelect={() => setSelected({ subjectType: row.subject_type, subjectId: row.subject_id })}
             />
           ))}
         </div>
 
         <div className="min-h-[60vh] rounded-control border border-[#E1E3E9] bg-white p-4">
           {selected
-            ? <ThreadPanel subjectType={selected.subjectType} subjectId={selected.subjectId} onChanged={refreshInbox} />
+            ? <ThreadPanel subjectType={selected.subjectType} subjectId={selected.subjectId} />
             : <p className="py-16 text-center text-[12.5px] text-slate-500">Pick a thread from the inbox to read and reply.</p>}
         </div>
       </div>
