@@ -17,6 +17,7 @@ from app.core.database import get_db
 from app.core.dependencies import _get_token_payload, get_current_user
 from app.main import app
 from app.models.llm_call import LLMCall
+from app.models.tenancy import Bank
 from app.models.user import User, UserRole
 from tests._db import DEFAULT_TENANT, create_schema, drop_schema, make_engine, make_session_factory
 
@@ -33,6 +34,11 @@ _SEQ = itertools.count(1)
 def db():
     create_schema(engine)
     s = TestingSession()
+    # llm_calls.bank_id carries a real FK (unlike audit_logs, which does not)
+    # -- THEIRS must be a real bank row or the insert in _call() violates it.
+    s.add(Bank(id=THEIRS, code="OTB", legal_name="Other Bank Ltd.", display_name="Other Bank",
+               timezone="Asia/Kolkata", brand={}, status="ACTIVE", is_demo=True))
+    s.commit()
     yield s
     s.close()
     app.dependency_overrides.clear()
