@@ -20,6 +20,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.core.audit import write_audit
+from app.core.csv_safe import csv_row
 from app.core.dependencies import DbSession
 from app.core.permissions import require_perm
 from app.core.request_context import CurrentContext
@@ -136,15 +137,20 @@ def bank_audit_export(
 
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(["timestamp", "action", "actor", "agency_id", "entity_type", "entity_id",
-                "success", "failure_reason", "ip_address"])
+    # Every writerow goes through csv_row, headers included: a blanket rule is
+    # one a reviewer can check at a glance, and it costs nothing on constants.
+    w.writerow(csv_row(["timestamp", "action", "actor", "agency_id", "entity_type", "entity_id",
+                        "success", "failure_reason", "ip_address"]))
     for r in rows:
         d = ar.row_out(r, names)
-        w.writerow([d["created_at"], d["action"], d["actor_name"] or "(system)", d["agency_id"] or "",
-                    d["entity_type"] or "", d["entity_id"] or "", d["success"],
-                    d["failure_reason"] or "", d["ip_address"] or ""])
+        # csv_row: actor_name is typed on an AGENCY's surface and opened on
+        # the BANK's machine. A cell starting with = + - @ is a formula there,
+        # so this is a cross-tenant path that no API scoping can see.
+        w.writerow(csv_row([d["created_at"], d["action"], d["actor_name"] or "(system)",
+                            d["agency_id"] or "", d["entity_type"] or "", d["entity_id"] or "",
+                            d["success"], d["failure_reason"] or "", d["ip_address"] or ""]))
     if truncated:
-        w.writerow([f"# truncated at {MAX_EXPORT_ROWS} rows; narrow the window or filter by action"])
+        w.writerow(csv_row([f"# truncated at {MAX_EXPORT_ROWS} rows; narrow the window or filter by action"]))
 
     # An export of the audit trail that is itself unaudited is the defect
     # manager.py's export was fixed for on 2026-09-10. The row records the

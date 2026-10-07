@@ -26,7 +26,7 @@ import { Badge } from "../../ui/badge";
 import { Button } from "../../ui/button";
 import {
   approveCandidate, canApprove, canPromote, getCandidates, getModelsOverview, metric,
-  promoteCandidate, rejectCandidate, stateTone, type CandidateRow,
+  promoteCandidate, reasonLabel, rejectCandidate, stateTone, type CandidateRow,
 } from "./mlopsModel";
 
 export function MLOpsPage() {
@@ -76,7 +76,12 @@ export function MLOpsPage() {
         </Badge>;
       },
     },
-    { key: "trigger_reasons", header: "Why", render: (c) => c.trigger_reasons?.join(", ") || "—" },
+        // Classified, never echoed: monitor.py builds these strings with the
+    // artifact's own metrics inside them. See reasonLabel.
+    { key: "trigger_reasons", header: "Why",
+      render: (c) => (c.trigger_reasons?.length
+        ? [...new Set(c.trigger_reasons.map(reasonLabel))].join(", ")
+        : "—") },
     { key: "cohort_rows", header: "Rows", align: "right", render: (c) => c.cohort_rows?.toLocaleString() ?? "—" },
     {
       key: "actions", header: "",

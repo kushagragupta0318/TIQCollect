@@ -12,7 +12,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Download, ScrollText } from "lucide-react";
 
 import { errorDetail } from "@/lib/apiError";
-import { PAGE, actionLabel, getAudit, when, type AuditRow } from "./auditModel";
+import { PAGE, actionLabel, exportAudit, getAudit, when, type AuditRow } from "./auditModel";
 import { AnalyticsError, AnalyticsLoading, Panel } from "../../components/analytics";
 import { DataTable, type DataColumn } from "../../components/DataTable";
 import { PageRoot, ToolHeader, ToolHeaderAction } from "../../components/PageTemplate";
@@ -25,6 +25,7 @@ export function AuditPage() {
   const [action, setAction] = useState("");
   const [actorId, setActorId] = useState("");
   const [offset, setOffset] = useState(0);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   const q = useQuery({
     queryKey: ["bank", "audit", action, actorId, offset],
@@ -64,12 +65,24 @@ export function AuditPage() {
       render: (r) => r.ip_address ?? "—" },
   ];
 
-  function exportCsv() {
-    const params = new URLSearchParams();
-    if (action) params.set("action", action);
-    if (actorId) params.set("actor_id", actorId);
-    const qs = params.toString();
-    window.open(`/api/v1/bank/audit/export${qs ? `?${qs}` : ""}`, "_blank", "noopener");
+  async function exportCsv() {
+    setExportError(null);
+    try {
+      const blob = await exportAudit({
+        ...(action ? { action } : {}),
+        ...(actorId ? { actor_id: actorId } : {}),
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `audit-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setExportError(errorDetail(e, "Could not export the audit trail."));
+    }
   }
 
   return (
@@ -80,6 +93,8 @@ export function AuditPage() {
         description="Every recorded action by this bank and its agencies. Immutable by convention; exports are themselves audited."
         actions={<ToolHeaderAction icon={Download} onClick={exportCsv}>Export CSV</ToolHeaderAction>}
       />
+
+      {exportError && <p className="text-[12px] font-medium text-danger-600">{exportError}</p>}
 
       <Panel title="Filters">
         <div className="flex flex-wrap items-end gap-3">
