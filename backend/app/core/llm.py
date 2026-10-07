@@ -603,6 +603,80 @@ def _refusal_reason(resp: Any) -> str:
     return f"refused ({getattr(det, 'category', None) or 'unspecified'})"
 
 
+# ── Usage metering (F11) ──────────────────────────────────────────────────────
+# Each provider's own published list price, USD per 1,000,000 tokens, as of
+# 2026-10. Not fetched from any billing API — there is none wired up here — so
+# this is a hand-maintained constant, same discipline as the scorecards: wrong
+# until someone updates it, never silently re-estimated per call. A model
+# absent from the table prices as None rather than a guessed number (ADR
+# 0005's "abstain rather than impute", borrowed for cost).
+#
+# cache_creation (a cache WRITE) is priced like input here rather than at its
+# own, typically higher, per-provider surcharge rate: none of today's callers
+# set a cache_ttl long enough to make a write-then-reuse worthwhile, so a
+# creation event is rare, and folding it into the input rate is a safe
+# over-simplification to flag rather than a second table to get wrong.
+_PRICE_PER_MTOK_USD: dict[str, tuple[float, float, float]] = {
+    # model: (input, output, cache_read)
+    "claude-haiku-4-5-20251001": (1.00, 5.00, 0.10),
+    "claude-sonnet-5": (3.00, 15.00, 0.30),
+    "gpt-4o-mini": (0.15, 0.60, 0.075),
+    "openai/gpt-oss-120b": (0.15, 0.75, 0.0),
+}
+
+
+def _cost_usd(model: str, usage: Usage) -> float | None:
+    """None, never 0.0, when `model` is not in the table — a real zero (a
+    known model, no tokens) must stay distinguishable from "price unknown"."""
+    prices = _PRICE_PER_MTOK_USD.get(model)
+    if prices is None:
+        return None
+    in_rate, out_rate, cache_read_rate = prices
+    return (
+        usage.input_tokens * in_rate
+        + usage.output_tokens * out_rate
+        + usage.cache_read_input_tokens * cache_read_rate
+        + usage.cache_creation_input_tokens * in_rate
+    ) / 1_000_000
+
+
+def _record_usage(purpose: str, bank_id: str | None, provider: str, model: str,
+                  usage: Usage) -> None:
+    """One row in ai.llm_calls per complete()/chat() call. Best-effort, like
+    every other write at this seam: a metering row is never the reason a
+    product feature fails, so any failure here is caught and logged, not
+    raised.
+
+    Skipped for "fake"/"none": a scripted test provider and a disabled one
+    never spend real money, and skipping them here means the hundreds of
+    LLM-seam unit tests that run with no database configured never attempt
+    one — `use_fake()` makes this unconditional rather than best-effort.
+
+    `bank_id` is whatever the caller passed (default None). None of today's
+    six call sites pass one yet — the same "known gap, counted not hidden"
+    shape as AuditLog's unattributed rows (services/bank/audit_read.py):
+    GET /bank/usage counts calls with no bank rather than guessing one.
+    """
+    if provider in ("fake", "none") or _fake is not None:
+        return
+    try:
+        from app.core.database import SessionLocal
+        from app.models.llm_call import LLMCall
+        db = SessionLocal()
+        try:
+            db.add(LLMCall(
+                bank_id=bank_id, provider=provider, model=model, feature=purpose,
+                input_tokens=usage.input_tokens, output_tokens=usage.output_tokens,
+                cache_tokens=usage.cache_tokens, cost=_cost_usd(model, usage),
+            ))
+            db.commit()
+        finally:
+            db.close()
+    except Exception as exc:                                      # noqa: BLE001 — never raise
+        logger.warning("llm.usage_record_failed", purpose=purpose, model=model,
+                       error=str(exc), error_type=type(exc).__name__)
+
+
 # ── Cache + failure counters (Redis, with an in-process fallback) ─────────────
 class _MemoryStore:
     """Used when Redis is unreachable, so the seam works with no infrastructure
@@ -896,6 +970,7 @@ def complete(
     json_schema: dict | None = None,
     names: Iterable[str] = (),
     redact_values: Iterable[str] = (),
+    bank_id: str | None = None,
 ) -> LLMResult:
     """Ask the model. Returns an LLMResult; never raises.
 
@@ -906,6 +981,9 @@ def complete(
     `json_schema` (optional) implies json_mode. On Anthropic it is enforced by
     the API (structured outputs); on OpenAI-compatible providers it is given to
     the model and the reply is still parsed and checked for an object.
+
+    `bank_id` (optional, F11): attributes the call's usage/cost row to a bank.
+    Omitted it is recorded unattributed, same as an audit row with no tenant.
     """
     started = time.monotonic()
     want_json = json_mode or json_schema is not None
@@ -938,6 +1016,7 @@ def complete(
     if red.changed:
         result.text = restore(result.text, red.mapping)
         result.data = restore(result.data, red.mapping)
+    _record_usage(purpose, bank_id, result.provider, result.model, result.usage)
     return result
 
 
@@ -1058,7 +1137,7 @@ def _complete_one(name, provider, model, api_key, prompt, *, purpose, system, wa
                            text_sha256=hashlib.sha256(text.encode(errors="surrogatepass")).hexdigest()[:16],
                            **error_detail)
             return fail(BAD_RESPONSE, "Model did not return valid JSON", text=text,
-                        stop_reason=stop)
+                        stop_reason=stop, usage=usage)
         data = parsed if isinstance(parsed, dict) else {"value": parsed}
 
     if ttl > 0:
@@ -1071,7 +1150,7 @@ def _complete_one(name, provider, model, api_key, prompt, *, purpose, system, wa
                 latency_ms=elapsed(), attempt=attempt, stop_reason=stop, cached=False,
                 fallback=is_fallback)
     return LLMResult(status=OK, text=text, data=data, provider=provider,
-                     model=model, stop_reason=stop, latency_ms=elapsed())
+                     model=model, stop_reason=stop, latency_ms=elapsed(), usage=usage)
 
 
 # ── chat(): one tool-calling turn ────────────────────────────────────────────
@@ -1249,6 +1328,7 @@ def chat(
     max_tokens: int = 16000,
     effort: str | None = None,
     temperature: float | None = None,
+    bank_id: str | None = None,
 ) -> ChatResult:
     """One model turn with tools. Returns a ChatResult; never raises.
 
@@ -1259,6 +1339,9 @@ def chat(
     `effort` overrides LLM_AGENT_EFFORT on models that accept it; `temperature`
     is sent only where the model accepts sampling parameters. A max_tokens stop
     is BAD_RESPONSE: the turn was cut off, and a truncated tool call must not run.
+
+    `bank_id` (optional, F11): attributes the call's usage/cost row to a bank,
+    same as on complete().
     """
     started = time.monotonic()
     effort = effort if effort is not None else (settings.LLM_AGENT_EFFORT or None)
@@ -1271,7 +1354,9 @@ def chat(
         tried.append((name, r))
         if r.status not in _CHAT_FALLBACK_ON:
             break
-    return _settle(purpose, tried, "chat")
+    result = _settle(purpose, tried, "chat")
+    _record_usage(purpose, bank_id, result.provider, result.model, result.usage)
+    return result
 
 
 def _chat_one(name, provider, model, api_key, *, purpose, system, messages, tools,
