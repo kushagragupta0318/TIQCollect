@@ -93,6 +93,12 @@ class Settings(BaseSettings):
     MINIO_SECRET_KEY: str
     MINIO_BUCKET_DOCUMENTS: str = "tiq-documents"
     MINIO_SECURE: bool = False
+    # Set on both clients so minting a pre-signed URL is pure-local HMAC and never
+    # makes a GetBucketLocation call. Without it the signing client (which carries
+    # the PUBLIC host, e.g. localhost:19000) tries to reach that host from INSIDE
+    # the api container to look up the region and fails with MaxRetryError —
+    # exactly what broke Board Reports' download link. MinIO's default is us-east-1.
+    MINIO_REGION: str = "us-east-1"
 
     # Host the BROWSER uses for pre-signed upload/download URLs.
     #

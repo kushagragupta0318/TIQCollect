@@ -22,6 +22,7 @@ def _client() -> Minio:
         access_key=settings.MINIO_ACCESS_KEY,
         secret_key=settings.MINIO_SECRET_KEY,
         secure=settings.MINIO_SECURE,
+        region=settings.MINIO_REGION,
     )
 
 
@@ -39,6 +40,9 @@ def _signing_client() -> Minio:
         access_key=settings.MINIO_ACCESS_KEY,
         secret_key=settings.MINIO_SECRET_KEY,
         secure=settings.minio_public_secure,
+        # Explicit region => signing is pure-local, no GetBucketLocation call to
+        # the public host (unreachable from inside this container). See config.
+        region=settings.MINIO_REGION,
     )
 
 
