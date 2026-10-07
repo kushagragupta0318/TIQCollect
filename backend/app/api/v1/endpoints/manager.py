@@ -31,7 +31,7 @@ from sqlalchemy import case as sa_case
 from sqlalchemy import false as sa_false
 from sqlalchemy.orm import joinedload
 
-from app.core.dependencies import DbSession, ManagerOnly
+from app.core.dependencies import AnalyticsDb, DbSession, ManagerOnly
 from app.core.config import settings
 from app.core.ids import UUIDPath, UUIDQuery, UUIDQueryRequired, UUIDStr
 from app.core import llm as _llm
@@ -55,6 +55,7 @@ from app.core.permissions import require_perm
 from app.core.csv_safe import csv_row
 from app.models.user import User
 from app.models.visit import Visit, VisitOutcome
+from app.services.bank.agency_scorecard import agency_scorecard
 from app.services.brand import brand_for
 from app.services.notification_service import NotificationService
 from app.services.leave_service import agent_ids_on_leave, effective_status, leave_today
@@ -1018,6 +1019,11 @@ def list_agents(current_user: ManagerOnly, db: DbSession):
             item["current_month_collections"] = round(now["collected"], 2)
             item["current_month_ptps_set"] = now["ptps_set"]
             item["current_month_ptps_honored"] = now["ptps_honored"]
+            # This agent's own progress against their own case targets --
+            # live, per-agent. Never "collection efficiency" (F1, coordinator
+            # audit 2026-10-07): that is the bank's agency-level,
+            # collectible-due-based figure (GET /manager/analytics's
+            # collection_efficiency_pct), which has no per-agent form.
             item["collection_rate_pct"] = now["rate_pct"]
             item["ptp_rate_pct"] = (
                 round(now["ptps_honored"] / now["ptps_set"] * 100, 1)
@@ -1722,7 +1728,10 @@ def agents_performance(
                 "ptp_capture_pct": p.get("ptp_capture_pct", 0.0),
                 # Rate comes from the helper, which computes it the one way the
                 # rest of the product does: collected / target, 0 when nothing
-                # was visited. Never collected / collected.
+                # was visited. Never collected / collected. Per-agent progress
+                # against their own targets -- never "collection efficiency"
+                # (F1, coordinator audit 2026-10-07; see GET /manager/agents's
+                # own note on this same field).
                 "collection_rate_pct": p.get("rate_pct", 0.0),
             })
 
@@ -2505,7 +2514,7 @@ def compliance_metrics(current_user: ManagerOnly, db: DbSession):
 # ---------------------------------------------------------------------------
 
 @router.get("/analytics")
-def analytics(current_user: ManagerOnly, db: DbSession):
+def analytics(current_user: ManagerOnly, db: DbSession, adb: AnalyticsDb):
     my_agent_ids = [
         a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()
     ]
@@ -2530,6 +2539,22 @@ def analytics(current_user: ManagerOnly, db: DbSession):
     # agree by construction.
     team_metrics = _live_monthly_metrics(db, my_agent_ids, months_ordered)
 
+    # collection_efficiency (F1, coordinator audit 2026-10-07): the bank's own
+    # agency_scorecard.compute_metrics() definition -- verified_collections /
+    # collectible_due (amount DUE that month), nightly, abstains (None) when
+    # collectible_due is unknown. Bank and manager used to show TWO different
+    # "how well is this agency collecting" numbers for the same agency/month
+    # (recovery_vs_target_pct below is live, target-based, a ~13x gap on real
+    # data) -- read from the SAME function the bank's own Agencies tab calls,
+    # not a second definition. One call per month (small, fixed window).
+    _NO_CARD = {"collection_efficiency": None}
+    efficiency_by_month = {
+        m: (agency_scorecard(adb, bank_id=current_user.bank_id, agency_id=current_user.agency_id,
+                             month_start=date.fromisoformat(f"{m}-01"))
+           if current_user.agency_id else _NO_CARD)
+        for m in months_ordered
+    }
+
     monthly_trend = []
     for m in months_ordered:
         collected = sum((team_metrics.get(a, {}).get(m, {}) or {}).get("collected", 0.0) for a in my_agent_ids)
@@ -2540,15 +2565,24 @@ def analytics(current_user: ManagerOnly, db: DbSession):
         # far as one who made ninety. Same reasoning as the collection rate below.
         cap_num = sum((team_metrics.get(a, {}).get(m, {}) or {}).get("ptps_captured", 0) for a in my_agent_ids)
         cap_den = sum((team_metrics.get(a, {}).get(m, {}) or {}).get("visits_needing_promise", 0) for a in my_agent_ids)
+        efficiency = efficiency_by_month[m].get("collection_efficiency")
         monthly_trend.append({
             "month": m,
             "collected_lakhs": round(collected / 100000, 2),
             "target_lakhs": round(target / 100000, 2),
             "total_visits": int(visits),
-            # Team rate is collected/target over the whole team, not the mean of
-            # per-agent rates: an agent who visited one small case must not swing
-            # the team line as hard as one who worked forty.
-            "collection_rate_pct": round(collected / target * 100, 1) if target > 0 else 0.0,
+            # Team progress toward THIS TEAM's own case targets -- live, and
+            # never the bank's "collection efficiency" (collection_efficiency_
+            # pct below): renamed from collection_rate_pct (F1) so the two
+            # numbers in this one row cannot be mistaken for each other.
+            # collected/target over the whole team, not the mean of per-agent
+            # rates: an agent who visited one small case must not swing the
+            # team line as hard as one who worked forty.
+            "recovery_vs_target_pct": round(collected / target * 100, 1) if target > 0 else 0.0,
+            # The bank's own figure for this agency/month (see above). None
+            # when collectible_due is unknown that month -- an abstention,
+            # never a 0 the frontend would read as "no collections".
+            "collection_efficiency_pct": (round(efficiency * 100, 1) if efficiency is not None else None),
             "visits_needing_promise": int(cap_den),
             "ptps_captured": int(cap_num),
             "ptp_capture_pct": round(cap_num / cap_den * 100, 1) if cap_den > 0 else 0.0,
@@ -3512,7 +3546,9 @@ def agent_ai_insight(agent_id: UUIDPath, current_user: ManagerOnly, db: DbSessio
     # Team averages for the current month. Mean of each agent's rate, which is
     # what the previous func.avg(collection_rate) computed — kept deliberately,
     # so the number a manager has been reading does not silently change meaning
-    # from "average agent" to "team total".
+    # from "average agent" to "team total". Per-agent/mean-of-agents progress
+    # against targets -- never "collection efficiency" (F1, coordinator audit
+    # 2026-10-07; see GET /manager/agents's own note on this same field).
     team_now = [team_metrics.get(aid, {}).get(current_month) or _blank() for aid in my_agent_ids]
     n_team = max(len(team_now), 1)
     team_collection_rate = round(sum(m["rate_pct"] for m in team_now) / n_team, 1)

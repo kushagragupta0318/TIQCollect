@@ -558,7 +558,7 @@ export default function ManagerAnalyticsPage() {
     const idx = monthly_trend.findIndex((m) => monthLabel(m.month) === selTeamMonth);
     return idx > 0 ? monthly_trend[idx - 1] : null;
   })() : null;
-  const teamRateDelta    = selTeamTrend && prevTeamTrend ? +(selTeamTrend.collection_rate_pct - prevTeamTrend.collection_rate_pct).toFixed(1) : null;
+  const teamRateDelta    = selTeamTrend && prevTeamTrend ? +(selTeamTrend.recovery_vs_target_pct - prevTeamTrend.recovery_vs_target_pct).toFixed(1) : null;
   const teamCollectDelta = selTeamTrend && prevTeamTrend && prevTeamTrend.collected_lakhs > 0
     ? +((selTeamTrend.collected_lakhs - prevTeamTrend.collected_lakhs) / prevTeamTrend.collected_lakhs * 100).toFixed(1) : null;
   const teamVisitsDelta  = selTeamTrend && prevTeamTrend && prevTeamTrend.total_visits > 0
@@ -601,14 +601,34 @@ export default function ManagerAnalyticsPage() {
   return (
     <div className="space-y-5">
       {/* KPI row — updates dynamically when a team month is selected */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4">
         {[
           {
-            label: "Collection Rate",
-            value: selTeamTrend ? `${selTeamTrend.collection_rate_pct.toFixed(1)}%` : `${windowRatePct.toFixed(1)}%`,
+            // This team's own live progress against its own case targets —
+            // renamed from "Collection Rate" (F1, coordinator audit
+            // 2026-10-07) so it reads as a different number from the bank's
+            // collection efficiency card below it, not a disagreement.
+            label: "Recovery vs Target",
+            value: selTeamTrend ? `${selTeamTrend.recovery_vs_target_pct.toFixed(1)}%` : `${windowRatePct.toFixed(1)}%`,
             sub: selTeamTrend ? "" : "on current portfolio",
             delta: teamRateDelta, deltaSuffix: "%",
             icon: <TrendingUp className="w-5 h-5" />, color: "text-brand-600",
+          },
+          {
+            // The bank's own figure for this agency, the same function
+            // agency_scorecard.compute_metrics the Agencies tab reads
+            // (F1): verified_collections / collectible_due, nightly.
+            // null is an abstention (ADR 0005), not a zero — shown as
+            // "no reading yet" rather than 0.0%. No window-aggregate
+            // fallback the way Recovery vs Target has one: the bank's
+            // figure is read per specific month, not blended over six.
+            label: "Collection Efficiency",
+            value: selTeamTrend?.collection_efficiency_pct != null
+              ? `${selTeamTrend.collection_efficiency_pct.toFixed(1)}%`
+              : "no reading yet",
+            sub: "the bank's own figure",
+            delta: null, deltaSuffix: "%",
+            icon: <TrendingUp className="w-5 h-5" />, color: "text-brand-700",
           },
           {
             label: "Total Collected",

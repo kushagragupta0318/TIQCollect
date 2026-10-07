@@ -373,7 +373,16 @@ export interface MonthlyTrend {
   collected_lakhs: number;
   target_lakhs: number;
   total_visits: number;
-  collection_rate_pct: number;
+  /** This team's own progress against its own case targets — live. Renamed
+   *  from collection_rate_pct (F1, coordinator audit 2026-10-07) so it is
+   *  never read as collection_efficiency_pct below, a different number from
+   *  a different source. */
+  recovery_vs_target_pct: number;
+  /** The bank's own collection-efficiency figure for this agency and month
+   *  (agency_scorecard.compute_metrics — verified_collections /
+   *  collectible_due, nightly). null when collectible_due is unknown that
+   *  month: an abstention (ADR 0005), never a 0 to render as "no reading". */
+  collection_efficiency_pct: number | null;
   /** PTP CAPTURE — promises won as a share of the visits where a promise was the
    *  right outcome. A different question from ptp_conversion (promises KEPT).
    *  Added to the API in the PTP fix pass; the type was never updated, and the
