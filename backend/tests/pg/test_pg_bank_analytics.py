@@ -6,10 +6,13 @@ covers.
 """
 from __future__ import annotations
 
+from datetime import date
+
 import pytest
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from tests.pg.test_pg_analytics_b import B1, _refresh, book  # noqa: F401 — the hand-built book
 from tests.pg.test_pg_demo_fixture import db, sql_text  # noqa: F401 — the restored fixture
 
 pytestmark = pytest.mark.filterwarnings("ignore")
@@ -96,10 +99,18 @@ def test_agencies_filter_by_id_returns_only_that_agency(views):
     assert [c["code"] for c in out["panels"]["scorecards"]] == ["AGY-SAHYADRI"]
 
 
-def test_recovery_vs_expected_is_the_predicted_figure_by_month(views):
+def test_recovery_vs_expected_abstains_honestly_on_the_real_book(views):
     """C04 task #5 (owner ruling 2026-10-06): the target is recovery_risk's
     predicted recovery (expected_recovery_inr, written once per placement),
-    bank-wide by month — not a bank-set number, since none exists."""
+    bank-wide by month — not a bank-set number, since none exists.
+
+    Measured against the restored dump (2026-10-07): collections.placements
+    has 9,764 rows for Girivan and expected_recovery_inr is NULL on every
+    one -- the generator never prices a placement at creation time, for any
+    agency. So every month's ratio is honestly None here: abstaining,
+    exactly as ADR 0005 requires, not a bug. The mechanism that computes a
+    real ratio WHEN something is priced is covered on a hand-built book
+    below, since this one has nothing to compute it from."""
     from app.demo.roster import BANK
     from app.services.bank.analytics_catalog import compute_tab
     from app.services.bank.kpi_filter import KpiFilter
@@ -108,10 +119,33 @@ def test_recovery_vs_expected_is_the_predicted_figure_by_month(views):
     assert out["available"], out["reason"]
     by_month = out["panels"]["by_month"]
     assert by_month and sum(r["actual_inr"] for r in by_month) > 0
-    priced = [r for r in by_month if r["expected_inr"] is not None]
-    assert priced, "no month has a modelled expected_recovery_inr at all"
-    assert any(r["recovery_vs_expected"] is not None for r in priced)
-    # None, never 0, when nothing was priced that month (ADR 0005).
+    assert all(r["recovery_vs_expected"] is None for r in by_month)
+
+
+def test_recovery_vs_expected_computes_a_real_ratio_once_something_is_priced(book):  # noqa: F811
+    """P1's placement (test_pg_analytics_b.book) carries
+    expected_recovery_inr=20_000 -- the one placement anywhere in this
+    suite's fixtures that IS priced. Proves _recovery()'s arithmetic, which
+    the real book (above) never exercises."""
+    from app.core import database
+    from app.services.bank.analytics_catalog import compute_tab
+    from app.services.bank.kpi_filter import KpiFilter
+    _refresh(book)
+    with book.connect() as conn:
+        with conn.begin():
+            conn.execute(text("SET LOCAL ROLE tiq_app"))
+            database._set_tenant(conn, {"user_id": "t", "bank_id": B1, "agency_id": None, "scope": "BANK"})
+            out = compute_tab(Session(bind=conn), Session(bind=conn), "recovery", B1, KpiFilter())
+    assert out["available"], out["reason"]
+    by_month = out["panels"]["by_month"]
+    jan = next(r for r in by_month if r["month_start"] == date(2025, 1, 1))
+    with book.connect() as conn:
+        expected_direct = conn.execute(text(
+            "SELECT sum(expected_recovery_inr) FROM collections.placements "
+            "WHERE bank_id = :b AND date_trunc('month', placed_on) = '2025-01-01'"), {"b": B1}).scalar()
+    assert expected_direct == 60_000   # P1, P2, P3 all placed 2025-01-05, all priced at 20,000
+    assert jan["expected_inr"] == expected_direct
+    assert float(jan["recovery_vs_expected"]) == round(float(jan["actual_inr"]) / float(expected_direct), 4)
     assert all(r["recovery_vs_expected"] is None for r in by_month if r["expected_inr"] is None)
 
 
