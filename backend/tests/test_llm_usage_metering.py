@@ -73,6 +73,12 @@ def _isolate(monkeypatch):
     monkeypatch.setattr(settings, "LLM_FALLBACK_PROVIDER", "")
     monkeypatch.setattr(settings, "LLM_CACHE_TTL_SECONDS", 0)   # a cache hit records no NEW usage
     monkeypatch.setattr(llm, "_store", llm._MemoryStore())
+    # The usage row is now written by a Celery task (perf A3). Run it eagerly so
+    # these tests see the write inline, with no broker: .delay() executes the task
+    # body in-process, which opens the monkeypatched SessionLocal below.
+    from app.workers.celery_app import celery_app
+    monkeypatch.setattr(celery_app.conf, "task_always_eager", True)
+    monkeypatch.setattr(celery_app.conf, "task_eager_propagates", False)
     yield
     llm._store = None
 

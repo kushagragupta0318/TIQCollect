@@ -71,6 +71,18 @@ class Settings(BaseSettings):
     # per process, and PgBouncer in front for anything larger.
     DB_POOL_SIZE: int = 5
     DB_MAX_OVERFLOW: int = 5
+    # Analytics engine (core/database.analytics_engine): its own pool, because a
+    # bank screen (/overview, /analytics, /alerts, /cash-forecast) holds an
+    # AnalyticsDb connection for the WHOLE request. Sized larger than the primary
+    # so concurrent analytics users don't exhaust it (perf A2). Connection budget
+    # in docs/DEPLOY.md: (WEB_CONCURRENCY × (primary + analytics peak)) + Celery
+    # must stay under Postgres max_connections (100 by default).
+    ANALYTICS_POOL_SIZE: int = 5
+    ANALYTICS_MAX_OVERFLOW: int = 10
+    # A SHORT pool-checkout timeout (seconds) on BOTH engines: a saturated pool
+    # fails fast with a clean 503 instead of hanging on SQLAlchemy's 30s default
+    # (perf A2). Raise only with the connection budget in mind.
+    DB_POOL_TIMEOUT_S: int = 5
     # Statement timeouts, applied with SET LOCAL at the start of every
     # transaction (PgBouncer-safe: a session-level SET leaks or vanishes under
     # transaction pooling). The API's is short, a request never needs more; the
