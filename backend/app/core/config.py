@@ -394,6 +394,16 @@ class Settings(BaseSettings):
     # request, refusal): another model would not make those right. Empty = off.
     LLM_FALLBACK_PROVIDER: str = ""
 
+    # Local RAG grounding for the narrative purposes (owner-directed build,
+    # 2026-10-07; core/rag.py). Default True for the demo. Off, every call
+    # site's prompt is byte-identical to before this existed — retrieve()
+    # is never called, not merely called and ignored. On, retrieve() still
+    # degrades to no grounding (never an error, never a blocked LLM call)
+    # if the embedding backend cannot load for any reason: RAG is additive
+    # grounding, never a boot dependency (local-first — "degrades vs
+    # breaks", the owner's rule).
+    LLM_RAG_ENABLED: bool = True
+
     # Fraud / anomaly detection (2026-08-19)
     # Thresholds are deliberately conservative. A detector that cries wolf is
     # worse than none: it teaches the manager to dismiss the panel, and then the

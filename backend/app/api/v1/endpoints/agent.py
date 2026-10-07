@@ -123,7 +123,7 @@ from sqlalchemy.orm import joinedload
 import structlog
 
 from app.core.dependencies import DbSession, AgentOnly, TokenPayload
-from app.core import llm
+from app.core import guardrails, llm, rag
 from app.core.prompting import DATA_RULE, fence
 from app.core.config import settings
 from app.core.ids import UUIDPath, UUIDQuery
@@ -1014,7 +1014,10 @@ Based on all the above, generate a visit strategy brief. Respond ONLY with a val
   "risk_flags": ["list of 1–4 short risk strings"],
   "key_leverage_points": ["list of 1–3 actionable intel points the agent should use"],
   "opening_line": "a natural opening sentence the agent should say in Hindi or Hinglish to open the conversation warmly"
-}}"""
+}}""" + rag.reference_block(
+        f"visit approach and tone for a borrower in the {case.collection_stage or 'FIELD'} stage, "
+        f"{loan.dpd_bucket.value} DPD bucket"
+    )
 
     # ── Ask the model ─────────────────────────────────────────────────────────
     # 2026-08-19 — routed through core/llm.py. The rule-based fallback below is
@@ -1029,8 +1032,28 @@ Based on all the above, generate a visit strategy brief. Respond ONLY with a val
         # name, so the seam is told; it puts it back in the answer.
         names=[customer.full_name],
     )
+    # A response the LLM seam itself calls OK can still be rejected HERE —
+    # a fabricated figure or coercive phrasing is an application-level
+    # failure, not a provider one, and `ai_generated` below must say so:
+    # _llm.ai_generated alone would let the agent read a rule-based brief
+    # believing it came from the model.
+    _ai_accepted = False
+    _ai_status, _ai_failure_reason = _llm.status, _llm.failure_reason
     if _llm.ai_generated:
-        strategy = _llm.data
+        _figures = guardrails.check_figures(_llm.text, prompt)
+        _tone = guardrails.check_tone(_llm.text)
+        if _figures.ok and _tone.ok:
+            strategy = _llm.data
+            _ai_accepted = True
+        else:
+            _ai_status = "GUARDRAIL_REJECTED"
+            if not _figures.ok:
+                _ai_failure_reason = "generated text failed the figure guard"
+                logger.warning("visit_strategy.figure_guard_rejected", case_id=case_id,
+                               offending=_figures.offending)
+            else:
+                _ai_failure_reason = "generated text failed the tone guard"
+                logger.warning("visit_strategy.tone_guard_rejected", case_id=case_id, reason=_tone.reason)
 
     # ── Rule-based fallback ───────────────────────────────────────────────────
     if not strategy:
@@ -1061,10 +1084,12 @@ Based on all the above, generate a visit strategy brief. Respond ONLY with a val
 
     strategy["generated_at"] = _dt.now(timezone.utc).isoformat()
     strategy["case_id"] = case_id
-    # Which of the two the agent is actually looking at.
-    strategy["ai_generated"] = _llm.ai_generated
-    strategy["ai_status"] = _llm.status
-    strategy["ai_failure_reason"] = _llm.failure_reason
+    # Which of the two the agent is actually looking at — _ai_accepted, not
+    # _llm.ai_generated: a guard-rejected response is a rule-based brief in
+    # the agent's hands, whatever the provider itself returned.
+    strategy["ai_generated"] = _ai_accepted
+    strategy["ai_status"] = _ai_status
+    strategy["ai_failure_reason"] = _ai_failure_reason
     return strategy
 
 

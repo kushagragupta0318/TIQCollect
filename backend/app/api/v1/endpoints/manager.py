@@ -35,6 +35,7 @@ from app.core.dependencies import DbSession, ManagerOnly
 from app.core.config import settings
 from app.core.ids import UUIDPath, UUIDQuery, UUIDQueryRequired, UUIDStr
 from app.core import llm as _llm
+from app.core import guardrails, rag
 from app.ml import eligibility as _elig
 from app.models.agent import Agent, AgentStatus, AgentPerformance, month_start
 # Module level, not a local import: the audit-log endpoints below share a
@@ -3314,6 +3315,7 @@ def ai_briefing(current_user: ManagerOnly, db: DbSession, refresh: bool = False)
     recommended_actions: list[dict] = []
 
     _brief_llm = None
+    _ai_accepted = False
     try:
         _ctx = {
             "collection_pct_now": collection_pct_now,
@@ -3331,8 +3333,9 @@ def ai_briefing(current_user: ManagerOnly, db: DbSession, refresh: bool = False)
             "escalated_cases": escalated_count,
             "pending_first_visit": pending_first_visit,
         }
+        _op_data = f"Operational data: {_ctx}"
         _brief_llm = _llm.complete(
-            f"Operational data: {_ctx}",
+            _op_data + rag.reference_block("daily collections operations priorities and recommended actions"),
             purpose="briefing", json_mode=True, temperature=0.25, max_tokens=1200,
             bank_id=current_user.bank_id,
             # The staff names this blob carries; the seam restores them in the answer.
@@ -3347,10 +3350,13 @@ def ai_briefing(current_user: ManagerOnly, db: DbSession, refresh: bool = False)
         )
         if not _brief_llm.ai_generated:
             raise RuntimeError(_brief_llm.status)   # take the fallback below
+        if not guardrails.check_figures(_brief_llm.text, _op_data).ok:
+            raise RuntimeError("GUARDRAIL_REJECTED")   # a figure not in the operational data; take the fallback
         _parsed = _brief_llm.data
         headline = _parsed.get("headline", headline)
         key_insight = _parsed.get("key_insight", key_insight)
         recommended_actions = _parsed.get("recommended_actions", [])[:3]
+        _ai_accepted = True
     except Exception:
         if risk_counts["HIGH"] > 0:
             recommended_actions.append({"action": f"Call agents handling {risk_counts['HIGH']} HIGH-risk PTPs and verify commitment before noon", "impact": "HIGH", "urgency": "NOW"})
@@ -3360,11 +3366,17 @@ def ai_briefing(current_user: ManagerOnly, db: DbSession, refresh: bool = False)
         if collection_pct_now < 30 and amount_target_today > 0:
             recommended_actions.append({"action": "Collection pace below 30% — reallocate high-value cases from underperforming agents to top performers", "impact": "HIGH", "urgency": "TODAY"})
 
+    # _ai_accepted, not _brief_llm.ai_generated: a figure-guard rejection
+    # falls back to the computed recommended_actions above, and the status
+    # the manager sees must say so rather than claim the seam's own OK.
+    _ai_status = (_brief_llm.status if _ai_accepted
+                 else "GUARDRAIL_REJECTED" if (_brief_llm and _brief_llm.ai_generated)
+                 else _brief_llm.status if _brief_llm else "NOT_CONFIGURED")
     data = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         # Whether the model wrote this or the computed fallback did.
-        "ai_generated": bool(_brief_llm and _brief_llm.ai_generated),
-        "ai_status": _brief_llm.status if _brief_llm else "NOT_CONFIGURED",
+        "ai_generated": _ai_accepted,
+        "ai_status": _ai_status,
         "headline": headline,
         "key_insight": key_insight,
         "recommended_actions": recommended_actions,
@@ -3634,8 +3646,9 @@ def agent_ai_insight(agent_id: UUIDPath, current_user: ManagerOnly, db: DbSessio
             },
             "case_portfolio_by_dpd": case_mix_dict,
         }
+        _agent_data = f"Agent data: {_ctx}"
         _insight_llm = _llm.complete(
-            f"Agent data: {_ctx}",
+            _agent_data + rag.reference_block("coaching guidance for a field agent's performance and conduct"),
             purpose="agent_insight", json_mode=True, temperature=0.25, max_tokens=1200,
             bank_id=current_user.bank_id,
             names=[agent_name],
@@ -3658,17 +3671,31 @@ def agent_ai_insight(agent_id: UUIDPath, current_user: ManagerOnly, db: DbSessio
         )
         if not _insight_llm.ai_generated:
             raise RuntimeError(_insight_llm.status)
+        if not guardrails.check_figures(_insight_llm.text, _agent_data).ok:
+            raise RuntimeError("GUARDRAIL_REJECTED")   # a figure not in the agent data
+        if not guardrails.check_tone(_insight_llm.text).ok:
+            raise RuntimeError("GUARDRAIL_REJECTED")   # coaching advice read as coercive toward a borrower
         _parsed = _insight_llm.data
         performance_signal = _parsed.get("performance_signal", trend)
         insight_text = _parsed.get("insight_text", insight_text)
         recommended_action = _parsed.get("recommended_action", recommended_action)
+        _ai_accepted = True
     except Exception:
         pass
 
+    # _ai_accepted, not _insight_llm.ai_generated: a guard rejection falls
+    # back to the rule-based text above, computed before the try block.
+    # locals().get: `_insight_llm` may never have been bound if an earlier
+    # line in the try block (building `_ctx`) raised first.
+    _il = locals().get("_insight_llm")
+    _ai_accepted = bool(locals().get("_ai_accepted"))
+    _ai_status = (_il.status if _ai_accepted
+                 else "GUARDRAIL_REJECTED" if (_il and _il.ai_generated)
+                 else _il.status if _il else "NOT_CONFIGURED")
     return {
         "agent_id": agent_id,
-        "ai_generated": bool(locals().get("_insight_llm") and _insight_llm.ai_generated),
-        "ai_status": _insight_llm.status if locals().get("_insight_llm") else "NOT_CONFIGURED",
+        "ai_generated": _ai_accepted,
+        "ai_status": _ai_status,
         "performance_signal": performance_signal,
         "insight_text": insight_text,
         "recommended_action": recommended_action,
@@ -4414,6 +4441,7 @@ def get_monthly_report(
                 "- Weakness: name the specific gap or risk — agent name or metric and exact number.\n"
                 "- Action: one decisive recommendation for the agency head to act on this week.\n\n"
                 + scope_stats
+                + rag.reference_block("monthly collections performance narrative for an agency head")
             )
 
     report_text = scope_stats  # rich fallback when the model cannot answer
@@ -4422,13 +4450,21 @@ def get_monthly_report(
         bank_id=current_user.bank_id,
         names=prompt_names,
     )
+    _ai_accepted = False
     if _report_llm.ai_generated and _report_llm.text:
-        report_text = _report_llm.text
+        _figures = guardrails.check_figures(_report_llm.text, scope_stats)
+        if _figures.ok:
+            report_text = _report_llm.text
+            _ai_accepted = True
 
     return {
         "month": month, "scope": scope, "report_text": report_text,
-        "ai_generated": _report_llm.ai_generated,
-        "ai_status": _report_llm.status,
+        # _ai_accepted, not _report_llm.ai_generated: a figure-guard
+        # rejection keeps scope_stats as report_text, and the manager must
+        # be told that, not that the model's own call succeeded.
+        "ai_generated": _ai_accepted,
+        "ai_status": _report_llm.status if _ai_accepted else (
+            "GUARDRAIL_REJECTED" if _report_llm.ai_generated else _report_llm.status),
         "ai_failure_reason": _report_llm.failure_reason,
         # Returned so the page stops printing a hardcoded model name. It had
         # said "GPT-4o-mini" since long after that stopped being true.
