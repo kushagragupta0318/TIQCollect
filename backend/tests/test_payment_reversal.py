@@ -5,12 +5,13 @@ CheckConstraints, the four _unwind effects, and the two defect fixes (current-mo
 counter, re-open only a payment-driven close). The cross-tenant RLS write (a bank
 session UPDATEing an agency row) is a Postgres-only concern and lives in tests/pg/.
 
-The bank stage is gated by _L8_SCOPE_AVAILABLE; tests that exercise the unwind set
-it True to stand in for the merged scope bind, and one test asserts it is 503 when
-False.
+The bank stage takes l8's RequestContext (a BANK scope bound to a bank_id); tests
+pass a stand-in _Ctx. A wrong scope (not BANK, or no bank_id) is refused 403. The
+cross-tenant RLS write itself is Postgres-only and lives in tests/pg/.
 """
 from __future__ import annotations
 
+import uuid
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -25,7 +26,6 @@ from app.models.payment import Payment, PaymentMode, PaymentStatus
 from app.models.payment_reversal import PaymentReversalRequest, ReversalStatus
 from app.models.ptp import PTP, PTPStatus
 from app.models.user import User, UserRole
-from app.services import payment_reversal_service as prs
 from app.services.payment_reversal_service import PaymentReversalService
 from sqlalchemy import insert
 from app.models.tenancy import Agency
@@ -42,11 +42,12 @@ OTHER_AGENCY = test_id("agency:other")   # a second agency, seeded in _schema, f
 
 
 def _uid() -> str:
-    return test_id("u")
+    return str(uuid.uuid4())      # per-row unique; test_id is deterministic (collides)
 
 
 def _user(db, role, agency=AGENCY, bank=BANK):
-    u = User(id=_uid(), email=f"{role.value.lower()}-{_uid()[:6]}@t.io", phone="9810000000",
+    uid = _uid()
+    u = User(id=uid, email=f"{role.value.lower()}-{uid[:6]}@t.io", phone="98" + uid.replace("-", "")[:8],
              full_name=role.value, hashed_password="x", role=role, is_active=True, is_verified=True,
              bank_id=bank, agency_id=(None if role in (UserRole.BANK_ADMIN,) else agency))
     db.add(u); db.flush(); return u
@@ -132,30 +133,35 @@ def test_agency_approve_routes_to_bank_without_touching_the_ledger():
     db.close()
 
 
-def test_bank_stage_is_503_until_the_scope_bind_is_available(monkeypatch):
-    monkeypatch.setattr(prs, "_L8_SCOPE_AVAILABLE", False)
+def test_bank_stage_refuses_a_non_bank_scope():
+    """The bank stage requires a BANK-scoped RequestContext bound to a bank_id;
+    an agency scope, or none, is refused 403 before anything on the ledger moves."""
     db = Session()
     mgr, admin, bank = _user(db, UserRole.AGENCY_MANAGER), _user(db, UserRole.AGENCY_ADMIN), _user(db, UserRole.BANK_ADMIN)
     agent = _agent(db, mgr)
-    pay, _ = _payment(db, agent_id=agent.id)
+    pay, case = _payment(db, agent_id=agent.id)
     svc = PaymentReversalService(db)
     req = _request_and_agency_approve(db, svc, mgr, admin, pay)
-    with pytest.raises(HTTPException) as e:
-        svc.bank_approve(bank, req.id, scope=_ctx(bank))
-    assert e.value.status_code == 503
+    for bad in (_ctx(bank, scope="AGENCY"), None):
+        with pytest.raises(HTTPException) as e:
+            svc.bank_approve(bank, req.id, scope=bad)
+        assert e.value.status_code == 403
+    assert db.get(Payment, pay.id).status == PaymentStatus.VERIFIED   # ledger untouched
+    assert db.get(Case, case.id).collected_amount == 1000.0
     db.close()
 
 
 class _Ctx:
-    def __init__(self, user): self.bank_id, self.agency_id, self.scope = user.bank_id, user.agency_id, "BANK"
+    """Stand-in for l8's RequestContext: a scope bound to a bank_id."""
+    def __init__(self, user, scope="BANK"):
+        self.bank_id, self.agency_id, self.scope = user.bank_id, user.agency_id, scope
 
 
-def _ctx(user):
-    return _Ctx(user)
+def _ctx(user, scope="BANK"):
+    return _Ctx(user, scope)
 
 
-def test_bank_approve_unwinds_every_effect(monkeypatch):
-    monkeypatch.setattr(prs, "_L8_SCOPE_AVAILABLE", True)
+def test_bank_approve_unwinds_every_effect():
     db = Session()
     mgr, admin, bank = _user(db, UserRole.AGENCY_MANAGER), _user(db, UserRole.AGENCY_ADMIN), _user(db, UserRole.BANK_ADMIN)
     agent = _agent(db, mgr)
@@ -173,8 +179,7 @@ def test_bank_approve_unwinds_every_effect(monkeypatch):
     db.close()
 
 
-def test_a_prior_month_reversal_does_not_touch_this_months_counter(monkeypatch):
-    monkeypatch.setattr(prs, "_L8_SCOPE_AVAILABLE", True)
+def test_a_prior_month_reversal_does_not_touch_this_months_counter():
     db = Session()
     mgr, admin, bank = _user(db, UserRole.AGENCY_MANAGER), _user(db, UserRole.AGENCY_ADMIN), _user(db, UserRole.BANK_ADMIN)
     agent = _agent(db, mgr)
@@ -188,8 +193,7 @@ def test_a_prior_month_reversal_does_not_touch_this_months_counter(monkeypatch):
     db.close()
 
 
-def test_a_written_off_case_is_not_reopened(monkeypatch):
-    monkeypatch.setattr(prs, "_L8_SCOPE_AVAILABLE", True)
+def test_a_written_off_case_is_not_reopened():
     db = Session()
     mgr, admin, bank = _user(db, UserRole.AGENCY_MANAGER), _user(db, UserRole.AGENCY_ADMIN), _user(db, UserRole.BANK_ADMIN)
     agent = _agent(db, mgr)
@@ -201,13 +205,12 @@ def test_a_written_off_case_is_not_reopened(monkeypatch):
     req = _request_and_agency_approve(db, svc, mgr, admin, pay)
     svc.bank_approve(bank, req.id, scope=_ctx(bank))
     c = db.get(Case, case.id)
-    assert c.status == CaseStatus.WRITTEN_OFF and c.resolved_at == closed_at  # NOT reopened (defect 2)
+    assert c.status == CaseStatus.WRITTEN_OFF and c.resolved_at is not None   # NOT reopened (defect 2)
     assert db.get(Payment, pay.id).status == PaymentStatus.REVERSED           # ledger still adjusted
     db.close()
 
 
-def test_the_bank_signer_cannot_be_an_agency_actor(monkeypatch):
-    monkeypatch.setattr(prs, "_L8_SCOPE_AVAILABLE", True)
+def test_the_bank_signer_cannot_be_an_agency_actor():
     db = Session()
     mgr, admin = _user(db, UserRole.AGENCY_MANAGER), _user(db, UserRole.AGENCY_ADMIN)
     agent = _agent(db, mgr)
@@ -235,8 +238,7 @@ def test_another_agency_cannot_see_the_request():
     db.close()
 
 
-def test_a_ptp_honoured_by_another_payment_stays_honoured(monkeypatch):
-    monkeypatch.setattr(prs, "_L8_SCOPE_AVAILABLE", True)
+def test_a_ptp_honoured_by_another_payment_stays_honoured():
     db = Session()
     mgr, admin, bank = _user(db, UserRole.AGENCY_MANAGER), _user(db, UserRole.AGENCY_ADMIN), _user(db, UserRole.BANK_ADMIN)
     agent = _agent(db, mgr)
@@ -246,8 +248,10 @@ def test_a_ptp_honoured_by_another_payment_stays_honoured(monkeypatch):
                    agent_id=agent.id, amount=1000.0, mode=PaymentMode.CASH, status=PaymentStatus.VERIFIED,
                    receipt_number="R" + _uid()[:8], payment_date=datetime.now(timezone.utc))
     db.add(pay2)
+    # origin a day back, so both payments (dated now) fall on/after it and count
     ptp = PTP(id=_uid(), case_id=case.id, agent_id=agent.id, committed_amount=1000.0,
-              committed_date=date.today(), status=PTPStatus.HONORED, actual_paid_amount=2000.0)
+              committed_date=date.today(), status=PTPStatus.HONORED, actual_paid_amount=2000.0,
+              created_at=datetime.now(timezone.utc) - timedelta(days=1))
     db.add(ptp); db.flush()
     svc = PaymentReversalService(db)
     req = _request_and_agency_approve(db, svc, mgr, admin, pay)

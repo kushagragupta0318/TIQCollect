@@ -38,10 +38,15 @@ back — was noted as the v2 hardening. The owner chose it for v1.
   returned the money but left the PTP HONORED is the inconsistent-ledger class this project keeps
   closing, so it is all-or-nothing.
 - **The bank stage is cross-tenant and goes through l8's scoped RequestContext, not a hand-rolled
-  bank_id match.** Until l8 merges, a module flag (`_L8_SCOPE_AVAILABLE = False`) makes the bank
-  approve/reject paths refuse with 503; the agency stages work today. When l8 lands: flip the flag and
-  replace the one scoped read with l8's RequestContext. This keeps a cross-tenant write on a money path
-  off a guessed authorization.
+  bank_id match.** l8-rls-s1b landed (v2_0026, the `RequestContext` + pre-auth bind), so the bank stage
+  is now live: `bank_approve`/`reject` require a BANK-scoped `RequestContext` bound to a `bank_id`
+  (`scope.scope == 'BANK'`), and the scoped read bounds the row to `scope.bank_id` — the same `bank_id`
+  the `_AGENCY_OWNED` policy keys on. A wrong scope (not BANK, or none) is refused 403 before the ledger
+  moves. The write runs on the ordinary `DbSession` (not the read-only `AnalyticsDb`) and never changes
+  `bank_id` (WITH CHECK re-evaluates the new row); `tests/pg/test_pg_rls` proves both, AS `tiq_app`.
+  Going live was the **owner's explicit authorization on 2026-10-07** (routed to the owner because no
+  live coordinator held the seat and every cross-tenant money-path flip on this product is an owner
+  call); the earlier `_L8_SCOPE_AVAILABLE` 503 stub is removed.
 - **Audited on both stages.** `PAYMENT_REVERSAL_REQUESTED` (request) and `PAYMENT_REVERSED` (the applied
   reversal), appended at the end of the native `audit_action_enum` (its own migration, since a value
   added by `ALTER TYPE` cannot be used in the same transaction). Both rows carry `bank_id` and
@@ -61,13 +66,10 @@ back — was noted as the v2 hardening. The owner chose it for v1.
   `tenancy.users`):
   `(bank_id = tenancy.current_bank_id() AND (tenancy.current_scope() = 'BANK' OR agency_id = tenancy.current_agency_id()))`
   — note BOTH arms require `bank_id = current_bank_id()`; an agency session matches only within its own
-  bank, never on `agency_id` alone. But the policy-map test machinery
-  (`tests/test_rls_policy_map.py`) currently lets a post-v2_0012 revision declare only *bank-only*
-  tables; there is no `RLS_AGENCY_OWNED` classification yet, so the table cannot be declared at all. That
-  is a shared ~4-line change (an `RLS_AGENCY_OWNED` list + its test assertion), agreed with the policy
-  owner rather than slipped in on a money branch. The model and migration are held until it lands,
-  because the model alone — present in `Base.metadata` with `bank_id` and `agency_id` — trips the
-  "every tenant table has a policy" test.
+  bank, never on `agency_id` alone. The policy-map test machinery (`tests/test_rls_policy_map.py`) now
+  carries an `RLS_AGENCY_OWNED` classification (added by l8), so v2_0029 declares the table through it and
+  the "every tenant table has a policy" test is satisfied — the migration no longer has to wait on a
+  shared change.
 - **Tenant isolation is enforced by the SERVICE today, not by RLS — and this is the honest state of the
   whole platform, not just this feature.** The table carries v2_0012's `_AGENCY_OWNED` RLS policy and the
   per-transaction GUC bind (`app.bank_id`/`app.scope`) is in place, BUT the API connects as the

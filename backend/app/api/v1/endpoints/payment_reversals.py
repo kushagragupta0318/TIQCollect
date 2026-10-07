@@ -2,7 +2,7 @@
 
 Agency side (/manager, AGENCY_MANAGER/ADMIN): request, agency-approve, agency-reject.
 Bank side (/bank, a bank role): final sign-off and reject — CROSS-TENANT, through l8's
-scoped RequestContext, so until l8 merges the service refuses the bank stage (503).
+scoped RequestContext (CurrentContext), which carries BANK scope + the caller's bank_id.
 Thin: the stage machine, the fiduciary separation and the atomic unwind live in
 PaymentReversalService.
 """
@@ -35,7 +35,7 @@ class ReversalDecisionIn(BaseModel):
 
 def _out(req) -> dict:
     return {"id": req.id, "payment_id": req.payment_id, "case_id": req.case_id,
-            "status": req.status.value, "reason": req.reason,
+            "status": req.status, "reason": req.reason,
             "agency_requested_by_id": req.agency_requested_by_id,
             "agency_approved_by_id": req.agency_approved_by_id,
             "bank_approved_by_id": req.bank_approved_by_id,

@@ -211,6 +211,25 @@ def test_what_the_app_role_may_not_do(seeded, sql):
                 conn.execute(text(sql))
 
 
+def test_a_bank_may_sign_off_an_agency_reversal_but_not_move_its_bank(seeded):
+    """The bank stage (ADR 0015) rests on this: under the _AGENCY_OWNED policy a
+    BANK-scoped session CAN UPDATE an agency-raised reversal row (the sign-off —
+    status + bank approver), and WITH CHECK refuses an UPDATE that would move the
+    row to another bank. Proven AS tiq_app, the role step 2 makes permanent."""
+    t = "collections.payment_reversal_requests"
+    with seeded.connect() as conn:
+        with conn.begin():
+            conn.execute(text("SET LOCAL ROLE tiq_app"))
+            database._set_tenant(conn, _ctx(B1, None, "BANK"))
+            n = conn.execute(text(f"UPDATE {t} SET status = 'APPROVED'")).rowcount
+            assert n == 1                      # the agency's row is visible and writable to its bank
+        with pytest.raises(sa.exc.DBAPIError, match="row-level security"):
+            with conn.begin():
+                conn.execute(text("SET LOCAL ROLE tiq_app"))
+                database._set_tenant(conn, _ctx(B1, None, "BANK"))
+                conn.execute(text(f"UPDATE {t} SET bank_id = :b"), {"b": B2})   # WITH CHECK re-evaluates
+
+
 def test_context_values_are_bound_never_formatted(seeded):
     hostile = "x', true); DROP TABLE collections.cases; --"
     with seeded.connect() as conn:

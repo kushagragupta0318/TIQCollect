@@ -12,8 +12,13 @@ Stages:
   reject           (either)    -> REJECTED              (nothing moved)
 
 The bank stage is cross-tenant (a bank user acting on a row the agency raised). It
-goes through l8's scoped RequestContext — NOT hand-rolled here. Until l8 merges,
-_require_bank_scope is the seam: it refuses rather than guessing an authorization.
+goes through l8's scoped RequestContext (core/request_context) — NOT a hand-rolled
+grant. The bank session carries scope=BANK + its bank_id (get_request_context from
+the DB-loaded user), and the _AGENCY_OWNED policy lets a BANK scope read/write any
+row in its own bank. RLS is dormant until the API connects as tiq_app (it runs as
+fieldops/BYPASSRLS today, DATA-MODEL-V2 §8.4), so the bank_id match in
+_request_for_bank is the enforcing isolation now; the RLS policy backs it once the
+role switch lands. Both key off the same bank_id.
 """
 from __future__ import annotations
 
@@ -28,13 +33,6 @@ from app.models.payment import Payment, PaymentStatus
 from app.models.payment_reversal import OPEN_REVERSAL_STATUSES, PaymentReversalRequest, ReversalStatus
 from app.models.ptp import PTP, PTPStatus
 from app.services.ptp_lifecycle_service import verified_paid_against
-
-# The bank stage is cross-tenant and must go through l8's scoped RequestContext
-# (f8's sanctioned mechanism), not a hand-rolled bank_id match. l8 is in the merge
-# wave; until it lands this stays False and the bank stage refuses (503) rather than
-# authorising a cross-tenant write on a money path. When l8 merges: flip to True and
-# replace _request_for_bank's bank_id check with l8's RequestContext scope.
-_L8_SCOPE_AVAILABLE = False
 
 
 class PaymentReversalService:
@@ -83,7 +81,7 @@ class PaymentReversalService:
     def bank_approve(self, user, request_id: str, *, scope) -> PaymentReversalRequest:
         """`scope` is l8's RequestContext — the sanctioned cross-tenant mechanism.
         The row was raised by the agency; a bank user may act on it only within that
-        scope. Not hand-rolled: _require_bank_scope refuses until l8 provides it."""
+        scope (scope.scope == 'BANK', bounded to scope.bank_id)."""
         self._require_bank_scope(user, scope)
         req = self._request_for_bank(user, request_id, scope)
         if req.status != ReversalStatus.PENDING_BANK:
@@ -199,18 +197,21 @@ class PaymentReversalService:
         return req
 
     def _require_bank_scope(self, user, scope) -> None:
-        """The cross-tenant seam. l8's RequestContext authorizes a bank user to act
-        on a row the agency raised; until it is wired, refuse rather than hand-roll a
-        cross-tenant grant on a money path (f8, fc). Drops in when l8 merges."""
-        if not _L8_SCOPE_AVAILABLE or scope is None:
-            raise AppException(503, ErrorCode.SERVICE_UNAVAILABLE,
-                               "Bank reversal sign-off is awaiting the scoped-access release (l8).")
+        """The cross-tenant seam. l8's RequestContext (scope) authorizes a bank user
+        to act on a row the agency raised: the request must carry BANK scope bound to
+        a bank_id. Not hand-rolled — the bank_id it bears is what _request_for_bank
+        bounds the row to. (require_perm already gates the capability to bank roles;
+        this refuses a wrong scope defensively on a money path.)"""
+        if scope is None or getattr(scope, "scope", None) != "BANK" or not getattr(scope, "bank_id", None):
+            raise AppException(403, ErrorCode.FORBIDDEN,
+                               "Bank reversal sign-off requires a bank-scoped session.")
 
     def _request_for_bank(self, user, request_id: str, scope) -> PaymentReversalRequest:
-        """Read a reversal for the bank user, scoped by their bank. Replace the
-        bank_id match with l8's RequestContext check when it lands (same result:
-        a bank sees only its own agencies' reversals)."""
+        """Read a reversal for the bank user, bounded to scope.bank_id — l8's
+        RequestContext, the same bank_id the _AGENCY_OWNED RLS policy keys on (so a
+        bank sees only its own agencies' reversals). Service-enforced today; RLS backs
+        it once the API connects as tiq_app."""
         req = self.db.get(PaymentReversalRequest, request_id)
-        if req is None or str(req.bank_id) != str(getattr(user, "bank_id", None)):
+        if req is None or str(req.bank_id) != str(scope.bank_id):
             raise AppException(404, ErrorCode.NOT_FOUND, "Reversal request not found.")
         return req
