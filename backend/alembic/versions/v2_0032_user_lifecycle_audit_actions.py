@@ -32,16 +32,17 @@ revision forward.
 Downgrade is a no-op: Postgres cannot drop an enum value. Same as v2_0016.
 
 Revision ID: v2_0032
-Revises: v2_0030
+Revises: v2_0031
 Create Date: 2026-10-07
 """
 from alembic import op
 
 revision = "v2_0032"
-# The real head when this was written. v2_0031 is Usage's provisional slot and
-# had not landed; if it lands first, this re-points to it at merge rather than
-# forking the chain -- the number is monotonic, the PARENT is what matters.
-down_revision = "v2_0030"
+# Re-pointed from v2_0030 when Usage landed at v2_0031: both were children of
+# v2_0030 for a moment, which is a FORK -- two heads, and `alembic upgrade
+# head` refuses. Verified by reparsing after the merge-forward rather than by
+# assuming. The number is monotonic; the PARENT is what prevents the fork.
+down_revision = "v2_0031"
 branch_labels = None
 depends_on = None
 
