@@ -34,6 +34,7 @@ from sqlalchemy.orm import joinedload
 from app.core.dependencies import AnalyticsDb, DbSession, ManagerOnly
 from app.core.config import settings
 from app.core.ids import UUIDPath, UUIDQuery, UUIDQueryRequired, UUIDStr
+from app.core import audit_coverage
 from app.core import llm as _llm
 from app.ml import eligibility as _elig
 from app.models.agent import Agent, AgentStatus, AgentPerformance, month_start
@@ -2182,21 +2183,20 @@ _AUDIT_WINDOW_DAYS = 7
 _AUDIT_PAGE_SIZE = 50
 _AUDIT_MAX_PAGE_SIZE = 200
 
-# Actions DECLARED on AuditAction that NO call site writes. Maintained by hand,
-# because "never emitted" is a property of the CODE, not of the data: an action
-# missing from a given window may simply have been quiet, and the difference is
-# exactly what an auditor needs to know. A short log that does not say which of
-# these two it is, is worse than no log.
+# Actions DECLARED on AuditAction that NO call site writes. "Never emitted" is
+# a property of the CODE, not of the data: an action missing from a given window
+# may simply have been quiet, and the difference is exactly what an auditor
+# needs to know. A short log that does not say which of these two it is, is
+# worse than no log.
 #
-# Re-derive with:
-#   grep -rn "AuditAction\.[A-Z_]*" backend/app --include=*.py \
-#       | grep -v models/audit_log.py
-_AUDIT_ACTIONS_NOT_INSTRUMENTED = [
-    "CASE_ASSIGNED", "CASE_UPDATED", "VISIT_RECORDED", "PAYMENT_SUBMITTED",
-    "PTP_SET", "DOCUMENT_UPLOADED", "SOS_TRIGGERED", "SOS_RESOLVED",
-    "BEAT_GENERATED", "BEAT_MODIFIED", "AGENT_STATUS_CHANGED",
-    "CONTACT_HOUR_VIOLATION_ATTEMPT", "ROLE_VIOLATION_ATTEMPT", "DATA_EXPORT",
-]
+# This WAS a hand-maintained list, and on 2026-10-07 it was measured wrong in
+# the worst direction: it declared VISIT_RECORDED, PTP_SET, PAYMENT_SUBMITTED,
+# CASE_ASSIGNED, DATA_EXPORT, ROLE_VIOLATION_ATTEMPT, AGENT_STATUS_CHANGED,
+# DOCUMENT_UPLOADED and CONTACT_HOUR_VIOLATION_ATTEMPT never recorded while
+# every one of them had a live write site -- an RBI screen telling a lender
+# that visits are not logged, when they are. It is now DERIVED from the write
+# sites themselves: core/audit_coverage.py, which parses rather than greps, so
+# a filter that merely READS an action is not counted as writing it.
 
 
 def _audit_visible_user_ids(db, current_user) -> list[str]:
@@ -2282,6 +2282,9 @@ def audit_log(
         .all()
     )
 
+    # lru_cached in audit_coverage: app/ is parsed once per worker process,
+    # not once per request, and the source cannot change under a running one.
+    _coverage = audit_coverage.coverage()
     return {
         "window_days": _AUDIT_WINDOW_DAYS,
         "since": since.isoformat(),
@@ -2309,7 +2312,11 @@ def audit_log(
         # The honesty block. Without it a short log reads as a quiet week.
         "coverage": {
             "declared_action_types": len(AuditAction),
-            "not_instrumented": _AUDIT_ACTIONS_NOT_INSTRUMENTED,
+            "not_instrumented": list(_coverage.not_instrumented),
+            # Carried so the list above is checkable rather than trusted: a scan
+            # that could not read the source would report everything as
+            # instrumented, and this number would be 0 where it is normally 80+.
+            "instrumentation_write_sites": _coverage.write_sites,
             "excludes_system_rows": True,
             "note": (
                 "Actions with no recorded actor (written by the system rather "

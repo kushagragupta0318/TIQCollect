@@ -1044,7 +1044,12 @@ export interface AuditLogPage {
    *  quiet week rather than as missing instrumentation. */
   coverage: {
     declared_action_types: number;
+    /** Derived from the write sites on the server, not hand-maintained — the
+     *  hand-written list was wrong for weeks. */
     not_instrumented: string[];
+    /** How many audit write sites the server's scan found. Normally 80+; a 0
+     *  means the scan read nothing, so not_instrumented above is not a claim. */
+    instrumentation_write_sites?: number;
     excludes_system_rows: boolean;
     note: string;
   };
