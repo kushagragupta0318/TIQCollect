@@ -14,6 +14,7 @@ import zlib
 
 import pytest
 
+from app.core.errors import AppException, ErrorCode
 from app.reports import formatting as f
 from app.reports import sample, theme
 from app.reports.payload import Chart, ChartKind, Column, ReportPayload, Series, Table, Unit
@@ -349,6 +350,7 @@ def test_export_uploads_then_signs_then_audits(seams, payload, fmt):
     assert audit["action"].value == "DATA_EXPORT" and audit["user_id"] == "user-1"
     assert audit["details"]["format"] == fmt and audit["details"]["bytes"] == size
     assert audit["details"]["sha256"] == out.sha256
+    assert audit["details"]["report_id"] == payload.report_id
     # the row records the export's shape, never its content
     assert all(not isinstance(v, (bytes, bytearray)) and (not isinstance(v, str) or len(v) < 200)
                for v in audit["details"].values())
@@ -356,24 +358,70 @@ def test_export_uploads_then_signs_then_audits(seams, payload, fmt):
 
 def test_a_failed_upload_writes_no_audit_row(seams, payload, monkeypatch):
     service, calls = seams
+    # These four tests are about export()'s own error handling, never about
+    # a renderer's bytes -- bypassing render() keeps them from depending on
+    # the renderer's own libraries being installed.
+    monkeypatch.setattr(service, "render", lambda p, f: b"fake report bytes")
 
     def boom(*_a, **_k):
         raise ConnectionError("minio unreachable")
     monkeypatch.setattr(service.storage, "upload_bytes", boom)
-    with pytest.raises(ConnectionError):
+    with pytest.raises(AppException) as exc_info:
         service.export(None, payload, "xlsx", user_id="user-1")
+    assert exc_info.value.code == ErrorCode.SERVICE_UNAVAILABLE
     assert calls == []
 
 
 def test_a_failed_link_writes_no_audit_row(seams, payload, monkeypatch):
     service, calls = seams
+    monkeypatch.setattr(service, "render", lambda p, f: b"fake report bytes")
 
     def boom(*_a, **_k):
         raise RuntimeError("cannot sign")
     monkeypatch.setattr(service.storage, "presigned_download_url", boom)
-    with pytest.raises(RuntimeError):
+    with pytest.raises(AppException) as exc_info:
         service.export(None, payload, "xlsx", user_id="user-1")
+    assert exc_info.value.code == ErrorCode.SERVICE_UNAVAILABLE
     assert [c[0] for c in calls] == ["upload"]
+
+
+def test_a_report_id_too_long_for_the_audit_column_still_fits(seams, payload, monkeypatch):
+    """entity_id is audit.audit_logs.entity_id, VARCHAR(50) on Postgres. A
+    board/agency_review report_id (bank.id + agency.id + a date) runs
+    53-97 chars and would DataError there; SQLite's test harness does not
+    enforce the column length, which is how this went unmeasured. Simulates
+    the column here so the test catches it on every backend, not just
+    Postgres's own pg suite."""
+    service, calls = seams
+    monkeypatch.setattr(service, "render", lambda p, f: b"fake report bytes")
+    long_payload = payload.model_copy(update={
+        "report_id": "agency_review-11111111-2222-3333-4444-555555555555-"
+                     "66666666-7777-8888-9999-aaaaaaaaaaaa-2026-10-07",
+    })
+    assert len(long_payload.report_id) > 50
+
+    def write_audit(db, **kw):
+        assert len(kw["entity_id"]) <= 50
+        calls.append(("audit", kw))
+        return True
+    monkeypatch.setattr(service, "write_audit", write_audit)
+    out = service.export(None, long_payload, "xlsx", user_id="user-1")
+    assert out.report_id == long_payload.report_id            # the real id still reaches the caller
+    assert calls[-1][1]["details"]["report_id"] == long_payload.report_id   # and the audit row
+
+
+def test_the_audit_write_failing_still_refuses_the_link(seams, payload, monkeypatch):
+    """write_audit never raises -- it swallows its own failure and returns
+    False. export() must treat that as its own failure (coordinator audit,
+    2026-10-07): an export the trail cannot show happened is the exact gap
+    this module's docstring says it closes."""
+    service, calls = seams
+    monkeypatch.setattr(service, "render", lambda p, f: b"fake report bytes")
+    monkeypatch.setattr(service, "write_audit", lambda db, **kw: False)
+    with pytest.raises(AppException) as exc_info:
+        service.export(None, payload, "xlsx", user_id="user-1")
+    assert exc_info.value.code == ErrorCode.INTERNAL_ERROR
+    assert [c[0] for c in calls] == ["upload", "presign"]     # it did render and store — just was not recorded
 
 
 def test_an_unknown_format_is_refused_before_anything_happens(seams, payload):

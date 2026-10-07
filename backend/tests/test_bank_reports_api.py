@@ -159,6 +159,18 @@ def test_agency_review_without_an_agency_id_is_refused(db, cleanup):
     assert r.status_code == 422
 
 
+def test_a_malformed_agency_id_is_refused_not_a_500(db, cleanup):
+    """agency_id used to be a bare str: db.get(Agency, "garbage") hits a uuid
+    column and DataErrors on Postgres (the same class the actor_id fix
+    728c66c closed on the audit routes). SQLite's test harness would not
+    catch this on its own -- the id is now validated before any query runs,
+    so this test holds on either backend."""
+    user = _user(db, UserRole.BANK_ADMIN, bank_id=DEFAULT_TENANT["bank_id"])
+    r = _client(db, user).post(f"{BASE}/generate",
+                               json={"template": "agency_review", "format": "pdf", "agency_id": "not-a-uuid"})
+    assert r.status_code == 422
+
+
 def test_an_agency_from_another_bank_reads_as_not_found(db, cleanup):
     other_agency = _other_bank_agency(db)
     user = _user(db, UserRole.BANK_ADMIN, bank_id=DEFAULT_TENANT["bank_id"])
