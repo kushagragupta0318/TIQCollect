@@ -112,7 +112,7 @@ def generate(body: GenerateReportIn, ctx: CurrentContext, db: DbSession, adb: An
             f = KpiFilter(period=body.period, start=body.start, end=body.end)
         except FilterError as exc:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
-        payload = report_templates.build_board_payload(adb, bank, f)
+        payload = report_templates.build_board_payload(db, adb, bank, f)
 
     try:
         exported = report_service.export(

@@ -327,7 +327,7 @@ def _unavailable(k: KpiDef, reason: str) -> dict:
     # The reason goes on the sub-line, which wraps; the trend line is one line and truncates.
     return {"id": k.id, "label": k.label, "value": "—", "sub": reason[:1].upper() + reason[1:], "trend": "Not available",
             "trendUp": None, "good": None, "basis": f"{k.basis} Not available: {reason}.", "drill": k.drill,
-            "available": False, "reason": reason}
+            "available": False, "reason": reason, "prior": None}
 
 
 def _month_span(lo: date, hi: date) -> tuple[date, date, date, date, int]:
@@ -403,7 +403,11 @@ def _one(db: Session, k: KpiDef, bank: str, as_of: date | None, views: set[str],
         basis += " The change is like for like: only loans read on both dates."
     return {"id": k.id, "label": k.label, "value": _fmt(k.unit, now.value),
             "sub": k.sub({"aux": now.aux}) if k.sub else "", "trend": trend_text, "trendUp": up, "good": good,
-            "basis": basis, "drill": k.drill, "available": True, "reason": None, "raw": now.value}
+            "basis": basis, "drill": k.drill, "available": True, "reason": None, "raw": now.value,
+            # The SAME prior-window reading _trend() already compared `now` against —
+            # exposed, not recomputed, for a consumer that wants the raw number (E10's
+            # Board Pack KPI delta chips) rather than only the formatted trend string.
+            "prior": prev.value}
 
 
 _TOTAL_QUERIES = (
