@@ -16,8 +16,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import "../bank.css";
 import { useState } from "react";
-import { Outlet } from "react-router";
+import { Outlet, useLocation } from "react-router";
 import { SidebarInset, SidebarProvider } from "../ui/sidebar";
+import { BankErrorBoundary } from "../components/BankErrorBoundary";
 import { BankSidebar, type BankPersona } from "./BankSidebar";
 import { BankTopBar, type StandingAlert } from "./BankTopBar";
 import { RaiseQueryDialog } from "./RaiseQueryDialog";
@@ -30,6 +31,9 @@ export interface BankLayoutProps {
 
 export function BankLayout({ persona, onSignOut, standingAlert }: BankLayoutProps) {
   const [queryOpen, setQueryOpen] = useState(false);
+  // A render error in one page is caught here, keeping the shell; keyed on the
+  // location so moving to another screen (or tab) clears a crashed one.
+  const location = useLocation();
 
   return (
     <div className="bank-root">
@@ -45,7 +49,9 @@ export function BankLayout({ persona, onSignOut, standingAlert }: BankLayoutProp
             />
             <main className="app-content flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-5 page-fade-in bg-background w-full rounded-card">
               <div className="w-full mx-auto">
-                <Outlet />
+                <BankErrorBoundary key={`${location.pathname}${location.search}`}>
+                  <Outlet />
+                </BankErrorBoundary>
               </div>
             </main>
           </SidebarInset>

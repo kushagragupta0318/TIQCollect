@@ -18,7 +18,7 @@ from app.models.loan import DPDBucket, LoanType
 from app.models.tenancy import Agency, Bank, Region
 from app.models.user import User
 from app.services.bank.analytics_catalog import TABS as ANALYTICS_TABS
-from app.services.bank.analytics_catalog import compute_tab
+from app.services.bank.analytics_catalog import compute_tab, numberize
 from app.services.bank.kpi_catalog import ROWS, compute_overview
 from app.services.bank.kpi_filter import PERIODS, FilterError, KpiFilter
 from app.services import portfolio_breakdown
@@ -147,7 +147,9 @@ def analytics_tab(tab: Literal["exposure", "migration", "agencies", "recovery", 
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     assert tab in ANALYTICS_TABS, tab   # Literal above already refused anything else
     out = compute_tab(db, adb, tab, bank_id, f)
-    return AnalyticsTabOut(tab=tab, available=out["available"], reason=out["reason"], panels=out["panels"])
+    # numeric panels carry Decimal; the wire must send JSON numbers, not strings,
+    # or the frontend's `.toFixed`/number formatting throws (numberize docstring).
+    return AnalyticsTabOut(tab=tab, available=out["available"], reason=out["reason"], panels=numberize(out["panels"]))
 
 
 class Option(BaseModel):
