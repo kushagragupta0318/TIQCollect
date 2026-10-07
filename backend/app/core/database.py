@@ -21,16 +21,13 @@ from sqlalchemy.pool import QueuePool
 from typing import Generator
 from app.core.config import settings
 
-# The eleven domain schemas, in search_path order. `public` holds infrastructure
+# The ten domain schemas, in search_path order. `public` holds infrastructure
 # only: alembic_version, demo_baseline and the shared native enum types.
-# `messaging` was added post-baseline (v2_0031, bank↔agency threads); its CREATE
-# SCHEMA and the matching ALTER DATABASE SET search_path live there.
 DOMAIN_SCHEMAS: tuple[str, ...] = (
     "tenancy", "lending", "collections", "workforce", "planning",
-    "ml", "ai", "strategy", "audit", "analytics", "messaging",
+    "ml", "ai", "strategy", "audit", "analytics",
 )
-# `public` first (audit W6); the v2 baseline set the first ten on the database,
-# v2_0031 extends it to include `messaging`.
+# `public` first (audit W6); the v2 baseline sets exactly this on the database.
 SEARCH_PATH = ", ".join(("public", *DOMAIN_SCHEMAS))
 
 NAMING_CONVENTION = {
