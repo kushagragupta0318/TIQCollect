@@ -90,9 +90,13 @@ export function Panel({
   className?: string;
 }) {
   return (
-    <div className={`rounded-card border border-border/60 bg-card p-6 shadow-[0_1px_2px_rgba(17,24,39,0.03)] ${className}`}>
-      <div className="mb-5 flex flex-wrap items-baseline justify-between gap-3">
-        <p className="text-[12.5px] font-semibold tracking-tight text-foreground">{title}</p>
+    // shadow-resting, not the inline one-layer approximation this used to
+    // carry: the real token (tailwind.bank.config.js) is the same restrained
+    // weight but two-layered, which is what makes a flat border read as a
+    // raised card instead of a drawn rectangle.
+    <div className={`rounded-card border border-border/60 bg-card p-6 shadow-resting ${className}`}>
+      <div className="mb-6 flex flex-wrap items-baseline justify-between gap-3">
+        <p className="text-[14px] font-bold tracking-tight text-foreground">{title}</p>
         {hint && <span className="text-[11px] text-muted-foreground">{hint}</span>}
       </div>
       {children}
@@ -102,9 +106,12 @@ export function Panel({
 
 export function Tile({ label, value, sub, color }: { label: ReactNode; value: ReactNode; sub?: ReactNode; color?: string }) {
   return (
-    <div className="rounded-[16px] border border-border/50 bg-card px-5 py-4">
+    <div className="relative overflow-hidden rounded-card border border-border/50 bg-card px-5 py-4 shadow-resting">
+      {/* The metric's own colour as a top accent, not a full tint wash —
+         one colour cue per KPI without every tile reading the same hue. */}
+      {color && <span className="absolute inset-x-0 top-0 h-[3px]" style={{ background: color }} aria-hidden="true" />}
       <p className="truncate text-[11.5px] font-medium leading-tight text-muted-foreground">{label}</p>
-      <p className="mt-2.5 text-[22px] font-bold leading-none tracking-tight tabular-nums" style={color ? { color } : undefined}>
+      <p className="mt-2.5 text-[28px] font-extrabold leading-none tracking-tight tabular-nums" style={color ? { color } : undefined}>
         {value}
       </p>
       {sub && <p className="mt-2 truncate text-[11px] text-muted-foreground">{sub}</p>}
