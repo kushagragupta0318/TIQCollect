@@ -3,16 +3,19 @@ function over the same scoped views C01/C02 already use, taking the same
 `KpiFilter`; a dimension the view cannot carry is refused by
 `KpiFilter.unsupported()` upstream in the endpoint, same as the Overview.
 
-Two tabs in the spec are NOT built here, by design, not oversight:
-- Field Operations' beat-adherence and planned-vs-actual-km panels: the
-  `beats` table is empty for the whole bank (no generator ever writes a
-  Beat row, demo or otherwise) — a generator gap, not a page bug. Its three
-  other metrics (visits/agent/day, met rate, SLA coverage) ARE built.
-- Recovery's target-line chart: there is no bank-set collection target
-  anywhere in the schema. Recovery vs Expected (recovery_risk-predicted,
-  §6.2) IS built; inventing a target number would be exactly the
-  fabrication ADR 0005 exists to prevent. Flagged to the owner as a missing
-  product concept, not this page's job to invent one.
+One tab in the spec is NOT built here, by design, not oversight:
+- Field Operations' beat-adherence and planned-vs-actual-km panels: queued
+  separately (its three other metrics — visits/agent/day, met rate, SLA
+  coverage — ARE built).
+
+Recovery (C04 task #5, owner ruling 2026-10-06): there is no bank-set
+collection target anywhere in the schema, and inventing one would be the
+fabrication ADR 0005 exists to prevent — so the target IS the model-
+predicted recovery, not a new field. `expected_recovery_inr`
+(services/bank/expected_recovery.py, written once per placement from the
+recovery_risk prediction in force then) is already the Agencies tab's
+Recovery-vs-Expected denominator; this tab is the same ratio, bank-wide,
+by month, off the same scorecard view — no new computation.
 """
 from __future__ import annotations
 
@@ -33,6 +36,8 @@ TAB_VIEWS: dict[str, tuple[str, ...]] = {
     "exposure": (PORTFOLIO,),
     "migration": (TRANSITIONS,),
     "agencies": (SCORECARD,),
+    "recovery": (SCORECARD,),
+    "cost": (SCORECARD,),
     "compliance": (FIELD,),
 }
 
@@ -112,6 +117,67 @@ def _migration(adb: Session, bank_id: str, as_of: date, f: KpiFilter) -> dict:
            "panels": {"transition_matrix": matrix, "trajectory_12m": trajectory}}
 
 
+# ── Recovery ─────────────────────────────────────────────────────────────────
+def _recovery(adb: Session, bank_id: str, f: KpiFilter) -> dict:
+    """Recovery vs Expected, bank-wide, by month — the Agencies tab's own
+    ratio (agency_scorecard.compute_metrics's recovery_vs_expected), summed
+    over every agency instead of one. Same NULL-is-unknown rule: a month
+    where no row carries an expected_recovery_inr (no recovery_risk score
+    was in force for any placement that month) reports unknown, not zero —
+    SQL SUM() already drops NULLs and returns NULL only when every row is
+    NULL, which is exactly agency_scorecard._sum_or_none's rule."""
+    clause, fp = f.clause(SCORECARD)
+    base = {"bank": bank_id, **fp}
+    by_month = _read_rows(adb, f"""
+        SELECT month_start,
+               SUM(verified_collections) + SUM(bank_direct_collections) AS actual_inr,
+               SUM(expected_recovery_inr) AS expected_inr
+        FROM analytics.{SCORECARD} WHERE bank_id = :bank {clause}
+        GROUP BY month_start ORDER BY month_start""", base)
+    for row in by_month:
+        expected = row["expected_inr"]
+        row["recovery_vs_expected"] = round(row["actual_inr"] / expected, 4) if expected else None
+    return {"available": True, "reason": None, "panels": {"by_month": by_month}}
+
+
+# ── Cost to collect ──────────────────────────────────────────────────────────
+def _cost(db: Session, adb: Session, bank_id: str, f: KpiFilter) -> dict:
+    """Channel economics (C04 task #4): commission and field cost, per month
+    bank-wide and per agency — the Agencies tab's own cost_per_100_inr
+    (agency_scorecard.compute_metrics), broken into its two components
+    instead of one blended ratio, and surfaced here as its own tab rather
+    than only buried in one scorecard column. field_cost is None (never 0)
+    when any visit that period has no FIELD_VISIT cost rate — unknown, not
+    free (agency_scorecard.py's own rule, same column)."""
+    from app.models.tenancy import Agency
+
+    clause, fp = f.clause(SCORECARD)
+    base = {"bank": bank_id, **fp}
+
+    def _rows(group_col: str) -> list[dict]:
+        rows = _read_rows(adb, f"""
+            SELECT {group_col} AS key, SUM(commission_accrued) AS commission_inr, SUM(field_cost) AS field_cost_inr,
+                   SUM(verified_collections) + SUM(bank_direct_collections) AS collected_inr
+            FROM analytics.{SCORECARD} WHERE bank_id = :bank {clause}
+            GROUP BY {group_col} ORDER BY {group_col}""", base)
+        for row in rows:
+            collected = row["collected_inr"]
+            row["cost_per_100_inr"] = (round((row["commission_inr"] + row["field_cost_inr"]) / collected * 100, 2)
+                                       if row["field_cost_inr"] is not None and collected else None)
+        return rows
+
+    by_month = _rows("month_start")
+    by_agency = _rows("agency_id")
+    for row in by_agency:
+        row["agency_id"] = row.pop("key")
+    for row in by_month:
+        row["month_start"] = row.pop("key")
+    names = {a.id: (a.trade_name or a.legal_name) for a in db.query(Agency).filter(Agency.bank_id == bank_id)}
+    for row in by_agency:
+        row["agency_name"] = names.get(row["agency_id"], row["agency_id"])
+    return {"available": True, "reason": None, "panels": {"by_month": by_month, "by_agency": by_agency}}
+
+
 # ── Agencies ─────────────────────────────────────────────────────────────────
 def _agencies(db: Session, adb: Session, bank_id: str, f: KpiFilter) -> dict:
     """A thin re-shape of agency_scorecard.py (§6.2's own scorecard
@@ -134,7 +200,7 @@ def _agencies(db: Session, adb: Session, bank_id: str, f: KpiFilter) -> dict:
 
 
 # ── Compliance ───────────────────────────────────────────────────────────────
-def _compliance(adb: Session, bank_id: str, f: KpiFilter) -> dict:
+def _compliance(db: Session, adb: Session, bank_id: str, f: KpiFilter) -> dict:
     # mv_field_activity_daily's real columns (v2_0007): activity_date,
     # out_of_hours_attempts, geo_unverified_visits, consent_missing_visits —
     # no fraud column on this view (its grain is visits/calls/PTPs/payments
@@ -166,11 +232,19 @@ def _compliance(adb: Session, bank_id: str, f: KpiFilter) -> dict:
     for row in by_agency:
         row["fraud_confirmed"] = next((r["fraud_confirmed"] for r in fraud_by_agency
                                        if r["agency_id"] == row["agency_id"]), 0)
+    # The view carries agency_id only (collections.fraud_reviews too) — a
+    # plain ORM lookup for the name, same as _agencies()'s own cards, rather
+    # than showing the bank an agency by its raw id.
+    from app.models.tenancy import Agency
+
+    names = {a.id: (a.trade_name or a.legal_name) for a in db.query(Agency).filter(Agency.bank_id == bank_id)}
+    for row in by_agency:
+        row["agency_name"] = names.get(row["agency_id"], row["agency_id"])
     return {"available": True, "reason": None,
            "panels": {"breaches_over_time": breaches_over_time, "by_agency": by_agency}}
 
 
-TABS = ("exposure", "migration", "agencies", "compliance")
+TABS = ("exposure", "migration", "agencies", "recovery", "cost", "compliance")
 
 
 def compute_tab(db: Session, adb: Session, tab: str, bank_id: str, f: KpiFilter) -> dict:
@@ -188,6 +262,10 @@ def compute_tab(db: Session, adb: Session, tab: str, bank_id: str, f: KpiFilter)
         return _unavailable(f"cannot be filtered by {', '.join(sorted(unsupported))} on this tab")
     if tab == "agencies":
         return _agencies(db, adb, bank_id, f)
+    if tab == "recovery":
+        return _recovery(adb, bank_id, f)
+    if tab == "cost":
+        return _cost(db, adb, bank_id, f)
     as_of = f.end if f.period == "custom" else latest_reading(adb, bank_id)
     if as_of is None:
         return _unavailable("no portfolio reading for this bank yet")
@@ -195,4 +273,4 @@ def compute_tab(db: Session, adb: Session, tab: str, bank_id: str, f: KpiFilter)
         return _exposure(adb, bank_id, as_of, f)
     if tab == "migration":
         return _migration(adb, bank_id, as_of, f)
-    return _compliance(adb, bank_id, f)
+    return _compliance(db, adb, bank_id, f)

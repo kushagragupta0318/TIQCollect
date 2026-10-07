@@ -20,6 +20,8 @@ interface Props {
   autoCloseMs?: number;
   /** I02: saved in the offline outbox, not yet on the server. Says so. */
   queued?: boolean;
+  /** Evidence the agent chose to record without (N1). Named, never hidden. */
+  missing?: string[];
   onClose: () => void;
 }
 
@@ -29,6 +31,7 @@ export default function VisitRecordedModal({
   outcomeLabel,
   autoCloseMs = 2000,
   queued = false,
+  missing,
   onClose,
 }: Props) {
   useEffect(() => {
@@ -73,6 +76,12 @@ export default function VisitRecordedModal({
               <p className="text-xs text-slate-500">{caseNumber}</p>
             )}
           </div>
+        )}
+
+        {missing && missing.length > 0 && (
+          <p className="mx-5 mb-3 rounded-lg bg-warning-50 px-3 py-2 text-center text-xs font-medium text-warning-700">
+            Recorded without: {missing.join(", ")}.
+          </p>
         )}
 
         <div className="px-5 pb-5">

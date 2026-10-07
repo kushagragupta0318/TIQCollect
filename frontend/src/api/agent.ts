@@ -116,13 +116,22 @@ export async function getCaseDetail(caseId: string) {
 // photos, signatures and the customer signature silently never reached MinIO.
 // I02: an outbox upload names its visit's capture, so the server judges it like
 // the visit and keys the object by the submission (a retry overwrites it).
+// "receipt" is the cheque or UPI-confirmation photo of a live payment; it is
+// never queued, so the outbox's own subject type leaves it out. "document" is
+// one of the collected documents and names its category and file type.
+export type CaseUploadSubject = "agent" | "borrower" | "object" | "signature" | "receipt" | "document";
+
 export async function getPhotoUploadUrl(
-  caseId: string, subject: "agent" | "borrower" | "object" | "signature", capture?: OutboxCapture,
+  caseId: string, subject: CaseUploadSubject, capture?: OutboxCapture,
+  document?: { category: string; contentType: string },
 ): Promise<{ upload_url: string; key: string }> {
   // The phone's id goes as capture_device_ref: `device_id` on a route means agent_devices.id.
   const { device_id: captureDeviceRef, ...rest } = capture ?? {};
   const { data } = await api.post(`/agent/cases/${caseId}/photo-upload-url`, null, {
-    params: { subject, ...rest, capture_device_ref: captureDeviceRef },
+    params: {
+      subject, ...rest, capture_device_ref: captureDeviceRef,
+      category: document?.category, content_type: document?.contentType,
+    },
   });
   return data;
 }
@@ -262,6 +271,19 @@ export interface VisitPayload {
   agent_recording_key?: string;
   borrower_recording_key?: string;
   signature_key?: string;
+  // N1: what the agent typed on an escalating visit, and the documents collected.
+  escalation_notes?: string;
+  witness_present?: boolean;
+  witness_name?: string;
+  documents?: VisitDocumentPayload[];
+}
+
+/** One collected document: its category and the object its upload route issued. */
+export interface VisitDocumentPayload {
+  category: string;
+  key: string;
+  sha256?: string;
+  content_type?: string;
 }
 
 export async function recordVisit(caseId: string, payload: VisitPayload & Partial<OutboxCapture>) {
@@ -310,6 +332,7 @@ export async function collectPayment(caseId: string, payload: {
   cheque_date?: string;
   cheque_bank?: string;
   bank_reference?: string;
+  receipt_photo_key?: string;   // the cheque or UPI-confirmation photo, from photo-upload-url (subject "receipt")
   verification_id?: string;   // verified borrower OTP → Payment written as VERIFIED
 }) {
   const { data } = await api.post(`/agent/cases/${caseId}/payment`, payload);

@@ -144,11 +144,12 @@ export default function AgencyDirectoryPage() {
     setStatus(""); setRegionId(""); setLoanType(""); setExpiringBefore("");
   }
 
-  /** PENDING is the only status the wizard can still usefully resume — an
-   *  ACTIVE/SUSPENDED/OFFBOARDED agency's profile view is D07, a separate
-   *  task, not built yet, so those rows are not clickable. */
+  /** PENDING resumes the onboarding wizard; every other status opens the
+   *  D07 profile page (contract, commission, placed volume, people — links
+   *  to D06's own page for performance rather than recomputing it). */
   function openRow(row: AgencyDirectoryRow) {
     if (row.status === "PENDING") navigate(`/bank/agencies/onboard/${row.agency_id}`);
+    else navigate(`/bank/agencies/profile/${row.agency_id}`);
   }
 
   function drawMarkers(map: L.Map) {

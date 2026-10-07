@@ -14,13 +14,14 @@
  * without IndexedDB or a network (outbox.test.ts). The IndexedDB adapter is
  * outboxIdb.ts; the triggers and the one-flusher lock are outboxRunner.ts.
  */
-import type { LogCallPayload, OutboxCapture, PtpPayload, VisitPayload } from "@/api/agent";
+import type { LogCallPayload, OutboxCapture, PtpPayload, VisitDocumentPayload, VisitPayload } from "@/api/agent";
 import { errorCode, errorDetail, errorStatus } from "@/lib/apiError";
+import { sha256Hex } from "@/lib/sha256";
+import type { DocumentCategory } from "@/lib/visitEvidence";
 
 export type PhotoSubject = "agent" | "borrower" | "object" | "signature";
 
-export interface MediaPart {
-  subject: PhotoSubject;
+interface MediaBase {
   blobKey: string;
   contentType: string;
   bytes: number;
@@ -28,6 +29,18 @@ export interface MediaPart {
   /** The object key once uploaded; a retry never uploads it twice. */
   uploadedKey?: string;
 }
+
+export interface PhotoPart extends MediaBase {
+  subject: PhotoSubject;
+}
+
+/** A collected document (N1): queued with the visit, sent under its category. */
+export interface DocumentPart extends MediaBase {
+  subject: "document";
+  category: DocumentCategory;
+}
+
+export type MediaPart = PhotoPart | DocumentPart;
 
 export interface ItemError {
   message: string;
@@ -80,6 +93,7 @@ export interface OutboxStore {
 
 export interface OutboxApi {
   photoUploadUrl(caseId: string, subject: PhotoSubject, capture: OutboxCapture): Promise<{ upload_url: string; key: string }>;
+  documentUploadUrl(caseId: string, category: DocumentCategory, contentType: string, capture: OutboxCapture): Promise<{ upload_url: string; key: string }>;
   putObject(url: string, blob: Blob, contentType: string): Promise<void>;
   recordVisit(caseId: string, body: VisitPayload & Partial<OutboxCapture>): Promise<{ id: string }>;
   setPTP(caseId: string, body: PtpPayload & Partial<OutboxCapture>): Promise<unknown>;
@@ -133,11 +147,6 @@ function refusal(err: unknown): ItemError {
   return { message: code && REFUSAL_HELP[code] ? REFUSAL_HELP[code] : message, code, status: errorStatus(err) };
 }
 
-async function sha256Hex(blob: Blob): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", await blob.arrayBuffer());
-  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
 function newId(): string {
   return crypto.randomUUID();
 }
@@ -188,13 +197,15 @@ export interface NewVisit {
   capturedAt: Date;
   body: VisitPayload;
   photos: Array<{ subject: PhotoSubject; blob: Blob }>;
+  documents?: Array<{ category: DocumentCategory; blob: Blob }>;
   ptp?: PtpPayload;
 }
 
 export async function enqueueVisit(
   store: OutboxStore, who: Who, v: NewVisit, nowMs = Date.now(), hash = sha256Hex,
 ): Promise<VisitItem> {
-  const bytes = v.photos.reduce((n, p) => n + p.blob.size, 0);
+  const documents = v.documents ?? [];
+  const bytes = v.photos.reduce((n, p) => n + p.blob.size, 0) + documents.reduce((n, d) => n + d.blob.size, 0);
   await checkRoom(store, bytes);
   const cap = await capture(store, who, v.capturedAt, nowMs);
   // The promise is part of the same submit: same moment, the next sequence number.
@@ -205,6 +216,12 @@ export async function enqueueVisit(
     await store.putBlob(blobKey, p.blob);
     media.push({ subject: p.subject, blobKey, contentType: p.blob.type || "image/jpeg",
                  bytes: p.blob.size, sha256: await hash(p.blob) });
+  }
+  for (const d of documents) {
+    const blobKey = `${cap.client_submission_id}:document:${d.category}`;
+    await store.putBlob(blobKey, d.blob);
+    media.push({ subject: "document", category: d.category, blobKey, contentType: d.blob.type || "image/jpeg",
+                 bytes: d.blob.size, sha256: await hash(d.blob) });
   }
   const item: VisitItem = {
     kind: "visit", id: cap.client_submission_id, userId: who.userId, deviceId: who.deviceId,
@@ -234,16 +251,20 @@ export async function enqueueCall(
 
 /** Where each uploaded photo's key and hash go on the visit body. */
 function photoFields(media: MediaPart[]): Partial<VisitPayload> {
-  const out: Record<string, string> = {};
+  const out: Record<string, string | VisitDocumentPayload[]> = {};
+  const documents: VisitDocumentPayload[] = [];
   for (const m of media) {
     if (!m.uploadedKey) continue;
-    if (m.subject === "signature") {
+    if (m.subject === "document") {
+      documents.push({ category: m.category, key: m.uploadedKey, sha256: m.sha256, content_type: m.contentType });
+    } else if (m.subject === "signature") {
       out.signature_key = m.uploadedKey;
     } else {
       out[`${m.subject}_photo_key`] = m.uploadedKey;
       out[`${m.subject}_photo_sha256`] = m.sha256;
     }
   }
+  if (documents.length) out.documents = documents;
   return out as Partial<VisitPayload>;
 }
 
@@ -265,7 +286,9 @@ export async function sendItem(
     const blob = await store.getBlob(m.blobKey);
     if (!blob) throw Object.assign(new Error("A photo for this visit is missing from the phone."),
                                    { response: { status: 410, data: { detail: "A photo for this visit is missing from the phone." } } });
-    const { upload_url, key } = await api.photoUploadUrl(item.caseId, m.subject, item.capture);
+    const { upload_url, key } = m.subject === "document"
+      ? await api.documentUploadUrl(item.caseId, m.category, m.contentType, item.capture)
+      : await api.photoUploadUrl(item.caseId, m.subject, item.capture);
     await api.putObject(upload_url, blob, m.contentType);
     m.uploadedKey = key;
     await save(item);

@@ -67,6 +67,9 @@ class ErrorCode(str, Enum):
     # how a bank's book migrates. An ABSTENTION, not a failure — the caller
     # records it as an ABSTAINED run (strategy/transitions.py).
     INSUFFICIENT_HISTORY = "INSUFFICIENT_HISTORY"
+    # N1: a payment or visit names evidence (a photo, a document) that is not one
+    # this case's upload route issued. Permanent: the client uploads it again.
+    EVIDENCE_KEY_INVALID = "EVIDENCE_KEY_INVALID"
 
 
 class AppException(HTTPException):

@@ -8,6 +8,7 @@ import {
   flush, nextSeqAfter, usage, type OutboxApi, type VisitItem,
 } from "./outbox";
 import type { VisitPayload } from "@/api/agent";
+import type { DocumentCategory } from "./visitEvidence";
 
 const WHO = { userId: "user-a", deviceId: "phone-a" };
 const T0 = Date.UTC(2026, 8, 29, 7, 0);          // 12:30 IST
@@ -29,6 +30,10 @@ function fakeApi(overrides: Partial<OutboxApi> = {}) {
       calls.push(`url:${subject}`);
       return { upload_url: `https://minio.test/${subject}`, key: `k/${subject}` };
     }),
+    documentUploadUrl: vi.fn(async (_c, category) => {
+      calls.push(`url:document:${category}`);
+      return { upload_url: `https://minio.test/doc-${category}`, key: `k/doc/${category}` };
+    }),
     putObject: vi.fn(async (url: string) => { calls.push(`put:${url.split("/").pop()}`); }),
     recordVisit: vi.fn(async () => { calls.push("visit"); return { id: `visit-${++n}` }; }),
     setPTP: vi.fn(async () => { calls.push("ptp"); return {}; }),
@@ -38,13 +43,18 @@ function fakeApi(overrides: Partial<OutboxApi> = {}) {
   return { api, calls };
 }
 
-async function visit(store: MemoryOutboxStore, opts: { photos?: number; ptp?: boolean; who?: typeof WHO; at?: number } = {}) {
+type Doc = { category: DocumentCategory; type: string };
+
+async function visit(store: MemoryOutboxStore, opts: { photos?: number; ptp?: boolean; who?: typeof WHO; at?: number; documents?: Doc[] } = {}) {
   const photos = Array.from({ length: opts.photos ?? 0 }, (_, i) => ({
     subject: (["agent", "borrower", "signature"] as const)[i],
     blob: new Blob([new Uint8Array(1000)], { type: "image/jpeg" }),
   }));
+  const documents = (opts.documents ?? []).map((d) => ({
+    category: d.category, blob: new Blob([new Uint8Array(2000)], { type: d.type }),
+  }));
   return enqueueVisit(store, opts.who ?? WHO, {
-    caseId: "case-1", caseLabel: "C-A1", capturedAt: new Date(opts.at ?? T0), body, photos,
+    caseId: "case-1", caseLabel: "C-A1", capturedAt: new Date(opts.at ?? T0), body, photos, documents,
     ptp: opts.ptp ? { committed_amount: 5000, committed_date: "2026-10-04" } : undefined,
   }, opts.at ?? T0, hash);
 }
@@ -159,6 +169,60 @@ describe("flush", () => {
     const { api } = fakeApi();
     await flush(store, api, WHO, T0);
     expect(api.logCall).toHaveBeenCalledWith("case-1", { outcome: "NO_ANSWER", ...c.capture });
+  });
+});
+
+describe("collected documents (N1)", () => {
+  const docs: Doc[] = [{ category: "ID_PROOF", type: "application/pdf" }, { category: "BANK_STMT", type: "image/jpeg" }];
+
+  it("sends each under its category and file type, then the visit with them listed", async () => {
+    const store = new MemoryOutboxStore();
+    const item = await visit(store, { photos: 1, documents: docs });
+    const { api, calls } = fakeApi();
+    await flush(store, api, WHO, T0);
+    expect(calls).toEqual(["url:agent", "put:agent", "url:document:ID_PROOF", "put:doc-ID_PROOF",
+                           "url:document:BANK_STMT", "put:doc-BANK_STMT", "visit"]);
+    expect(api.documentUploadUrl).toHaveBeenCalledWith("case-1", "ID_PROOF", "application/pdf", item.capture);
+    expect(api.documentUploadUrl).toHaveBeenCalledWith("case-1", "BANK_STMT", "image/jpeg", item.capture);
+    expect(api.photoUploadUrl).toHaveBeenCalledTimes(1);          // the agent photo only
+    expect(vi.mocked(api.recordVisit).mock.calls[0][1].documents).toEqual([
+      { category: "ID_PROOF", key: "k/doc/ID_PROOF", sha256: "f".repeat(64), content_type: "application/pdf" },
+      { category: "BANK_STMT", key: "k/doc/BANK_STMT", sha256: "f".repeat(64), content_type: "image/jpeg" },
+    ]);
+    expect(store.blobCount).toBe(0);
+  });
+
+  it("sends no documents field for a visit that collected none", async () => {
+    const store = new MemoryOutboxStore();
+    await visit(store, { photos: 1 });
+    const { api } = fakeApi();
+    await flush(store, api, WHO, T0);
+    expect(vi.mocked(api.recordVisit).mock.calls[0][1]).not.toHaveProperty("documents");
+  });
+
+  it("does not upload a document twice when a later step has to be retried", async () => {
+    const store = new MemoryOutboxStore();
+    await visit(store, { documents: docs });
+    let fail = true;
+    const { api } = fakeApi({
+      recordVisit: vi.fn(async () => { if (fail) throw new Error("Network Error"); return { id: "v1" }; }),
+    });
+    await flush(store, api, WHO, T0);
+    fail = false;
+    await flush(store, api, WHO, T0 + backoffMs(1));
+    expect(api.documentUploadUrl).toHaveBeenCalledTimes(2);       // one per document, not one per attempt
+    expect(vi.mocked(api.recordVisit).mock.calls[1][1].documents).toHaveLength(2);
+  });
+
+  it("counts their bytes, and frees them when the visit is refused", async () => {
+    const store = new MemoryOutboxStore();
+    const item = await visit(store, { documents: docs });
+    expect(item.bytes).toBe(4000);
+    const { api } = fakeApi({ recordVisit: vi.fn(async () => { throw httpError(403, "no"); }) });
+    await flush(store, api, WHO, T0);
+    const [parked] = await store.list();
+    expect(parked).toMatchObject({ state: "attention", bytes: 0 });
+    expect(store.blobCount).toBe(0);
   });
 });
 
