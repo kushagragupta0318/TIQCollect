@@ -9,13 +9,16 @@
 // field for it on MessageIn, by design, not by omission.
 import api from "./axios";
 
-export type ThreadSubjectType = "REVERSAL" | "PLACEMENT" | "ISSUE";
+export type ThreadSubjectType = "REVERSAL" | "PLACEMENT" | "ISSUE" | "AGENT_DIRECT";
 /** RESOLVED exists only for an ISSUE's own status (escalation_issues.status);
- *  a REVERSAL thread's status is OPEN/CLOSED, never RESOLVED. One union
- *  covers both rather than a conditional type for one extra value nothing
+ *  a REVERSAL thread's status is OPEN/CLOSED, never RESOLVED, and an
+ *  AGENT_DIRECT thread has no status concept at all. One union covers all
+ *  of them rather than a conditional type for one extra value nothing
  *  downstream needs to distinguish. */
 export type ThreadStatus = "OPEN" | "RESOLVED" | "CLOSED";
-export type SenderSide = "BANK" | "AGENCY";
+/** AGENT only appears on the manager<->agent axis; BANK/AGENCY only on the
+ *  bank<->agency one. Never mixed within a single thread. */
+export type SenderSide = "BANK" | "AGENCY" | "AGENT";
 
 export interface ThreadMessage {
   id: string;
@@ -115,5 +118,27 @@ export async function raiseEscalation(title: string, body: string): Promise<Esca
  *  (subject_type, subject_id) pair. */
 export async function setEscalationStatus(issueId: string, status: ThreadStatus): Promise<EscalationOpened> {
   const { data } = await api.post<EscalationOpened>(`/messaging/escalations/${issueId}/status`, { status });
+  return data;
+}
+
+// ── manager<->agent direct chat: a second axis, same envelope shapes,
+//    a different URL family (/messaging/agent-threads, not
+//    /messaging/threads/{subject_type}/{subject_id}) — an agent sees only
+//    their own thread, a manager/admin sees every one of their agency's
+//    agents'. No status concept here (no escalation_issues row behind it). ──
+
+export async function listAgentThreads(pending?: boolean): Promise<InboxThread[]> {
+  const { data } = await api.get<{ threads: InboxThread[] }>("/messaging/agent-threads",
+    { params: pending === undefined ? undefined : { pending } });
+  return data.threads;
+}
+
+export async function getAgentThread(agentId: string): Promise<ThreadDetail> {
+  const { data } = await api.get<ThreadDetail>(`/messaging/agent-threads/${agentId}`);
+  return data;
+}
+
+export async function postAgentMessage(agentId: string, body: string): Promise<ThreadDetail> {
+  const { data } = await api.post<ThreadDetail>(`/messaging/agent-threads/${agentId}/messages`, { body });
   return data;
 }

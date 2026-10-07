@@ -11,7 +11,9 @@
 //   the agent's live address.
 // ─────────────────────────────────────────────────────────────────────────
 import { NavLink, Outlet, useNavigate, useLocation } from "react-router";
-import { Home, Briefcase, User, Map, LogOut, WifiOff, MapPin, LocateFixed, RotateCcw } from "lucide-react";
+import {
+  Home, Briefcase, User, Map, LogOut, WifiOff, MapPin, LocateFixed, RotateCcw, MessageSquare,
+} from "lucide-react";
 import { BrandLogo } from "@/components/ui/BrandLogo";
 import { useEffect, useState, useCallback, useSyncExternalStore } from "react";
 import { toast } from "react-hot-toast";
@@ -27,16 +29,21 @@ import { outboxUsage, startOutbox, stopOutbox } from "@/lib/outboxRunner";
 import { OutboxBar } from "@/components/agent/OutboxBar";
 import { readCacheServedAt, subscribeReadCache } from "@/lib/readCacheRuntime";
 import { logout as apiLogout } from "@/api/auth";
+import { useUnreadAgentMessagingCount } from "@/lib/useMessagingInbox";
+import { NavUnreadDot } from "@/components/layout/NavUnreadDot";
 
 const SIDEBAR_KEY  = "tiq:agent-sidebar";
 const SIDEBAR_W    = 252;
 const SIDEBAR_ICON = 72;
 
+const MESSAGING_PATH = "/agent/messaging";
+
 const NAV_ITEMS = [
-  { to: "/agent/home",    icon: Home,      label: "Home" },
-  { to: "/agent/cases",   icon: Briefcase, label: "Cases" },
-  { to: "/agent/beat",    icon: Map,       label: "Beat" },
-  { to: "/agent/profile", icon: User,      label: "Profile" },
+  { to: "/agent/home",      icon: Home,           label: "Home" },
+  { to: "/agent/cases",     icon: Briefcase,      label: "Cases" },
+  { to: "/agent/beat",      icon: Map,            label: "Beat" },
+  { to: MESSAGING_PATH,     icon: MessageSquare,  label: "Messages" },
+  { to: "/agent/profile",   icon: User,           label: "Profile" },
 ];
 
 // ── Inline style helpers — mirrored from ManagerLayout ───────────────────────
@@ -150,6 +157,7 @@ function AgentLayoutInner() {
   const { beat } = useBeat();
   const navigate = useNavigate();
   const location = useLocation();
+  const unreadMessages = useUnreadAgentMessagingCount();
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   // I02: set while a page shows the copy saved on the phone (lib/readCache.ts).
   const cachedAt = useSyncExternalStore(subscribeReadCache, readCacheServedAt);
@@ -272,7 +280,10 @@ function AgentLayoutInner() {
             <NavLink key={to} to={to} title={!open ? label : undefined}>
               {({ isActive }) => (
                 <div style={navItemStyle(isActive, open)}>
-                  <Icon size={17} style={{ flexShrink: 0, color: isActive ? "#2563EB" : "#98A2B3" }} />
+                  <span style={{ position: "relative", display: "inline-flex", flexShrink: 0 }}>
+                    <Icon size={17} style={{ flexShrink: 0, color: isActive ? "#2563EB" : "#98A2B3" }} />
+                    {to === MESSAGING_PATH && unreadMessages > 0 && <NavUnreadDot />}
+                  </span>
                   <span style={{ fontSize: 11.5, fontWeight: isActive ? 600 : 500, opacity: open ? 1 : 0, maxWidth: open ? 160 : 0, overflow: "hidden", transition: "opacity 150ms, max-width 200ms" }}>{label}</span>
                 </div>
               )}
@@ -398,7 +409,10 @@ function AgentLayoutInner() {
                     transition:     "background 120ms cubic-bezier(0.2,0,0,1)",
                   }}
                 >
-                  <Icon size={19} style={{ color: isActive ? "#2563EB" : "#98A2B3", strokeWidth: isActive ? 2.2 : 1.8, flexShrink: 0 }} />
+                  <span style={{ position: "relative", display: "inline-flex", flexShrink: 0 }}>
+                    <Icon size={19} style={{ color: isActive ? "#2563EB" : "#98A2B3", strokeWidth: isActive ? 2.2 : 1.8, flexShrink: 0 }} />
+                    {to === MESSAGING_PATH && unreadMessages > 0 && <NavUnreadDot />}
+                  </span>
                   <span
                     className="w-full truncate text-center"
                     style={{ fontSize: 10, fontWeight: isActive ? 700 : 500, color: isActive ? "#2563EB" : "#667085", lineHeight: 1 }}

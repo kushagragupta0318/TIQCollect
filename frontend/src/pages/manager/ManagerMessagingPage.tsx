@@ -12,10 +12,17 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { MessageSquarePlus, ScrollText, Send } from "lucide-react";
-import { raiseEscalation, type InboxThread, type ThreadStatus, type ThreadSubjectType } from "@/api/messaging";
+import {
+  getAgentThread, getThread, postAgentMessage, postMessage, raiseEscalation, setEscalationStatus,
+  type InboxThread, type ThreadStatus, type ThreadSubjectType,
+} from "@/api/messaging";
 import { errorDetail } from "@/lib/apiError";
-import { MESSAGING_INBOX_KEY, useMessagingInbox } from "@/lib/useMessagingInbox";
-import { handleComposeKeyDown, useAutoScrollOnChange, useMessagingThread } from "@/lib/useMessagingThread";
+import {
+  AGENT_MESSAGING_INBOX_KEY, MESSAGING_INBOX_KEY, useAgentMessagingInbox, useMessagingInbox,
+} from "@/lib/useMessagingInbox";
+import {
+  handleComposeKeyDown, useAutoScrollOnChange, useMessagingThread, type ThreadEndpoints,
+} from "@/lib/useMessagingThread";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 
@@ -43,7 +50,7 @@ function InboxRow({ row, active, onSelect }: { row: InboxThread; active: boolean
       </div>
       <div className="mt-1 flex items-center gap-2">
         <Badge variant={STATUS_VARIANT[row.status]}>{row.status}</Badge>
-        <span className="text-[11px] text-slate-500">Bank</span>
+        <span className="text-[11px] text-slate-500">{row.counterparty === "AGENT" ? "Agent" : "Bank"}</span>
         {row.pending && <Badge variant="orange">Awaiting your reply</Badge>}
       </div>
       <p className={`mt-1.5 truncate text-[12px] ${row.unread ? "font-medium text-slate-700" : "text-slate-500"}`}>
@@ -58,7 +65,16 @@ function ThreadPanel({ subjectType, subjectId }: {
   subjectType: ThreadSubjectType; subjectId: string;
 }) {
   const [body, setBody] = useState("");
-  const t = useMessagingThread(subjectType, subjectId, "AGENCY");
+  const endpoints: ThreadEndpoints = {
+    getThread: () => getThread(subjectType, subjectId),
+    postMessage: (b) => postMessage(subjectType, subjectId, b),
+    setStatus: subjectType === "ISSUE"
+      ? (status) => setEscalationStatus(subjectId, status).then((r) => ({
+          thread: r.thread, subject_type: subjectType, subject_id: subjectId, messages: r.messages,
+        }))
+      : undefined,
+  };
+  const t = useMessagingThread(["messaging", "thread", subjectType, subjectId], "AGENCY", endpoints, MESSAGING_INBOX_KEY);
   const bottomRef = useAutoScrollOnChange(t.messages.length);
 
   if (t.isLoading) return <p className="py-10 text-center text-[13px] text-slate-500">Loading the conversation…</p>;
@@ -126,6 +142,100 @@ function ThreadPanel({ subjectType, subjectId }: {
   );
 }
 
+/** The agent-chats axis' own thread panel — no status concept (an
+ *  AGENT_DIRECT thread has no escalation_issues row behind it), so this is
+ *  simpler than the bank-axis ThreadPanel rather than that one generalized
+ *  with an unused branch. */
+function AgentThreadPanel({ agentId }: { agentId: string }) {
+  const [body, setBody] = useState("");
+  const endpoints: ThreadEndpoints = {
+    getThread: () => getAgentThread(agentId),
+    postMessage: (b) => postAgentMessage(agentId, b),
+  };
+  const t = useMessagingThread(["messaging", "agent-thread", agentId], "AGENCY", endpoints, AGENT_MESSAGING_INBOX_KEY);
+  const bottomRef = useAutoScrollOnChange(t.messages.length);
+
+  if (t.isLoading) return <p className="py-10 text-center text-[13px] text-slate-500">Loading the conversation…</p>;
+  if (t.isError) return <p className="py-10 text-center text-[13px] text-rose-600">{errorDetail(t.error, "This conversation could not load.")}</p>;
+
+  const doSend = () => { if (!body.trim()) return; t.send(body.trim()); setBody(""); };
+
+  return (
+    <div className="flex h-full flex-col">
+      <p className="flex items-center gap-1.5 border-b border-[#E1E3E9] pb-3 text-[11px] text-slate-500">
+        <ScrollText className="size-3.5" aria-hidden="true" />
+        Every message here is part of the audit record.
+      </p>
+
+      <div className="flex-1 space-y-3 overflow-y-auto py-4">
+        {t.messages.map((m) => (
+          <div key={m.id} className={`motion-safe:animate-card-enter max-w-[80%] rounded-control px-3.5 py-2.5 ${
+            m.sender_side === "AGENCY" ? "ml-auto bg-primary/5" : "bg-[#F7F8FA]"
+          } ${m.pending ? "opacity-60" : ""}`}>
+            <p className="text-[11px] font-semibold text-slate-500">{m.sender_side === "AGENCY" ? "You" : "Agent"}</p>
+            <p className="mt-0.5 whitespace-pre-wrap text-[13px] text-slate-900">{m.body}</p>
+            <p className="mt-1 text-[10.5px] text-slate-400">{m.pending ? "Sending…" : when(m.created_at)}</p>
+          </div>
+        ))}
+        {t.messages.length === 0 && (
+          <p className="py-8 text-center text-[12.5px] text-slate-500">No messages yet.</p>
+        )}
+        <div ref={bottomRef} />
+      </div>
+
+      <div className="border-t border-[#E1E3E9] pt-3">
+        <textarea
+          className="input text-[13px] w-full"
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
+          onKeyDown={(e) => handleComposeKeyDown(e, body, doSend)}
+          placeholder="Reply… (Enter to send, Shift+Enter for a new line)"
+          rows={3}
+        />
+        <div className="mt-2 flex justify-end">
+          <Button onClick={doSend} disabled={!body.trim()} loading={t.sendPending}>
+            {!t.sendPending && <Send className="size-4 shrink-0" />} Send
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** The agent-chats inbox — one thread per agent in the manager's own
+ *  agency, parallel to the bank-axis inbox above but on its own query key
+ *  (AGENT_MESSAGING_INBOX_KEY) so the two never cross-invalidate. */
+function AgentChatsTab() {
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const q = useAgentMessagingInbox();
+
+  return (
+    <div className="grid gap-5 lg:grid-cols-[320px_1fr]">
+      <div className="max-h-[70vh] overflow-y-auto rounded-control border border-[#E1E3E9] bg-white p-3 space-y-2">
+        {q.isLoading && <p className="py-8 text-center text-[13px] text-slate-500">Loading threads…</p>}
+        {q.isError && <p className="py-8 text-center text-[13px] text-rose-600">{errorDetail(q.error, "Threads could not load.")}</p>}
+        {q.data && q.data.length === 0 && (
+          <p className="py-8 text-center text-[12.5px] text-slate-500">No agents yet.</p>
+        )}
+        {q.data?.map((row) => (
+          <InboxRow
+            key={row.thread_id}
+            row={row}
+            active={selectedAgentId === row.subject_id}
+            onSelect={() => setSelectedAgentId(row.subject_id)}
+          />
+        ))}
+      </div>
+
+      <div className="min-h-[60vh] rounded-control border border-[#E1E3E9] bg-white p-4">
+        {selectedAgentId
+          ? <AgentThreadPanel agentId={selectedAgentId} />
+          : <p className="py-16 text-center text-[12.5px] text-slate-500">Pick an agent from the list to read and reply.</p>}
+      </div>
+    </div>
+  );
+}
+
 function EscalateForm({ onOpened }: { onOpened: (subjectId: string) => void }) {
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState("");
@@ -159,19 +269,16 @@ function EscalateForm({ onOpened }: { onOpened: (subjectId: string) => void }) {
   );
 }
 
-export default function ManagerMessagingPage() {
+function BankThreadsTab() {
   const qc = useQueryClient();
   const [selected, setSelected] = useState<{ subjectType: ThreadSubjectType; subjectId: string } | null>(null);
   const q = useMessagingInbox();
   const refreshInbox = () => qc.invalidateQueries({ queryKey: MESSAGING_INBOX_KEY });
 
   return (
-    <div className="space-y-5 p-4 sm:p-6">
+    <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-slate-900">Messages</h1>
-          <p className="mt-0.5 text-[12.5px] text-slate-500">Threads with the bank — reversal disputes and escalations you've raised.</p>
-        </div>
+        <p className="text-[12.5px] text-slate-500">Threads with the bank — reversal disputes and escalations you've raised.</p>
         <EscalateForm onOpened={(subjectId) => { setSelected({ subjectType: "ISSUE", subjectId }); refreshInbox(); }} />
       </div>
 
@@ -198,6 +305,41 @@ export default function ManagerMessagingPage() {
             : <p className="py-16 text-center text-[12.5px] text-slate-500">Pick a thread from the inbox to read and reply.</p>}
         </div>
       </div>
+    </div>
+  );
+}
+
+const TABS = [
+  { key: "bank", label: "Bank" },
+  { key: "agents", label: "Agents" },
+] as const;
+type Tab = (typeof TABS)[number]["key"];
+
+export default function ManagerMessagingPage() {
+  const [tab, setTab] = useState<Tab>("bank");
+
+  return (
+    <div className="space-y-5 p-4 sm:p-6">
+      <div>
+        <h1 className="text-xl font-bold text-slate-900">Messages</h1>
+      </div>
+
+      <div className="flex gap-1 rounded-control border border-[#E1E3E9] bg-white p-1 w-fit">
+        {TABS.map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            onClick={() => setTab(t.key)}
+            className={`tap-target rounded-control px-4 py-1.5 text-[12.5px] font-semibold transition-colors ${
+              tab === t.key ? "bg-primary/10 text-primary" : "text-slate-500 hover:text-slate-700"
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "bank" ? <BankThreadsTab /> : <AgentChatsTab />}
     </div>
   );
 }

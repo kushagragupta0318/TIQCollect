@@ -42,23 +42,13 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getMe } from "@/api/auth";
 import { useLiveEvents, WORK_EVENTS } from "@/hooks/useLiveEvents";
 import { useModalA11y } from "@/hooks/useModalA11y";
-import { useUnreadMessagingCount } from "@/lib/useMessagingInbox";
+import { useUnreadAgentMessagingCount, useUnreadMessagingCount } from "@/lib/useMessagingInbox";
 import {
   MANAGER_NAV, MOBILE_MORE, MOBILE_PRIMARY, activeMoreItem, isSheetOpen, moreButtonActive,
 } from "@/components/layout/managerNav";
+import { NavUnreadDot } from "@/components/layout/NavUnreadDot";
 
 const MESSAGING_PATH = "/manager/messaging";
-
-/** A themed dot, not a raw colour literal repeated at every call site — one
- *  place decides what "unread, somewhere in the nav" looks like. */
-function NavUnreadDot() {
-  return (
-    <span
-      aria-label="Unread messages"
-      className="absolute -right-0.5 -top-0.5 size-2 rounded-full bg-primary ring-2 ring-white"
-    />
-  );
-}
 
 const SIDEBAR_KEY   = "tiq:sidebar";
 const SIDEBAR_W     = 252;
@@ -115,7 +105,10 @@ export default function ManagerLayout() {
   // Its own 6s poll (useMessagingInbox), not this file's 30s one — shared
   // with whichever Messaging page/badge is also mounted, via the same query
   // key, so this never adds a second request alongside an open inbox.
-  const unreadMessages = useUnreadMessagingCount();
+  // The Messages nav entry is one destination covering both axes (bank
+  // threads and agent chats are tabs on the same page), so its dot lights
+  // for either one rather than needing a second nav item.
+  const unreadMessages = useUnreadMessagingCount() + useUnreadAgentMessagingCount();
 
   const fetchSOS = useCallback(() => {
     api.get("/manager/dashboard")
@@ -396,7 +389,10 @@ function MoreSheet({ onClose }: { onClose: () => void }) {
   useModalA11y(true, ref, onClose);
   // Same shared query as the rail's own badge (useMessagingInbox's key) —
   // calling the hook again here costs no second request.
-  const unreadMessages = useUnreadMessagingCount();
+  // The Messages nav entry is one destination covering both axes (bank
+  // threads and agent chats are tabs on the same page), so its dot lights
+  // for either one rather than needing a second nav item.
+  const unreadMessages = useUnreadMessagingCount() + useUnreadAgentMessagingCount();
   // Back/Forward while open (the Android back button, most often): close in
   // its own commit first, for the same scroll reason as the links below.
   // Without it the page Back lands on opened at this page's offset — 800 px
