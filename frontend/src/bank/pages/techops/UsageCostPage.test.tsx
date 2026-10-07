@@ -31,13 +31,13 @@ function payload(over: Partial<UsagePayload> = {}): UsagePayload {
     },
     by_feature: [
       { feature: "briefing", calls: 30, input_tokens: 40_000, output_tokens: 6_000, cache_tokens: 800,
-        cost_usd: 0.09 },
+        cost_usd: 0.09, unpriced_calls: 0 },
       { feature: "case_ranking", calls: 12, input_tokens: 10_000, output_tokens: 2_000, cache_tokens: 200,
-        cost_usd: 0.03 },
+        cost_usd: 0.03, unpriced_calls: 0 },
     ],
     by_day: [
-      { day: "2026-10-05", calls: 20, cost_usd: 0.06 },
-      { day: "2026-10-06", calls: 22, cost_usd: 0.06 },
+      { day: "2026-10-05", calls: 20, cost_usd: 0.06, unpriced_calls: 0 },
+      { day: "2026-10-06", calls: 22, cost_usd: 0.06, unpriced_calls: 0 },
     ],
     coverage: { pending_attribution: 0, note: "Calls with no bank recorded cannot be charged to one." },
     ...over,
@@ -68,10 +68,26 @@ describe("UsageCostPage", () => {
     await waitFor(() => expect(screen.getByText(/3 calls at an unknown price/)).toBeTruthy());
   });
 
+  it("flags an unpriced feature row rather than showing it as a real zero", async () => {
+    show(payload({
+      by_feature: [
+        { feature: "briefing", calls: 5, input_tokens: 1_000, output_tokens: 200, cache_tokens: 0,
+          cost_usd: 0, unpriced_calls: 5 },
+      ],
+    }));
+    await waitFor(() => expect(screen.getByText("unpriced (5)")).toBeTruthy());
+  });
+
   it("says nothing about unpriced calls when there are none", async () => {
     show(payload());
     await waitFor(() => expect(screen.getByText("$0.12")).toBeTruthy());
     expect(screen.queryByText(/unknown price/)).toBeNull();
+  });
+
+  it("marks a fully-unpriced day distinctly rather than letting it read as empty", async () => {
+    show(payload({ by_day: [{ day: "2026-10-05", calls: 4, cost_usd: 0, unpriced_calls: 4 }] }));
+    await waitFor(() => expect(screen.getByTitle(/unpriced \(4\), 4 calls/)).toBeTruthy());
+    expect(screen.getByTitle(/unpriced \(4\), 4 calls/).querySelector(".border-dashed")).not.toBeNull();
   });
 
   it("SAYS how many calls are pending attribution", async () => {

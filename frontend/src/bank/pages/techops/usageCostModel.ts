@@ -23,12 +23,14 @@ export interface UsageByFeature {
   output_tokens: number;
   cache_tokens: number;
   cost_usd: number;
+  unpriced_calls: number;
 }
 
 export interface UsageByDay {
   day: string;
   calls: number;
   cost_usd: number;
+  unpriced_calls: number;
 }
 
 export interface UsageCoverage {
@@ -68,6 +70,15 @@ export function formatUsd(n: number): string {
   // cent it reads as ordinary currency, 2dp, same as any other total.
   if (n !== 0 && Math.abs(n) < 0.01) return `$${n.toFixed(4)}`;
   return `$${n.toFixed(2)}`;
+}
+
+/** A real zero and "we don't know this model's price" must stay visually
+ *  distinct — the totals tile already says so in its sub-line; a row with
+ *  no breakdown of its own needs the same honesty folded into one cell. */
+export function costCellLabel(costUsd: number, unpricedCalls: number): string {
+  if (unpricedCalls === 0) return formatUsd(costUsd);
+  if (costUsd === 0) return `unpriced (${unpricedCalls})`;
+  return `${formatUsd(costUsd)} +${unpricedCalls} unpriced`;
 }
 
 export function formatDay(iso: string): string {

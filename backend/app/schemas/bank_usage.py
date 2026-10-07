@@ -25,12 +25,14 @@ class UsageByFeatureOut(BaseModel):
     output_tokens: int
     cache_tokens: int
     cost_usd: float
+    unpriced_calls: int
 
 
 class UsageByDayOut(BaseModel):
     day: str
     calls: int
     cost_usd: float
+    unpriced_calls: int
 
 
 class UsageCoverageOut(BaseModel):

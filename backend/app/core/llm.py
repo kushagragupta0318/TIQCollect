@@ -642,22 +642,43 @@ def _cost_usd(model: str, usage: Usage) -> float | None:
 
 def _record_usage(purpose: str, bank_id: str | None, provider: str, model: str,
                   usage: Usage) -> None:
-    """One row in ai.llm_calls per complete()/chat() call. Best-effort, like
-    every other write at this seam: a metering row is never the reason a
-    product feature fails, so any failure here is caught and logged, not
-    raised.
+    """One row in ai.llm_calls for a call that actually reached a model.
+    Best-effort, like every other write at this seam: a metering row is never
+    the reason a product feature fails, so any failure here is caught and
+    logged, not raised.
 
-    Skipped for "fake"/"none": a scripted test provider and a disabled one
-    never spend real money, and skipping them here means the hundreds of
+    Skipped entirely when nothing was billed: a cache hit (CACHED) never
+    calls the provider by design, and NOT_CONFIGURED / RATE_LIMITED / TIMEOUT
+    / an SDK error never get far enough to receive a response -- both read as
+    zero usage. Recording either as a "call" would make the page's own
+    "Calls" tile count things nobody was charged for (coordinator audit,
+    2026-10-07). A real response that failed afterwards (REFUSED, a
+    non-JSON BAD_RESPONSE) DID cost tokens and keeps its row; `usage` already
+    distinguishes the two because it is captured right after the response,
+    never guessed from the final status.
+
+    Skipped for "fake"/"none" too: a scripted test provider and a disabled
+    one never spend real money, and skipping them here means the hundreds of
     LLM-seam unit tests that run with no database configured never attempt
     one — `use_fake()` makes this unconditional rather than best-effort.
 
-    `bank_id` is whatever the caller passed (default None). None of today's
-    six call sites pass one yet — the same "known gap, counted not hidden"
-    shape as AuditLog's unattributed rows (services/bank/audit_read.py):
-    GET /bank/usage counts calls with no bank rather than guessing one.
+    `bank_id` is whatever the caller passed (default None). None reaches here
+    only from call sites that have not been updated to pass one -- the same
+    "known gap, counted not hidden" shape as AuditLog's unattributed rows
+    (services/bank/audit_read.py): GET /bank/usage counts calls with no bank
+    rather than guessing one.
+
+    RLS CUTOVER NOTE (flagged 2026-10-07, coordinator audit; not fixed here):
+    this opens a bare SessionLocal() with no `app.bank_id`/`app.scope` set.
+    RLS is dormant today (the API runs as `fieldops`, which bypasses it), so
+    the insert succeeds; once the API moves to `tiq_app` (RLS enforce step
+    2), this insert has no tenant context and the bank-only policy on
+    ai.llm_calls would reject it. Needs a tenant-aware session (or a
+    SECURITY DEFINER path) before that cutover, not before.
     """
     if provider in ("fake", "none") or _fake is not None:
+        return
+    if usage == Usage():
         return
     try:
         from app.core.database import SessionLocal

@@ -471,7 +471,7 @@ class CaseService:
                         "\n\nCases:\n" + "\n".join(lines) +
                         ("\n\n" + "\n".join(notes) if notes else "") +
                         '\n\nFormat: {"1": "reason", "2": "reason", ...}',
-                        purpose="case_ranking", json_mode=True,
+                        purpose="case_ranking", json_mode=True, bank_id=agent.bank_id,
                         max_tokens=900, temperature=0.3,
                         names=[r["customer"]["full_name"] for r in eligible],
                     )

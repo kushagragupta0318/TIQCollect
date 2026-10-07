@@ -86,18 +86,22 @@ def test_a_bank_reads_only_its_own_calls(db):
 
 def test_another_banks_calls_are_never_returned(db):
     """The one that matters: a leak here is one lender reading another's cost
-    structure, not a wrong figure."""
+    structure, not a wrong figure -- checked on every shape the page shows,
+    not just the totals tile."""
     actor = _user(db, UserRole.BANK_ADMIN, bank_id=OURS)
-    _call(db, cost=0.01)
-    _call(db, bank_id=THEIRS, cost=99.0)
+    _call(db, feature="briefing", cost=0.01)
+    _call(db, bank_id=THEIRS, feature="case_ranking", cost=99.0)
     body = _client(db, actor).get("/api/v1/bank/usage").json()
     assert body["totals"]["calls"] == 1
     assert body["totals"]["cost_usd"] == pytest.approx(0.01)
+    assert {r["feature"] for r in body["by_feature"]} == {"briefing"}
+    assert sum(r["cost_usd"] for r in body["by_day"]) == pytest.approx(0.01)
 
 
 def test_an_unattributed_call_is_counted_not_charged_to_anyone(db):
-    """None of today's call sites pass bank_id yet (core/llm.py) — a known,
-    counted gap, not a leak and not a silent free ride."""
+    """A row from before every call site was wired (2026-10-07), or any
+    future caller that omits bank_id — a known, counted gap, not a leak and
+    not a silent free ride."""
     actor = _user(db, UserRole.BANK_ADMIN, bank_id=OURS)
     _call(db, cost=0.01)
     _call(db, bank_id=None, cost=5.0)
@@ -114,6 +118,21 @@ def test_a_call_with_no_known_price_is_flagged_not_zeroed(db):
     body = _client(db, actor).get("/api/v1/bank/usage").json()
     assert body["totals"]["calls"] == 2
     assert body["totals"]["cost_usd"] == pytest.approx(0.01)     # the unknown one excluded, not zeroed-in
+    assert body["totals"]["unpriced_calls"] == 1
+
+
+def test_unpriced_calls_are_flagged_on_the_breakdowns_too(db):
+    """Not just the totals tile -- the same row the by-feature table and the
+    by-day chart render must say "unpriced", end to end through the API,
+    not only inside usage_read.py's own return value."""
+    actor = _user(db, UserRole.BANK_ADMIN, bank_id=OURS)
+    _call(db, feature="briefing", cost=0.01)
+    _call(db, feature="briefing", model="some-future-model", cost=None)
+    body = _client(db, actor).get("/api/v1/bank/usage").json()
+    briefing = next(r for r in body["by_feature"] if r["feature"] == "briefing")
+    assert briefing["unpriced_calls"] == 1
+    assert briefing["cost_usd"] == pytest.approx(0.01)
+    assert sum(d["unpriced_calls"] for d in body["by_day"]) == 1
     assert body["totals"]["unpriced_calls"] == 1
 
 

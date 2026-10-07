@@ -1,7 +1,9 @@
 // Command Center `components/DecisionAlerts.jsx`, ported to TypeScript (spec §4.4)
 // and made data-driven: CC fetches its own alerts; here they are a prop
 // (null = still scanning), so task C06's rules plug straight in. Class strings
-// verbatim, including the inert `animate-slide-up` (spec §0.1).
+// verbatim, except the inert `animate-slide-up` (spec §0.1), now `card-enter`
+// (bank.css's own bank-slideUpCard, same fix as PulseKpiFlow.tsx — the
+// existing per-card `animationDelay` stagger actually runs it now).
 import { useState } from "react";
 import { ArrowRight, ChevronDown, Loader2 } from "lucide-react";
 import { DPD_COLORS } from "../theme/colors";
@@ -191,7 +193,7 @@ export function DecisionAlerts({
             <div
               key={a.id}
               style={{ animationDelay: `${i * 35}ms` }}
-              className={`animate-slide-up rounded-card border border-border overflow-hidden bg-card shadow-resting ${isOpen ? "xl:col-span-2" : ""}`}
+              className={`card-enter rounded-card border border-border overflow-hidden bg-card shadow-resting ${isOpen ? "xl:col-span-2" : ""}`}
             >
               <button
                 onClick={() => setOpenId(isOpen ? null : a.id)}
