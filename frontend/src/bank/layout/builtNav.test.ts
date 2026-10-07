@@ -55,10 +55,12 @@ describe("the rail and the router agree", () => {
 
   it("hides the unbuilt items and drops a section left empty", () => {
     const shown = BUILT_BANK_SECTIONS.flatMap((s) => s.items.map((i) => i.path));
-    expect(shown).not.toContain("tech-ops/mlops");
-    expect(shown).not.toContain("admin/users");
+    // Still unbuilt as of this wave (Alerts, Data Quality, Scenario Lab, AI Agents).
     expect(shown).not.toContain("alerts");
-    expect(BUILT_BANK_SECTIONS.map((s) => s.label)).not.toContain("Tech Ops");   // every item unbuilt
+    expect(shown).not.toContain("tech-ops/data-quality");
+    expect(shown).not.toContain("strategy/scenario-lab");
+    expect(shown).not.toContain("tech-ops/agents");
+    // The invariant that survives any build state: a rendered section is never empty.
     expect(BUILT_BANK_SECTIONS.every((s) => s.items.length > 0)).toBe(true);
   });
 

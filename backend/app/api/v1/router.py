@@ -53,3 +53,7 @@ api_router.include_router(payment_reversals.bank_router)
 # Own line, for the same merge reason as above.
 from app.api.v1.endpoints import bank_settings  # noqa: E402
 api_router.include_router(bank_settings.router)
+# 2026-10-07 (P3 K01): Admin > Bank Users, /bank/users (BANK_ADMIN only).
+# Own line, same merge reason as above.
+from app.api.v1.endpoints import bank_users_admin  # noqa: E402
+api_router.include_router(bank_users_admin.router)
