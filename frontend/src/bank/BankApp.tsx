@@ -16,6 +16,7 @@ import { BANK_PORTAL_ROLES, BANK_ROLE_LABELS, isBankPortalRole } from "./layout/
 import { BANK_NAV_ITEMS } from "./layout/navigation";
 import { BankAnalyticsPage } from "./pages/BankAnalyticsPage";
 import { BankOverviewPage } from "./pages/BankOverviewPage";
+import { AuditPage } from "./pages/admin/AuditPage";
 import { BankPlacementPage } from "./pages/BankPlacementPage";
 import { BankPlaceholderPage } from "./pages/BankPlaceholderPage";
 import OnboardAgencyWizardPage from "./pages/onboarding/OnboardAgencyWizardPage";
@@ -38,6 +39,7 @@ const AGENCY_PERFORMANCE_PATH = "agencies/performance";
 const BUILT_PAGES: Record<string, ComponentType> = {
   overview: BankOverviewPage, analytics: BankAnalyticsPage, "agencies/placement": BankPlacementPage,
   "governance/models": ModelsPage, "strategy/monte-carlo": MonteCarloPage,
+  "admin/audit": AuditPage,
 };
 
 
