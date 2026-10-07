@@ -51,9 +51,23 @@ export interface AgenciesPanels {
   scorecards: AgencyScorecard[];
 }
 
+export interface RecoveryPanels {
+  by_month: { month_start: string; actual_inr: number; expected_inr: number | null;
+             recovery_vs_expected: number | null }[];
+}
+
+interface CostRow {
+  commission_inr: number; field_cost_inr: number | null; collected_inr: number; cost_per_100_inr: number | null;
+}
+export interface CostPanels {
+  by_month: (CostRow & { month_start: string })[];
+  by_agency: (CostRow & { agency_id: string; agency_name: string })[];
+}
+
 export interface CompliancePanels {
   breaches_over_time: { month_start: string; out_of_hours: number; geofence: number; consent_missing: number; fraud_confirmed: number }[];
-  by_agency: { agency_id: string; out_of_hours: number; geofence: number; visits: number; fraud_confirmed: number }[];
+  by_agency: { agency_id: string; agency_name: string; out_of_hours: number; geofence: number; visits: number;
+              fraud_confirmed: number }[];
 }
 
 /** mv_portfolio_daily's dpd_bucket (CURRENT | BUCKET_1..3 | NPA) to the

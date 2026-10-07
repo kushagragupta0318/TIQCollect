@@ -1,10 +1,10 @@
 // Command Center › Analytics (plan §5.4, task C04): the eight-tab breakdown.
-// Four tabs are built — Exposure, Migration, Agencies, Compliance — each its
-// own GET /bank/analytics/{tab} call, filtered by the same global KpiFilter
-// every bank page shares. The other four (Recovery, Field Operations, Cost
-// to Collect, Concentration) say so honestly rather than rendering sample
-// data; Field Operations and Recovery are partway (tracked in the tab's own
-// note, not silently dropped from the tab bar).
+// Six tabs are built — Exposure, Migration, Agencies, Recovery, Cost to
+// Collect, Compliance — each its own GET /bank/analytics/{tab} call,
+// filtered by the same global KpiFilter every bank page shares. The other
+// two (Field Operations, Concentration) say so honestly rather than
+// rendering sample data; Field Operations is partway (tracked in the tab's
+// own note, not silently dropped from the tab bar).
 import { useSearchParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import api from "@/api/axios";
@@ -17,8 +17,9 @@ import { useKpiFilter } from "../components/useKpiFilter";
 import { filterToParams } from "../components/kpiFilter";
 import { ExecutiveHeader, PageRoot } from "../components/PageTemplate";
 import {
-  dpdLadderHeatRows, exposureFunnelStages, pct, securityCoverStages, transitionMatrixData,
-  type AgenciesPanels, type AnalyticsTabResponse, type CompliancePanels, type ExposurePanels, type MigrationPanels,
+  dpdLadderHeatRows, exposureFunnelStages, moneyCr, pct, securityCoverStages, transitionMatrixData,
+  type AgenciesPanels, type AnalyticsTabResponse, type CompliancePanels, type CostPanels, type ExposurePanels,
+  type MigrationPanels, type RecoveryPanels,
 } from "./analyticsModel";
 
 type TabId = "exposure" | "migration" | "recovery" | "field_ops" | "agencies" | "cost" | "concentration" | "compliance";
@@ -37,16 +38,13 @@ const TABS: readonly AnalyticsTab<TabId>[] = [
 // The backend's own tab ids (analytics_catalog.TABS) for the four that call
 // the API; the rest render their own honest "not built" note below.
 const API_TAB: Partial<Record<TabId, string>> = {
-  exposure: "exposure", migration: "migration", agencies: "agencies", compliance: "compliance",
+  exposure: "exposure", migration: "migration", agencies: "agencies", recovery: "recovery", cost: "cost",
+  compliance: "compliance",
 };
 
 const NOT_BUILT: Partial<Record<TabId, string>> = {
-  recovery: "Recovery vs Expected (recovery_risk-predicted) is next; the cumulative-target-line chart waits on " +
-           "a bank-set collection target, which does not exist in the schema yet — a product decision, not a data gap.",
   field_ops: "Visits per agent, met rate and SLA coverage are built below the other three tabs land; beat " +
             "adherence and planned-vs-actual km wait on the demo book generating routed days, queued separately.",
-  cost: "Commission and field cost are already in the Agencies scorecard (Cost per ₹100); a dedicated channel-" +
-       "economics breakdown is not built yet.",
   concentration: "Zone / region / state / city / branch / product breakdowns need a new aggregation over " +
                  "mv_portfolio_daily joined to branches — not built yet.",
 };
@@ -92,6 +90,8 @@ export function BankAnalyticsPage() {
       {apiTab && q.data?.available && active === "exposure" && <ExposureTab panels={q.data.panels as unknown as ExposurePanels} />}
       {apiTab && q.data?.available && active === "migration" && <MigrationTab panels={q.data.panels as unknown as MigrationPanels} />}
       {apiTab && q.data?.available && active === "agencies" && <AgenciesTab panels={q.data.panels as unknown as AgenciesPanels} />}
+      {apiTab && q.data?.available && active === "recovery" && <RecoveryTab panels={q.data.panels as unknown as RecoveryPanels} />}
+      {apiTab && q.data?.available && active === "cost" && <CostTab panels={q.data.panels as unknown as CostPanels} />}
       {apiTab && q.data?.available && active === "compliance" && <ComplianceTab panels={q.data.panels as unknown as CompliancePanels} />}
     </PageRoot>
   );
@@ -163,6 +163,47 @@ function AgenciesTab({ panels }: { panels: AgenciesPanels }) {
   );
 }
 
+function RecoveryTab({ panels }: { panels: RecoveryPanels }) {
+  return (
+    <Panel title="Recovery vs expected" hint="Actual collections against the recovery_risk-predicted figure, by month — the owner's target line: there is no bank-set number in the schema, and the predicted figure is the one that exists without inventing one.">
+      <DataTable
+        rows={panels.by_month}
+        rowKey={(r) => r.month_start}
+        columns={[
+          { key: "month_start", header: "Month" },
+          { key: "actual_inr", header: "Actual", align: "right", render: (r) => moneyCr(r.actual_inr) },
+          { key: "expected_inr", header: "Expected (predicted)", align: "right", render: (r) => moneyCr(r.expected_inr) },
+          { key: "recovery_vs_expected", header: "Recovery vs expected", align: "right", render: (r) => pct(r.recovery_vs_expected) },
+        ]}
+      />
+    </Panel>
+  );
+}
+
+const COST_COLUMNS = [
+  { key: "commission_inr", header: "Commission", align: "right" as const, render: (r: { commission_inr: number }) => moneyCr(r.commission_inr) },
+  { key: "field_cost_inr", header: "Field cost", align: "right" as const,
+    render: (r: { field_cost_inr: number | null }) => r.field_cost_inr == null ? "Not available" : moneyCr(r.field_cost_inr) },
+  { key: "collected_inr", header: "Collected", align: "right" as const, render: (r: { collected_inr: number }) => moneyCr(r.collected_inr) },
+  { key: "cost_per_100_inr", header: "Cost / ₹100", align: "right" as const,
+    render: (r: { cost_per_100_inr: number | null }) => r.cost_per_100_inr == null ? "Not available" : `₹${r.cost_per_100_inr.toFixed(2)}` },
+];
+
+function CostTab({ panels }: { panels: CostPanels }) {
+  return (
+    <div className="space-y-6">
+      <Panel title="Channel economics, by month" hint="Commission and field cost, bank-wide">
+        <DataTable rows={panels.by_month} rowKey={(r) => r.month_start}
+                  columns={[{ key: "month_start", header: "Month" }, ...COST_COLUMNS]} />
+      </Panel>
+      <Panel title="Channel economics, by agency">
+        <DataTable rows={panels.by_agency} rowKey={(r) => r.agency_id}
+                  columns={[{ key: "agency_name", header: "Agency", className: "font-bold text-foreground" }, ...COST_COLUMNS]} />
+      </Panel>
+    </div>
+  );
+}
+
 function ComplianceTab({ panels }: { panels: CompliancePanels }) {
   return (
     <div className="space-y-6">
@@ -184,7 +225,7 @@ function ComplianceTab({ panels }: { panels: CompliancePanels }) {
           rows={panels.by_agency}
           rowKey={(r) => r.agency_id}
           columns={[
-            { key: "agency_id", header: "Agency" },
+            { key: "agency_name", header: "Agency" },
             { key: "visits", header: "Visits", align: "right" },
             { key: "out_of_hours", header: "Out of hours", align: "right" },
             { key: "geofence", header: "Geofence", align: "right" },

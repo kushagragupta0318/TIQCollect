@@ -9,7 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core import database
-from app.services.bank.agency_effect import agency_effect
+from app.services.bank.agency_effect import agency_effect, latest_month
 from tests.pg.test_pg_analytics_b import A1, B1, B2, L1, _insert, _refresh, book  # noqa: F401 (fixture)
 
 
@@ -40,3 +40,22 @@ def test_the_effect_reads_the_scoped_view_and_skips_an_unknown_due(book):  # noq
 def test_another_bank_reads_no_effect(book):  # noqa: F811
     _refresh(book)
     assert _effects(book, B2, month_start=date(2025, 2, 1)) == []
+
+
+def test_latest_month_is_not_the_still_running_month(book):  # noqa: F811
+    """P1 (L1) is still ACTIVE (ended_on=None), so the scorecard view's own
+    `months` CTE (v2_0013) generate_series runs it through the CURRENT
+    month-in-progress for active-placement tracking — by design, not a bug
+    in the view. That row has no placed/visit/payment activity yet (none of
+    it happened), so picking it as "the" reporting month, as plain
+    `max(month_start)` on the view would, degrades every ratio metric to
+    None. latest_month must anchor on the book's last REAL reading
+    (mv_portfolio_daily, same anchor exposure/compliance already use), not
+    on the view's own forward-looking row."""
+    _refresh(book)
+    with book.connect() as conn:
+        with conn.begin():
+            conn.execute(text("SET LOCAL ROLE tiq_app"))
+            database._set_tenant(conn, {"user_id": "t", "bank_id": B1, "agency_id": None, "scope": "BANK"})
+            last = latest_month(Session(bind=conn), bank_id=B1)
+    assert last == date(2025, 3, 1), last
