@@ -68,3 +68,22 @@ def open_escalation(body: EscalationIn, ctx: CurrentContext, db: DbSession,
 def change_status(issue_id: UUIDPath, body: StatusIn, ctx: CurrentContext, db: DbSession,
                   current_user: User = require_perm("messaging.send")):
     return MessagingService(db).change_status(ctx, issue_id, body.status)
+
+
+# ── manager↔agent axis (agency↔agent 1:1) ─────────────────────────────────────
+@router.get("/agent-threads", summary="Agent-chat inbox (agent: their own; manager: their agency's agents')")
+def list_agent_threads(ctx: CurrentContext, db: DbSession,
+                       current_user: User = require_perm("messaging.agent_chat")):
+    return {"threads": MessagingService(db).list_agent_threads(ctx)}
+
+
+@router.get("/agent-threads/{agent_id}", summary="One manager↔agent thread (marks read)")
+def get_agent_thread(agent_id: UUIDPath, ctx: CurrentContext, db: DbSession,
+                     current_user: User = require_perm("messaging.agent_chat")):
+    return MessagingService(db).get_thread(ctx, "AGENT_DIRECT", agent_id)
+
+
+@router.post("/agent-threads/{agent_id}/messages", summary="Post to a manager↔agent thread (lazy-create)")
+def post_agent_message(agent_id: UUIDPath, body: MessageIn, ctx: CurrentContext, db: DbSession,
+                       current_user: User = require_perm("messaging.agent_chat")):
+    return MessagingService(db).post_message(ctx, "AGENT_DIRECT", agent_id, body.body)

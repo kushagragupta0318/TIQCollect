@@ -37,6 +37,7 @@ class ThreadSubject(str, enum.Enum):
     REVERSAL = "REVERSAL"      # a payment_reversal_requests row (live)
     PLACEMENT = "PLACEMENT"    # a placement decision (reserved; wired later)
     ISSUE = "ISSUE"            # a general agency→bank escalation (collections.escalation_issues)
+    AGENT_DIRECT = "AGENT_DIRECT"   # a manager↔agent 1:1 chat, subject_id = agent_id (one per agent)
 
 
 class ThreadStatus(str, enum.Enum):
@@ -53,6 +54,7 @@ class IssueStatus(str, enum.Enum):
 class SenderSide(str, enum.Enum):
     BANK = "BANK"
     AGENCY = "AGENCY"
+    AGENT = "AGENT"      # a field agent on the manager↔agent axis
 
 
 SUBJECT_TYPES = tuple(s.value for s in ThreadSubject)

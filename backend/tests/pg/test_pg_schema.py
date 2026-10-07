@@ -59,11 +59,11 @@ def test_the_database_carries_search_path_and_timezone(pg_url):
 
 def test_the_permission_seed_is_loaded(pg_engine):
     with pg_engine.connect() as conn:
-        # 74 + 3 reversal + 2 messaging.read/.send + 1 messaging.escalate = 80;
-        # 138 + 4 reversal + 9 messaging + 2 escalate (AA/AM) = 153.
+        # 74 + 3 reversal + 2 messaging.read/.send + 1 escalate + 1 agent_chat = 81;
+        # 138 + 4 reversal + 9 messaging + 2 escalate + 3 agent_chat (FA/AA/AM) = 156.
         # Cumulative at merge: if another lane adds caps ahead of this branch, add its delta.
-        assert conn.execute(text("SELECT count(*) FROM tenancy.permissions")).scalar() == 80
-        assert conn.execute(text("SELECT count(*) FROM tenancy.role_permissions")).scalar() == 153
+        assert conn.execute(text("SELECT count(*) FROM tenancy.permissions")).scalar() == 81
+        assert conn.execute(text("SELECT count(*) FROM tenancy.role_permissions")).scalar() == 156
 
 
 def test_v2_0010_releases_only_the_bindings_that_have_no_secret():
