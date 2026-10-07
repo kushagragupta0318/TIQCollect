@@ -9,7 +9,7 @@ import { Gauge } from "lucide-react";
 
 import { errorDetail } from "@/lib/apiError";
 import {
-  featureLabel, formatDay, formatTokens, formatUsd, getUsage, type UsageByFeature,
+  costCellLabel, featureLabel, formatDay, formatTokens, formatUsd, getUsage, type UsageByFeature,
 } from "./usageCostModel";
 import { AnalyticsError, AnalyticsLoading, Panel, Tile } from "../../components/analytics";
 import { DataTable, type DataColumn } from "../../components/DataTable";
@@ -29,7 +29,7 @@ export function UsageCostPage() {
     { key: "cache_tokens", header: "Cached", className: "text-right",
       render: (r) => formatTokens(r.cache_tokens) },
     { key: "cost_usd", header: "Cost", className: "text-right font-semibold",
-      render: (r) => formatUsd(r.cost_usd) },
+      render: (r) => costCellLabel(r.cost_usd, r.unpriced_calls) },
   ];
 
   const maxDayCost = Math.max(0.0001, ...(data?.by_day.map((d) => d.cost_usd) ?? []));
@@ -74,14 +74,24 @@ export function UsageCostPage() {
               <p className="text-sm text-muted-foreground py-6 text-center">No calls in this window.</p>
             ) : (
               <div className="flex items-end gap-1.5 h-32">
-                {data.by_day.map((d) => (
-                  <div key={d.day} className="flex-1 flex flex-col items-center gap-1"
-                      title={`${formatDay(d.day)}: ${formatUsd(d.cost_usd)}, ${d.calls} calls`}>
-                    <div className="w-full rounded-t bg-primary/70"
-                        style={{ height: `${Math.max(2, (d.cost_usd / maxDayCost) * 100)}%` }} />
-                    <span className="text-[10px] text-muted-foreground">{formatDay(d.day)}</span>
-                  </div>
-                ))}
+                {data.by_day.map((d) => {
+                  // A day with real activity but no priced cost must not look
+                  // identical to an empty day — height-by-cost alone would
+                  // flatten it to the same near-invisible sliver either way.
+                  const allUnpriced = d.calls > 0 && d.unpriced_calls === d.calls;
+                  return (
+                    <div key={d.day} className="flex-1 flex flex-col items-center gap-1"
+                        title={`${formatDay(d.day)}: ${costCellLabel(d.cost_usd, d.unpriced_calls)}, ${d.calls} calls`}>
+                      <div
+                        className={allUnpriced
+                          ? "w-full rounded-t border-2 border-dashed border-muted-foreground/40 bg-transparent"
+                          : "w-full rounded-t bg-primary/70"}
+                        style={{ height: allUnpriced ? "15%" : `${Math.max(2, (d.cost_usd / maxDayCost) * 100)}%` }}
+                      />
+                      <span className="text-[10px] text-muted-foreground">{formatDay(d.day)}</span>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </Panel>

@@ -461,7 +461,8 @@ def api(monkeypatch, no_llm):
 
     state = {"role": UserRole.FIELD_AGENT, "foreign": False, "session": _RecordingSession()}
     fake_agent = SimpleNamespace(id="agent-aravalli-017")
-    fake_case = SimpleNamespace(id=CASE_ID, target_amount=30_000.0, collected_amount=12_000.0)
+    fake_case = SimpleNamespace(id=CASE_ID, target_amount=30_000.0, collected_amount=12_000.0,
+                                bank_id="bank-aravalli")
 
     def own_case(db, agent_id, case_id):
         state["case_lookup"] = (agent_id, case_id)

@@ -3,7 +3,7 @@
 // localStorage at module load through the auth store — node has none.
 import { describe, expect, it } from "vitest";
 
-import { featureLabel, formatDay, formatTokens, formatUsd } from "./usageCostModel";
+import { costCellLabel, featureLabel, formatDay, formatTokens, formatUsd } from "./usageCostModel";
 
 describe("featureLabel", () => {
   it("reads a feature as a label, not as shouting", () => {
@@ -35,6 +35,20 @@ describe("formatUsd", () => {
 
   it("shows exactly zero at two decimal places, not four", () => {
     expect(formatUsd(0)).toBe("$0.00");
+  });
+});
+
+describe("costCellLabel", () => {
+  it("shows a plain cost when nothing in the row is unpriced", () => {
+    expect(costCellLabel(0.09, 0)).toBe("$0.09");
+  });
+
+  it("says 'unpriced' rather than '$0.00' when every call in the row is unpriced", () => {
+    expect(costCellLabel(0, 3)).toBe("unpriced (3)");
+  });
+
+  it("shows both a real cost and an unpriced count when the row is mixed", () => {
+    expect(costCellLabel(0.09, 2)).toBe("$0.09 +2 unpriced");
   });
 });
 
