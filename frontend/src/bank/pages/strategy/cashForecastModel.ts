@@ -75,6 +75,8 @@ export function backtestCaption(run: CashForecastRun): string {
   const bt = run.backtest;
   if (bt.n_folds === 0) return `Not enough history for a backtest fold yet (${bt.reason}).`;
   const mape = bt.mape === null ? "undefined" : `${(bt.mape * 100).toFixed(0)}%`;
+  // `reason` names the ceiling on both sides now (cleared or missed) — shown
+  // always, not only on failure, so "calibrated" is never a bare label.
   return `${bt.n_folds} rolling-origin fold(s) against this book's own history, mean absolute ` +
-    `percentage error ${mape}${bt.calibrated ? "" : ` — ${bt.reason}`}.`;
+    `percentage error ${mape} — ${bt.reason}.`;
 }

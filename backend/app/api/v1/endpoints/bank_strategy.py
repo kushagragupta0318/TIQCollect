@@ -59,6 +59,8 @@ class CashForecastBacktestOut(BaseModel):
     mape: Optional[float]
     n_folds: int
     calibrated: bool
+    calibration_ceiling: float
+    min_folds: int
     reason: str
 
 

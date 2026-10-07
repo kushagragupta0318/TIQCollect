@@ -169,3 +169,58 @@ def test_trim_never_goes_below_min_weeks_history():
     trimmed, lag = CF.trim_trailing_reporting_lag(y)
     assert trimmed.shape[0] >= CF.MIN_WEEKS_HISTORY
     assert lag == 2  # capped by the MIN_WEEKS_HISTORY floor, not by the 6-week cap
+
+
+# ── bootstrap_total_bands: the 13-week TOTAL's own band (2026-10-07 audit) ──
+
+def test_bootstrap_total_bands_are_ordered_and_deterministic():
+    residuals = np.array([-50.0, -10.0, 0.0, 5.0, 40.0, -5.0, 10.0, -20.0])
+    point = np.full(13, 500.0)
+    out1 = CF.bootstrap_total_bands(residuals, point)
+    out2 = CF.bootstrap_total_bands(residuals, point)
+    assert out1["p10"] <= out1["p50"] <= out1["p90"]
+    assert out1 == out2, "the default seed must make this reproducible"
+
+
+def test_bootstrap_total_bands_are_narrower_than_the_naive_sum_of_weekly_bands():
+    # The defect this replaces: summing each week's own p10/p90 overstates
+    # the total's tails (independent errors partially cancel in a sum).
+    residuals = np.array([-900.0, -400.0, -100.0, 50.0, 300.0, 700.0, -250.0, 150.0])
+    point = np.full(13, 2000.0)
+    weekly = CF.residual_bands(residuals, point)
+    naive_spread = float(np.sum(weekly["p90"] - weekly["p10"]))
+    total = CF.bootstrap_total_bands(residuals, point)
+    assert (total["p90"] - total["p10"]) < naive_spread
+
+
+def test_bootstrap_total_bands_falls_back_to_the_point_sum_with_no_residuals():
+    point = np.full(13, 500.0)
+    out = CF.bootstrap_total_bands(np.array([]), point)
+    assert out == {"p10": 6500.0, "p50": 6500.0, "p90": 6500.0}
+
+
+def test_bootstrap_total_bands_respects_start_h_like_residual_bands():
+    residuals = np.array([-900.0, -400.0, -100.0, 50.0, 300.0, 700.0, -250.0, 150.0])
+    point = np.full(5, 2000.0)
+    from_one = CF.bootstrap_total_bands(residuals, point, start_h=1)
+    from_six = CF.bootstrap_total_bands(residuals, point, start_h=6)
+    # Later-starting weeks carry more per-week uncertainty (bigger sqrt(h)),
+    # so the total's spread must be at least as wide.
+    assert (from_six["p90"] - from_six["p10"]) >= (from_one["p90"] - from_one["p10"])
+
+
+# ── BacktestResult.as_dict() names the ceiling either way ───────────────────
+
+def test_backtest_as_dict_names_the_ceiling_on_both_success_and_failure():
+    y = np.full(CF.MIN_WEEKS_HISTORY + CF.HORIZON_WEEKS + 20, 1000.0)
+    ok = CF.rolling_origin_backtest(y, horizon=CF.HORIZON_WEEKS, fold_step=4).as_dict()
+    assert ok["calibrated"] is True
+    assert ok["calibration_ceiling"] == CF.CALIBRATION_MAPE_CEILING
+    assert ok["min_folds"] == CF.MIN_BACKTEST_FOLDS
+    assert "within" in ok["reason"] and "50%" in ok["reason"]
+
+    rng = np.random.default_rng(0)
+    erratic = rng.uniform(0, 5000, size=CF.MIN_WEEKS_HISTORY + CF.HORIZON_WEEKS + 20)
+    bad = CF.rolling_origin_backtest(erratic, horizon=CF.HORIZON_WEEKS, fold_step=4).as_dict()
+    assert bad["calibrated"] is False
+    assert "exceeds" in bad["reason"] and "50%" in bad["reason"]

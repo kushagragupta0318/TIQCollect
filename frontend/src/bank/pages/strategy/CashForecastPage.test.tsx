@@ -44,7 +44,8 @@ function run(o: Partial<CashForecastRun> = {}): CashForecastRun {
     ptp_resolved_count: 14,
     recovery_informed_total: 180000,
     recovery_informed_loans: 9,
-    backtest: { mape: 0.21, n_folds: 3, calibrated: true, reason: "" },
+    backtest: { mape: 0.21, n_folds: 3, calibrated: true, calibration_ceiling: 0.5, min_folds: 2,
+               reason: "MAPE 21% within the 50% ceiling" },
     engine_version: "cf-1.0.0",
     synthetic: true, calibrated: true, data_version: "2026-10-07",
     basis: "20 week(s) of VERIFIED payments, Holt ETS (alpha=0.4, beta=0.2), 14 resolved PTP(s)",
@@ -88,7 +89,8 @@ describe("Cash Forecast page", () => {
 
   it("reports the backtest honestly when it has not cleared the calibration bar", async () => {
     vi.mocked(api.get).mockResolvedValue({ data: run({
-      backtest: { mape: 0.78, n_folds: 2, calibrated: false, reason: "MAPE 78% exceeds the 50% ceiling" },
+      backtest: { mape: 0.78, n_folds: 2, calibrated: false, calibration_ceiling: 0.5, min_folds: 2,
+                 reason: "MAPE 78% exceeds the 50% ceiling" },
     }) });
     renderPage();
 
