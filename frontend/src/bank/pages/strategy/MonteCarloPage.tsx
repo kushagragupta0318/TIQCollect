@@ -190,7 +190,7 @@ function Results({ run }: { run: SimulationRun }) {
 
       <div className="grid gap-5 xl:grid-cols-2">
         <Panel title="Gross NPA at the horizon" hint="p5-p95 across the simulated paths">
-          <PercentileRangeChart rows={gnpaBand} color={BRAND.destructive} format={pct} domainFrom0 height={70} />
+          <PercentileRangeChart rows={gnpaBand} color={BRAND.destructive} format={pct} domainFrom0 height={110} />
         </Panel>
         <Panel title="Cash at the horizon" hint="p5-p95, ₹ crore">
           <PercentileRangeChart rows={cashBand} color={BRAND.success} format={cr1} />
