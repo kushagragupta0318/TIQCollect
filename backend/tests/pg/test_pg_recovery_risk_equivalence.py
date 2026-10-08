@@ -183,6 +183,8 @@ def test_the_read_uses_the_index_and_never_scans_a_prediction_row(db):  # noqa: 
     """
     as_of = _as_of(db)
     bank_id = _banks(db)[0]
+    with Session(db) as s:
+        _total, loans = CF.read_recovery_risk_next_cycle(s, bank_id, as_of=as_of)
     with db.connect() as c:
         plan = NEWLINE.join(r[0] for r in c.execute(
             text("EXPLAIN (ANALYZE, BUFFERS) " + str(CF._RECOVERY_RISK_SQL)),
@@ -193,9 +195,30 @@ def test_the_read_uses_the_index_and_never_scans_a_prediction_row(db):  # noqa: 
     assert "Index Only Scan" in plan, plan
     assert "bank_id_model_name_loan_id_as_of" in plan, plan      # v2_0039's columns
     assert "external merge" not in plan, plan
-    # Index-only means the prediction tuples themselves are never visited.
-    heap = [line for line in lines if line.startswith("Heap Fetches:")]
-    assert heap and all(line == "Heap Fetches: 0" for line in heap), plan
+
+    # Heap visits SCALE WITH THE LOANS, never with the predictions -- which is
+    # the whole claim of the rewrite. Two things this is NOT asserted as, both
+    # measured wrong first:
+    #   * not "Heap Fetches: 0". An Index Only Scan still reads the heap for
+    #     any page the visibility map has not marked all-visible, so a freshly
+    #     restored book reports some and a long-lived autovacuumed one reports
+    #     none. Zero is a property of VACUUM, not of the plan.
+    #   * not "<= one per loan". The Merge Append asks EVERY non-empty monthly
+    #     partition for its own newest row before taking one, so a loan scored
+    #     in two months is fetched twice (172 for 86 loans, measured).
+    # A 45-day window spans at most three calendar months, hence the bound.
+    months_in_window = 3
+    fetches = sum(int(line.split(":")[1]) for line in lines if line.startswith("Heap Fetches:"))
+    assert fetches <= loans * months_in_window, (fetches, loans, plan)
+    # And the figure that names the defect: the old shape read every prediction
+    # in the window (122,674 on the dev book). This one reads far fewer rows
+    # than there are predictions to read.
+    with db.connect() as c:
+        in_window = c.execute(text(
+            "SELECT count(*) FROM ml.model_predictions WHERE bank_id = :bank "
+            "AND model_name = 'recovery_risk' AND as_of_date >= :recency_start"),
+            {"bank": bank_id, "recency_start": as_of - timedelta(days=CF.RECOVERY_RISK_RECENCY_DAYS)}).scalar()
+    assert fetches < in_window, (fetches, in_window, plan)
 
     # Every sequential scan of a partition returned NOTHING -- they are the
     # empty future months, not the book. `rows=` appears twice on a scan line
