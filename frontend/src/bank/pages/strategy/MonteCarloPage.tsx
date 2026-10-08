@@ -210,6 +210,50 @@ function RangeCards({ rows, color, format, cols = "sm:grid-cols-2 lg:grid-cols-4
   );
 }
 
+// A distribution read as ONE picture: horizontal bars, each the median share/
+// amount (vibrant fill) over a lighter p5–p95 extent, all on a shared scale so
+// the composition and the relative sizes are the story. Better than cards when
+// the rows are parts of a whole (the book) or directly comparable (cash flows).
+function ShareBars({ rows, format, colorFor }: {
+  rows: { name: string; p5: number; p50: number; p95: number }[];
+  format: (v: number) => string;
+  colorFor: (name: string, i: number) => string;
+}) {
+  const max = Math.max(...rows.map((r) => r.p95), 0) || 1;
+  return (
+    <div className="space-y-2.5">
+      {rows.map((r, i) => {
+        const c = colorFor(r.name, i);
+        return (
+          <div key={r.name} className="group flex items-center gap-3"
+               title={`${r.name}\nmedian ${format(r.p50)}\np5–p95 ${format(r.p5)} – ${format(r.p95)}`}>
+            <div className="w-36 shrink-0 truncate text-[12px] text-foreground">{r.name}</div>
+            <div className="relative h-5 flex-1 overflow-hidden rounded bg-muted/25">
+              <div className="absolute inset-y-0 rounded" style={{ width: `${(r.p95 / max) * 100}%`, background: c, opacity: 0.22 }} />
+              <div className="absolute inset-y-0 rounded transition-[width]" style={{ width: `${Math.max(1, (r.p50 / max) * 100)}%`, background: c }} />
+            </div>
+            <div className="w-24 shrink-0 text-right text-[12.5px] font-semibold tabular-nums text-foreground">{format(r.p50)}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// DPD-lifecycle colours so the book's states read in a consistent order of risk.
+function bookStateColor(name: string): string {
+  const n = name.toLowerCase();
+  if (n.startsWith("current")) return "#16A34A";
+  if (n.startsWith("sma-0")) return "#1677FF";
+  if (n.startsWith("sma-1")) return "#F59E0B";
+  if (n.startsWith("sma-2")) return "#F97316";
+  if (n.includes("substandard")) return "#EF4444";
+  if (n.includes("doubtful")) return "#B91C1C";
+  if (n.startsWith("written")) return "#1F2937";
+  if (n.startsWith("closed") || n.includes("recover")) return "#06B6D4";
+  return BRAND.slate;
+}
+
 function Results({ run }: { run: SimulationRun }) {
   const tiles = headlineTiles(run);
   const stages = ifrs9Rows(run);
@@ -231,13 +275,14 @@ function Results({ run }: { run: SimulationRun }) {
         {BAND_NOTE}
       </p>
 
-      <Panel title="Cash at the horizon" hint="median ₹ crore, with the p5–p95 band">
-        <RangeCards rows={cashBand} color={BRAND.success} format={cr1} cols="grid-cols-2 lg:grid-cols-4" />
-      </Panel>
-
-      <Panel title="The book at the horizon" hint={`Share of accounts after ${run.horizon_months} months, median with the p5–p95 band`}>
-        <RangeCards rows={stateBand} color={BRAND.primary} format={pct} cols="grid-cols-2 sm:grid-cols-3 lg:grid-cols-4" />
-      </Panel>
+      <div className="grid gap-5 lg:grid-cols-2">
+        <Panel title="Cash at the horizon" hint="median ₹ crore (lighter bar = p5–p95)">
+          <ShareBars rows={cashBand} format={cr1} colorFor={() => BRAND.success} />
+        </Panel>
+        <Panel title="The book at the horizon" hint={`Share of accounts after ${run.horizon_months} months (lighter bar = p5–p95)`}>
+          <ShareBars rows={stateBand} format={pct} colorFor={(n) => bookStateColor(n)} />
+        </Panel>
+      </div>
 
       <div className="grid gap-5 lg:grid-cols-2">
         <Panel title="Gross NPA at the horizon" hint="median, with the p5–p95 band">
