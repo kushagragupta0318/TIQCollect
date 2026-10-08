@@ -30,10 +30,13 @@ from sqlalchemy.orm import Session
 
 from app.core import guardrails, llm, rag
 from app.ml.pipeline.monitor import serving_version as _ml_serving_version
+from app.models.loan import DPDBucket
 from app.models.tenancy import Agency, Bank
 from app.reports import formatting as rfmt
-from app.reports.payload import Column, Direction, Kpi, Narrative, ReportPayload, Section, Table, Unit
-from app.services.bank.agency_scorecard import agency_scorecard
+from app.reports.payload import Chart, ChartKind, Column, Direction, Kpi, Narrative, ReportPayload, Section, \
+    Series, Table, Unit
+from app.services.bank import analytics_catalog
+from app.services.bank.agency_scorecard import agency_scorecard, fetch_rows
 from app.services.bank.kpi_catalog import KPIS, SCORECARD, Overview, available_views, compute_overview
 from app.services.bank.kpi_filter import KpiFilter
 from app.services.bank.model_showcase import LIVE_EQUIVALENT, TRAINED_MODEL, configured_version
@@ -54,6 +57,21 @@ def _month_end(d: date) -> date:
     return nxt - timedelta(days=1)
 
 
+def _n_months_before(d: date, n: int) -> date:
+    # Not imported from agency_scorecard._month_back — the same call that
+    # module itself makes about its own underscore-prefixed helper: module-
+    # internal, and 3 lines of index math is not the duplication the
+    # one-definition rule protects against.
+    y, m = divmod(d.year * 12 + (d.month - 1) - n, 12)
+    return date(y, m + 1, 1)
+
+
+def _month_label(d) -> str:
+    """month_start comes back as a real date on Postgres; defensive for a
+    driver that hands back a string instead."""
+    return d.strftime("%b %Y") if hasattr(d, "strftime") else str(d)[:7]
+
+
 def _headline_kpis(ov: Overview) -> list[Kpi]:
     out = []
     for k in ov.kpis:
@@ -61,7 +79,8 @@ def _headline_kpis(ov: Overview) -> list[Kpi]:
         if unit is None:
             continue
         out.append(Kpi(kpi_id=k["id"], label=k["label"], value=k.get("raw") if k.get("available") else None,
-                       unit=unit, direction=_DIRECTION_BY_ID.get(k["id"], Direction.NEUTRAL), basis=k.get("basis")))
+                       unit=unit, direction=_DIRECTION_BY_ID.get(k["id"], Direction.NEUTRAL), basis=k.get("basis"),
+                       prior=k.get("prior") if k.get("available") else None))
     return out
 
 
@@ -101,6 +120,89 @@ def _model_performance_table() -> Table | None:
     )
 
 
+#: Canonical order + display label for a DPD bucket chart — DPDBucket's own
+#: definition (models/loan.py), not the SQL's alphabetical GROUP BY order
+#: (which would put CURRENT between BUCKET_3 and NPA).
+_DPD_LABEL = {
+    DPDBucket.CURRENT: "Current", DPDBucket.BUCKET_1: "1-30 DPD", DPDBucket.BUCKET_2: "31-60 DPD",
+    DPDBucket.BUCKET_3: "61-90 DPD", DPDBucket.NPA: "NPA (90+)",
+}
+
+
+def _exposure_chart(db: Session, adb: Session, bank_id: str, f: KpiFilter) -> Chart | None:
+    """Delinquent exposure by DPD bucket — analytics_catalog's own Exposure
+    tab, the same panel the Analytics screen draws. Abstains (no chart, not
+    an empty one) the same way the tab itself does: no reading, no filter
+    the view can honour, or nothing in any bucket."""
+    out = analytics_catalog.compute_tab(db, adb, "exposure", bank_id, f)
+    if not out["available"]:
+        return None
+    by_bucket = {row["dpd_bucket"]: row for row in out["panels"].get("dpd_ladder", [])}
+    categories, values = [], []
+    for bucket in DPDBucket:
+        row = by_bucket.get(bucket.value)
+        if row is None:
+            continue
+        categories.append(_DPD_LABEL[bucket])
+        values.append(float(row["outstanding"] or 0))
+    if not categories:
+        return None
+    # scale="sequential" is deliberately NOT set: it recolours per SERIES, not
+    # per bar within one series (theme.series_colors), so on this one-series
+    # chart it would be a silent no-op. The single-series "direct value
+    # label on each bar" path (charts.py) is the relief that applies here —
+    # confirmed by eyeballing the actual render, every bar labelled.
+    return Chart(chart_id="exposure_by_dpd", title="Exposure by DPD bucket", kind=ChartKind.BAR, unit=Unit.INR,
+                categories=categories, series=[Series(name="Outstanding", values=values)])
+
+
+def _recovery_chart(db: Session, adb: Session, bank_id: str, f: KpiFilter) -> Chart | None:
+    """Collections vs the recovery_risk-implied expectation, by month —
+    analytics_catalog's own Recovery tab (recovery_vs_expected, already
+    computed there from expected_recovery_inr; nothing recomputed here).
+    Up to the last 6 months the view carries."""
+    out = analytics_catalog.compute_tab(db, adb, "recovery", bank_id, f)
+    if not out["available"]:
+        return None
+    rows = [r for r in out["panels"].get("by_month", []) if r.get("actual_inr") is not None][-6:]
+    if not rows:
+        return None
+    categories = [_month_label(r["month_start"]) for r in rows]
+    actual = [float(r["actual_inr"] or 0) for r in rows]
+    expected = [None if r.get("expected_inr") is None else float(r["expected_inr"]) for r in rows]
+    series = [Series(name="Collected", values=actual)]
+    if any(v is not None for v in expected):
+        series.append(Series(name="Expected recovery", values=expected))
+    return Chart(chart_id="recovery_vs_expected", title="Recovery vs expected, by month", kind=ChartKind.BAR,
+                unit=Unit.INR, categories=categories, series=series)
+
+
+def _agency_collections_chart(adb: Session, bank_id: str, agency_id: str, last_month: date,
+                              months: int = 6) -> Chart | None:
+    """One agency's verified + bank-direct collections per month, over up to
+    the last 6 months — agency_scorecard.fetch_rows()'s own per-month rows.
+    fetch_rows' grain is (month, agency, REGION): an agency covering several
+    regions gets one row per region per month, so a month is summed across
+    its region rows here — the same rule agency_scorecard.compute_metrics
+    itself uses (SUM over every row in the window, never one row per
+    region). Found by eyeballing the first render: without the grouping,
+    a 3-region agency drew "Apr 2026" three times with three different
+    bars instead of one summed bar."""
+    first_month = _n_months_before(last_month, months - 1)
+    rows = [r for r in fetch_rows(adb, bank_id=bank_id, first_month=first_month, last_month=last_month)
+           if r.agency_id == agency_id]
+    if not rows:
+        return None
+    by_month: dict[date, float] = {}
+    for r in rows:
+        by_month[r.month_start] = by_month.get(r.month_start, 0.0) + float(r.verified_collections
+                                                                            + r.bank_direct_collections)
+    categories = [_month_label(m) for m in sorted(by_month)]
+    values = [by_month[m] for m in sorted(by_month)]
+    return Chart(chart_id="agency_collections_by_month", title="Collections by month", kind=ChartKind.BAR,
+                unit=Unit.INR, categories=categories, series=[Series(name="Collected", values=values)])
+
+
 def _board_narrative(ov: Overview, bank_name: str, bank_id: str) -> Narrative:
     template_text = " ".join(ov.narrative) or "No KPI could be computed for this bank in this period."
     prompt = (
@@ -124,11 +226,12 @@ def _board_narrative(ov: Overview, bank_name: str, bank_id: str) -> Narrative:
     return Narrative(text=template_text, ai_generated=False)
 
 
-def build_board_payload(adb: Session, bank: Bank, f: KpiFilter, *,
+def build_board_payload(db: Session, adb: Session, bank: Bank, f: KpiFilter, *,
                         generated_at: datetime | None = None) -> ReportPayload:
     """The bank-wide board pack: the same twelve KPIs as /bank/overview, over
-    the requested period, plus the trained model's honest live-equivalent
-    figures and an AI-written opening paragraph."""
+    the requested period, the exposure and recovery charts analytics_catalog
+    already computes, the trained model's honest live-equivalent figures,
+    and an AI-written opening paragraph."""
     generated_at = generated_at or datetime.now(timezone.utc)
     ov = compute_overview(adb, bank.id, f)
     as_of = ov.as_of or date.today()
@@ -138,10 +241,11 @@ def build_board_payload(adb: Session, bank: Bank, f: KpiFilter, *,
     model_table = _model_performance_table()
     if model_table:
         tables.append(model_table)
+    charts = [c for c in (_exposure_chart(db, adb, bank.id, f), _recovery_chart(db, adb, bank.id, f)) if c]
 
     section = Section(section_id="portfolio_overview", title="Portfolio Overview",
                       narrative=_board_narrative(ov, bank.display_name, bank.id),
-                      kpis=_headline_kpis(ov), tables=tables)
+                      kpis=_headline_kpis(ov), charts=charts, tables=tables)
     data_note = None if ov.as_of else "No portfolio reading exists yet for this bank; every KPI abstains."
 
     return ReportPayload(
@@ -184,9 +288,13 @@ def _agency_name(agency: Agency) -> str:
     return agency.trade_name or agency.legal_name
 
 
-def _scorecard_kpis(card: dict) -> list[Kpi]:
+def _scorecard_kpis(card: dict, prior_card: dict) -> list[Kpi]:
+    """prior_card is the same shape from the prior month, or {} when that
+    month has no rows — a KPI's delta chip shows only when both months do."""
+    has_prior = bool(prior_card.get("n_rows"))
     return [Kpi(kpi_id=f"agency_scorecard.{key}", label=_SCORECARD_LABEL[key], value=card.get(key),
-               unit=unit, direction=Direction.HIGHER_IS_BETTER)
+               unit=unit, direction=Direction.HIGHER_IS_BETTER,
+               prior=prior_card.get(key) if has_prior else None)
            for key, unit in _SCORECARD_UNIT.items()]
 
 
@@ -235,8 +343,8 @@ def build_agency_review_payload(adb: Session, bank: Bank, agency: Agency, *,
     # calling compute_tab, since a report payload wants the single-agency card, not
     # every agency's. Without this a bank with no refresh yet would raise instead of
     # abstaining, exactly the gap compute_tab's own callers are protected from.
-    card = (agency_scorecard(adb, bank_id=bank.id, agency_id=agency.id) if SCORECARD in available_views(adb)
-           else {"n_rows": 0})
+    views = available_views(adb)
+    card = agency_scorecard(adb, bank_id=bank.id, agency_id=agency.id) if SCORECARD in views else {"n_rows": 0}
     name = _agency_name(agency)
     has_data = bool(card.get("n_rows"))
 
@@ -244,13 +352,18 @@ def build_agency_review_payload(adb: Session, bank: Bank, agency: Agency, *,
         month_start = date.fromisoformat(card["month_start"])
         period_start, period_end = month_start, _month_end(month_start)
         data_note = None
+        prior_month = _n_months_before(month_start, 1)
+        prior_card = (agency_scorecard(adb, bank_id=bank.id, agency_id=agency.id, month_start=prior_month)
+                     if SCORECARD in views else {"n_rows": 0})
+        charts = [c for c in (_agency_collections_chart(adb, bank.id, agency.id, month_start),) if c]
     else:
         period_start, period_end = date.today().replace(day=1), date.today()
         data_note = "No scorecard rows for this agency in the latest available month."
+        prior_card, charts = {"n_rows": 0}, []
 
     section = Section(section_id="agency_scorecard", title=f"{name} — Scorecard",
                       narrative=_agency_narrative(card, name, bank.display_name, bank.id),
-                      kpis=_scorecard_kpis(card) if has_data else [],
+                      kpis=_scorecard_kpis(card, prior_card) if has_data else [], charts=charts,
                       tables=[_scorecard_detail_table(card)] if has_data else [])
 
     return ReportPayload(
