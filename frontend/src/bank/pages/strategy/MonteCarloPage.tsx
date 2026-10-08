@@ -15,7 +15,7 @@ import { FlaskConical, Info, Play, TriangleAlert } from "lucide-react";
 import { runSimulation, type SimulationRun } from "@/api/bankStrategy";
 import { errorCode, errorDetail, errorStatus } from "@/lib/apiError";
 import { AnalyticsLoading, Panel, Tile } from "../../components/analytics";
-import { GroupedBarLineChart, PercentileRangeChart } from "../../components/charts";
+import { PercentileRangeChart } from "../../components/charts";
 import { BRAND } from "../../theme/chartTheme";
 import { cr1 } from "../../theme/format";
 import { PageRoot, ToolHeader } from "../../components/PageTemplate";
@@ -215,18 +215,47 @@ function Results({ run }: { run: SimulationRun }) {
 
       <Panel title="IFRS-9 staging at the horizon" hint={STAGING_NOTE}>
         {stageChart.length > 0 && (
-          <div className="mb-5">
-            <GroupedBarLineChart
-              data={stageChart}
-              xKey="stage"
-              bars={[
-                { key: "ead", name: "Exposure (₹ Cr)", color: BRAND.primary },
-                { key: "ecl", name: "ECL (₹ Cr)", color: BRAND.destructive },
-              ]}
-              line={{ key: "coverage", name: "Coverage (%)", color: BRAND.warning }}
-              barFormat={cr1}
-              lineFormat={pct}
-            />
+          // Stage cards, not a bar+line chart: Stage-1 exposure dwarfs 2 and 3
+          // (a performing book is mostly Stage 1), so on one ₹-axis the other
+          // bars vanish, and a dual axis over three categories reads as noise.
+          // Cards compare cleanly and the coverage bar is the headline per stage.
+          <div className="mb-5 grid gap-3 sm:grid-cols-3">
+            {stageChart.map((s, i) => {
+              const tone = [BRAND.success, BRAND.warning, BRAND.destructive][i] ?? BRAND.slate;
+              const totalEad = stageChart.reduce((a, r) => a + (r.ead as number), 0) || 1;
+              const share = ((s.ead as number) / totalEad) * 100;
+              const cov = Math.min(100, Math.max(0, s.coverage as number));
+              return (
+                <div key={s.stage} className="rounded-[14px] border border-border/60 bg-card p-4">
+                  <div className="flex items-center justify-between">
+                    <span className="inline-flex items-center gap-2 text-[13px] font-semibold text-foreground">
+                      <span className="size-2.5 rounded-full" style={{ background: tone }} />
+                      {s.stage}
+                    </span>
+                    <span className="text-[11px] text-muted-foreground">{share.toFixed(0)}% of book</span>
+                  </div>
+                  <div className="mt-3 flex items-end justify-between">
+                    <div>
+                      <div className="text-[11px] text-muted-foreground">Exposure</div>
+                      <div className="text-[15px] font-bold tabular-nums text-foreground">{cr1(s.ead as number)}</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-[11px] text-muted-foreground">ECL</div>
+                      <div className="text-[15px] font-bold tabular-nums text-foreground">{cr1(s.ecl as number)}</div>
+                    </div>
+                  </div>
+                  <div className="mt-3">
+                    <div className="mb-1 flex items-center justify-between text-[11px]">
+                      <span className="text-muted-foreground">Coverage</span>
+                      <span className="font-semibold tabular-nums" style={{ color: tone }}>{cov.toFixed(1)}%</span>
+                    </div>
+                    <div className="h-2 w-full overflow-hidden rounded-full bg-muted/50">
+                      <div className="h-full rounded-full" style={{ width: `${cov}%`, background: tone }} />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
         <div className="overflow-x-auto">
