@@ -1,0 +1,29 @@
+# LAN demo override (owner, 2026-10-08): the prod image served over PLAIN HTTP on
+# the LAN, no Caddy/TLS. Use WITH the prod file and the LAN env:
+#
+#   C="docker compose -p tiq-lan -f docker-compose.prod.yml -f docker-compose.lan.yml --env-file deploy/.env.lan"
+#   $C build api
+#   $C up -d api worker beat          # NOT caddy — the api publishes :8500 itself
+#
+# NOT a public deployment: no TLS, DEMO_MODE on, demo book restored. The host
+# firewall must allow 8500 (app) and 19000 (MinIO media). Reachable at
+# http://<LAN-IP>:8500.
+services:
+  api:
+    ports:
+      - "8500:8300"
+    environment:
+      # Plain HTTP on the LAN IP — override the prod file's https/domain values.
+      ALLOWED_ORIGINS: http://192.168.1.217:8500
+      PUBLIC_BASE_URL: http://192.168.1.217:8500
+      MINIO_PUBLIC_ENDPOINT: 192.168.1.217:19000
+      MINIO_PUBLIC_SECURE: "false"
+      MINIO_REGION: us-east-1
+      # No reverse proxy in front, so trust the forwarded header from anywhere
+      # on this closed demo LAN rather than only Caddy's fixed address.
+      FORWARDED_ALLOW_IPS: "*"
+      DEMO_MODE: "true"
+
+  minio:
+    ports:
+      - "19000:9000"
