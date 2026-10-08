@@ -41,7 +41,7 @@ def numberize(obj):
         return [numberize(v) for v in obj]
     return obj
 
-from app.services.bank.agency_scorecard import agency_scorecard, latest_month
+from app.services.bank.agency_scorecard import agency_scorecards_batch, latest_month
 from app.services.bank.kpi_catalog import FIELD, PORTFOLIO, SCORECARD, TRANSITIONS, available_views, latest_reading
 from app.services.bank.kpi_filter import KpiFilter
 
@@ -236,19 +236,27 @@ def _cost(db: Session, adb: Session, bank_id: str, f: KpiFilter) -> dict:
 def _agencies(db: Session, adb: Session, bank_id: str, f: KpiFilter) -> dict:
     """A thin re-shape of agency_scorecard.py (§6.2's own scorecard
     definition) over every agency the filter leaves in scope — no new
-    arithmetic, reusing the already-tested Performance Index / shrinkage."""
+    arithmetic, reusing the already-tested Performance Index / shrinkage.
+
+    B3 (performance audit, 2026-10-08): one batched read for every agency,
+    not agency_scorecard() in a per-agency loop -- each of those calls re-
+    read the WHOLE bank's scorecard window and re-ran region-peer shrinkage
+    over every agency, just to keep one row and discard the rest. See
+    agency_scorecards_batch()'s own docstring."""
     from app.models.tenancy import Agency
 
     # Agency has no region_id of its own (coverage is many-to-many via
     # tenancy.agency_regions); geo narrows the SCORECARD rows inside
-    # agency_scorecard(), not which agencies appear as cards.
+    # agency_scorecards_batch(), not which agencies appear as cards.
     q = db.query(Agency).filter(Agency.bank_id == bank_id)
     if f.agency:
         q = q.filter(Agency.id == f.agency)
     agencies = q.order_by(Agency.code).all()
     last = latest_month(adb, bank_id=bank_id)
+    scorecards = agency_scorecards_batch(adb, bank_id=bank_id, agency_ids=[a.id for a in agencies],
+                                         region_id=f.geo, month_start=last)
     cards = [{"agency_id": a.id, "code": a.code, "name": a.trade_name or a.legal_name, "status": a.status,
-             **agency_scorecard(adb, bank_id=bank_id, agency_id=a.id, region_id=f.geo, month_start=last)}
+             **scorecards[a.id]}
             for a in agencies]
     return {"available": True, "reason": None, "panels": {"scorecards": cards}}
 

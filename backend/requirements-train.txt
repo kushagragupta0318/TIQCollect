@@ -1,0 +1,18 @@
+# Test and CLI/seed tooling — NOT installed in the prod image (Dockerfile).
+# Dockerfile.dev installs this alongside requirements.txt, and so does
+# anyone running pytest or an operator script (scripts/) by hand.
+#
+# 2026-10-08 (D1, performance audit): the original ask here was a
+# train-only split for the ML stack (scikit-learn, matplotlib, seaborn,
+# statsmodels, optbinning, ortools, joblib) -- traced and found genuinely
+# unsplittable: lifecycle.attach_model_outcomes's scheduled monitor task can
+# lazily reach ml.pipeline.train.ModelTrainer (and therefore that whole
+# stack) IN THE SAME prod image/container when ML_AUTO_RETRAIN_ENABLED
+# fires, and app/reports/charts.py (live PDF report generation) imports
+# matplotlib directly for serving. Moving any of them here would 503 a live
+# feature or break the retrain path's first run in production. They stay in
+# requirements.txt. xgboost, the other half of the original ask, had zero
+# imports anywhere (not even in the training pipeline) and was removed
+# outright instead of relocated — see requirements.txt's own note.
+pytest==8.3.4
+faker==33.1.0

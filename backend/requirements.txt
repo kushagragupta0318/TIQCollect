@@ -7,6 +7,20 @@
 # than deleted so the stale claim is visible.
 # Installing this pulls the whole set — see step 5 of the README if you only
 # ever run the stub and want to skip the ML/audio packages.
+#
+# 2026-10-08 (D1, performance audit) — this file is what the PROD image
+# installs (Dockerfile) and must stay exactly that: everything the API and
+# the Celery worker/beat genuinely reach at runtime, including the
+# model-training stack (scikit-learn, matplotlib, seaborn, statsmodels,
+# optbinning, ortools, joblib) -- lifecycle.attach_model_outcomes's scheduled
+# monitor can lazily reach ml.pipeline.train.ModelTrainer in THIS SAME image
+# when ML_AUTO_RETRAIN_ENABLED fires, and app/reports/charts.py (live PDF
+# reports) imports matplotlib directly. xgboost was the one package nothing
+# anywhere imports -- removed outright, not relocated (153MB, the single
+# largest wheel in this file). Test/seed-only tooling (pytest, faker, used
+# only by backend/tests and scripts/) now lives in requirements-train.txt,
+# which Dockerfile.dev installs alongside this one and the prod Dockerfile
+# does not install at all.
 fastapi==0.115.5
 uvicorn[standard]==0.32.1
 
@@ -34,11 +48,9 @@ httpx2==2.13.1
 httpcore2==2.13.1
 truststore==0.10.4
 docstring-parser==0.18.0
-faker==33.1.0
 pandas==2.2.3
 numpy==2.2.0
 scikit-learn==1.6.0
-xgboost==2.1.3
 pyotp==2.9.0
 pillow==11.0.0
 python-dateutil==2.9.0
@@ -72,7 +84,6 @@ ortools==9.11.4210
 # so the app runs fine without this installed as long as
 # TRANSCRIPTION_PROVIDER stays "openai".
 faster-whisper==1.0.3
-pytest==8.3.4
 
 # Imported inside functions in notification_service.py and endpoints/agent.py,
 # so the app starts without them and only fails when SMS/WhatsApp, the in-app
