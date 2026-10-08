@@ -129,7 +129,11 @@ export function RecoveryPaceChart({
   );
 }
 
-/* ── Bars per category + a line on the right axis (:560-575) ─────────────── */
+/* ── Bars per category, optionally + a line on the right axis (:560-575).
+   `line` is optional: a plain category breakdown (counts or amounts by
+   reason, by feature, by zone) is one series and gets one axis — forcing a
+   second, meaningless series on it just to reuse this shape would be its
+   own honesty problem. ── */
 
 export function BarLineChart({
   data,
@@ -142,7 +146,7 @@ export function BarLineChart({
   data: Row[];
   xKey: string;
   bar: ChartSeries;
-  line: ChartSeries;
+  line?: ChartSeries;
   /** Per-category bar colour (CC colours cost bars by DPD bucket). */
   barColor?: (row: Row) => string;
   height?: number;
@@ -153,13 +157,15 @@ export function BarLineChart({
         <CartesianGrid {...gridProps} />
         <XAxis dataKey={xKey} tick={analyticsTick} axisLine={false} tickLine={false} />
         <YAxis yAxisId="l" tick={analyticsTick} axisLine={false} tickLine={false} />
-        <YAxis yAxisId="r" orientation="right" tick={analyticsTick} axisLine={false} tickLine={false} />
+        {line && <YAxis yAxisId="r" orientation="right" tick={analyticsTick} axisLine={false} tickLine={false} />}
         <Tooltip contentStyle={analyticsTooltipStyle} />
-        <Legend iconSize={8} iconType="circle" wrapperStyle={analyticsLegendStyle} />
+        {line && <Legend iconSize={8} iconType="circle" wrapperStyle={analyticsLegendStyle} />}
         <Bar yAxisId="l" dataKey={bar.key} name={bar.name} fill={bar.color} radius={[3, 3, 0, 0]} maxBarSize={42}>
           {barColor && data.map((row) => <Cell key={String(row[xKey])} fill={barColor(row)} />)}
         </Bar>
-        <Line yAxisId="r" type="monotone" dataKey={line.key} name={line.name} stroke={line.color} strokeWidth={2} dot={{ r: 3 }} />
+        {line && (
+          <Line yAxisId="r" type="monotone" dataKey={line.key} name={line.name} stroke={line.color} strokeWidth={2} dot={{ r: 3 }} />
+        )}
       </ComposedChart>
     </ResponsiveContainer>
   );

@@ -11,8 +11,10 @@ import {
   type QuarantinedRow,
 } from "./dataQualityModel";
 import { AnalyticsError, AnalyticsLoading, Panel, Tile } from "../../components/analytics";
+import { BarLineChart } from "../../components/charts";
 import { DataTable, type DataColumn } from "../../components/DataTable";
 import { PageRoot, ToolHeader } from "../../components/PageTemplate";
+import { BRAND } from "../../theme/colors";
 
 const QUARANTINE_COLUMNS: DataColumn<QuarantinedRow>[] = [
   { key: "loan_account_number", header: "Loan account", render: (r) => r.loan_account_number ?? "—" },
@@ -75,14 +77,24 @@ export function DataQualityPage() {
             {data.quarantined_by_reason.length === 0 ? (
               <p className="text-sm text-muted-foreground py-6 text-center">Nothing is quarantined.</p>
             ) : (
-              <div className="space-y-2">
-                {data.quarantined_by_reason.map((r) => (
-                  <div key={r.reason} className="flex items-center justify-between text-sm">
-                    <span className="font-medium">{reasonLabel(r.reason)}</span>
-                    <span className="font-bold tabular-nums">{r.rows.toLocaleString()}</span>
-                  </div>
-                ))}
-              </div>
+              <>
+                {data.quarantined_by_reason.length > 2 && (
+                  <BarLineChart
+                    data={data.quarantined_by_reason.map((r) => ({ reason: reasonLabel(r.reason), rows: r.rows }))}
+                    xKey="reason"
+                    bar={{ key: "rows", name: "Rows", color: BRAND.destructive }}
+                    height={190}
+                  />
+                )}
+                <div className="space-y-2 mt-3">
+                  {data.quarantined_by_reason.map((r) => (
+                    <div key={r.reason} className="flex items-center justify-between text-sm">
+                      <span className="font-medium">{reasonLabel(r.reason)}</span>
+                      <span className="font-bold tabular-nums">{r.rows.toLocaleString()}</span>
+                    </div>
+                  ))}
+                </div>
+              </>
             )}
           </Panel>
 
