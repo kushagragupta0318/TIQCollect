@@ -19,7 +19,7 @@ import { useKpiFilter } from "../components/useKpiFilter";
 import { filterToParams } from "../components/kpiFilter";
 import { ExecutiveHeader, PageRoot } from "../components/PageTemplate";
 import {
-  complianceBreachRows, concentrationRows, CONCENTRATION_CHART_LIMIT, costMonthRows, dpdLadderHeatRows,
+  complianceBreachRows, concentrationRows, CONCENTRATION_CHART_LIMIT, costAgencyRows, costMonthRows, dpdLadderHeatRows,
   exposureFunnelStages, fieldOpsCoverageRows, fieldOpsMonthRows, migrationTrajectoryRows,
   moneyCr, pct, recoveryMonthRows, securityCoverStages, transitionMatrixData,
   type AgenciesPanels, type AnalyticsTabResponse, type CompliancePanels, type ConcentrationPanels,
@@ -271,9 +271,23 @@ function CostTab({ panels }: { panels: CostPanels }) {
                     columns={[{ key: "month_start", header: "Month" }, ...COST_COLUMNS]} />
         </BelowChart>
       </Panel>
-      <Panel title="Channel economics, by agency">
-        <DataTable rows={panels.by_agency} rowKey={(r) => r.agency_id}
-                  columns={[{ key: "agency_name", header: "Agency", className: "font-bold text-foreground" }, ...COST_COLUMNS]} />
+      <Panel title="Channel economics, by agency"
+             hint="Commission and field cost per agency, with cost per ₹100 collected as the line.">
+        <GroupedBarLineChart
+          data={costAgencyRows(panels)}
+          xKey="agency"
+          bars={[
+            { key: "commission_cr", name: "Commission", color: BRAND.primary },
+            { key: "field_cost_cr", name: "Field cost", color: BRAND.secondary },
+          ]}
+          line={{ key: "cost_per_100", name: "Cost / ₹100", color: BRAND.warning }}
+          barFormat={crFmt}
+          lineFormat={(v) => `₹${v.toFixed(2)}`}
+        />
+        <BelowChart>
+          <DataTable rows={panels.by_agency} rowKey={(r) => r.agency_id}
+                    columns={[{ key: "agency_name", header: "Agency", className: "font-bold text-foreground" }, ...COST_COLUMNS]} />
+        </BelowChart>
       </Panel>
     </div>
   );

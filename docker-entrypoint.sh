@@ -276,4 +276,17 @@ if [ -n "${DEMO_MASTER_PASSWORD:-}" ] && [ "${1:-}" != "celery" ]; then
   esac
 fi
 
+# Demo-only: the generated book never produces bank-feed/quarantine rows, cost
+# rates, or the two Data-Quality anomalies, so Tech Ops and the Cost tab render
+# empty. Add them to the restored book. Idempotent (each category is skipped if
+# present, so the scorecard-MV refresh only runs the first time), api only, and
+# never fatal. Gated on DEMO_MODE; on a real deployment it does nothing.
+if [ "${DEMO_MODE:-false}" = "true" ] && [ "${1:-}" != "celery" ]; then
+  if python -m scripts.demo_enrich --apply; then
+    echo "[entrypoint] demo book enriched"
+  else
+    echo "[entrypoint] demo enrich skipped — see the error above; nothing was changed" >&2
+  fi
+fi
+
 exec "$@"

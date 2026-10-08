@@ -310,6 +310,17 @@ export function costMonthRows(p: CostPanels): ChartRow[] {
   });
 }
 
+/** The same economics per agency instead of per month — one bar group per
+ *  agency with cost per ₹100 as the line. Same null-is-a-gap rule as above. */
+export function costAgencyRows(p: CostPanels): ChartRow[] {
+  return p.by_agency.map((r) => {
+    const row: ChartRow = { agency: r.agency_name, commission_cr: toCr(r.commission_inr) };
+    put(row, "field_cost_cr", r.field_cost_inr == null ? null : toCr(r.field_cost_inr));
+    put(row, "cost_per_100", r.cost_per_100_inr);
+    return row;
+  });
+}
+
 /** The four breach types as grouped bars, with their total as the line. The
  *  total is the sum of exactly those four and nothing else, so the line and
  *  the bars can never disagree. */
