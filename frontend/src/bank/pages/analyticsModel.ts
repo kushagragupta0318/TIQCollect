@@ -3,6 +3,8 @@
 // app/services/bank/analytics_catalog.py), and the pure transforms from that
 // shape into the Command Center's existing chart props (portfolioVisuals.tsx).
 // Kept apart from the page so they are testable without mounting it.
+import type { ChartSeries } from "../components/charts";
+import { CHART_SERIES } from "../theme/colors";
 import type { FunnelStage, HeatGridRow } from "../components/portfolioVisuals";
 
 export interface AnalyticsTabResponse {
@@ -68,6 +70,44 @@ export interface CompliancePanels {
   breaches_over_time: { month_start: string; out_of_hours: number; geofence: number; consent_missing: number; fraud_confirmed: number }[];
   by_agency: { agency_id: string; agency_name: string; out_of_hours: number; geofence: number; visits: number;
               fraud_confirmed: number }[];
+}
+
+/** _field_ops's two grains (e6's contract): by_day/by_agent are summed over
+ * the window; sla_by_agency is monthly and reuses agency_scorecard.py's own
+ * sla_adherence definition — never pivoted onto the daily x-axis. */
+export interface FieldOpsDailyRow {
+  day: string; visits: number; met_visits: number; met_rate_pct: number | null;
+  planned_stops: number; visited_stops: number; beat_adherence_pct: number | null;
+  planned_km: number; actual_km: number | null;
+}
+export interface FieldOpsAgentRow {
+  agent_id: string; agent_name: string; visits: number; met_rate_pct: number | null; beat_adherence_pct: number | null;
+}
+export interface FieldOpsAgencySlaRow {
+  agency_id: string; agency_name: string; month_start: string; sla_adherence_pct: number | null;
+}
+export interface FieldOpsPanels {
+  by_day: FieldOpsDailyRow[];
+  by_agent: FieldOpsAgentRow[];
+  sla_by_agency: FieldOpsAgencySlaRow[];
+}
+
+/** _concentration's shapes (e6's contract). by_branch has no NPA split —
+ * mv_portfolio_daily carries no branch column, so this grain comes from a
+ * live Loan query instead; flagged to 73 as separate follow-up work. */
+export interface ConcentrationGeoRow {
+  id: string; name: string; exposure: number; npa_exposure: number; accounts: number; npa_accounts: number;
+}
+export interface ConcentrationProductRow {
+  product: string; exposure: number; npa_exposure: number; accounts: number; npa_accounts: number;
+}
+export interface ConcentrationBranchRow {
+  branch_code: string; branch_name: string; exposure: number; loan_count: number;
+}
+export interface ConcentrationRatios { top_5_cities_share_pct: number; top_5_branches_share_pct: number }
+export interface ConcentrationPanels {
+  by_city: ConcentrationGeoRow[]; by_state: ConcentrationGeoRow[]; by_region: ConcentrationGeoRow[]; by_zone: ConcentrationGeoRow[];
+  by_product: ConcentrationProductRow[]; by_branch: ConcentrationBranchRow[]; concentration_ratios: ConcentrationRatios;
 }
 
 /** mv_portfolio_daily's dpd_bucket (CURRENT | BUCKET_1..3 | NPA) to the
@@ -154,6 +194,160 @@ export function transitionMatrixData(p: MigrationPanels): { labels: string[]; ma
 
 function round1(v: number): number { return Math.round(v * 10) / 10; }
 function round2(v: number): number { return Math.round(v * 100) / 100; }
+
+/** "2026-07-01" -> "Jul 26". Date-only strings parse as UTC midnight, which
+ *  is fine here since only the month/year are read, never the time of day. */
+export function shortMonth(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString("en-GB", { month: "short", year: "2-digit" });
+}
+
+/** "2026-07-14" -> "14 Jul", for a daily x-axis where shortMonth's year-grain
+ *  label would repeat across every day in the same month. */
+export function shortDay(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : `${d.getDate()} ${d.toLocaleDateString("en-GB", { month: "short" })}`;
+}
+
+/** Field Ops' daily trend: visit volume against met rate. */
+export function fieldOpsVisitsChartRows(p: FieldOpsPanels): Record<string, string | number>[] {
+  return p.by_day.map((r) => {
+    const row: Record<string, string | number> = { day: shortDay(r.day), visits: r.visits };
+    if (r.met_rate_pct != null) row.met_rate_pct = round1(r.met_rate_pct);
+    return row;
+  });
+}
+
+/** Field Ops' beat-adherence trend. A day with no routed beat has no
+ *  reading at all (e6: actual_km/beat_adherence_pct are null, never 0), so
+ *  it is left off rather than plotted as a zero day. */
+export function fieldOpsBeatAdherenceChartRows(p: FieldOpsPanels): Record<string, string | number>[] {
+  return p.by_day
+    .filter((r) => r.beat_adherence_pct != null)
+    .map((r) => ({ day: shortDay(r.day), beat_adherence_pct: round1(r.beat_adherence_pct as number) }));
+}
+
+/** Field Ops' per-agent leaderboard: visits against met rate, whole window. */
+export function fieldOpsAgentChartRows(p: FieldOpsPanels): Record<string, string | number>[] {
+  return p.by_agent.map((a) => {
+    const row: Record<string, string | number> = { agent_name: a.agent_name, visits: a.visits };
+    if (a.met_rate_pct != null) row.met_rate_pct = round1(a.met_rate_pct);
+    return row;
+  });
+}
+
+/** Field Ops' SLA trend: one line per agency, monthly — the OTHER grain
+ *  (by_day is daily), kept on its own chart rather than forced onto the
+ *  same x-axis. A month an agency has no reading simply has no point. */
+export function fieldOpsSlaTrend(p: FieldOpsPanels): { rows: Record<string, string | number>[]; series: ChartSeries[] } {
+  const order: string[] = [];
+  const names = new Map<string, string>();
+  for (const r of p.sla_by_agency) {
+    if (!names.has(r.agency_id)) { names.set(r.agency_id, r.agency_name); order.push(r.agency_id); }
+  }
+  const byMonth = new Map<string, Record<string, string | number>>();
+  for (const r of p.sla_by_agency) {
+    if (!byMonth.has(r.month_start)) byMonth.set(r.month_start, { month: shortMonth(r.month_start) });
+    if (r.sla_adherence_pct != null) byMonth.get(r.month_start)![r.agency_id] = round1(r.sla_adherence_pct);
+  }
+  const rows = [...byMonth.keys()].sort().map((k) => byMonth.get(k) as Record<string, string | number>);
+  const series = order.map((id, i) => ({ key: id, name: names.get(id) ?? id, color: CHART_SERIES[i % CHART_SERIES.length] }));
+  return { rows, series };
+}
+
+const GEO_TOP_N = 10;
+
+function geoChartRows(rows: ConcentrationGeoRow[]): Record<string, string | number>[] {
+  return rows.slice(0, GEO_TOP_N).map((r) => ({
+    name: r.name, exposure_cr: round2(r.exposure / CR), npa_exposure_cr: round2(r.npa_exposure / CR),
+  }));
+}
+
+/** Concentration's three charted levels (73's brief: branches/cities/products
+ *  by exposure). State/region/zone are real data too, so they still get a
+ *  table below — just not a third near-identical bar chart each. */
+export function concentrationCityChartRows(p: ConcentrationPanels): Record<string, string | number>[] {
+  return geoChartRows(p.by_city);
+}
+
+export function concentrationProductChartRows(p: ConcentrationPanels): Record<string, string | number>[] {
+  return [...p.by_product]
+    .sort((a, b) => b.exposure - a.exposure)
+    .map((r) => ({ name: r.product, exposure_cr: round2(r.exposure / CR), npa_exposure_cr: round2(r.npa_exposure / CR) }));
+}
+
+/** by_branch carries no NPA split (e6: mv_portfolio_daily has no branch
+ *  column) — loan count rides the right axis instead, as the honest second
+ *  series rather than a fabricated NPA figure. */
+export function concentrationBranchChartRows(p: ConcentrationPanels): Record<string, string | number>[] {
+  return [...p.by_branch]
+    .sort((a, b) => b.exposure - a.exposure)
+    .slice(0, GEO_TOP_N)
+    .map((r) => ({ name: r.branch_name, exposure_cr: round2(r.exposure / CR), loan_count: r.loan_count }));
+}
+
+/** Recovery's lead chart: actual vs the recovery_risk-predicted figure, by
+ *  month. `expected_cr` is left unset (never 0) on a month the model
+ *  abstained on, same as the table's own "Not available" — a flat line
+ *  through those months would say a number exists where none does. */
+export function recoveryChartRows(p: RecoveryPanels): Record<string, string | number>[] {
+  return p.by_month.map((r) => {
+    const row: Record<string, string | number> = { month: shortMonth(r.month_start), actual_cr: round2(r.actual_inr / CR) };
+    if (r.expected_inr != null) row.expected_cr = round2(r.expected_inr / CR);
+    return row;
+  });
+}
+
+/** Agencies' leaderboard: ranked by collection efficiency, recovery vs
+ *  expected riding alongside on the right axis. An agency with no efficiency
+ *  reading yet can't be ranked, so it is left off the chart entirely — the
+ *  table beneath still lists it as "Not available", nothing is hidden. */
+export function agencyLeaderboardRows(p: AgenciesPanels): Record<string, string | number>[] {
+  return p.scorecards
+    .filter((a) => a.collection_efficiency != null)
+    .slice()
+    .sort((a, b) => (b.collection_efficiency ?? 0) - (a.collection_efficiency ?? 0))
+    .map((a) => {
+      const row: Record<string, string | number> = {
+        code: a.code, collection_efficiency_pct: round1((a.collection_efficiency ?? 0) * 100),
+      };
+      if (a.recovery_vs_expected != null) row.recovery_vs_expected_pct = round1(a.recovery_vs_expected * 100);
+      return row;
+    });
+}
+
+/** Cost to Collect's monthly trend: commission and field cost (both ₹ Cr,
+ *  left axis) against cost per ₹100 collected (right axis). Field cost is
+ *  the one leg the book doesn't always have; a month without it draws no
+ *  bar for that leg rather than a fabricated zero. */
+export function costMonthlyChartRows(p: CostPanels): Record<string, string | number>[] {
+  return p.by_month.map((r) => {
+    const row: Record<string, string | number> = { month: shortMonth(r.month_start), commission_cr: round2(r.commission_inr / CR) };
+    if (r.field_cost_inr != null) row.field_cost_cr = round2(r.field_cost_inr / CR);
+    if (r.cost_per_100_inr != null) row.cost_per_100 = round2(r.cost_per_100_inr);
+    return row;
+  });
+}
+
+/** Cost to Collect's per-agency bar: cost per ₹100 collected, with the
+ *  ₹ Cr actually collected riding alongside for scale. An agency with no
+ *  cost_per_100 reading is left off, same reasoning as the leaderboard above. */
+export function costByAgencyChartRows(p: CostPanels): Record<string, string | number>[] {
+  return p.by_agency
+    .filter((a) => a.cost_per_100_inr != null)
+    .map((a) => ({
+      agency_name: a.agency_name, cost_per_100: round2(a.cost_per_100_inr ?? 0), collected_cr: round2(a.collected_inr / CR),
+    }));
+}
+
+/** Compliance's breach trend: every category is a real count, never null, so
+ *  no abstain case applies here. */
+export function complianceChartRows(p: CompliancePanels): Record<string, string | number>[] {
+  return p.breaches_over_time.map((r) => ({
+    month: shortMonth(r.month_start), out_of_hours: r.out_of_hours, geofence: r.geofence,
+    consent_missing: r.consent_missing, fraud_confirmed: r.fraud_confirmed,
+  }));
+}
 
 export function pct(v: number | null): string {
   return v == null ? "Not available" : `${(v * 100).toFixed(1)}%`;
