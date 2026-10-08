@@ -163,3 +163,94 @@ export function moneyCr(v: number | null | undefined): string {
   const x = v ?? 0;
   return Math.abs(x) >= CR ? `₹${(x / CR).toFixed(2)} Cr` : `₹${(x / 1e5).toFixed(2)} L`;
 }
+
+/* ── Chart rows (owner, 2026-10-07: "only data no actual analytics,
+      charts/graphs/aggregations should be there") ─────────────────────────────
+
+   Four tabs rendered their monthly series as text tables. These transforms
+   turn each into the props the shared chart shapes take, and they live here
+   rather than in the page for the reason the rest of this file does: the
+   honesty rules below are worth testing without mounting a chart jsdom
+   cannot measure anyway.
+
+   HOW A NULL IS CHARTED: it is not. A missing figure has its KEY OMITTED
+   from the row, so Recharts draws a gap; writing 0 would draw a floor and
+   read as "we collected nothing" instead of "we do not know". The compact
+   table under each chart keeps saying "Not available" in words. This is also
+   why the rows are built by `put` rather than object literals: charts.tsx's
+   own Row type is Record<string, string | number> and does not admit null,
+   and a shared chart shape is not widened for one caller's missing data. */
+
+export type ChartRow = Record<string, string | number>;
+
+function put(row: ChartRow, key: string, v: number | null | undefined): void {
+  if (v != null && Number.isFinite(v)) row[key] = v;
+}
+
+/** "2026-09-30" -> "Sep 26". Parsed as digits, never through `new Date(iso)`:
+ *  that reads a bare date as UTC midnight and prints the month before in any
+ *  timezone behind it, which is known issue 3 on nine other frontend reads. */
+export function monthLabel(iso: string): string {
+  const [y, m] = iso.split("-");
+  const names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const name = names[Number(m) - 1];
+  return name ? `${name} ${y.slice(2)}` : iso;
+}
+
+function toCr(inr: number): number {
+  return round2(inr / CR);
+}
+
+/** Accounts cured / held / rolled per month, plus the cure RATE as a line —
+ *  the one aggregation the three counts do not show on their own, because a
+ *  month with twice the accounts has twice the cures at the same rate.
+ *  Omitted (gap, not 0%) for a month with no accounts in any state. */
+export function migrationTrajectoryRows(p: MigrationPanels): ChartRow[] {
+  return p.trajectory_12m.map((r) => {
+    const total = r.cured + r.held + r.rolled;
+    const row: ChartRow = { month: monthLabel(r.month_end), cured: r.cured, held: r.held, rolled: r.rolled };
+    put(row, "cure_rate_pct", total > 0 ? round1((r.cured / total) * 100) : null);
+    return row;
+  });
+}
+
+/** Actual against expected in crores (both INR, directly comparable, so both
+ *  are bars on one axis) and recovery-vs-expected as a percentage line on the
+ *  right axis. `expected_inr` is the recovery_risk-predicted figure, not a
+ *  bank target — the panel's hint says so, and a month without a prediction
+ *  charts no expected bar at all. */
+export function recoveryMonthRows(p: RecoveryPanels): ChartRow[] {
+  return p.by_month.map((r) => {
+    const row: ChartRow = { month: monthLabel(r.month_start), actual_cr: toCr(r.actual_inr) };
+    put(row, "expected_cr", r.expected_inr == null ? null : toCr(r.expected_inr));
+    put(row, "vs_expected_pct", r.recovery_vs_expected == null ? null : round1(r.recovery_vs_expected * 100));
+    return row;
+  });
+}
+
+/** Commission and field cost as bars in crores, cost per ₹100 collected as the
+ *  line. field_cost_inr is null wherever the book has no field-cost rows, so
+ *  that bar is absent for those months rather than sitting at zero — which
+ *  would read as "free", the opposite of "not recorded". */
+export function costMonthRows(p: CostPanels): ChartRow[] {
+  return p.by_month.map((r) => {
+    const row: ChartRow = { month: monthLabel(r.month_start), commission_cr: toCr(r.commission_inr) };
+    put(row, "field_cost_cr", r.field_cost_inr == null ? null : toCr(r.field_cost_inr));
+    put(row, "cost_per_100", r.cost_per_100_inr);
+    return row;
+  });
+}
+
+/** The four breach types as grouped bars, with their total as the line. The
+ *  total is the sum of exactly those four and nothing else, so the line and
+ *  the bars can never disagree. */
+export function complianceBreachRows(p: CompliancePanels): ChartRow[] {
+  return p.breaches_over_time.map((r) => ({
+    month: monthLabel(r.month_start),
+    out_of_hours: r.out_of_hours,
+    geofence: r.geofence,
+    consent_missing: r.consent_missing,
+    fraud_confirmed: r.fraud_confirmed,
+    total: r.out_of_hours + r.geofence + r.consent_missing + r.fraud_confirmed,
+  }));
+}
