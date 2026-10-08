@@ -126,19 +126,8 @@ class MessagingService:
     # ── inbox: every visible thread, newest-first, with unread/pending flags ───
     def list_inbox(self, ctx, *, pending_only: bool = False) -> list[dict]:
         side = self._side(ctx)
-        rows = []
-        for thread in self._visible_threads(ctx):
-            last = self._last_message(thread.id)
-            pending = last is not None and thread.status == ThreadStatus.OPEN.value \
-                and last.sender_side != side.value
-            if pending_only and not pending:
-                continue
-            rows.append(self._inbox_row(ctx, thread, last, side, pending))
-        # newest-first by last activity (a thread with no message yet sorts by its creation)
-        rows.sort(key=lambda r: r["last_message"]["at"] if r["last_message"] else r["_created"], reverse=True)
-        for r in rows:
-            r.pop("_created", None)
-        return rows
+        threads = self._visible_threads(ctx).all()
+        return self._build_inbox_rows(ctx, threads, side, pending_only=pending_only)
 
     def _last_message(self, thread_id: str) -> Message | None:
         return (self.db.query(Message).filter(Message.thread_id == thread_id)
@@ -159,16 +148,106 @@ class MessagingService:
             q = q.filter(MessageThread.agency_id == str(ctx.agency_id))
         else:
             return []
-        rows = [self._inbox_row(ctx, t, self._last_message(t.id), side,
-                                self._is_pending(t, self._last_message(t.id), side)) for t in q]
+        return self._build_inbox_rows(ctx, q.all(), side, pending_only=False)
+
+    # ── inbox row-building, batched (perf round 2, 2026-10-08) ────────────────
+    # Each of the 5 reads below used to happen ONCE PER THREAD inside the old
+    # per-row _inbox_row/_title/_row_status/_unread (last message, message
+    # count, read marker, and for ISSUE threads the SAME EscalationIssue
+    # fetched twice over, for title and status separately) -- an inbox of N
+    # threads cost 4-5N queries. Measured by QA as 834-941ms on /threads and
+    # /agent-threads. One query per lookup for every thread in the page
+    # instead, grouped in Python; every row's title/status/unread/pending
+    # value is unchanged.
+    def _last_messages_batch(self, thread_ids: list[str]) -> dict[str, Message]:
+        if not thread_ids:
+            return {}
+        out: dict[str, Message] = {}
+        for m in (self.db.query(Message).filter(Message.thread_id.in_(thread_ids))
+                  .order_by(Message.created_at.desc())):
+            out.setdefault(m.thread_id, m)   # first seen per thread = latest, DESC order
+        return out
+
+    def _message_counts_batch(self, thread_ids: list[str]) -> dict[str, int]:
+        if not thread_ids:
+            return {}
+        return dict(self.db.query(Message.thread_id, func.count(Message.id))
+                    .filter(Message.thread_id.in_(thread_ids))
+                    .group_by(Message.thread_id).all())
+
+    def _thread_reads_batch(self, ctx, thread_ids: list[str]) -> dict[str, ThreadRead]:
+        if not thread_ids:
+            return {}
+        return {r.thread_id: r for r in
+                self.db.query(ThreadRead).filter(ThreadRead.thread_id.in_(thread_ids),
+                                                 ThreadRead.user_id == ctx.user_id)}
+
+    def _titles_and_statuses_batch(self, threads: list[MessageThread]) -> tuple[dict[str, str], dict[str, str]]:
+        """Same per-subject-type rules _title/_row_status used to apply one
+        thread at a time (ISSUE: the issue's own title/status; REVERSAL: a
+        short label; AGENT_DIRECT: the agent's user's name; everything else:
+        the thread's own subject_type/status) -- just fed from two preloaded
+        dicts instead of a query per thread."""
+        issue_ids = [t.subject_id for t in threads if t.subject_type == ThreadSubject.ISSUE.value]
+        agent_ids = [t.subject_id for t in threads if t.subject_type == ThreadSubject.AGENT_DIRECT.value]
+        issues = ({i.id: i for i in self.db.query(EscalationIssue).filter(EscalationIssue.id.in_(issue_ids))}
+                 if issue_ids else {})
+        agents = ({a.id: a for a in self.db.query(Agent).filter(Agent.id.in_(agent_ids))}
+                 if agent_ids else {})
+        user_ids = [a.user_id for a in agents.values()]
+        users = {u.id: u for u in self.db.query(User).filter(User.id.in_(user_ids))} if user_ids else {}
+
+        titles: dict[str, str] = {}
+        statuses: dict[str, str] = {}
+        for t in threads:
+            if t.subject_type == ThreadSubject.ISSUE.value:
+                issue = issues.get(t.subject_id)
+                titles[t.id] = issue.title if issue is not None else "Escalation"
+                statuses[t.id] = issue.status if issue is not None else t.status
+            elif t.subject_type == ThreadSubject.REVERSAL.value:
+                titles[t.id] = f"Reversal {str(t.subject_id)[:8]}"
+                statuses[t.id] = t.status
+            elif t.subject_type == ThreadSubject.AGENT_DIRECT.value:
+                agent = agents.get(t.subject_id)
+                user = users.get(agent.user_id) if agent is not None else None
+                titles[t.id] = user.full_name if user is not None else "Agent"
+                statuses[t.id] = t.status
+            else:
+                titles[t.id] = t.subject_type.title()
+                statuses[t.id] = t.status
+        return titles, statuses
+
+    def _build_inbox_rows(self, ctx, threads: list[MessageThread], side: SenderSide,
+                          *, pending_only: bool) -> list[dict]:
+        ids = [t.id for t in threads]
+        last_by = self._last_messages_batch(ids)
+        counts = self._message_counts_batch(ids)
+        reads = self._thread_reads_batch(ctx, ids)
+        titles, statuses = self._titles_and_statuses_batch(threads)
+
+        rows = []
+        for t in threads:
+            last = last_by.get(t.id)
+            pending = last is not None and t.status == ThreadStatus.OPEN.value and last.sender_side != side.value
+            if pending_only and not pending:
+                continue
+            read = reads.get(t.id)
+            unread = last is not None and (read is None or read.last_read_at < last.created_at)
+            rows.append({
+                "thread_id": t.id, "subject_type": t.subject_type, "subject_id": t.subject_id,
+                "title": titles.get(t.id, t.subject_type.title()), "status": statuses.get(t.id, t.status),
+                "counterparty": self._counterparty(t, side),
+                "unread": unread, "pending": pending, "message_count": int(counts.get(t.id, 0) or 0),
+                "last_message": ({"sender_side": last.sender_side, "preview": last.body[:_PREVIEW],
+                                  "at": last.created_at.isoformat() if last.created_at else None}
+                                 if last is not None else None),
+                "_created": t.created_at.isoformat() if t.created_at else "",
+            })
+        # newest-first by last activity (a thread with no message yet sorts by its creation)
         rows.sort(key=lambda r: r["last_message"]["at"] if r["last_message"] else r["_created"], reverse=True)
         for r in rows:
             r.pop("_created", None)
         return rows
-
-    def _is_pending(self, thread: MessageThread, last: Message | None, side: SenderSide) -> bool:
-        return last is not None and thread.status == ThreadStatus.OPEN.value \
-            and last.sender_side != side.value
 
     # ── helpers ───────────────────────────────────────────────────────────────
     def _thread_for(self, subject_type: str, subject_id: str) -> MessageThread | None:
@@ -263,53 +342,12 @@ class MessagingService:
         else:
             read.last_read_at = now
 
-    def _unread(self, ctx, thread: MessageThread, last: Message | None) -> bool:
-        if last is None:
-            return False
-        read = (self.db.query(ThreadRead)
-                .filter(ThreadRead.thread_id == thread.id, ThreadRead.user_id == ctx.user_id).first())
-        return read is None or read.last_read_at < last.created_at
-
-    def _title(self, thread: MessageThread) -> str:
-        if thread.subject_type == ThreadSubject.ISSUE.value:
-            issue = self.db.get(EscalationIssue, thread.subject_id)
-            return issue.title if issue is not None else "Escalation"
-        if thread.subject_type == ThreadSubject.REVERSAL.value:
-            return f"Reversal {str(thread.subject_id)[:8]}"
-        if thread.subject_type == ThreadSubject.AGENT_DIRECT.value:
-            agent = self.db.get(Agent, thread.subject_id)        # subject_id is the agent
-            user = self.db.get(User, agent.user_id) if agent is not None else None
-            return user.full_name if user is not None else "Agent"
-        return thread.subject_type.title()
-
     def _counterparty(self, thread: MessageThread, side: SenderSide) -> str:
         """The other side of THIS thread, by axis. Agent axis is AGENT↔AGENCY;
         every other axis is BANK↔AGENCY."""
         if thread.subject_type == ThreadSubject.AGENT_DIRECT.value:
             return SenderSide.AGENT.value if side is SenderSide.AGENCY else SenderSide.AGENCY.value
         return SenderSide.AGENCY.value if side is SenderSide.BANK else SenderSide.BANK.value
-
-    def _row_status(self, thread: MessageThread) -> str:
-        """For an escalation the issue's status drives the row; otherwise the thread's."""
-        if thread.subject_type == ThreadSubject.ISSUE.value:
-            issue = self.db.get(EscalationIssue, thread.subject_id)
-            if issue is not None:
-                return issue.status
-        return thread.status
-
-    def _inbox_row(self, ctx, thread: MessageThread, last: Message | None, side: SenderSide,
-                   pending: bool) -> dict:
-        count = self.db.query(func.count(Message.id)).filter(Message.thread_id == thread.id).scalar()
-        return {
-            "thread_id": thread.id, "subject_type": thread.subject_type, "subject_id": thread.subject_id,
-            "title": self._title(thread), "status": self._row_status(thread),
-            "counterparty": self._counterparty(thread, side),
-            "unread": self._unread(ctx, thread, last), "pending": pending, "message_count": int(count or 0),
-            "last_message": ({"sender_side": last.sender_side, "preview": last.body[:_PREVIEW],
-                              "at": last.created_at.isoformat() if last.created_at else None}
-                             if last is not None else None),
-            "_created": thread.created_at.isoformat() if thread.created_at else "",
-        }
 
     def _dump(self, thread: MessageThread) -> dict:
         msgs = (self.db.execute(select(Message).where(Message.thread_id == thread.id)

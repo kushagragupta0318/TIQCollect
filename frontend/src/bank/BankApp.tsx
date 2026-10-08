@@ -77,9 +77,25 @@ export default function BankApp() {
   // right after login sees the chart instantly rather than a fresh request.
   // Same queryKey as CashForecastPage's own useQuery, so that mount reads the
   // warmed cache (global staleTime 60s, App.tsx) instead of refetching.
+  //
+  // Perf round 2 (2026-10-08): this used to fire in the SAME tick as mount,
+  // racing whatever page the session actually landed on for the API and the
+  // main thread -- a QA warm-pass measured it adding ~810-890ms to pages
+  // that never render the forecast at all. requestIdleCallback pushes it
+  // behind the landing page's own requests/render without dropping it or
+  // narrowing which sessions get warmed (still every bank login, same as
+  // the owner asked for) -- it only changes WHEN, not WHETHER or FOR WHOM.
+  // Safari has no requestIdleCallback; setTimeout(0) is the documented
+  // fallback (MDN), same ordering guarantee minus the idle-budget awareness.
   useEffect(() => {
     if (!isAuthenticated) return;
-    void qc.prefetchQuery({ queryKey: ["bank", "strategy", "cash-forecast"], queryFn: () => getCashForecast() });
+    const warm = () => void qc.prefetchQuery({ queryKey: ["bank", "strategy", "cash-forecast"], queryFn: () => getCashForecast() });
+    if (typeof window.requestIdleCallback === "function") {
+      const handle = window.requestIdleCallback(warm);
+      return () => window.cancelIdleCallback(handle);
+    }
+    const handle = window.setTimeout(warm, 0);
+    return () => window.clearTimeout(handle);
   }, [isAuthenticated, qc]);
 
   // The same guard decision as ProtectedRoute (lib/roles.ts): signed out →

@@ -9,6 +9,7 @@ from typing import Literal, Optional
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel
 
+from app.core.config import settings
 from app.core.dependencies import AnalyticsDb, DbSession
 from app.core.errors import AppException, ErrorCode
 from app.core.ids import UUIDQuery
@@ -234,12 +235,45 @@ _PERIOD_LABELS = {"mtd": "Month to date", "l30": "Last 30 days", "qtd": "Quarter
 _LEVEL_ORDER = {"ZONE": 0, "REGION": 1, "STATE": 2, "CITY": 3}
 
 
+_FILTERS_CACHE_TTL_S = 300
+
+
+def _filters_cache_key(bank_id: str) -> str:
+    return f"bank:filters:{bank_id}"
+
+
+def _redis_client():
+    """Same lazy, best-effort pattern as otp_service._make_store: a cache is
+    an optimisation, never a dependency, so a Redis outage falls back to
+    computing live rather than failing the request."""
+    try:
+        import redis
+        client = redis.from_url(settings.REDIS_URL, decode_responses=True, socket_connect_timeout=0.5)
+        client.ping()
+        return client
+    except Exception:
+        return None
+
+
 @router.get("/filters", response_model=FiltersOut, summary="The global filter bar's options for this bank")
 def filters(ctx: CurrentContext, db: DbSession, _user: User = require_perm("cc.read")):
+    """Regions and agencies change on an onboarding/admin timescale, not a
+    per-click one (perf round 2, 2026-10-08: measured 800-900ms, fetched on
+    every page that renders the filter bar). Cached per bank for 5 minutes;
+    a stale read is never wrong enough to matter here (the owner adding a
+    region today is seen within the TTL, same as any other cache), and a
+    cache miss or a down Redis just computes it the old way."""
     bank_id = _bank_of(ctx)
+    cache = _redis_client()
+    key = _filters_cache_key(bank_id)
+    if cache is not None:
+        cached = cache.get(key)
+        if cached is not None:
+            return FiltersOut.model_validate_json(cached)
+
     regions = db.query(Region).filter(Region.bank_id == bank_id, Region.is_active.is_(True)).all()
     agencies = db.query(Agency).filter(Agency.bank_id == bank_id).order_by(Agency.legal_name).all()
-    return FiltersOut(
+    out = FiltersOut(
         periods=[Option(value=p, label=_PERIOD_LABELS[p]) for p in PERIODS],
         geography=[Option(value=str(r.id), label=r.name, level=r.level,
                           parent=str(r.parent_id) if r.parent_id else None)
@@ -249,6 +283,12 @@ def filters(ctx: CurrentContext, db: DbSession, _user: User = require_perm("cc.r
         buckets=[Option(value=b.value, label=b.value.replace("_", " ").title()) for b in DPDBucket],
         security=[Option(value="SECURED", label="Secured"), Option(value="UNSECURED", label="Unsecured")],
     )
+    if cache is not None:
+        try:
+            cache.set(key, out.model_dump_json(), ex=_FILTERS_CACHE_TTL_S)
+        except Exception:
+            pass
+    return out
 
 
 class BreakdownRowOut(BaseModel):
