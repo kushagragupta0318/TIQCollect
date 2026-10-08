@@ -223,7 +223,15 @@ Full list with evidence: `docs/ENGINEERING-AUDIT.md`. The short form:
    convention only. Scoping reads drop system-written rows.
 7. **Two rollout gates are off by design:** `REPAYMENT_WRITE_RISK_SCORE` and
    `RECOVERY_WRITE_LABEL`. Every manager surface reads snapshots.
-8. **Analytics have three dimensions** (agent, DPD bucket, month). There is no breakdown by
-   branch, city or product, although the columns exist.
-9. **The prod image carries unused heavy dependencies** (xgboost and others). RESTRUCTURE-PLAN
-   1.7 removes them.
+8. **Manager analytics have three dimensions** (agent, DPD bucket, month). The bank Analytics
+   **Concentration** tab now breaks the book down by zone / state / city / product
+   (`analytics_catalog._concentration`); branch stays absent because the portfolio view carries
+   `region_id`/`agency_id`, not `branch_id`. Manager analytics are still agent/DPD/month only.
+9. **xgboost is gone** — it was dead (zero imports anywhere, incl. the training pipeline), removed
+   ~154 MB from the image (40, 2026-10-08). The rest of the heavy stack is **load-bearing in the
+   serving image, not removable as-is**: matplotlib (the live PDF report engine, E09/E10),
+   scikit-learn/joblib/seaborn/optbinning/ortools (the scheduled auto-retrain task lazily imports
+   `ml.pipeline.train.ModelTrainer` in the SAME prod worker) and statsmodels (also `cash_forecast`).
+   Splitting them needs retraining moved out of the prod worker first — a real follow-up, not done.
+   Test/seed-only deps (pytest, faker) moved to `backend/requirements-train.txt` (installed by
+   `Dockerfile.dev`; prod `Dockerfile` installs `requirements.txt` only). RESTRUCTURE-PLAN 1.7.
