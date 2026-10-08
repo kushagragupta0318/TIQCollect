@@ -246,7 +246,10 @@ function LeaderboardSection() {
             </TableHeader>
             <TableBody>
               {rows.map((row: PerformanceIndex & { rank: number | null }) => (
-                <TableRow key={row.agency_id}>
+                // One row per (agency, region) — an agency covering several regions
+                // appears once per region (the Region column), so the key must carry
+                // both, not agency_id alone (21 dup-key warnings otherwise).
+                <TableRow key={`${row.agency_id}:${row.region_id ?? "none"}`}>
                   <TableCell>{row.rank ?? <span className="text-muted-foreground">—</span>}</TableCell>
                   <TableCell className="font-semibold text-foreground">
                     {agencyName.get(row.agency_id) ?? row.agency_id}
