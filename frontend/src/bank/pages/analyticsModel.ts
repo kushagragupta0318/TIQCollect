@@ -70,6 +70,72 @@ export interface CompliancePanels {
               fraud_confirmed: number }[];
 }
 
+/** Field effort and reach off mv_field_activity_daily (analytics_catalog's
+ *  _field_ops). Every rate is 0..1 or null; null means the denominator was
+ *  zero — no calls made, no routed day planned — and is NOT a 0% result. */
+export interface FieldOpsMonthRow {
+  month_start: string;
+  visits: number;
+  met_visits: number;
+  calls: number;
+  calls_answered: number;
+  ptps_set: number;
+  payments_verified_count: number;
+  agent_days: number;
+  planned_stops: number;
+  visited_stops: number;
+  planned_km: number | null;
+  met_rate: number | null;
+  contact_rate: number | null;
+  visits_per_agent_day: number | null;
+  stop_coverage: number | null;
+}
+
+export interface FieldOpsAgencyRow {
+  agency_id: string;
+  agency_name: string;
+  visits: number;
+  met_visits: number;
+  calls: number;
+  calls_answered: number;
+  ptps_set: number;
+  agent_days: number;
+  agents: number;
+  planned_stops: number;
+  visited_stops: number;
+  met_rate: number | null;
+  contact_rate: number | null;
+  visits_per_agent_day: number | null;
+  stop_coverage: number | null;
+}
+
+export interface FieldOpsPanels {
+  by_month: FieldOpsMonthRow[];
+  by_agency: FieldOpsAgencyRow[];
+}
+
+/** One concentration slice. The dimension's own name arrives under its own key
+ *  (zone | state | city | product), which is why `share` and the money columns
+ *  are typed here and the label is read by key. */
+export interface ConcentrationRow {
+  zone?: string;
+  state?: string;
+  city?: string;
+  product?: string;
+  outstanding: number | null;
+  placed: number | null;
+  npa: number | null;
+  accounts: number | null;
+  share: number | null;
+}
+
+export interface ConcentrationPanels {
+  by_zone: ConcentrationRow[];
+  by_state: ConcentrationRow[];
+  by_city: ConcentrationRow[];
+  by_product: ConcentrationRow[];
+}
+
 /** mv_portfolio_daily's dpd_bucket (CURRENT | BUCKET_1..3 | NPA) to the
  * display label portfolioVisuals.tsx / DPD_COLORS actually key on —
  * these are DIFFERENT vocabularies (DPD_COLORS also carries the
@@ -253,4 +319,50 @@ export function complianceBreachRows(p: CompliancePanels): ChartRow[] {
     fraud_confirmed: r.fraud_confirmed,
     total: r.out_of_hours + r.geofence + r.consent_missing + r.fraud_confirmed,
   }));
+}
+
+/** Visits and met visits as bars with the met RATE as the line. Both counts
+ *  are on one axis because met_visits is a subset of visits and the gap
+ *  between the bars IS the miss. A month with no visits has no rate — gap,
+ *  not 0%. */
+export function fieldOpsMonthRows(p: FieldOpsPanels): ChartRow[] {
+  return p.by_month.map((r) => {
+    const row: ChartRow = { month: monthLabel(r.month_start), visits: r.visits, met_visits: r.met_visits };
+    put(row, "met_rate_pct", r.met_rate == null ? null : round1(r.met_rate * 100));
+    return row;
+  });
+}
+
+/** Planned against visited stops, with coverage as the line. A zero here is
+ *  REAL and charted: zero planned stops means no routed day in that month,
+ *  which is a measurement, not a gap. The COVERAGE is the unknown in that
+ *  case (0/0), so only the line breaks. */
+export function fieldOpsCoverageRows(p: FieldOpsPanels): ChartRow[] {
+  return p.by_month.map((r) => {
+    const row: ChartRow = {
+      month: monthLabel(r.month_start), planned_stops: r.planned_stops, visited_stops: r.visited_stops,
+    };
+    put(row, "stop_coverage_pct", r.stop_coverage == null ? null : round1(r.stop_coverage * 100));
+    return row;
+  });
+}
+
+/** How many slices a concentration chart draws. A city breakdown can run to
+ *  dozens of rows, and forty bars on a categorical axis is a texture, not a
+ *  reading; the table under the chart keeps every row. */
+export const CONCENTRATION_CHART_LIMIT = 10;
+
+/** One concentration dimension as chart rows: outstanding, placed and NPA in
+ *  crores with the share of book as the line, biggest first (the backend
+ *  already orders by outstanding), truncated to CONCENTRATION_CHART_LIMIT.
+ *  `dim` is the key the dimension's name arrives under. */
+export function concentrationRows(rows: ConcentrationRow[], dim: "zone" | "state" | "city" | "product"): ChartRow[] {
+  return rows.slice(0, CONCENTRATION_CHART_LIMIT).map((r) => {
+    const row: ChartRow = { name: String(r[dim] ?? "Unassigned") };
+    put(row, "outstanding_cr", r.outstanding == null ? null : toCr(r.outstanding));
+    put(row, "placed_cr", r.placed == null ? null : toCr(r.placed));
+    put(row, "npa_cr", r.npa == null ? null : toCr(r.npa));
+    put(row, "share_pct", r.share == null ? null : round1(r.share * 100));
+    return row;
+  });
 }

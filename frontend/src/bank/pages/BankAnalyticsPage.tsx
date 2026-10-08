@@ -19,9 +19,11 @@ import { useKpiFilter } from "../components/useKpiFilter";
 import { filterToParams } from "../components/kpiFilter";
 import { ExecutiveHeader, PageRoot } from "../components/PageTemplate";
 import {
-  complianceBreachRows, costMonthRows, dpdLadderHeatRows, exposureFunnelStages, migrationTrajectoryRows,
+  complianceBreachRows, concentrationRows, CONCENTRATION_CHART_LIMIT, costMonthRows, dpdLadderHeatRows,
+  exposureFunnelStages, fieldOpsCoverageRows, fieldOpsMonthRows, migrationTrajectoryRows,
   moneyCr, pct, recoveryMonthRows, securityCoverStages, transitionMatrixData,
-  type AgenciesPanels, type AnalyticsTabResponse, type CompliancePanels, type CostPanels, type ExposurePanels,
+  type AgenciesPanels, type AnalyticsTabResponse, type CompliancePanels, type ConcentrationPanels,
+  type ConcentrationRow, type CostPanels, type ExposurePanels, type FieldOpsPanels,
   type MigrationPanels, type RecoveryPanels,
 } from "./analyticsModel";
 
@@ -42,14 +44,7 @@ const TABS: readonly AnalyticsTab<TabId>[] = [
 // the API; the rest render their own honest "not built" note below.
 const API_TAB: Partial<Record<TabId, string>> = {
   exposure: "exposure", migration: "migration", agencies: "agencies", recovery: "recovery", cost: "cost",
-  compliance: "compliance",
-};
-
-const NOT_BUILT: Partial<Record<TabId, string>> = {
-  field_ops: "Visits per agent, met rate and SLA coverage are built below the other three tabs land; beat " +
-            "adherence and planned-vs-actual km wait on the demo book generating routed days, queued separately.",
-  concentration: "Zone / region / state / city / branch / product breakdowns need a new aggregation over " +
-                 "mv_portfolio_daily joined to branches — not built yet.",
+  compliance: "compliance", field_ops: "field_ops", concentration: "concentration",
 };
 
 export function BankAnalyticsPage() {
@@ -75,12 +70,6 @@ export function BankAnalyticsPage() {
       <FilterBar />
       <AnalyticsTabBar tabs={TABS} active={active} onChange={onChange} />
 
-      {!apiTab && (
-        <Panel title={TABS.find((t) => t.id === active)?.label ?? ""}>
-          <p className="text-[12px] text-muted-foreground">{NOT_BUILT[active]}</p>
-        </Panel>
-      )}
-
       {apiTab && q.isLoading && <AnalyticsLoading />}
       {apiTab && (q.isError || (!q.isLoading && !q.data)) && (
         <AnalyticsError>{errorDetail(q.error, "This tab could not be loaded.")}</AnalyticsError>
@@ -96,6 +85,8 @@ export function BankAnalyticsPage() {
       {apiTab && q.data?.available && active === "recovery" && <RecoveryTab panels={q.data.panels as unknown as RecoveryPanels} />}
       {apiTab && q.data?.available && active === "cost" && <CostTab panels={q.data.panels as unknown as CostPanels} />}
       {apiTab && q.data?.available && active === "compliance" && <ComplianceTab panels={q.data.panels as unknown as CompliancePanels} />}
+      {apiTab && q.data?.available && active === "field_ops" && <FieldOpsTab panels={q.data.panels as unknown as FieldOpsPanels} />}
+      {apiTab && q.data?.available && active === "concentration" && <ConcentrationTab panels={q.data.panels as unknown as ConcentrationPanels} />}
     </PageRoot>
   );
 }
@@ -321,6 +312,158 @@ function ComplianceTab({ panels }: { panels: CompliancePanels }) {
           ]}
         />
       </Panel>
+    </div>
+  );
+}
+
+
+function FieldOpsTab({ panels }: { panels: FieldOpsPanels }) {
+  return (
+    <div className="space-y-6">
+      <Panel title="Effort and reach, by month"
+             hint="Visits and the ones where the borrower was met, with the met rate as the line. The gap between the bars is the miss.">
+        <GroupedBarLineChart
+          data={fieldOpsMonthRows(panels)}
+          xKey="month"
+          bars={[
+            { key: "visits", name: "Visits", color: BRAND.primary },
+            { key: "met_visits", name: "Met", color: BRAND.success },
+          ]}
+          line={{ key: "met_rate_pct", name: "Met rate", color: BRAND.warning }}
+          barFormat={countFmt}
+          lineFormat={pctFmt}
+        />
+        <BelowChart>
+          <DataTable
+            rows={panels.by_month}
+            rowKey={(r) => r.month_start}
+            columns={[
+              { key: "month_start", header: "Month" },
+              { key: "visits", header: "Visits", align: "right" },
+              { key: "met_rate", header: "Met rate", align: "right", render: (r) => pct(r.met_rate) },
+              { key: "contact_rate", header: "Contact rate", align: "right", render: (r) => pct(r.contact_rate) },
+              { key: "ptps_set", header: "PTPs", align: "right" },
+              { key: "payments_verified_count", header: "Payments", align: "right" },
+              { key: "visits_per_agent_day", header: "Visits / agent-day", align: "right",
+                render: (r) => r.visits_per_agent_day == null ? "Not available" : r.visits_per_agent_day.toFixed(2) },
+            ]}
+          />
+        </BelowChart>
+      </Panel>
+
+      {/* Stop coverage is the one figure here that can be honestly ZERO and
+          honestly UNKNOWN in the same month: zero planned stops is a real
+          measurement (no routed day), while the coverage ratio over it is 0/0
+          and is not charted at all. */}
+      <Panel title="Plan against actual, by month"
+             hint="Stops planned by the nightly router against stops actually visited. A month with no routed day shows zero planned stops and no coverage line — the ratio is unknown, not 0%.">
+        <GroupedBarLineChart
+          data={fieldOpsCoverageRows(panels)}
+          xKey="month"
+          bars={[
+            { key: "planned_stops", name: "Planned stops", color: BRAND.slate },
+            { key: "visited_stops", name: "Visited stops", color: BRAND.primary },
+          ]}
+          line={{ key: "stop_coverage_pct", name: "Stop coverage", color: BRAND.success }}
+          barFormat={countFmt}
+          lineFormat={pctFmt}
+        />
+        <BelowChart>
+          <DataTable
+            rows={panels.by_month}
+            rowKey={(r) => r.month_start}
+            columns={[
+              { key: "month_start", header: "Month" },
+              { key: "planned_stops", header: "Planned", align: "right" },
+              { key: "visited_stops", header: "Visited", align: "right" },
+              { key: "stop_coverage", header: "Coverage", align: "right", render: (r) => pct(r.stop_coverage) },
+              { key: "planned_km", header: "Planned km", align: "right",
+                render: (r) => r.planned_km == null ? "Not available" : r.planned_km.toFixed(1) },
+              { key: "agent_days", header: "Agent-days", align: "right" },
+            ]}
+          />
+        </BelowChart>
+      </Panel>
+
+      <Panel title="By agency" hint={`${panels.by_agency.length} agencies`}>
+        <DataTable
+          rows={panels.by_agency}
+          rowKey={(r) => r.agency_id}
+          columns={[
+            { key: "agency_name", header: "Agency", className: "font-bold text-foreground" },
+            { key: "agents", header: "Agents", align: "right" },
+            { key: "visits", header: "Visits", align: "right" },
+            { key: "met_rate", header: "Met rate", align: "right", render: (r) => pct(r.met_rate) },
+            { key: "contact_rate", header: "Contact rate", align: "right", render: (r) => pct(r.contact_rate) },
+            { key: "visits_per_agent_day", header: "Visits / agent-day", align: "right",
+              render: (r) => r.visits_per_agent_day == null ? "Not available" : r.visits_per_agent_day.toFixed(2) },
+            { key: "stop_coverage", header: "Stop coverage", align: "right", render: (r) => pct(r.stop_coverage) },
+          ]}
+        />
+      </Panel>
+    </div>
+  );
+}
+
+/** One concentration dimension: the biggest slices charted, every slice in the
+ *  table under it. `dim` is both the row key the name arrives under and the
+ *  column header. */
+function ConcentrationPanel({ title, rows, dim }: {
+  title: string;
+  rows: ConcentrationRow[];
+  dim: "zone" | "state" | "city" | "product";
+}) {
+  const charted = Math.min(rows.length, CONCENTRATION_CHART_LIMIT);
+  const hint = rows.length > charted
+    ? `Biggest ${charted} by outstanding, of ${rows.length} — the table below carries them all.`
+    : `${rows.length} ${rows.length === 1 ? "slice" : "slices"}, biggest first.`;
+  return (
+    <Panel title={title} hint={hint}>
+      <GroupedBarLineChart
+        data={concentrationRows(rows, dim)}
+        xKey="name"
+        bars={[
+          { key: "outstanding_cr", name: "Outstanding", color: BRAND.primary },
+          { key: "placed_cr", name: "Placed", color: BRAND.secondary },
+          { key: "npa_cr", name: "NPA", color: BRAND.destructive },
+        ]}
+        line={{ key: "share_pct", name: "Share of book", color: BRAND.ink }}
+        barFormat={crFmt}
+        lineFormat={pctFmt}
+      />
+      <BelowChart>
+        <DataTable
+          rows={rows}
+          rowKey={(r) => String(r[dim] ?? "Unassigned")}
+          columns={[
+            { key: dim, header: title, className: "font-bold text-foreground",
+              render: (r) => String(r[dim] ?? "Unassigned") },
+            { key: "outstanding", header: "Outstanding", align: "right", render: (r) => moneyCr(r.outstanding) },
+            { key: "placed", header: "Placed", align: "right", render: (r) => moneyCr(r.placed) },
+            { key: "npa", header: "NPA", align: "right", render: (r) => moneyCr(r.npa) },
+            { key: "accounts", header: "Accounts", align: "right", render: (r) => r.accounts ?? 0 },
+            { key: "share", header: "Share", align: "right", render: (r) => pct(r.share) },
+          ]}
+        />
+      </BelowChart>
+    </Panel>
+  );
+}
+
+function ConcentrationTab({ panels }: { panels: ConcentrationPanels }) {
+  return (
+    <div className="space-y-6">
+      <ConcentrationPanel title="Zone" rows={panels.by_zone} dim="zone" />
+      <ConcentrationPanel title="State" rows={panels.by_state} dim="state" />
+      <ConcentrationPanel title="City" rows={panels.by_city} dim="city" />
+      <ConcentrationPanel title="Product" rows={panels.by_product} dim="product" />
+      {/* Said once, here, rather than left for a reader to notice is missing:
+          mv_portfolio_daily carries region_id and agency_id, not branch_id, so
+          a branch breakdown would need a column the grain does not have. */}
+      <p className="text-[11px] text-muted-foreground">
+        No branch breakdown: the portfolio reading carries region and agency, not branch, so a branch
+        column would have to be invented rather than measured.
+      </p>
     </div>
   );
 }

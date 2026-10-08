@@ -184,6 +184,7 @@ describe("Cost's chart rows", () => {
       { month_start: "2026-08-01", commission_inr: 1e7, field_cost_inr: 5e6, collected_inr: 4e8, cost_per_100_inr: 3.75 },
       { month_start: "2026-09-01", commission_inr: 2e7, field_cost_inr: null, collected_inr: 5e8, cost_per_100_inr: null },
     ],
+    by_agency: [],
   };
 
   it("charts commission and field cost in crores with the ratio as the line", () => {
