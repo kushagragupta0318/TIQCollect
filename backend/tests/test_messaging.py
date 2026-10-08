@@ -301,6 +301,27 @@ def test_manager_inbox_lists_all_agency_agent_threads(db):
     assert {r["subject_id"] for r in rows} == {a1.id, a2.id}
 
 
+def test_agent_chats_never_leak_into_the_bank_axis_inbox(db):
+    # Owner report 2026-10-08: an agency manager saw their own agent chats under
+    # the "Bank" tab. The bank axis (list_inbox / list_pending) must carry only
+    # ISSUE + REVERSAL, never AGENT_DIRECT — that axis is list_agent_threads.
+    mgr = _user(db, UserRole.AGENCY_MANAGER)
+    agent, _ = _agent(db, mgr)
+    rev = _reversal(db)
+    svc = MessagingService(db)
+    svc.post_message(_Ctx(mgr, "AGENCY"), ThreadSubject.AGENT_DIRECT.value, agent.id, "how's the day?")
+    svc.post_message(_Ctx(mgr, "AGENCY"), ThreadSubject.REVERSAL.value, rev.id, "disputing this reversal")
+
+    inbox = svc.list_inbox(_Ctx(mgr, "AGENCY"))
+    assert all(r["subject_type"] != ThreadSubject.AGENT_DIRECT.value for r in inbox)
+    assert {r["subject_type"] for r in inbox} == {ThreadSubject.REVERSAL.value}
+    # the pending/unread-dot count must not see the agent thread either
+    assert all(r["subject_type"] != ThreadSubject.AGENT_DIRECT.value
+               for r in svc.list_pending(_Ctx(mgr, "AGENCY")))
+    # and the agent axis still has it
+    assert {r["subject_id"] for r in svc.list_agent_threads(_Ctx(mgr, "AGENCY"))} == {agent.id}
+
+
 def test_a_manager_of_another_agency_cannot_reach_the_agent(db):
     mgr = _user(db, UserRole.AGENCY_MANAGER)
     agent, _ = _agent(db, mgr)

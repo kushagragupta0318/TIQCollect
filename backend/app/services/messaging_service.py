@@ -307,7 +307,15 @@ class MessagingService:
         self._require_tenant(ctx, thread.bank_id, thread.agency_id)
 
     def _visible_threads(self, ctx):
-        q = self.db.query(MessageThread).filter(MessageThread.bank_id == str(ctx.bank_id))
+        # The BANK AXIS only (ISSUE + REVERSAL). AGENT_DIRECT (the agency↔agent
+        # chat, v2_0038) is a separate axis served by list_agent_threads; it must
+        # never surface in the bank inbox or its pending/unread count, or an
+        # agency manager sees their own agent chats under the "Bank" tab (owner
+        # report, 2026-10-08). Both callers of this helper (list_inbox,
+        # list_pending) are the bank axis, so the exclusion belongs here.
+        q = (self.db.query(MessageThread)
+             .filter(MessageThread.bank_id == str(ctx.bank_id),
+                     MessageThread.subject_type != ThreadSubject.AGENT_DIRECT.value))
         if ctx.scope != "BANK":
             q = q.filter(MessageThread.agency_id == str(ctx.agency_id))
         return q
