@@ -55,6 +55,8 @@ TAB_VIEWS: dict[str, tuple[str, ...]] = {
     "recovery": (SCORECARD,),
     "cost": (SCORECARD,),
     "compliance": (FIELD,),
+    "field_ops": (FIELD,),
+    "concentration": (PORTFOLIO,),
 }
 
 
@@ -300,7 +302,97 @@ def _compliance(db: Session, adb: Session, bank_id: str, f: KpiFilter) -> dict:
            "panels": {"breaches_over_time": breaches_over_time, "by_agency": by_agency}}
 
 
-TABS = ("exposure", "migration", "agencies", "recovery", "cost", "compliance")
+# ── Field operations ───────────────────────────────────────────────────────
+def _field_ops(db: Session, adb: Session, bank_id: str, f: KpiFilter) -> dict:
+    """Field effort and reach off mv_field_activity_daily (grain: agent-day).
+    Built: visits/agent-day, met rate, contact rate, PTPs, and stop coverage
+    (visited_stops / planned_stops) with planned km. Coverage and km come from
+    the beat plan; a book with no routed days has planned_stops = 0 everywhere,
+    and SUM()/NULLIF reports that as None (unknown), never a misleading 0% or
+    100% — same abstain-not-impute rule the scorecards follow. The view carries
+    only the agency dimension (kpi_filter.VIEW_DIMENSIONS), so geo/product/
+    bucket are refused upstream, not silently ignored."""
+    clause, fp = f.clause(FIELD)
+    base = {"bank": bank_id, **fp}
+    by_month = _read_rows(adb, f"""
+        SELECT date_trunc('month', activity_date)::date AS month_start,
+               SUM(visits) AS visits, SUM(met_visits) AS met_visits,
+               SUM(calls) AS calls, SUM(calls_answered) AS calls_answered,
+               SUM(ptps_set) AS ptps_set,
+               SUM(payments_verified_count) AS payments_verified_count,
+               COUNT(DISTINCT (agent_id, activity_date)) AS agent_days,
+               SUM(planned_stops) AS planned_stops, SUM(visited_stops) AS visited_stops,
+               SUM(planned_km) AS planned_km
+        FROM analytics.{FIELD} WHERE bank_id = :bank {clause}
+        GROUP BY 1 ORDER BY 1""", base)
+    for row in by_month:
+        row["met_rate"] = round(row["met_visits"] / row["visits"], 4) if row["visits"] else None
+        row["contact_rate"] = round(row["calls_answered"] / row["calls"], 4) if row["calls"] else None
+        row["visits_per_agent_day"] = round(row["visits"] / row["agent_days"], 2) if row["agent_days"] else None
+        # Stop coverage and km come off the beat plan; 0 planned stops = no routed
+        # day in this window, reported unknown rather than a fabricated ratio.
+        row["stop_coverage"] = round(row["visited_stops"] / row["planned_stops"], 4) if row["planned_stops"] else None
+    by_agency = _read_rows(adb, f"""
+        SELECT agency_id,
+               SUM(visits) AS visits, SUM(met_visits) AS met_visits,
+               SUM(calls) AS calls, SUM(calls_answered) AS calls_answered,
+               SUM(ptps_set) AS ptps_set,
+               COUNT(DISTINCT (agent_id, activity_date)) AS agent_days,
+               COUNT(DISTINCT agent_id) AS agents,
+               SUM(planned_stops) AS planned_stops, SUM(visited_stops) AS visited_stops
+        FROM analytics.{FIELD} WHERE bank_id = :bank {clause}
+        GROUP BY agency_id""", base)
+    for row in by_agency:
+        row["met_rate"] = round(row["met_visits"] / row["visits"], 4) if row["visits"] else None
+        row["contact_rate"] = round(row["calls_answered"] / row["calls"], 4) if row["calls"] else None
+        row["visits_per_agent_day"] = round(row["visits"] / row["agent_days"], 2) if row["agent_days"] else None
+        row["stop_coverage"] = round(row["visited_stops"] / row["planned_stops"], 4) if row["planned_stops"] else None
+    from app.models.tenancy import Agency
+
+    names = {a.id: (a.trade_name or a.legal_name) for a in db.query(Agency).filter(Agency.bank_id == bank_id)}
+    for row in by_agency:
+        row["agency_name"] = names.get(row["agency_id"], row["agency_id"])
+    return {"available": True, "reason": None, "panels": {"by_month": by_month, "by_agency": by_agency}}
+
+
+# ── Concentration ────────────────────────────────────────────────────────────
+def _concentration(adb: Session, bank_id: str, as_of: date, f: KpiFilter) -> dict:
+    """Portfolio concentration at the latest reading, broken down by zone,
+    state, city and product off mv_portfolio_daily joined to analytics.dim_region
+    (denormalised zone/state/city names per region). A loan with no region
+    coalesces to 'Unassigned' rather than being dropped. Branch is NOT offered:
+    the portfolio view carries region_id and agency_id, not branch_id, so a
+    branch breakdown would need a column the grain does not have — abstained in
+    the frontend note, not invented here."""
+    clause, fp = f.clause(PORTFOLIO, "p")
+    base = {"bank": bank_id, "d": as_of, **fp}
+
+    def _by(dim_expr: str, label: str, extra_join: str = "") -> list[dict]:
+        rows = _read_rows(adb, f"""
+            SELECT {dim_expr} AS key,
+                   SUM(p.total_outstanding) AS outstanding, SUM(p.placed_exposure) AS placed,
+                   SUM(p.npa_exposure) AS npa, SUM(p.accounts) AS accounts
+            FROM analytics.{PORTFOLIO} p
+            LEFT JOIN analytics.dim_region r ON r.region_id = p.region_id
+            {extra_join}
+            WHERE p.bank_id = :bank AND p.as_of_date = :d {clause}
+            GROUP BY 1 ORDER BY outstanding DESC NULLS LAST""", base)
+        total = sum((r["outstanding"] or 0) for r in rows) or None
+        for r in rows:
+            r[label] = r.pop("key")
+            r["share"] = round((r["outstanding"] or 0) / total, 4) if total else None
+        return rows
+
+    by_zone = _by("COALESCE(r.zone_name, 'Unassigned')", "zone")
+    by_state = _by("COALESCE(r.state_name, 'Unassigned')", "state")
+    by_city = _by("COALESCE(r.city_name, 'Unassigned')", "city")
+    by_product = _by("COALESCE(dp.label, p.loan_type)", "product",
+                     "JOIN analytics.dim_product dp ON dp.loan_type = p.loan_type")
+    return {"available": True, "reason": None,
+            "panels": {"by_zone": by_zone, "by_state": by_state, "by_city": by_city, "by_product": by_product}}
+
+
+TABS =("exposure", "migration", "agencies", "recovery", "cost", "compliance", "field_ops", "concentration")
 
 
 def compute_tab(db: Session, adb: Session, tab: str, bank_id: str, f: KpiFilter) -> dict:
@@ -322,6 +414,10 @@ def compute_tab(db: Session, adb: Session, tab: str, bank_id: str, f: KpiFilter)
         return _recovery(adb, bank_id, f)
     if tab == "cost":
         return _cost(db, adb, bank_id, f)
+    if tab == "field_ops":
+        return _field_ops(db, adb, bank_id, f)
+    if tab == "compliance":
+        return _compliance(db, adb, bank_id, f)
     as_of = f.end if f.period == "custom" else latest_reading(adb, bank_id)
     if as_of is None:
         return _unavailable("no portfolio reading for this bank yet")
@@ -329,4 +425,4 @@ def compute_tab(db: Session, adb: Session, tab: str, bank_id: str, f: KpiFilter)
         return _exposure(adb, bank_id, as_of, f)
     if tab == "migration":
         return _migration(adb, bank_id, as_of, f)
-    return _compliance(db, adb, bank_id, f)
+    return _concentration(adb, bank_id, as_of, f)
