@@ -62,7 +62,7 @@ export default function LandingPage() {
                 actually collect.
               </h1>
               <p className="mb-8 max-w-lg text-lg leading-relaxed text-muted-foreground">
-                Enterprise-grade field collections management for Indian NBFCs & banks. Rule-based overnight case allocation, real-time agent tracking, RBI-compliant workflows — all in one platform.
+                Enterprise-grade field collections management for Indian NBFCs & banks. Rule-based overnight case allocation, real-time agent tracking, and workflows built for RBI conduct rules — all in one platform.
               </p>
 
               <div className="flex flex-wrap gap-3 mb-10">
@@ -75,7 +75,7 @@ export default function LandingPage() {
               </div>
 
               <div className="flex flex-wrap gap-5 text-sm text-muted-foreground">
-                {["No setup required", "RBI Compliant", "Works offline"].map((t) => (
+                {["No setup required", "RBI conduct-aligned", "Evidence-backed"].map((t) => (
                   <span key={t} className="flex items-center gap-1.5"><CheckCircle className="w-4 h-4 text-primary" />{t}</span>
                 ))}
               </div>
@@ -247,7 +247,7 @@ export default function LandingPage() {
                 </div>
                 <div>
                   <h3 className="font-bold text-foreground">Field Agent App</h3>
-                  <p className="text-xs text-muted-foreground">Mobile PWA · Works offline</p>
+                  <p className="text-xs text-muted-foreground">Mobile PWA · GPS + evidence capture</p>
                 </div>
               </div>
               <ul className="space-y-3">
@@ -375,7 +375,7 @@ export default function LandingPage() {
         <div className="max-w-4xl mx-auto px-6 lg:px-8 text-center">
           <h2 className="text-3xl lg:text-4xl font-bold mb-4">Ready to transform your collections?</h2>
           <p className="mx-auto mb-8 max-w-xl text-lg text-muted-foreground">
-            See how TIQCollect turns manual, inefficient field collections into a data-driven, RBI-compliant operation.
+            See how TIQCollect turns manual, inefficient field collections into a data-driven operation built for RBI conduct rules.
           </p>
           <div className="flex flex-wrap justify-center gap-4">
             <button onClick={() => goLogin()} className="flex items-center gap-2 rounded-control border border-primary bg-primary px-8 py-3.5 text-sm font-medium text-white transition-colors hover:bg-brand-700">
@@ -401,13 +401,13 @@ export default function LandingPage() {
                 <span className="text-lg font-bold">TIQCollect</span>
               </div>
               <p className="text-slate-400 text-sm leading-relaxed max-w-xs">
-                Enterprise collections management platform built for Indian NBFCs, banks, and recovery agencies. RBI compliant, evidence-backed.
+                Enterprise collections management platform built for Indian NBFCs, banks, and recovery agencies. Built for RBI conduct rules, evidence-backed.
               </p>
             </div>
             <div>
               <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Platform</p>
               <ul className="space-y-2 text-sm text-slate-400">
-                {["Manager Dashboard", "Field Agent App", "Beat Map", "Case Allocation", "RBI Compliance"].map((l) => (
+                {["Manager Dashboard", "Field Agent App", "Beat Map", "Case Allocation", "RBI Conduct Rules"].map((l) => (
                   <li key={l}><a href="#" className="transition-colors hover:text-primary">{l}</a></li>
                 ))}
               </ul>
@@ -422,7 +422,7 @@ export default function LandingPage() {
             </div>
           </div>
           <div className="flex flex-col items-center justify-between gap-4 border-t border-border pt-8 text-xs text-slate-500 sm:flex-row">
-            <p>© 2025 TIQCollect. All rights reserved. Compliant with RBI/2008 Recovery Agent Guidelines.</p>
+            <p>© 2026 TIQCollect. All rights reserved. Built to the RBI/2008 Recovery Agent Guidelines.</p>
             <div className="flex items-center gap-1.5">
               <Globe className="w-3.5 h-3.5" />
               <span>India · EN</span>

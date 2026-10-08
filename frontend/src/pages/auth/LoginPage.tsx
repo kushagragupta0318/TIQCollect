@@ -158,8 +158,8 @@ export default function LoginPage() {
           </div>
 
           <footer className="flex flex-wrap items-center justify-between gap-3 pt-2 text-xs text-[#98A2B3] [@media(max-height:600px)]:hidden">
-            <span>Copyright © 2025 TIQCollect</span>
-            <span>RBI Compliant</span>
+            <span>© 2026 TIQCollect</span>
+            <span>Built for RBI conduct rules</span>
           </footer>
         </div>
 
