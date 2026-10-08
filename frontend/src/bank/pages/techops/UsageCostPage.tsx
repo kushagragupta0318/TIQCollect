@@ -12,8 +12,10 @@ import {
   costCellLabel, featureLabel, formatDay, formatTokens, formatUsd, getUsage, type UsageByFeature,
 } from "./usageCostModel";
 import { AnalyticsError, AnalyticsLoading, Panel, Tile } from "../../components/analytics";
+import { BarLineChart } from "../../components/charts";
 import { DataTable, type DataColumn } from "../../components/DataTable";
 import { PageRoot, ToolHeader } from "../../components/PageTemplate";
+import { BRAND } from "../../theme/colors";
 
 export function UsageCostPage() {
   const q = useQuery({ queryKey: ["bank", "usage"], queryFn: getUsage });
@@ -65,7 +67,20 @@ export function UsageCostPage() {
             {data.by_feature.length === 0 ? (
               <p className="text-sm text-muted-foreground py-6 text-center">No calls in this window.</p>
             ) : (
-              <DataTable columns={columns} rows={data.by_feature} rowKey={(r) => r.feature} minWidth={640} />
+              <>
+                {/* A handful of rows reads fine as a table alone; past that,
+                   cost-vs-calls by feature is the thing worth seeing at a
+                   glance before the exact figures below. */}
+                {data.by_feature.length > 2 && (
+                  <BarLineChart
+                    data={data.by_feature.map((f) => ({ feature: featureLabel(f.feature), cost: f.cost_usd, calls: f.calls }))}
+                    xKey="feature"
+                    bar={{ key: "cost", name: "Cost (USD)", color: BRAND.primary }}
+                    line={{ key: "calls", name: "Calls", color: BRAND.secondary }}
+                  />
+                )}
+                <DataTable columns={columns} rows={data.by_feature} rowKey={(r) => r.feature} minWidth={640} />
+              </>
             )}
           </Panel>
 

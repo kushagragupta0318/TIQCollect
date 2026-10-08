@@ -9,8 +9,10 @@ import { ChevronDown, ChevronRight, MapPin } from "lucide-react";
 import { ExecutiveHeader, PageFailure, PageLoading, PageRoot } from "../../components/PageTemplate";
 import { Card, CardContent, CardHeader, CardTitle } from "../../ui/card";
 import { Badge } from "../../ui/badge";
+import { BarLineChart } from "../../components/charts";
 import { getRegionTree, type RegionTreeNode } from "@/api/bank";
 import { errorDetail } from "@/lib/apiError";
+import { BRAND } from "../../theme/colors";
 import { n, rs } from "../../theme/format";
 
 const LEVEL_LABEL: Record<string, string> = {
@@ -75,6 +77,23 @@ export default function RegionsPage() {
               assigned yet — not shown in the tree below.
             </span>
             <span className="font-medium text-foreground">{n(unassigned.loan_count)} loans · {rs(unassigned.exposure)}</span>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Top-level roll-up only: below zone, node count varies too widely
+         (a handful of zones vs. hundreds of branches) for one flat bar
+         chart to stay readable, and the tree below already drills down. */}
+      {roots.length > 2 && (
+        <Card>
+          <CardHeader><CardTitle>Exposure by {LEVEL_LABEL[roots[0].level]?.toLowerCase() ?? "region"}</CardTitle></CardHeader>
+          <CardContent>
+            <BarLineChart
+              data={roots.map((r) => ({ name: r.name, exposure: r.exposure / 1e7 }))}
+              xKey="name"
+              bar={{ key: "exposure", name: "Exposure (₹ Cr)", color: BRAND.primary }}
+              height={200}
+            />
           </CardContent>
         </Card>
       )}
