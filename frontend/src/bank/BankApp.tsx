@@ -2,9 +2,11 @@
 // `/bank/*` (plan §2.4). It guards the roles, mounts the Command Center shell
 // and registers every page in navigation.ts, so the sidebar and the router
 // cannot list different screens.
-import { Suspense, useCallback, type ComponentType } from "react";
+import { Suspense, useCallback, useEffect, type ComponentType } from "react";
 import { Navigate, Route, Routes, useNavigate } from "react-router";
+import { useQueryClient } from "@tanstack/react-query";
 import api from "@/api/axios";
+import { getCashForecast } from "@/api/bankStrategy";
 import { useAuthStore } from "@/store/authStore";
 import { AnalyticsLoading } from "./components/analytics";
 // Null unless the gallery is enabled (galleryFlag.ts); lazy when it is, so
@@ -60,6 +62,7 @@ const BUILT_PAGES: Record<string, ComponentType> = {
 export default function BankApp() {
   const { isAuthenticated, user, logout } = useAuthStore();
   const navigate = useNavigate();
+  const qc = useQueryClient();
 
   const signOut = useCallback(() => {
     api.post("/auth/logout").finally(() => {
@@ -67,6 +70,17 @@ export default function BankApp() {
       navigate("/login", { replace: true });
     });
   }, [logout, navigate]);
+
+  // cf-prefetch: the 13-week cash forecast (E06) is the heaviest thing on the
+  // Strategy tab, and the login mount of BankApp is the earliest point a
+  // bank session exists — warming it here means a manager who opens Strategy
+  // right after login sees the chart instantly rather than a fresh request.
+  // Same queryKey as CashForecastPage's own useQuery, so that mount reads the
+  // warmed cache (global staleTime 60s, App.tsx) instead of refetching.
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    void qc.prefetchQuery({ queryKey: ["bank", "strategy", "cash-forecast"], queryFn: () => getCashForecast() });
+  }, [isAuthenticated, qc]);
 
   // The same guard decision as ProtectedRoute (lib/roles.ts): signed out →
   // /login, another portal's role → its own home, never a second rejection.
