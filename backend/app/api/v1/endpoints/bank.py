@@ -130,7 +130,8 @@ class AnalyticsTabOut(BaseModel):
 
 
 @router.get("/analytics/{tab}", response_model=AnalyticsTabOut, summary="Analytics tab (plan §5.4)")
-def analytics_tab(tab: Literal["exposure", "migration", "agencies", "recovery", "cost", "compliance"],
+def analytics_tab(tab: Literal["exposure", "migration", "agencies", "recovery", "cost", "compliance",
+                               "field_ops", "concentration"],
                   ctx: CurrentContext, db: DbSession, adb: AnalyticsDb,
                   period: Literal["mtd", "l30", "qtd", "fytd", "custom"] = "mtd",
                   start: Optional[date] = None, end: Optional[date] = None,

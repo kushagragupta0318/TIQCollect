@@ -61,12 +61,27 @@ const BankApp = lazy(() => import("@/bank/BankApp"));
 // on the API and pure redundant re-renders. Measured: with focus-refetch on,
 // every return to the browser refetched all active queries at once
 // (~5-6 per manager page). Off by default; a page opts back in explicitly.
+// Retry once, but only on a transient failure: a network error (no response),
+// a 5xx, or a 401. The 401 is the token-refresh race — a query that fires in the
+// window between an expired access token and the interceptor's refresh landed
+// used to surface as the "could not be loaded" / "could not refresh" flash;
+// retrying once, after the interceptor has refreshed, clears it. A deterministic
+// 4xx (403/404/422) is never retried: the second call would fail identically, so
+// retrying only delays the real error and doubles the load N concurrent users
+// put on the API (performance directive).
+function retryTransient(failureCount: number, err: unknown): boolean {
+  if (failureCount >= 1) return false;
+  const status = (err as { response?: { status?: number } })?.response?.status;
+  if (status === undefined) return true;          // network / no response
+  return status === 401 || status >= 500;
+}
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       staleTime: 60_000,
       gcTime: 5 * 60_000,
-      retry: 1,
+      retry: retryTransient,
       refetchOnWindowFocus: false,
       refetchOnReconnect: false,
     },
