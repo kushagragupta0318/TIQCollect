@@ -9,6 +9,9 @@ export interface AnalyticsTabResponse {
   tab: string;
   available: boolean;
   reason: string | null;
+  /** ISO date of the portfolio snapshot a portfolio-derived tab reads
+   *  (exposure/migration/concentration); null on the scorecard tabs. */
+  as_of?: string | null;
   panels: Record<string, unknown>;
 }
 

@@ -123,6 +123,9 @@ class AnalyticsTabOut(BaseModel):
     tab: str
     available: bool
     reason: Optional[str] = None
+    #: ISO date of the portfolio snapshot the tab reads, when it reads one
+    #: (exposure/migration/concentration). None on the scorecard-based tabs.
+    as_of: Optional[str] = None
     #: Each tab's own chart-ready shape (plan §5.4) — structurally different
     #: per tab (a funnel is not a transition matrix), so unlike KpiOut this
     #: is not forced into one row shape. Every number in it is a real read
@@ -153,7 +156,8 @@ def analytics_tab(tab: Literal["exposure", "migration", "agencies", "recovery", 
     out = compute_tab(db, adb, tab, bank_id, f)
     # numeric panels carry Decimal; the wire must send JSON numbers, not strings,
     # or the frontend's `.toFixed`/number formatting throws (numberize docstring).
-    return AnalyticsTabOut(tab=tab, available=out["available"], reason=out["reason"], panels=numberize(out["panels"]))
+    return AnalyticsTabOut(tab=tab, available=out["available"], reason=out["reason"],
+                           as_of=out.get("as_of"), panels=numberize(out["panels"]))
 
 
 class AlertMetric(BaseModel):

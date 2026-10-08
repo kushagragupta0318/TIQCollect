@@ -65,7 +65,11 @@ export function BankAnalyticsPage() {
 
   return (
     <PageRoot>
-      <ExecutiveHeader title="Analytics" meta={["Eight tabs across the placed book"]} live={false}
+      <ExecutiveHeader title="Analytics"
+                       meta={q.data?.as_of
+                         ? ["Eight tabs across the placed book", `Portfolio snapshot ${fmtSnapshot(q.data.as_of)}`]
+                         : ["Eight tabs across the placed book"]}
+                       live={false}
                        scopeNote="The whole book across every agency unless filtered." />
       <FilterBar />
       <AnalyticsTabBar tabs={TABS} active={active} onChange={onChange} />
@@ -104,6 +108,14 @@ export function BankAnalyticsPage() {
 
 /** Crores, as the bars carry them. One formatter for the axis ticks and the
  *  tooltip both, which is what GroupedBarLineChart takes. */
+// Read the date off the ISO digits, not new Date(iso): a bare date parses as
+// UTC midnight and prints the day before in any zone behind UTC (issue 3).
+function fmtSnapshot(iso: string): string {
+  const [y, m, d] = iso.slice(0, 10).split("-").map(Number);
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return `${d} ${months[m - 1]} ${y}`;
+}
+
 const crFmt = (v: number) => `₹${v.toFixed(2)} Cr`;
 const pctFmt = (v: number) => `${v.toFixed(1)}%`;
 const countFmt = (v: number) => String(v);

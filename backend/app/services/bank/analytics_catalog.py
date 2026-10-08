@@ -430,7 +430,14 @@ def compute_tab(db: Session, adb: Session, tab: str, bank_id: str, f: KpiFilter)
     if as_of is None:
         return _unavailable("no portfolio reading for this bank yet")
     if tab == "exposure":
-        return _exposure(adb, bank_id, as_of, f)
-    if tab == "migration":
-        return _migration(adb, bank_id, as_of, f)
-    return _concentration(adb, bank_id, as_of, f)
+        out = _exposure(adb, bank_id, as_of, f)
+    elif tab == "migration":
+        out = _migration(adb, bank_id, as_of, f)
+    else:
+        out = _concentration(adb, bank_id, as_of, f)
+    # The portfolio-derived tabs read a point-in-time snapshot (the latest DPD
+    # reading), which legitimately trails live field activity — surface its date
+    # so the figures read as a dated cut, never as live-today (owner, 2026-10-08).
+    if out.get("available"):
+        out["as_of"] = as_of.isoformat()
+    return out
