@@ -176,25 +176,36 @@ function RangeCards({ rows, color, format, cols = "sm:grid-cols-2 lg:grid-cols-4
   format: (v: number) => string;
   cols?: string;
 }) {
-  const lo = Math.min(...rows.map((r) => r.p5), 0);
-  const hi = Math.max(...rows.map((r) => r.p95));
-  const span = hi - lo || 1;
-  const at = (v: number) => ((v - lo) / span) * 100;
+  // PER-CARD scale: the band spans 10%–90% of its own bar so it is always a
+  // readable width (a shared scale flattened small metrics to a sliver), and
+  // the median tick sits where p50 falls in that range, so skew is visible.
   return (
     <div className={`grid gap-3 ${cols}`}>
-      {rows.map((r) => (
-        <div key={r.name} className="rounded-[14px] border border-border/60 bg-card p-3.5">
-          <div className="truncate text-[11px] text-muted-foreground" title={r.name}>{r.name}</div>
-          <div className="mt-0.5 text-[17px] font-bold tabular-nums text-foreground">{format(r.p50)}</div>
-          <div className="relative mt-3 h-2 rounded-full bg-muted/40">
-            <div className="absolute inset-y-0 rounded-full"
-                 style={{ left: `${at(r.p5)}%`, width: `${Math.max(2, at(r.p95) - at(r.p5))}%`, background: color, opacity: 0.4 }} />
-            <div className="absolute inset-y-0 w-[2px] rounded-full"
-                 style={{ left: `calc(${at(r.p50)}% - 1px)`, background: color }} />
+      {rows.map((r) => {
+        const span = r.p95 - r.p5 || 1;
+        const medPct = 10 + (Math.min(1, Math.max(0, (r.p50 - r.p5) / span))) * 80;
+        return (
+          <div key={r.name}
+               className="group rounded-[14px] border border-border/60 bg-card p-4 transition-shadow hover:shadow-resting"
+               title={`${r.name}\nmedian ${format(r.p50)}\np5–p95 ${format(r.p5)} – ${format(r.p95)}`}>
+            <div className="flex items-center gap-2">
+              <span className="size-2.5 shrink-0 rounded-full" style={{ background: color }} />
+              <span className="truncate text-[11.5px] font-medium text-muted-foreground">{r.name}</span>
+            </div>
+            <div className="mt-1 text-[20px] font-bold leading-tight tabular-nums text-foreground">{format(r.p50)}</div>
+            <div className="relative mt-3 h-2.5 rounded-full bg-muted/30">
+              {/* vibrant p5–p95 band (10%→90%) with a solid median tick */}
+              <div className="absolute inset-y-0 rounded-full"
+                   style={{ left: "10%", width: "80%", background: color, opacity: 0.9 }} />
+              <div className="absolute inset-y-[-2px] w-[3px] rounded-full ring-1 ring-white"
+                   style={{ left: `calc(${medPct}% - 1.5px)`, background: BRAND.ink }} />
+            </div>
+            <div className="mt-2 flex justify-between text-[10.5px] tabular-nums text-muted-foreground">
+              <span>{format(r.p5)}</span><span>{format(r.p95)}</span>
+            </div>
           </div>
-          <div className="mt-1.5 text-[10.5px] tabular-nums text-muted-foreground">{format(r.p5)} – {format(r.p95)}</div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -220,20 +231,18 @@ function Results({ run }: { run: SimulationRun }) {
         {BAND_NOTE}
       </p>
 
-      <div className="grid gap-5 xl:grid-cols-2">
+      <Panel title="Cash at the horizon" hint="median ₹ crore, with the p5–p95 band">
+        <RangeCards rows={cashBand} color={BRAND.success} format={cr1} cols="grid-cols-2 lg:grid-cols-4" />
+      </Panel>
+
+      <Panel title="The book at the horizon" hint={`Share of accounts after ${run.horizon_months} months, median with the p5–p95 band`}>
+        <RangeCards rows={stateBand} color={BRAND.primary} format={pct} cols="grid-cols-2 sm:grid-cols-3 lg:grid-cols-4" />
+      </Panel>
+
+      <div className="grid gap-5 lg:grid-cols-2">
         <Panel title="Gross NPA at the horizon" hint="median, with the p5–p95 band">
           <RangeCards rows={gnpaBand} color={BRAND.destructive} format={pct} cols="grid-cols-1" />
         </Panel>
-        <Panel title="Cash at the horizon" hint="median ₹ crore, with the p5–p95 band">
-          <RangeCards rows={cashBand} color={BRAND.success} format={cr1} cols="grid-cols-2" />
-        </Panel>
-      </div>
-
-      <div className="grid gap-5">
-        <Panel title="The book at the horizon" hint={`Share of accounts after ${run.horizon_months} months, median with the p5–p95 band`}>
-          <RangeCards rows={stateBand} color={BRAND.primary} format={pct} cols="grid-cols-2 sm:grid-cols-3 lg:grid-cols-4" />
-        </Panel>
-
         <Panel title="The scenario it ran" hint={run.scenario.name}>
           <ul className="space-y-2 text-[12.5px] text-foreground">
             {scenarioChanges(run).map((c) => <li key={c}>{c}</li>)}
