@@ -94,14 +94,21 @@ export function UsageCostPage() {
                   // identical to an empty day — height-by-cost alone would
                   // flatten it to the same near-invisible sliver either way.
                   const allUnpriced = d.calls > 0 && d.unpriced_calls === d.calls;
+                  // Explicit PIXELS, not a percentage: the bar's parent is a
+                  // flex column with no definite height, so a `height: X%` on
+                  // the bar resolves against `auto` and collapses to nothing
+                  // (the bars were invisible). BAR_AREA is h-32 (128px) less the
+                  // date label below it.
+                  const BAR_AREA = 108;
+                  const h = allUnpriced ? 18 : Math.max(2, (d.cost_usd / maxDayCost) * BAR_AREA);
                   return (
-                    <div key={d.day} className="flex-1 flex flex-col items-center gap-1"
+                    <div key={d.day} className="flex-1 flex flex-col items-center justify-end gap-1 h-full"
                         title={`${formatDay(d.day)}: ${costCellLabel(d.cost_usd, d.unpriced_calls)}, ${d.calls} calls`}>
                       <div
                         className={allUnpriced
                           ? "w-full rounded-t border-2 border-dashed border-muted-foreground/40 bg-transparent"
                           : "w-full rounded-t bg-primary/70"}
-                        style={{ height: allUnpriced ? "15%" : `${Math.max(2, (d.cost_usd / maxDayCost) * 100)}%` }}
+                        style={{ height: `${h}px` }}
                       />
                       <span className="text-[10px] text-muted-foreground">{formatDay(d.day)}</span>
                     </div>
