@@ -15,7 +15,6 @@ import { FlaskConical, Info, Play, TriangleAlert } from "lucide-react";
 import { runSimulation, type SimulationRun } from "@/api/bankStrategy";
 import { errorCode, errorDetail, errorStatus } from "@/lib/apiError";
 import { AnalyticsLoading, Panel, Tile } from "../../components/analytics";
-import { PercentileRangeChart } from "../../components/charts";
 import { BRAND } from "../../theme/chartTheme";
 import { cr1 } from "../../theme/format";
 import { PageRoot, ToolHeader } from "../../components/PageTemplate";
@@ -26,7 +25,7 @@ import { Select } from "../../ui/select";
 import {
   BAND_NOTE, DEFAULT_FORM, HORIZONS, LEVER_FIELDS, PATH_COUNTS, PRESETS, STAGING_NOTE,
   cashChartRows, changedLevers, gnpaChartRows, headlineTiles, ifrs9ChartRows, ifrs9Rows, leverErrors,
-  requestFor, runSummary, scenarioChanges, stateShareChartRows, stateShareRows, type SimulatorForm,
+  requestFor, runSummary, scenarioChanges, stateShareChartRows, type SimulatorForm,
 } from "./simulatorModel";
 
 /** The run's own caveat, rendered verbatim. The wording lives in the engine
@@ -166,9 +165,42 @@ function Controls({ form, setForm, onRun, running }: {
   );
 }
 
+/** A distribution metric as a card: the p50 is the headline, with a labelled
+ *  p5–p95 band + median tick below. Replaces the thin box-plot bars, which read
+ *  as sparse and need explaining — the number people want is p50, and the band
+ *  is the uncertainty around it. Mini-bars share one scale per group so they
+ *  compare. */
+function RangeCards({ rows, color, format, cols = "sm:grid-cols-2 lg:grid-cols-4" }: {
+  rows: { name: string; p5: number; p50: number; p95: number }[];
+  color: string;
+  format: (v: number) => string;
+  cols?: string;
+}) {
+  const lo = Math.min(...rows.map((r) => r.p5), 0);
+  const hi = Math.max(...rows.map((r) => r.p95));
+  const span = hi - lo || 1;
+  const at = (v: number) => ((v - lo) / span) * 100;
+  return (
+    <div className={`grid gap-3 ${cols}`}>
+      {rows.map((r) => (
+        <div key={r.name} className="rounded-[14px] border border-border/60 bg-card p-3.5">
+          <div className="truncate text-[11px] text-muted-foreground" title={r.name}>{r.name}</div>
+          <div className="mt-0.5 text-[17px] font-bold tabular-nums text-foreground">{format(r.p50)}</div>
+          <div className="relative mt-3 h-2 rounded-full bg-muted/40">
+            <div className="absolute inset-y-0 rounded-full"
+                 style={{ left: `${at(r.p5)}%`, width: `${Math.max(2, at(r.p95) - at(r.p5))}%`, background: color, opacity: 0.4 }} />
+            <div className="absolute inset-y-0 w-[2px] rounded-full"
+                 style={{ left: `calc(${at(r.p50)}% - 1px)`, background: color }} />
+          </div>
+          <div className="mt-1.5 text-[10.5px] tabular-nums text-muted-foreground">{format(r.p5)} – {format(r.p95)}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function Results({ run }: { run: SimulationRun }) {
   const tiles = headlineTiles(run);
-  const states = stateShareRows(run);
   const stages = ifrs9Rows(run);
   const gnpaBand = gnpaChartRows(run);
   const cashBand = cashChartRows(run);
@@ -189,20 +221,17 @@ function Results({ run }: { run: SimulationRun }) {
       </p>
 
       <div className="grid gap-5 xl:grid-cols-2">
-        <Panel title="Gross NPA at the horizon" hint="p5-p95 across the simulated paths">
-          <PercentileRangeChart rows={gnpaBand} color={BRAND.destructive} format={pct} domainFrom0 height={110} />
+        <Panel title="Gross NPA at the horizon" hint="median, with the p5–p95 band">
+          <RangeCards rows={gnpaBand} color={BRAND.destructive} format={pct} cols="grid-cols-1" />
         </Panel>
-        <Panel title="Cash at the horizon" hint="p5-p95, ₹ crore">
-          <PercentileRangeChart rows={cashBand} color={BRAND.success} format={cr1} />
+        <Panel title="Cash at the horizon" hint="median ₹ crore, with the p5–p95 band">
+          <RangeCards rows={cashBand} color={BRAND.success} format={cr1} cols="grid-cols-2" />
         </Panel>
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-2">
-        <Panel title="The book at the horizon" hint={`Share of accounts after ${run.horizon_months} months, p5-p95`}>
-          <PercentileRangeChart rows={stateBand} color={BRAND.primary} format={pct} domainFrom0 />
-          <ul className="mt-4 space-y-1 text-[11px] text-muted-foreground">
-            {states.map((s) => <li key={s.state}>{s.label}: {s.value} ({s.range})</li>)}
-          </ul>
+      <div className="grid gap-5">
+        <Panel title="The book at the horizon" hint={`Share of accounts after ${run.horizon_months} months, median with the p5–p95 band`}>
+          <RangeCards rows={stateBand} color={BRAND.primary} format={pct} cols="grid-cols-2 sm:grid-cols-3 lg:grid-cols-4" />
         </Panel>
 
         <Panel title="The scenario it ran" hint={run.scenario.name}>
