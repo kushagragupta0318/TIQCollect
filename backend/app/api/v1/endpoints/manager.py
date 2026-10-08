@@ -57,7 +57,7 @@ from app.core.permissions import require_perm
 from app.core.csv_safe import csv_row
 from app.models.user import User
 from app.models.visit import Visit, VisitOutcome
-from app.services.bank.agency_scorecard import agency_scorecard
+from app.services.bank.agency_scorecard import compute_metrics, fetch_rows
 from app.services.brand import brand_for
 from app.services.notification_service import NotificationService
 from app.services.leave_service import agent_ids_on_leave, effective_status, leave_today
@@ -2555,13 +2555,26 @@ def analytics(current_user: ManagerOnly, db: DbSession, adb: AnalyticsDb):
     # (recovery_vs_target_pct below is live, target-based, a ~13x gap on real
     # data) -- read from the SAME function the bank's own Agencies tab calls,
     # not a second definition. One call per month (small, fixed window).
+    # B4 (performance audit, 2026-10-08): ONE read of the scorecard window for
+    # all 6 months, instead of agency_scorecard() once per month -- each of
+    # those calls re-read the whole bank's window AND computed a Performance
+    # Index this figure never uses (only collection_efficiency is read below).
+    # Same fix as alerts.py's B1: compute_metrics is still the one
+    # definition, now fed the rows already in hand.
     _NO_CARD = {"collection_efficiency": None}
-    efficiency_by_month = {
-        m: (agency_scorecard(adb, bank_id=current_user.bank_id, agency_id=current_user.agency_id,
-                             month_start=date.fromisoformat(f"{m}-01"))
-           if current_user.agency_id else _NO_CARD)
-        for m in months_ordered
-    }
+    if current_user.agency_id:
+        _eff_rows = [r for r in fetch_rows(adb, bank_id=current_user.bank_id,
+                                           first_month=date.fromisoformat(f"{months_ordered[0]}-01"),
+                                           last_month=date.fromisoformat(f"{months_ordered[-1]}-01"))
+                    if r.agency_id == current_user.agency_id]
+        _eff_by_month: dict[str, list] = {m: [] for m in months_ordered}
+        for r in _eff_rows:
+            key = r.month_start.strftime("%Y-%m")
+            if key in _eff_by_month:
+                _eff_by_month[key].append(r)
+        efficiency_by_month = {m: compute_metrics(_eff_by_month[m]) for m in months_ordered}
+    else:
+        efficiency_by_month = {m: _NO_CARD for m in months_ordered}
 
     monthly_trend = []
     for m in months_ordered:

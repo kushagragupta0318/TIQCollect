@@ -43,6 +43,13 @@ RUN if [ "$WITH_LOCAL_STT" = "true" ]; then \
       grep -v '^faster-whisper' requirements.txt > /tmp/req.txt && pip install -r /tmp/req.txt; \
     fi
 
+# pytest + faker (D1, performance audit 2026-10-08): test and seed-script
+# tooling, split out of requirements.txt because the prod image never needs
+# them. The dev loop runs backend/tests and scripts/ directly, so it installs
+# both files; the prod Dockerfile installs only requirements.txt.
+COPY backend/requirements-train.txt ./
+RUN pip install -r requirements-train.txt
+
 # Lives outside /app so the bind mount does not hide it.
 COPY docker-entrypoint.sh /usr/local/bin/entrypoint.sh
 # Windows checkouts can leave the script with CRLF even when .gitattributes is

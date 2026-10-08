@@ -17,8 +17,8 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core import database
-from app.services.bank.agency_scorecard import agency_scorecard, leaderboard
-from tests.pg.test_pg_analytics_b import A1, B1, B2, book  # noqa: F401 (fixture)
+from app.services.bank.agency_scorecard import agency_scorecard, agency_scorecards_batch, leaderboard
+from tests.pg.test_pg_analytics_b import A1, A2, B1, B2, book  # noqa: F401 (fixture)
 
 
 def _bound_session(eng, bank_id):
@@ -58,6 +58,26 @@ def test_a_foreign_bank_sees_an_empty_scorecard_not_someone_elses(book):  # noqa
     try:
         card = agency_scorecard(adb, bank_id=B2, agency_id=A1, month_start=date(2025, 2, 1))
         assert card["n_rows"] == 0
+    finally:
+        trans.rollback()
+        conn.close()
+
+
+def test_batch_matches_the_per_agency_call_it_replaced(book):  # noqa: F811
+    """B3 (performance audit, 2026-10-08): _agencies() now calls
+    agency_scorecards_batch() once instead of agency_scorecard() in a
+    per-agency loop. This proves the batched read produces the identical
+    dict agency_scorecard() would have for every agency in the bank,
+    including one (A2) with no rows at all for this window."""
+    from tests.pg.test_pg_analytics_b import _refresh
+    _refresh(book)
+    adb, trans, conn = _bound_session(book, B1)
+    try:
+        batched = agency_scorecards_batch(adb, bank_id=B1, agency_ids=[A1, A2], month_start=date(2025, 2, 1))
+        assert set(batched.keys()) == {A1, A2}
+        assert batched[A1] == agency_scorecard(adb, bank_id=B1, agency_id=A1, month_start=date(2025, 2, 1))
+        assert batched[A2] == agency_scorecard(adb, bank_id=B1, agency_id=A2, month_start=date(2025, 2, 1))
+        assert batched[A2]["n_rows"] == 0
     finally:
         trans.rollback()
         conn.close()

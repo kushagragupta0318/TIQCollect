@@ -246,6 +246,50 @@ def agency_scorecard(adb: Session, *, bank_id: str, agency_id: str, region_id: s
     }
 
 
+def agency_scorecards_batch(adb: Session, *, bank_id: str, agency_ids: list[str],
+                            region_id: str | None = None, month_start: date | None = None,
+                            months: int = 1) -> dict[str, dict]:
+    """Same contract as calling agency_scorecard() once per agency in
+    `agency_ids`, but one set-based read instead of N (B3, performance audit
+    2026-10-08): fetch_rows and agency_effect already return every agency's
+    rows/effects for the bank in one query each -- the per-agency loop only
+    needs to happen in Python, not at the database. compute_metrics and
+    shrink (via agency_effect) are unchanged, so the numbers are identical."""
+    last = month_start or latest_month(adb, bank_id=bank_id)
+    if last is None:
+        return {aid: {"agency_id": aid, "region_id": region_id, "n_rows": 0} for aid in agency_ids}
+    months = max(1, int(months))
+    first = _month_back(last.replace(day=1), months - 1)
+
+    all_rows = fetch_rows(adb, bank_id=bank_id, first_month=first, last_month=last)
+    if region_id is not None:
+        all_rows = [r for r in all_rows if r.region_id == region_id]
+    rows_by_agency: dict[str, list[ScorecardRow]] = {}
+    for r in all_rows:
+        rows_by_agency.setdefault(r.agency_id, []).append(r)
+
+    effects = agency_effect(adb, bank_id=bank_id, region_id=region_id, month_start=last,
+                            months=months, pooled=True)
+    # setdefault, not a dict comprehension: agency_effect's rows are ordered
+    # (month, region_id, agency_id), and an agency with no region_id filter
+    # can appear once per region it operates in -- the FIRST one is what
+    # agency_scorecard()'s own `effects[0] if effects else None` picked, so a
+    # later duplicate must not silently overwrite it here.
+    effect_by_agency: dict[str, dict] = {}
+    for e in effects:
+        effect_by_agency.setdefault(e["agency_id"], e)
+
+    return {
+        aid: {
+            "agency_id": aid, "region_id": region_id, "month_start": last.isoformat(),
+            "months": months, "version": VERSION,
+            "performance_index": effect_by_agency.get(aid),
+            **compute_metrics(rows_by_agency.get(aid, [])),
+        }
+        for aid in agency_ids
+    }
+
+
 def leaderboard(adb: Session, *, bank_id: str, region_id: str | None = None,
                 month_start: date | None = None) -> list[dict]:
     """Every agency in `region_id` (or the whole bank), ranked by Performance
