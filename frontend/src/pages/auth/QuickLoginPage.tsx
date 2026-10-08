@@ -1,22 +1,28 @@
 // collection_dashboard: public bridge route — exchanges a link token for a real session, no login form shown
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { toast } from "react-hot-toast";
 import { quickLogin } from "@/api/auth";
 import { useAuthStore } from "@/store/authStore";
 import { quickLoginLanding } from "@/lib/roles";
 
+// The token is single-use: the backend 401s the second exchange. A useRef guard
+// is NOT enough — React StrictMode unmounts and remounts this component in dev,
+// giving a fresh ref each time, so the effect's exchange fired twice and the
+// second 401 bounced a just-succeeded login to /login. A module-scoped set
+// survives the remount and keys by token, so a distinct link later in the same
+// session still exchanges.
+const exchanged = new Set<string>();
+
 export default function QuickLoginPage() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const { setTokens, setUser } = useAuthStore();
-  const ranOnce = useRef(false);
 
   useEffect(() => {
-    if (ranOnce.current) return;
-    ranOnce.current = true;
-
     const token = params.get("token");
+    if (token && exchanged.has(token)) return;
+    if (token) exchanged.add(token);
     if (!token) {
       navigate("/login", { replace: true });
       return;
