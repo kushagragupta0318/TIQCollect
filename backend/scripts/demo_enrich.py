@@ -157,15 +157,55 @@ def _out_of_range(conn, bank_id: str, apply: bool) -> int:
     return 1
 
 
+# The LLM features the product actually calls (ai.llm_calls.feature), with a
+# rough calls-per-day weight so the mix looks real: a daily briefing, a few
+# agent insights, board/monthly commentary now and then.
+USAGE_FEATURES = [("briefing", 1.0), ("agent_insight", 2.5), ("board_report_commentary", 0.3),
+                  ("monthly_report", 0.1)]
+# Sonnet-class per-1k-token prices (USD), so the cost totals are plausible.
+_PRICE_IN, _PRICE_OUT = 0.003, 0.015
+
+
+def _usage(conn, bank_id: str, today: date, apply: bool) -> int:
+    recent = conn.execute(text(
+        "SELECT count(*) FROM ai.llm_calls WHERE bank_id = :b AND created_at >= :since"),
+        {"b": bank_id, "since": datetime.now(timezone.utc) - timedelta(days=30)}).scalar()
+    if recent and recent >= 20:
+        return 0
+    if not apply:
+        return 30 * 3        # rough estimate for the dry-run count
+    rng = random.Random(f"usage-{bank_id}")
+    made = 0
+    for i in range(30):                                   # the last 30 days
+        day = today - timedelta(days=i)
+        for feature, weight in USAGE_FEATURES:
+            n = 1 if rng.random() < weight else (2 if rng.random() < weight - 1 else 0)
+            for _ in range(max(0, n)):
+                inp = rng.randint(600, 3200)
+                out = rng.randint(200, 1500)
+                cost = round(inp / 1000 * _PRICE_IN + out / 1000 * _PRICE_OUT, 6)
+                ts = datetime(day.year, day.month, day.day,
+                              rng.randint(7, 20), rng.randint(0, 59), tzinfo=timezone.utc)
+                conn.execute(text("""
+                    INSERT INTO ai.llm_calls (id, bank_id, provider, model, feature,
+                        input_tokens, output_tokens, cache_tokens, cost, created_at)
+                    VALUES (gen_random_uuid(), :b, 'anthropic', 'claude-sonnet-4-5', :f, :i, :o, 0, :c, :ts)
+                """), {"b": bank_id, "f": feature, "i": inp, "o": out, "c": cost, "ts": ts})
+                made += 1
+    return made
+
+
 def run(engine, apply: bool) -> dict:
     today = datetime.now(timezone.utc).date()
-    summary: dict = {"apply": apply, "banks": [], "cost_rates": 0, "feed_batches": 0, "dup_phones": 0, "out_of_range": 0}
+    summary: dict = {"apply": apply, "banks": [], "cost_rates": 0, "feed_batches": 0,
+                     "dup_phones": 0, "out_of_range": 0, "llm_calls": 0}
     with engine.begin() as conn:
         for bank_id, name in _demo_banks(conn):
             summary["cost_rates"] += _cost_rates(conn, bank_id, apply)
             summary["feed_batches"] += _feed(conn, bank_id, today, apply)
             summary["dup_phones"] += _dup_phone(conn, bank_id, apply)
             summary["out_of_range"] += _out_of_range(conn, bank_id, apply)
+            summary["llm_calls"] += _usage(conn, bank_id, today, apply)
             summary["banks"].append(name)
     return summary
 
