@@ -2,32 +2,7 @@
 // structure (one icon per section; its pages inline when expanded, in a hover
 // flyout on the collapsed rail). Every route the shell registers comes from
 // here, so the sidebar, the search index and the router cannot disagree.
-import {
-  ArrowRightLeft,
-  BarChart3,
-  BellRing,
-  Bot,
-  Boxes,
-  BrainCircuit,
-  Building2,
-  Cpu,
-  Database,
-  FileText,
-  FlaskConical,
-  Gauge,
-  LayoutDashboard,
-  Map as MapIcon,
-  MessageSquare,
-  ScrollText,
-  Settings,
-  ShieldCheck,
-  SlidersHorizontal,
-  TrendingUp,
-  Trophy,
-  UserPlus,
-  Users,
-  type LucideIcon,
-} from "lucide-react";
+import { ArrowRightLeft, BarChart3, BellRing, Bot, Boxes, BrainCircuit, Building2, Cpu, Database, FileText, FlaskConical, Gauge, LayoutDashboard, Map as MapIcon, MessageSquare, ScrollText, Settings, ShieldCheck, SlidersHorizontal, TrendingUp, Trophy, Upload, UserPlus, Users, type LucideIcon } from "lucide-react";
 
 export interface BankNavItem {
   name: string;
@@ -129,7 +104,7 @@ export const BANK_SECTIONS: BankNavSection[] = [
         tasks: "D06–D07",
       },
       {
-        name: "Placement",
+        name: "Allocate Cases",
         path: "agencies/placement",
         icon: ArrowRightLeft,
         summary: "Place delinquent loans with agencies within capacity and coverage, with reasons.",
@@ -182,6 +157,13 @@ export const BANK_SECTIONS: BankNavSection[] = [
         icon: Boxes,
         summary: "Models, monitoring, retrain candidates and the serving state.",
         tasks: "F07–F09",
+      },
+      {
+        name: "Loan Feed",
+        path: "tech-ops/loan-feed",
+        icon: Upload,
+        summary: "Upload the daily overdue-loan CSV and track each ingestion run.",
+        tasks: "F12",
       },
       {
         name: "Data Quality",
@@ -255,6 +237,7 @@ export const BANK_NAV_ITEMS: BankNavItem[] = BANK_SECTIONS.flatMap((s) => s.item
  */
 export const BUILT_NAV_PATHS: ReadonlySet<string> = new Set([
   "overview",
+  "tech-ops/loan-feed",
   "analytics",
   "alerts",
   "agencies/directory",
