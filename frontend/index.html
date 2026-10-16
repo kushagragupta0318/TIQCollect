@@ -18,8 +18,54 @@
          UI and the iOS status bar, so it sits directly beside the icon. -->
     <meta name="theme-color" content="#2568B0" />
     <title>TIQCollect</title>
+    <!-- Boot splash. Until the bundle parses and React mounts, #root is empty,
+         which showed a white screen on every hard refresh — longest on an
+         agent's phone over mobile data. These rules and the markup below are a
+         deliberate copy of .brand-loader in src/index.css: that file is in the
+         bundle, so it cannot style this. Keep the two in step (44px, 1.6s). -->
+    <style>
+      #boot {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        background: #F4F5F7; /* --background 220 13% 96% */
+      }
+      /* Mark over caption, centred as one unit — mirrors .brand-loader__stack. */
+      #boot .stack {
+        display: grid;
+        justify-items: center;
+        gap: 12px;
+      }
+      #boot img {
+        width: 44px;
+        height: 44px;
+        object-fit: contain;
+        animation: bootBreathe 1.6s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+      }
+      #boot .label {
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        font-size: 12.5px;
+        font-weight: 500;
+        letter-spacing: 0.01em;
+        color: #6B6D76;   /* --muted-foreground, literal: no tokens before the bundle */
+      }
+      @keyframes bootBreathe {
+        0%, 100% { opacity: 0.45; transform: scale(0.94); }
+        50%      { opacity: 1;    transform: scale(1); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #boot img { animation: none; opacity: 1; transform: none; }
+      }
+    </style>
   </head>
   <body>
+    <div id="boot" role="status" aria-label="Loading TIQCollect">
+      <div class="stack">
+        <img src="/favicon.svg" alt="" aria-hidden="true" width="44" height="44" />
+        <span class="label">Loading...</span>
+      </div>
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
