@@ -605,6 +605,47 @@ class PlacementService:
 
     # ── quarantine ───────────────────────────────────────────────────────────
 
+    def record_skipped(self, batch: BankFeedBatch, *, row_no: int, raw: dict,
+                       detail: str) -> BankFeedRow | None:
+        """Record a row the ingest passed over, with the reason it gave.
+
+        A SKIPPED row is NOT a quarantined one: quarantine means "held for a
+        person to fix and release" and its reasons are the REFUSAL_REASONS
+        vocabulary the release rules are built on. A skip is the engine
+        declining a row for its own reasons (no coordinates for a new
+        borrower, an unparseable field), and those must not become releasable
+        — hence the separate status the schema already declares, not a
+        widened REFUSAL_REASONS.
+
+        Why it exists at all: `rows_skipped` was a COUNTER and the reason went
+        to log.debug, which is off in production. Measured on a 500-row feed,
+        the batch reported PARTIAL with 500 skipped, 0 quarantined and no row
+        anywhere saying why — an operator could see that nothing loaded and
+        had no way to find out the cause. Same (batch_id, row_no) dedup as
+        quarantine, so a replay updates rather than duplicates.
+        """
+        row = (self.db.query(BankFeedRow)
+               .filter(BankFeedRow.batch_id == batch.id, BankFeedRow.row_no == row_no).first())
+        error = {"reason": "SKIPPED", "detail": detail}
+        if row is None:
+            row = BankFeedRow(
+                bank_id=batch.bank_id, batch_id=batch.id, row_no=row_no,
+                loan_account_number=(raw.get("loan_account_number") or "").strip()[:30] or None,
+                customer_ref=(raw.get("customer_ref") or "").strip()[:30] or None,
+                case_number=(raw.get("case_number") or "").strip()[:20] or None,
+                raw=dict(raw), status="SKIPPED", dq_errors=[error],
+                processed_at=datetime.now(timezone.utc),
+            )
+            self.db.add(row)
+        elif row.status == "SKIPPED":
+            # Replay of the same row: refresh the reason, never append a second.
+            row.dq_errors = [error]
+        else:
+            # Already quarantined (a stronger state): leave it alone.
+            return row
+        self.db.flush()
+        return row
+
     def quarantine(self, batch: BankFeedBatch, *, row_no: int, raw: dict, reason: str, detail: str,
                    loan_id: str | None = None) -> BankFeedRow:
         """Hold a feed row for a person to fix and release. Never raises for
