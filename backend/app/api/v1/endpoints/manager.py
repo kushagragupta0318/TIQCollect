@@ -1351,6 +1351,7 @@ def unallocated_cases(current_user: ManagerOnly, db: DbSession):
         BLOCKED_DO_NOT_CONTACT, BLOCKED_NEEDS_FEMALE_AGENT,
         agent_block_reason, case_block_reason,
     )
+    from app.services.scope import cases_in_scope
     my_agents = (
         db.query(Agent).join(Agent.user)
         .filter(Agent.manager_user_id == current_user.id)
@@ -1359,8 +1360,20 @@ def unallocated_cases(current_user: ManagerOnly, db: DbSession):
     _on_leave_today = agent_ids_on_leave(db, leave_today(), [a.id for a in my_agents])
     on_duty = [a for a in my_agents if effective_status(a, _on_leave_today) is AgentStatus.ON_DUTY]
 
+    # TENANCY. This query had no tenant bound at all: `Case.status ==
+    # UNASSIGNED` matched every unplaced case in the WHOLE DATABASE — any
+    # bank, any agency — so one agency's manager saw another's pool, with the
+    # borrower's name attached. Same defect A04 closed in
+    # planner_service.plan_next_day; the fix never reached this endpoint, and
+    # the textual sweep could not see it because `_scoped_agent_ids` appears
+    # just above for the AGENT query.
+    #
+    # Bound through services/scope.cases_in_scope — the one definition
+    # (ADR 0001): it already states "the agency's UNASSIGNED pool for the
+    # agency roles … never another agency's pool", and gets AGENCY_ADMIN right
+    # as well as AGENCY_MANAGER.
     cases = (
-        db.query(Case)
+        cases_in_scope(db, current_user)
         .filter(Case.status == CaseStatus.UNASSIGNED)
         .options(joinedload(Case.customer))
         .all()
@@ -5273,6 +5286,7 @@ def reassign_case(
         BAR_MESSAGES, DEFAULT_TERRITORY_RADIUS_KM, GlobalAllocator,
         case_bar, pair_bar)
     from app.services.planner_service import PlannerService
+    from app.services.scope import cases_in_scope
 
     my_agent_ids = [
         a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()
@@ -5286,8 +5300,15 @@ def reassign_case(
     # manager through GET /cases/unallocated, so there is nothing to hide, and
     # "not found" would send somebody hunting for a scoping bug when the real
     # answer is "not yet — wait for tonight".
+    # TENANCY (same fix as GET /cases/unallocated). This read
+    # `or_(agent_id.in_(mine), agent_id.is_(None))` with no tenant bound, so
+    # the second half matched every unplaced case in the database and another
+    # agency's case id resolved here — on a WRITE route. Its own comment
+    # argued there was "nothing to hide, they are visible through
+    # GET /cases/unallocated", which was true only because THAT query was
+    # unscoped too.
     case = (
-        db.query(Case)
+        cases_in_scope(db, current_user)
         .options(joinedload(Case.customer))
         .filter(Case.id == case_id,
                 or_(Case.agent_id.in_(my_agent_ids), Case.agent_id.is_(None)))
