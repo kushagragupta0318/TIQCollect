@@ -787,3 +787,66 @@ def test_a_refused_export_writes_no_data_export_row(client, seeded):
             AuditLog.entity_id == "does-not-exist").count() == 0
     finally:
         db.close()
+
+
+# ─ "Collected" counts VERIFIED money only ───────────────────────────────────
+# GET /dashboard and GET /agents/live-status each summed Payment.amount with NO
+# status filter, so PENDING_VERIFICATION and REJECTED counted as collected.
+# Measured on the demo book: +1.7% on average, +11% on 2026-09-22. The figure
+# had no test at all, which is how it survived.
+#
+# VERIFIED-only is the product's existing rule: six other aggregations in
+# manager.py already filter it, and ADR 0015 says a reversal removes the amount
+# from case.collected_amount and that verified_paid_against counts VERIFIED.
+
+def _pay(db, case, agent, *, amount, status, when):
+    from app.models.payment import Payment, PaymentMode, PaymentStatus
+    import uuid as _uuid
+    p = Payment(case_id=case.id, agent_id=agent.id, amount=amount, mode=PaymentMode.CASH,
+                receipt_number=f"RC-{_uuid.uuid4().hex[:8]}", payment_date=when, status=status)
+    db.add(p)
+    db.commit()
+    return p
+
+
+def test_dashboard_collected_counts_verified_money_only(client, seeded):
+    from app.models.payment import PaymentStatus
+    db, mgr = seeded["db"], seeded["manager"]
+    case, agent = seeded["cases"][0], seeded["agents"][0]
+    when = NOW - timedelta(hours=2)
+
+    base = client.get("/api/v1/manager/dashboard", headers=auth_headers(mgr)).json()
+    start = float(base["amount_collected_today"])
+
+    # Only this one is real money.
+    _pay(db, case, agent, amount=1000.0, status=PaymentStatus.VERIFIED, when=when)
+    # None of these are: not yet checked, refused, and taken back (ADR 0015).
+    _pay(db, case, agent, amount=500.0, status=PaymentStatus.PENDING_VERIFICATION, when=when)
+    _pay(db, case, agent, amount=700.0, status=PaymentStatus.REJECTED, when=when)
+    _pay(db, case, agent, amount=900.0, status=PaymentStatus.REVERSED, when=when)
+
+    after = client.get("/api/v1/manager/dashboard", headers=auth_headers(mgr)).json()
+    moved = float(after["amount_collected_today"]) - start
+
+    # 1000 only. Unfiltered this was 3100 — the test fails by 2100 without the fix.
+    assert moved == pytest.approx(1000.0), (
+        f"collected moved by {moved}, so non-VERIFIED money is being counted"
+    )
+
+
+def test_live_status_and_dashboard_agree_on_collected(client, seeded):
+    """The two endpoints compute the same figure from the same window, so they
+    must not disagree — they were separately-maintained copies of one sum."""
+    from app.models.payment import PaymentStatus
+    db, mgr = seeded["db"], seeded["manager"]
+    case, agent = seeded["cases"][0], seeded["agents"][0]
+    _pay(db, case, agent, amount=2500.0, status=PaymentStatus.VERIFIED,
+         when=NOW - timedelta(hours=1))
+    _pay(db, case, agent, amount=4000.0, status=PaymentStatus.PENDING_VERIFICATION,
+         when=NOW - timedelta(hours=1))
+
+    dash = client.get("/api/v1/manager/dashboard", headers=auth_headers(mgr)).json()
+    live = client.get("/api/v1/manager/agents/live-status", headers=auth_headers(mgr)).json()
+    if isinstance(live, dict) and "amount_collected_today" in live:
+        assert float(dash["amount_collected_today"]) == pytest.approx(
+            float(live["amount_collected_today"]))

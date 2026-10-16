@@ -87,6 +87,36 @@ def _require_own_agent(db, current_user, agent_id: str) -> Agent:
 
 
 
+def _collected_between(db, agent_ids: list[str], start, end) -> float:
+    """Money COLLECTED by these agents in [start, end], VERIFIED only.
+
+    The one definition of "collected" for this router. It exists because
+    /dashboard and /agents/live-status each summed Payment.amount with NO
+    status filter, so PENDING_VERIFICATION and REJECTED money counted as
+    collected: measured on the demo book that overstated the day by 1.7% on
+    average and by 11% on 2026-09-22 (Rs 75,160 of PENDING on Rs 6.85L real).
+
+    VERIFIED-only is the product's existing rule, not a new one — six other
+    aggregations in this file already filter it, and ADR 0015 states that a
+    reversal removes the amount from `case.collected_amount` and the agent's
+    month, and that `verified_paid_against` counts VERIFIED only. A sum that
+    counts REVERSED money contradicts the ledger it is supposed to describe.
+
+    NOT applied to the agent/DPD breakdown at the bottom of this file, which
+    filters `!= REJECTED` (so it still counts PENDING and REVERSED). That is
+    the same inconsistency one screen further out and is left alone here
+    deliberately: changing it moves numbers on a surface this change was not
+    asked to touch.
+    """
+    return (
+        db.query(func.sum(Payment.amount))
+        .filter(Payment.agent_id.in_(agent_ids),
+                Payment.status == PaymentStatus.VERIFIED,
+                Payment.payment_date >= start, Payment.payment_date <= end)
+        .scalar() or 0.0
+    )
+
+
 def _effective_today(agent_ids: list[str], db) -> tuple[datetime, datetime, date]:
     """Return (start_of_day, end_of_day, eff_date) scoped to the most recent
     beat date on or before today across the given agents. Falls back to date.today()
@@ -366,11 +396,7 @@ def dashboard(current_user: ManagerOnly, db: DbSession):
         )
         .scalar() or 0
     )
-    amount_collected_today = (
-        db.query(func.sum(Payment.amount))
-        .filter(Payment.agent_id.in_(my_agent_ids), Payment.payment_date >= start_of_day, Payment.payment_date <= end_of_day)
-        .scalar() or 0.0
-    )
+    amount_collected_today = _collected_between(db, my_agent_ids, start_of_day, end_of_day)
     ptps_due_today = (
         db.query(func.count(PTP.id))
         .filter(PTP.agent_id.in_(my_agent_ids), PTP.committed_date == today_date, PTP.status == PTPStatus.ACTIVE)
@@ -3244,11 +3270,7 @@ def ai_briefing(current_user: ManagerOnly, db: DbSession, refresh: bool = False)
     start_of_day, end_of_day, eff_date = _effective_today(my_agent_ids, db)
 
     # ── Collection stats ─────────────────────────────────────────────────────
-    amount_collected_today = (
-        db.query(func.sum(Payment.amount))
-        .filter(Payment.agent_id.in_(my_agent_ids), Payment.payment_date >= start_of_day, Payment.payment_date <= end_of_day)
-        .scalar() or 0.0
-    )
+    amount_collected_today = _collected_between(db, my_agent_ids, start_of_day, end_of_day)
     visited_case_ids_today = [
         row[0] for row in
         db.query(Visit.case_id)
