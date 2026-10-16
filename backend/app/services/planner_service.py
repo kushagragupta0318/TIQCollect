@@ -13,16 +13,18 @@ import math
 import uuid
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
+from time import perf_counter
 from typing import TYPE_CHECKING, Any, Sequence
 
 import structlog
 import zlib
 
 from sqlalchemy import and_, func, or_, text
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.core.config import settings as _settings
 from app.core.routing import avg_visit_seconds, plan_route
+from app.services.pipeline_readiness import business_date
 from app.ml.eligibility import agent_block_reason, is_eligible, is_female
 from app.ml.visit_priority import score as score_visit_priority
 from app.models.agent import Agent, AgentSpecialization, AgentStatus, AgentTier
@@ -82,8 +84,15 @@ def get_target_plan_date(reference_date: date | None = None) -> date:
     Monday–Friday: Plans next day (Tuesday–Saturday).
     Saturday: Plans Monday (Sunday is a scheduled rest day).
     Sunday: Plans Monday.
+
+    `reference_date` defaults to the IST business date, not `date.today()`.
+    The containers run UTC (celery_app sets enable_utc=True), so in a worker
+    `date.today()` is the UTC date: for the 20:00 IST run that is 14:30 UTC and
+    the same day, but any caller past 18:30 UTC named YESTERDAY and therefore
+    planned for today instead of tomorrow. leave_service.leave_today() fixed
+    the same class of bug in September. One definition: pipeline_readiness.
     """
-    ref = reference_date or date.today()
+    ref = reference_date or business_date()
     weekday = ref.weekday()  # Monday is 0, Sunday is 6
     if weekday == 5:  # Saturday -> Monday (skip Sunday)
         return ref + timedelta(days=2)
@@ -211,6 +220,19 @@ class PlannerService:
         """
         target_date = plan_date or get_target_plan_date()
 
+        # STAGE TIMING. The nightly window has never been timed: no stage
+        # recorded its duration, so "the plan is ready by morning" was a design
+        # claim with no measurement behind it. `_stage` marks the wall-clock
+        # end of each numbered stage below; the result is stamped into the
+        # run's existing summary_metadata JSON (no migration) and logged.
+        # perf_counter, not datetime: it is monotonic, so an NTP step during a
+        # long run cannot produce a negative duration.
+        _t0 = perf_counter()
+        _marks: list[tuple[str, float]] = []
+
+        def _stage(name: str) -> None:
+            _marks.append((name, perf_counter()))
+
         # A04 (coordinator audit follow-up, 2026-09-28) — resolved once, up
         # front, rather than deep inside the candidate-case query: it also
         # scopes the agent roster below (defence in depth — the eligible set
@@ -295,6 +317,8 @@ class PlannerService:
                 f"team. Wait for it to finish, then try again."
             )
 
+        _stage("agents")
+
         # 2. Check for existing PLANNED beats on target_date
         existing_beats = self.db.query(Beat).filter(
             Beat.agent_id.in_(agent_ids),
@@ -305,6 +329,8 @@ class PlannerService:
         active_or_done = [b for b in existing_beats if b.status in (BeatStatus.IN_PROGRESS, BeatStatus.COMPLETED)]
         if active_or_done and not simulate:
             raise ValueError(f"Cannot replan: {len(active_or_done)} beat(s) on {target_date} are already IN_PROGRESS or COMPLETED.")
+
+        _stage("existing_beats")
 
         # 3. Load Candidate Case Pool Scoped to Manager's Team
         # Unassigned cases + cases assigned to this manager's agents.
@@ -449,6 +475,8 @@ class PlannerService:
 
         sorted_cases = sorted(candidate_cases, key=_get_prio, reverse=True)
 
+        _stage("case_pool")
+
         # 4. Load Historical Competency Matrix & Empirical Bayes Adjuster
         history_matrix = self.get_historical_competency_matrix(agent_ids, days_lookback=90)
         from app.ml.empirical_bayes import EmpiricalBayesAgentAdjuster
@@ -462,6 +490,8 @@ class PlannerService:
         shadow_evaluator = ShadowModelEvaluator()
         ptp_fatigue = self._ptp_fatigue_map([c.id for c in candidate_cases])
 
+        _stage("competency")
+
         # 5. Initialize Allocation State
         assigned_cases_by_agent: dict[str, list[Case]] = defaultdict(list)
         decisions: list[AllocationDecision] = []
@@ -474,6 +504,8 @@ class PlannerService:
         capacity_remaining: dict[str, int] = {
             a.id: max(1, a.max_cases_per_day or 12) for a in agents
         }
+
+        _stage("init_state")
 
         # 6. Matching & Assignment
         prio_map = {c.id: _get_prio(c) for c in sorted_cases}
@@ -639,6 +671,8 @@ class PlannerService:
 
         decisions.extend(pool_decisions)
         deferred_count += len(pool_decisions)
+
+        _stage("matching")
 
         # 7. Route Optimization & Beat Creation
         run_id = str(uuid.uuid4())
@@ -809,6 +843,17 @@ class PlannerService:
                     if when is not None:
                         c.allocation_date = when.date()
 
+        _stage("routing")
+
+        # Per-stage wall clock, in order, plus the total. Each stage's mark is
+        # its END, so a stage costs the gap from the previous mark.
+        _timings: dict[str, int] = {}
+        _prev = _t0
+        for _name, _at in _marks:
+            _timings[f"{_name}_ms"] = int((_at - _prev) * 1000)
+            _prev = _at
+        _timings["total_ms"] = int((_prev - _t0) * 1000)
+
         # 8. Create and Persist AllocationRun
         run = AllocationRun(
             id=run_id,
@@ -830,8 +875,18 @@ class PlannerService:
                 "agents_count": len(agents),
                 "allocated_cases_count": allocated_count,
                 "shadow_evaluation": shadow_telemetry,
+                # Counts and durations of this run, for the nightly window.
+                # Numbers only — no borrower, agent or case identifier.
+                "timings_ms": _timings,
             },
         )
+        # Also emitted as one structured line, so the window can be read from
+        # the worker log without querying allocation_runs.
+        logger.info("allocation.timing", manager_user_id=self.manager_user_id,
+                    plan_date=str(target_date), strategy=strategy, simulate=simulate,
+                    cases_considered=len(sorted_cases), agents_considered=len(agents),
+                    allocated=allocated_count, deferred=deferred_count,
+                    blocked=blocked_count, beats=len(created_beats), **_timings)
 
         for d in decisions:
             d.run_id = run_id
@@ -889,9 +944,25 @@ class PlannerService:
         is the opposite of what happened. The caller asks for the failure
         separately via get_last_failure(); an absent plan plus a visible
         failure is honest, a zeroed plan is not."""
+        # selectinload, and the decisions' case + agent eagerly.
+        #
+        # 2026-10-16: this fed /manager/allocation/latest, which reads
+        # d.case and d.allocated_agent.user for EVERY decision. Neither was
+        # loaded here, so a 1,733-decision run issued 1,733+ extra queries and
+        # the endpoint took 41-55s — past the frontend's 15s axios timeout, so
+        # the Field Plan page aborted the read and rendered its empty state
+        # while a perfectly good PLANNED run sat in the database. Measured on
+        # that run: 18.0s/1,735 queries before, 1.2s/10 after.
+        #
+        # joinedload on two collections also built a decisions x beats
+        # cartesian product in one result set; selectinload issues one SELECT
+        # per collection instead.
         query = self.db.query(AllocationRun).options(
-            joinedload(AllocationRun.decisions),
-            joinedload(AllocationRun.beats),
+            selectinload(AllocationRun.decisions).selectinload(AllocationDecision.case),
+            selectinload(AllocationRun.decisions)
+            .selectinload(AllocationDecision.allocated_agent)
+            .selectinload(Agent.user),
+            selectinload(AllocationRun.beats),
         ).filter(
             AllocationRun.manager_user_id == self.manager_user_id,
             AllocationRun.status != AllocationRunStatus.FAILED.value,

@@ -41,20 +41,61 @@ logger = structlog.get_logger()
 
 
 @celery_app.task(name="app.workers.tasks.allocation.run_nightly_allocation", bind=True, max_retries=3)
-def run_nightly_allocation(self, strategy: str = "SMART", plan_date_str: str | None = None):
+def run_nightly_allocation(self, strategy: str = "SMART", plan_date_str: str | None = None,
+                           force: bool = False):
+    """Plan tomorrow for every active agency manager.
+
+    `force=True` plans even when the evening's upstream stages have not
+    finished. It exists for an operator re-running the night by hand; the
+    scheduled 20:00 run never sets it, because planning on a book the feed
+    never updated hands agents a day of work aimed at yesterday's balances.
+    """
     from app.core.database import SessionLocal
     from app.models.allocation_run import AllocationRun, AllocationRunStatus
     from app.models.tenancy import Agency
     from app.models.user import User, UserRole
+    from app.services.pipeline_readiness import allocation_gate, business_date, gate_summary
     from app.services.planner_service import PlannerService, get_target_plan_date
 
-    target_date = date.fromisoformat(plan_date_str) if plan_date_str else get_target_plan_date()
-    logger.info("nightly_allocation.start", target_date=str(target_date), strategy=strategy)
+    # The IST business date the EVENING belongs to — what the feed and the
+    # scores are stamped with. Distinct from target_date, which is the day
+    # being planned FOR (tomorrow, or Monday from a Saturday).
+    tonight = business_date()
+    target_date = date.fromisoformat(plan_date_str) if plan_date_str else get_target_plan_date(tonight)
+    logger.info("nightly_allocation.start", target_date=str(target_date),
+                business_date=str(tonight), strategy=strategy)
 
     db = SessionLocal()
     results: dict[str, dict] = {}
     failures: dict[str, str] = {}
     try:
+        # ── UPSTREAM GATE ───────────────────────────────────────────────────
+        # Both evening stages must have finished for TONIGHT's business date.
+        # Checked before a single manager is planned, and checked against
+        # persisted state rather than task results, so a worker restart between
+        # 19:45 and 20:00 does not make the chain look complete.
+        #
+        # Refused, NOT retried: neither a missing feed nor missing scores is a
+        # transient fault, and `force_replan=True` below means a retry would
+        # discard beats that did plan. The refusal becomes a row per manager —
+        # the lesson of the 2026-09-02 run in this file's changelog, where a
+        # failed night left nothing behind but a stack trace.
+        # An EXPLICIT plan_date_str is an operator-chosen run (a re-plan, a
+        # backfill, a named date from the Field Plan page). The gate asks
+        # whether TONIGHT's feed landed, which is not the question for a run
+        # aimed at some other date — so naming a date opts out, exactly as
+        # force does. The scheduled 20:00 run passes neither.
+        if not force and plan_date_str is None:
+            ready, stages = allocation_gate(db, tonight)
+            if not ready:
+                summary = gate_summary(stages)
+                logger.error("nightly_allocation.blocked_upstream_not_ready",
+                             target_date=str(target_date), business_date=str(tonight), **summary)
+                blocked = _record_blocked(db, AllocationRun, AllocationRunStatus,
+                                          target_date, strategy, tonight, summary)
+                return {"target_date": str(target_date), "business_date": str(tonight),
+                        "blocked": True, "planned": {}, "failed": {},
+                        "runs_recorded": blocked, **summary}
         try:
             # MED, coordinator audit on c041835: this used to select by role
             # and is_active alone, with no Agency join at all — a manager
@@ -64,7 +105,13 @@ def run_nightly_allocation(self, strategy: str = "SMART", plan_date_str: str | N
             # not occur — ck_users_role_scope requires it) is excluded the
             # same way, rather than needing a separate check.
             managers = db.query(User).join(Agency, User.agency_id == Agency.id).filter(
-                User.role.in_([UserRole.AGENCY_MANAGER, UserRole.AGENCY_ADMIN]),
+                # AGENCY_MANAGER only. A field plan is built from a roster,
+                # and agents report to a MANAGER — an agency admin has none of
+                # their own, so planning for them produced an allocation run of
+                # 0 cases / 0 agents every night (17 such rows on the dev book
+                # before this). Admins read and generate a manager's plan
+                # through the Field Plan page instead, naming whose it is.
+                User.role == UserRole.AGENCY_MANAGER,
                 User.is_active.is_(True),
                 Agency.status == "ACTIVE",
             ).all()
@@ -166,3 +213,64 @@ def _record_failure(db, AllocationRun, AllocationRunStatus,
         logger.error("nightly_allocation.failure_row_not_written",
                      manager=manager.email, error=str(bookkeeping_exc))
         db.rollback()
+
+
+def _record_blocked(db, AllocationRun, AllocationRunStatus, target_date: date,
+                    strategy: str, tonight: date, summary: dict) -> int:
+    """One BLOCKED_UPSTREAM row per manager who would have been planned.
+
+    WHY A ROW PER MANAGER, not one for the run. `allocation_runs` is keyed by
+    manager (and the tenant listener fills bank_id/agency_id from that manager),
+    and every surface that asks "what happened to my team tonight?" reads it
+    that way. A single global row would be invisible to all of them — the same
+    absence the 2026-09-02 incident in this file's changelog was about.
+
+    Returns how many rows were written, so the task reports what it recorded
+    rather than asserting it.
+    """
+    from app.models.tenancy import Agency
+    from app.models.user import User, UserRole
+
+    try:
+        db.rollback()
+        managers = db.query(User).join(Agency, User.agency_id == Agency.id).filter(
+            User.role == UserRole.AGENCY_MANAGER,
+            User.is_active.is_(True),
+            Agency.status == "ACTIVE",
+        ).all()
+        for manager in managers:
+            db.add(AllocationRun(
+                id=str(uuid.uuid4()),
+                manager_user_id=manager.id,
+                plan_date=target_date,
+                strategy=strategy,
+                # FAILED, not a new status: ck_allocation_runs_status
+                # (v2_0002_tables.py) permits only the four existing values, so
+                # BLOCKED_UPSTREAM would need a migration to widen the CHECK.
+                # The CAUSE is what distinguishes this from a planning crash,
+                # and it is in summary_metadata below — queryable, and visible
+                # on the surfaces that already read these rows.
+                status=AllocationRunStatus.FAILED.value,
+                total_cases_evaluated=0,
+                total_cases_allocated=0,
+                total_cases_deferred=0,
+                total_cases_blocked=0,
+                total_agents_planned=0,
+                expected_recovery_total=0.0,
+                summary_metadata={
+                    "trigger": "nightly",
+                    # The marker that tells a refused night from a crashed one.
+                    "outcome": "BLOCKED_UPSTREAM",
+                    "business_date": str(tonight),
+                    "blocked_by": summary.get("blocked_by", []),
+                    # The operator-facing reason, per stage, so the row explains
+                    # itself without a log lookup.
+                    "stages": summary.get("stages", []),
+                },
+            ))
+        db.commit()
+        return len(managers)
+    except Exception as bookkeeping_exc:      # pragma: no cover - defensive
+        logger.error("nightly_allocation.blocked_row_not_written", error=str(bookkeeping_exc))
+        db.rollback()
+        return 0

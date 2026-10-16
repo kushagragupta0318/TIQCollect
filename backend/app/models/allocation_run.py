@@ -32,6 +32,17 @@ class AllocationRunStatus(str, enum.Enum):
     # than an absence. status is String(20), not a Postgres enum, so adding
     # this needs no migration.
     FAILED = "FAILED"
+    # 2026-10-15 (Phase 7) — NOTE FOR ANYONE ADDING A STATUS HERE. The comment
+    # above is true but incomplete: `status` is String(20) rather than a
+    # Postgres enum, AND it carries a CHECK constraint
+    # (ck_allocation_runs_status, v2_0002_tables.py:472) listing the four
+    # values. So a new status DOES need a migration to widen that CHECK.
+    #
+    # Phase 7 needed to record "the night was refused because an upstream
+    # stage had not finished". It reuses FAILED and names the cause in
+    # summary_metadata["blocked_by"] instead of adding BLOCKED_UPSTREAM, so no
+    # migration was required. If a distinct status is ever wanted, the CHECK in
+    # a new migration is the work.
 
 
 class AllocationRun(Base, UUIDPrimaryKey, TimestampMixin):
