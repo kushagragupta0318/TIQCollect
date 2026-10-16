@@ -40,7 +40,7 @@ export function BankPlacementPage() {
   return (
     <PageRoot>
       <ToolHeader
-        title="Placement"
+        title="Allocate Cases"
         icon={ArrowRightLeft}
         description="Place delinquent loans with an agency. Each loan is checked against the agency's contract: in force, product and bucket authorised, territory covered, room under its cap."
       />

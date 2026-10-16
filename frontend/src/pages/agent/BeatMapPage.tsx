@@ -219,7 +219,7 @@ export default function BeatMapPage() {
           <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between text-sm">
             <div>
               <p className="text-xs text-slate-400">Collected today</p>
-              <p className="font-bold text-success-600">₹{(collectedAmt / 1000).toFixed(1)}K</p>
+              <p className="font-bold text-success-600">{shortMoney(collectedAmt)}</p>
             </div>
             <div className="text-right">
               <p className="text-xs text-slate-400">Total target</p>

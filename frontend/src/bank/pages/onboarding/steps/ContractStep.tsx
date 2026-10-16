@@ -38,10 +38,15 @@ interface Props {
   onSaved: () => void;
 }
 
+// IST calendar, not UTC: toISOString() on a local Date prints yesterday
+// between 00:00 and 05:30 IST, which backdated a new contract by a day
+// (CLAUDE.md known issue 3). IST is UTC+5:30 with no DST, so a fixed offset
+// is exact.
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+
 function isoToday(offsetDays = 0): string {
-  const d = new Date();
-  d.setDate(d.getDate() + offsetDays);
-  return d.toISOString().slice(0, 10);
+  const shifted = new Date(Date.now() + IST_OFFSET_MS + offsetDays * 86_400_000);
+  return shifted.toISOString().slice(0, 10);
 }
 
 function emptyTerm(): ContractTerm {

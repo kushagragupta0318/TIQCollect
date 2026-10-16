@@ -56,13 +56,31 @@ export function MapCanvas({
     const map = L.map(el.current, {
       zoomControl: true,
       attributionControl: true,
+      // A map inside a scrolling page must not eat the page's scroll: rolling
+      // the wheel over it used to zoom instead of scrolling past, trapping the
+      // reader on the panel. Leaflet's own answer — the wheel scrolls the page
+      // until the map is CLICKED (or ctrl/⌘ is held), and from then on it
+      // zooms; clicking off the map hands scrolling back. Zoom buttons and
+      // pinch-zoom are unaffected, so nothing is lost on touch.
+      scrollWheelZoom: "center",
     }).setView(centre, zoom);
+    map.scrollWheelZoom.disable();
+    map.on("click focus", () => map.scrollWheelZoom.enable());
+    map.on("blur", () => map.scrollWheelZoom.disable());
+    // Clicking anywhere outside the map releases the wheel back to the page.
+    const releaseWheel = (e: MouseEvent) => {
+      if (el.current && e.target instanceof Node && !el.current.contains(e.target)) {
+        map.scrollWheelZoom.disable();
+      }
+    };
+    document.addEventListener("click", releaseWheel, true);
     addBaseTiles(map);
     mapRef.current = map;
     // See the header: without this the panel can render as grey tiles.
     const t = window.setTimeout(() => map.invalidateSize(), 0);
     return () => {
       window.clearTimeout(t);
+      document.removeEventListener("click", releaseWheel, true);
       map.remove();
       mapRef.current = null;
     };

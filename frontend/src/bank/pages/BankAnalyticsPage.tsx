@@ -13,6 +13,7 @@ import { AnalyticsError, AnalyticsLoading, AnalyticsTabBar, Panel, Tile, type An
 import { DataTable } from "../components/DataTable";
 import { GroupedBarLineChart } from "../components/charts";
 import { BRAND } from "../theme/colors";
+import { cr } from "../theme/format";
 import { ExposureFunnel, HeatGrid, TransitionMatrix } from "../components/portfolioVisuals";
 import { FilterBar } from "../components/FilterBar";
 import { useKpiFilter } from "../components/useKpiFilter";
@@ -116,7 +117,6 @@ function fmtSnapshot(iso: string): string {
   return `${d} ${months[m - 1]} ${y}`;
 }
 
-const crFmt = (v: number) => `₹${v.toFixed(2)} Cr`;
 const pctFmt = (v: number) => `${v.toFixed(1)}%`;
 const countFmt = (v: number) => String(v);
 
@@ -221,7 +221,7 @@ function RecoveryTab({ panels }: { panels: RecoveryPanels }) {
           { key: "expected_cr", name: "Expected (predicted)", color: BRAND.slate },
         ]}
         line={{ key: "vs_expected_pct", name: "Recovery vs expected", color: BRAND.success }}
-        barFormat={crFmt}
+        barFormat={cr}
         lineFormat={pctFmt}
       />
       <BelowChart>
@@ -263,7 +263,7 @@ function CostTab({ panels }: { panels: CostPanels }) {
             { key: "field_cost_cr", name: "Field cost", color: BRAND.secondary },
           ]}
           line={{ key: "cost_per_100", name: "Cost / ₹100", color: BRAND.warning }}
-          barFormat={crFmt}
+          barFormat={cr}
           lineFormat={(v) => `₹${v.toFixed(2)}`}
         />
         <BelowChart>
@@ -281,7 +281,7 @@ function CostTab({ panels }: { panels: CostPanels }) {
             { key: "field_cost_cr", name: "Field cost", color: BRAND.secondary },
           ]}
           line={{ key: "cost_per_100", name: "Cost / ₹100", color: BRAND.warning }}
-          barFormat={crFmt}
+          barFormat={cr}
           lineFormat={(v) => `₹${v.toFixed(2)}`}
         />
         <BelowChart>
@@ -454,7 +454,7 @@ function ConcentrationPanel({ title, rows, dim }: {
           { key: "npa_cr", name: "NPA", color: BRAND.destructive },
         ]}
         line={{ key: "share_pct", name: "Share of book", color: BRAND.ink }}
-        barFormat={crFmt}
+        barFormat={cr}
         lineFormat={pctFmt}
       />
       <BelowChart>
