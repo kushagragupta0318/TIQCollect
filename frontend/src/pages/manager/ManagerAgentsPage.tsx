@@ -36,6 +36,7 @@ import { useNavigate } from "react-router";
 import { Search, MapPin, AlertTriangle, Phone, ChevronDown, ChevronUp, ChevronsUpDown, Brain, Shuffle, X, Loader2, TrendingUp, TrendingDown, Minus, IndianRupee, Plus, Pencil, KeyRound, Ban, RotateCcw } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { shortAmount, shortMoney } from "@/lib/money";
+import { DPD_COLOUR, DPD_LABEL } from "./todayDpd";
 import { AiBadge } from "@/components/ui/AiBadge";
 import { getAgents, getAgentInsight, getReallocationPlan, updateAgentStatus, acknowledgeAgentSos, resetAgentLogin, reactivateAgent, reassignCase } from "@/api/manager";
 import type { AgentInsight, ReallocationPlan } from "@/api/manager";
@@ -47,6 +48,7 @@ import { LeaveWindow, MarkLeaveModal } from "./LeavePanel";
 import { useLeaveRequests } from "./leaveQueries";
 import { CalendarOff } from "lucide-react";
 import { useSearchParams } from "react-router";
+import { ALL_MANAGERS, managerOptions, resolveManagerFilter, showManagerFilter, trendSplit } from "@/lib/managerFilter";
 import type { Agent, AgentStatus } from "@/types";
 import { CreateAgentDrawer } from "./CreateAgentDrawer";
 import { EditAgentDrawer } from "./EditAgentDrawer";
@@ -116,6 +118,8 @@ export default function ManagerAgentsPage() {
   const [search, setSearch]         = useState("");
   const [statusFilter, setStatusFilter] = useState<"ALL" | "ON_DUTY" | "OFF_DUTY">("ALL");
   const [tierFilter, setTierFilter]     = useState<"ALL" | "TIER_1" | "TIER_2" | "TIER_3">("ALL");
+  // Agency admins see the whole agency, so they can narrow to one manager.
+  const [managerFilter, setManagerFilter] = useState<string>(ALL_MANAGERS);
   const [expandedAgent, setExpandedAgent] = useState<string | null>(null);
   const [sort, setSort] = useState<SortState>({ key: "default", dir: "asc" });
   // Create/edit/suspend drawer & modal state — lifted here (not into AgentRow)
@@ -156,12 +160,14 @@ export default function ManagerAgentsPage() {
   }, [queryClient]);
 
 
+  const activeManagerFilter = resolveManagerFilter(agents, managerFilter);
   const filtered = useMemo(() => {
     return agents.filter((a) => {
       // "Off Duty" is everyone not working today: OFF_DUTY and ON_LEAVE alike.
       if (statusFilter === "ON_DUTY" && a.status !== "ON_DUTY") return false;
       if (statusFilter === "OFF_DUTY" && a.status === "ON_DUTY") return false;
       if (tierFilter  !== "ALL" && a.tier   !== tierFilter)   return false;
+      if (activeManagerFilter !== ALL_MANAGERS && a.manager_user_id !== activeManagerFilter) return false;
       if (search) {
         const q = search.toLowerCase();
         return (
@@ -172,7 +178,7 @@ export default function ManagerAgentsPage() {
       }
       return true;
     });
-  }, [agents, search, statusFilter, tierFilter]);
+  }, [agents, search, statusFilter, tierFilter, activeManagerFilter]);
 
   const visible = useMemo(() => {
     if (sort.key === "default") return filtered;
@@ -189,13 +195,26 @@ export default function ManagerAgentsPage() {
     });
   }, [filtered, sort]);
 
-  const onDuty    = agents.filter((a) => a.status === "ON_DUTY").length;
-  const sosAgents = agents.filter((a) => a.sos_active);
-  const tier1     = agents.filter((a) => a.tier === "TIER_1").length;
-  const tier2     = agents.filter((a) => a.tier === "TIER_2").length;
-  const tier3     = agents.filter((a) => a.tier === "TIER_3").length;
-  const teamCollectedToday = agents.reduce((s, a) => s + (a.today_collected || 0), 0);
-  const teamTargetToday    = agents.reduce((s, a) => s + (a.today_target || 0), 0);
+  // The roster the header and the summary charts describe. It follows the
+  // MANAGER filter only — an agency admin who picks one manager is asking to
+  // see that manager's team, so "24 agents / 21 on duty" above a 4-row table
+  // was two different teams on one screen. The status and tier chips are
+  // deliberately NOT applied: those narrow the TABLE, and folding them in
+  // would collapse each donut to the slice just selected ("On Duty" → 100%).
+  const roster = useMemo(
+    () => (activeManagerFilter === ALL_MANAGERS
+      ? agents
+      : agents.filter((a) => a.manager_user_id === activeManagerFilter)),
+    [agents, activeManagerFilter],
+  );
+
+  const onDuty    = roster.filter((a) => a.status === "ON_DUTY").length;
+  const sosAgents = agents.filter((a) => a.sos_active);   // agency-wide on purpose: an SOS is never filtered away
+  const tier1     = roster.filter((a) => a.tier === "TIER_1").length;
+  const tier2     = roster.filter((a) => a.tier === "TIER_2").length;
+  const tier3     = roster.filter((a) => a.tier === "TIER_3").length;
+  const teamCollectedToday = roster.reduce((s, a) => s + (a.today_collected || 0), 0);
+  const teamTargetToday    = roster.reduce((s, a) => s + (a.today_target || 0), 0);
 
   return (
     <div className="space-y-4">
@@ -211,8 +230,8 @@ export default function ManagerAgentsPage() {
               was the same fact twice. What is left is the thing neither chart
               shows: how much of today's target the team has actually banked. */}
           <p className="text-[13px] sm:text-sm" style={{ color: "#6B6D76" }}>
-            ₹{(teamCollectedToday / 100000).toFixed(1)}L collected today
-            {teamTargetToday > 0 && <> of ₹{(teamTargetToday / 100000).toFixed(1)}L visited target</>}
+            {shortMoney(teamCollectedToday)} collected today
+            {teamTargetToday > 0 && <> of {shortMoney(teamTargetToday)} visited target</>}
           </p>
         </div>
         {/* Add Agent — opens the create drawer. Same visual weight as Leave,
@@ -305,8 +324,8 @@ export default function ManagerAgentsPage() {
         style={{ animation: `enter 420ms ${EASE} 60ms both` }}
       >
         <TierMixDonut tier1={tier1} tier2={tier2} tier3={tier3} />
-        <DutyMeter onDuty={onDuty} total={agents.length} />
-        <TrendSplit agents={agents} />
+        <DutyMeter onDuty={onDuty} total={roster.length} />
+        <TrendSplit agents={roster} />
       </div>
 
       {/* Filters */}
@@ -353,6 +372,38 @@ export default function ManagerAgentsPage() {
               </button>
             ))}
           </div>
+          {/* Styled as a THIRD SEGMENT, not as a form input: it sits beside the
+              two pill groups above, so `.input` gave it a different radius
+              (10px vs 12px), border colour and height, and it read as a stray
+              box in the row. The wrapper carries the group's chrome; the select
+              itself is transparent and borderless inside it. */}
+          {showManagerFilter(agents) && (
+            <div
+              className="relative flex rounded-xl overflow-hidden flex-shrink-0"
+              style={{ border: "1px solid #EAEBEF", background: "#fff" }}
+            >
+              <select
+                aria-label="Filter by manager"
+                className="tap-target-h w-full cursor-pointer appearance-none truncate bg-transparent py-2 pl-3 pr-9 text-xs font-semibold outline-none"
+                style={{ color: "#6B6D76", maxWidth: 190, border: "none", borderRadius: 0 }}
+                value={activeManagerFilter}
+                onChange={(e) => setManagerFilter(e.target.value)}
+              >
+                <option value={ALL_MANAGERS}>All managers</option>
+                {managerOptions(agents).map((m) => (
+                  <option key={m.id} value={m.id}>{m.name}</option>
+                ))}
+              </select>
+              {/* appearance-none removes the native arrow, so the control would
+                  otherwise look like a label rather than a dropdown. */}
+              <ChevronDown
+                size={14}
+                className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2"
+                style={{ color: "#6B6D76" }}
+                aria-hidden="true"
+              />
+            </div>
+          )}
         </div>
       </div>
 
@@ -616,7 +667,7 @@ function AgentRow({
           </div>
           {/* Context on its own line so it gets the column's full width rather
               than competing with the gauge for it. */}
-          <p className="text-xs mt-0.5 truncate" style={{ color: "#6B6D76" }}>{agent.current_month_visits} visits · ₹{(agent.current_month_collections / 100000).toFixed(1)}L</p>
+          <p className="text-xs mt-0.5 truncate" style={{ color: "#6B6D76" }}>{agent.current_month_visits} visits · {shortMoney(agent.current_month_collections)}</p>
         </div>
 
         <div className="col-span-1">
@@ -684,7 +735,7 @@ function AgentRow({
 
         <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2 text-xs" style={{ color: "#6B6D76" }}>
           <span>Score <strong className="text-brand-600">{agent.ranking_score.toFixed(0)}</strong></span>
-          <span>₹{(agent.current_month_collections / 100000).toFixed(1)}L collected</span>
+          <span>{shortMoney(agent.current_month_collections)} collected</span>
           <span>{agent.current_month_visits} visits</span>
           <span>PTP {ptpRate}%</span>
           <span className="flex items-center gap-1 ml-auto">
@@ -1239,13 +1290,9 @@ function DutyMeter({ onDuty, total }: { onDuty: number; total: number }) {
  *  header and the table can never disagree. Status colours (good / critical /
  *  neutral) are correct here because these ARE states, not series. */
 function TrendSplit({ agents }: { agents: Agent[] }) {
-  const deltas = agents
-    .map((a) => a.collection_rate_delta_pts)
-    .filter((d): d is number => d !== null && d !== undefined);
-  const up = deltas.filter((d) => d > 0).length;
-  const down = deltas.filter((d) => d < 0).length;
-  const flat = deltas.filter((d) => d === 0).length;
-  const total = deltas.length;
+  // Counting rule in lib/managerFilter.trendSplit, with its own tests: a null
+  // delta is UNKNOWN (too little history), never Flat.
+  const { up, down, flat, total, noHistory } = trendSplit(agents);
 
   const rows = [
     { label: "Improving", n: up,   color: "#12B76A" },
@@ -1274,6 +1321,11 @@ function TrendSplit({ agents }: { agents: Agent[] }) {
               <span className="text-[13px] font-semibold tabular-nums w-5 text-right" style={{ color: "#1C1C1F" }}>{r.n}</span>
             </li>
           ))}
+          {noHistory > 0 && (
+            <li className="text-[11.5px] pt-0.5" style={{ color: "#8A8C94" }}>
+              {noHistory} with too little history to compare
+            </li>
+          )}
         </ul>
       )}
     </div>
@@ -1499,10 +1551,13 @@ function ReallocationModal({ plan, onClose, onRefresh }: { plan: ReallocationPla
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-sm font-semibold" style={{ color: "#1C1C1F" }}>{r.customer_name}</span>
+                    {/* Colour comes from DPD_COLOUR, not a local ternary: the old one
+                        had its own near-miss hues and collapsed every bucket below
+                        BUCKET_3 to amber. todayDpd.ts's palette is the CVD-checked one. */}
                     <span className="text-xs px-1.5 py-0.5 rounded-full font-bold" style={{
-                      background: r.dpd_bucket === "NPA" ? "rgba(124,58,237,0.10)" : r.dpd_bucket === "BUCKET_3" ? "rgba(220,38,38,0.10)" : "rgba(245,158,11,0.10)",
-                      color: r.dpd_bucket === "NPA" ? "#7c3aed" : r.dpd_bucket === "BUCKET_3" ? "#dc2626" : "#d97706",
-                    }}>{r.dpd_bucket.replace("_", " ")}</span>
+                      background: `${DPD_COLOUR[r.dpd_bucket] ?? "#64748B"}1A`,
+                      color: DPD_COLOUR[r.dpd_bucket] ?? "#64748B",
+                    }}>{DPD_LABEL[r.dpd_bucket] ?? r.dpd_bucket.replace("_", " ")}</span>
                     <span className="text-xs" style={{ color: "#6B6D76" }}>{r.case_number}</span>
                   </div>
                   <div className="flex items-center gap-3 mt-1 text-xs" style={{ color: "#6B6D76" }}>

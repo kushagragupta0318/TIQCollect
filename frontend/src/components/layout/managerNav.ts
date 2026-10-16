@@ -41,8 +41,11 @@ export const MANAGER_NAV: readonly ManagerNavItem[] = [
   { to: "/manager/beat-plan",  icon: Compass,         label: "Field Plan", primary: false },
   { to: "/manager/cases",      icon: Briefcase,       label: "Cases",      primary: true },
   { to: "/manager/analytics",  icon: BarChart2,       label: "Analytics",  primary: false },
-  { to: "/manager/compliance", icon: Shield,          label: "Compliance", primary: false },
   { to: "/manager/messaging",  icon: MessageSquare,   label: "Messages",   primary: false },
+  // Compliance is last for every manager role, agency admin included: it is
+  // the oversight surface, not a daily destination. Both the rail and the More
+  // sheet read this order, so it only has to be right here.
+  { to: "/manager/compliance", icon: Shield,          label: "Compliance", primary: false },
 ];
 
 /** The phone's bottom bar, before the More button. */
