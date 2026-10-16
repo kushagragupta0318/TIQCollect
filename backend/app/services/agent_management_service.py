@@ -166,6 +166,8 @@ def create_agent(
     territory_region_id: str | None = None, gender: str | None = None,
     specialization: AgentSpecialization | None = None, vehicle_type: str | None = None,
     max_cases_per_day: int | None = None, languages_spoken: list[str] | None = None,
+    experience_years: int | None = None, strong_loan_type: "LoanType | None" = None,
+    assign_manager_user_id: str | None = None,
     request: Request | None = None,
 ) -> dict:
     """Creates the User (role=FIELD_AGENT) and Agent rows in one transaction
@@ -200,6 +202,27 @@ def create_agent(
     _validate_vehicle_type(vehicle_type)
     _validate_max_cases_per_day(max_cases_per_day)
     _validate_languages_spoken(languages_spoken)
+    if experience_years is not None and not (0 <= experience_years <= 60):
+        raise AppException(422, ErrorCode.VALIDATION_ERROR, "Experience must be between 0 and 60 years.")
+
+    # Who will manage this agent. An AGENCY_ADMIN adds agents on behalf of any
+    # manager in their OWN agency (the Add Agent form offers the list); anyone
+    # else may only add to their own roster, so an explicit id that is not
+    # theirs is refused rather than silently ignored.
+    owner_id = manager.id
+    if assign_manager_user_id and assign_manager_user_id != manager.id:
+        if manager.role != UserRole.AGENCY_ADMIN:
+            raise AppException(403, ErrorCode.FORBIDDEN, "You can only add agents to your own team.")
+        target = (
+            db.query(User)
+            .filter(User.id == assign_manager_user_id,
+                    User.agency_id == manager.agency_id,
+                    User.role == UserRole.AGENCY_MANAGER)
+            .first()
+        )
+        if target is None:
+            raise AppException(422, ErrorCode.VALIDATION_ERROR, "Pick a manager from your own agency.")
+        owner_id = target.id
     _validate_base_location(base_latitude, base_longitude, territory_region_id, manager, db)
 
     # Global, not agency-scoped, ON PURPOSE: one login per identity across
@@ -234,12 +257,13 @@ def create_agent(
 
         agent = Agent(
             user_id=user.id, employee_code=employee_code, id_card_number=id_card_number,
-            manager_user_id=manager.id, bank_id=manager.bank_id, agency_id=manager.agency_id,
+            manager_user_id=owner_id, bank_id=manager.bank_id, agency_id=manager.agency_id,
             base_latitude=base_latitude, base_longitude=base_longitude, territory=territory,
             territory_region_id=territory_region_id, gender=gender,
             specialization=specialization or AgentSpecialization.BOTH,
             vehicle_type=vehicle_type or "TWO_WHEELER",
             max_cases_per_day=max_cases_per_day or 15,
+            experience_years=experience_years, strong_loan_type=strong_loan_type,
             languages_spoken=languages_spoken or [], status=AgentStatus.OFF_DUTY, tier=AgentTier.TIER_3,
         )
         db.add(agent)
