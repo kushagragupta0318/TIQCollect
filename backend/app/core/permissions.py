@@ -131,6 +131,19 @@ _CATALOG: tuple[Capability, ...] = (
     _cap("bank.regions.manage", "edit the region hierarchy and branches", (BA,)),
     _cap("bank.audit.read", "the bank-wide audit trail", (BA, BT)),
     _cap("bank_feed.upload", "submit a feed file (a person or a SERVICE account)", (BA, BT, SV), sensitive=True),
+    # 2026-10-16 (Phase 9, RISK-1). Reading a quarantined row AS RECEIVED is a
+    # SEPARATE grant from submitting a feed: `include_raw=true` returns the
+    # borrower's name, phone, address and masked PAN, and Phase 8 measured that
+    # every holder of bank_feed.upload — including BANK_TECHOPS and the SERVICE
+    # account — could read it, with no audit row.
+    #
+    # BANK_ADMIN only, on purpose. BANK_TECHOPS keeps the whole review and
+    # release workflow (held rows, reasons, account numbers, Release); it loses
+    # only the borrower's contact details. SERVICE is excluded because a
+    # long-lived machine credential has no reason to read them at all.
+    _cap("bank_feed.pii.read",
+         "read a quarantined feed row as received (borrower PII); writes DATA_EXPORT",
+         (BA,), sensitive=True),
 
     _cap("agency.read", "directory, scorecards, agency drill (read-only)", (BA, BN, BT)),
     _cap("agency.onboard", "create a draft agency, send the master-login invite", (BA,), sensitive=True),

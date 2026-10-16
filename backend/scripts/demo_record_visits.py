@@ -102,6 +102,48 @@ OUTCOME_MIX = [
 ]
 MODES = [PaymentMode.CASH, PaymentMode.UPI, PaymentMode.NEFT, PaymentMode.CHEQUE]
 
+# Digital-first weighting for --plan runs: UPI and NEFT dominate, with a little
+# cash and cheque so the book does not look synthetic. ONLINE is deliberately
+# absent — ck_payments_no_online makes the database refuse it and
+# tests/test_payment_modes.py pins that for demo scripts.
+PLAN_MODES = ([PaymentMode.UPI] * 5 + [PaymentMode.NEFT] * 4
+              + [PaymentMode.CASH, PaymentMode.CHEQUE])
+
+# `--plan` asks for an EXACT distribution instead of the weighted OUTCOME_MIX:
+# "264 cases, of which 38 fully paid, 69 part-paid (29 of those also promising),
+# 50 promising, and the rest met-or-absent with no outcome". The weighted mix
+# cannot express that — it draws independently per case, so the realised counts
+# drift. A plan is consumed one outcome per case, in shuffled order, so the
+# totals are what was asked for.
+#
+# Each entry is (outcome, count, pays, promises) — the same 4-tuple shape
+# OUTCOME_MIX uses, so _record_one needs no special case.
+PLANS: dict[str, list[tuple]] = {
+    # 264 cases: 205 visited, 59 left unvisited (the remainder of the beat).
+    "oct16-264": [
+        (VisitOutcome.PAID_FULL,     38, True,  False),
+        (VisitOutcome.PART_PAID,     40, True,  False),
+        (VisitOutcome.PART_PAID_PTP, 29, True,  True),   # part-paid AND promised
+        (VisitOutcome.PTP,           21, False, True),
+        (VisitOutcome.REVISIT,       40, False, False),  # met, no outcome yet
+        (VisitOutcome.NOT_AVAILABLE, 37, False, False),  # visited, nobody home
+    ],
+}
+
+
+def _plan_queue(name: str, rng: random.Random) -> list[tuple]:
+    """The plan as a shuffled queue of one 4-tuple per case.
+
+    Shuffled so outcomes are spread across agents and beats rather than
+    arriving in blocks — an agent whose whole day is PAID_FULL is not a
+    plausible day.
+    """
+    if name not in PLANS:
+        raise SystemExit(f"unknown plan {name!r}; known: {', '.join(sorted(PLANS))}")
+    queue = [spec for spec in PLANS[name] for _ in range(spec[1])]
+    rng.shuffle(queue)
+    return queue
+
 
 def _uid() -> str:
     return str(uuid.uuid4())
@@ -160,7 +202,8 @@ def _summary(day, visit_ids, payment_ids, ptp_ids, plan_rows) -> dict:
             "collected": round(sum(r[3] for r in plan_rows), 2)}
 
 
-def record_day(db, day, *, per_agent: int = 3, seed: int = 20260910, apply_changes: bool = False) -> dict:
+def record_day(db, day, *, per_agent: int = 3, seed: int = 20260910, apply_changes: bool = False,
+               plan: str | None = None) -> dict:
     """Record one DAY's field activity against that day's beats.
 
     Extracted from main() unchanged (2026-10-07) so scripts/demo_catchup.py can
@@ -216,12 +259,23 @@ def record_day(db, day, *, per_agent: int = 3, seed: int = 20260910, apply_chang
     ptp_ids: list[str] = []
     plan_rows: list[tuple] = []
 
+    # --plan: one exact outcome per case, consumed across every beat. Without
+    # it the weighted OUTCOME_MIX applies, exactly as before.
+    plan_queue = _plan_queue(plan, rng) if plan else None
+    if plan_queue:
+        print(f"plan {plan}: {len(plan_queue)} visits to place across {len(beats)} beats")
+
     for beat in sorted(beats, key=lambda b: b.agent_id):
+        if plan_queue is not None and not plan_queue:
+            break                      # the plan is satisfied; leave the rest unvisited
         agent = db.get(Agent, beat.agent_id)
         if not agent:
             continue
         case_ids = [c for c in (beat.ordered_case_ids or []) if c not in visited_day]
-        chosen = case_ids[: per_agent]
+        # A plan takes a few per agent and moves on, so 264 visits land across
+        # the whole field force instead of emptying the first few beats.
+        take = per_agent if plan_queue is None else min(per_agent, len(plan_queue))
+        chosen = case_ids[: take]
         if not chosen:
             continue
 
@@ -237,7 +291,12 @@ def record_day(db, day, *, per_agent: int = 3, seed: int = 20260910, apply_chang
                 continue
             remaining = round(float(case.target_amount or 0)
                               - float(case.collected_amount or 0), 2)
-            outcome, pays, promises = _pick(rng)
+            if plan_queue is not None:
+                if not plan_queue:
+                    break
+                outcome, _n, pays, promises = plan_queue[0]
+            else:
+                outcome, pays, promises = _pick(rng)
             # Nothing left to collect means nothing to collect. Fall back to
             # a promise rather than writing a zero-rupee payment.
             if pays and remaining <= 1.0:
@@ -256,6 +315,11 @@ def record_day(db, day, *, per_agent: int = 3, seed: int = 20260910, apply_chang
                           else str(case.status),
                 "resolved_at": case.resolved_at.isoformat() if case.resolved_at else None,
             })
+            if plan_queue is not None:
+                # Popped HERE, not at the draw: a case skipped above (no
+                # customer, nothing left to collect) must not consume a slot,
+                # or the realised totals come out short of the plan.
+                plan_queue.pop(0)
             plan_rows.append((agent.employee_code, case.case_number, outcome.value, amount))
 
             if not apply_changes:
@@ -286,7 +350,7 @@ def record_day(db, day, *, per_agent: int = 3, seed: int = 20260910, apply_chang
             if pays and amount > 0:
                 pay = Payment(
                     id=_uid(), case_id=case.id, visit_id=visit.id, agent_id=agent.id,
-                    amount=amount, mode=rng.choice(MODES),
+                    amount=amount, mode=rng.choice(PLAN_MODES if plan_queue is not None else MODES),
                     status=PaymentStatus.VERIFIED, verified_at=when,
                     receipt_number=_next_receipt(),
                     payment_date=when, receipt_sms_sent=True,
@@ -369,6 +433,9 @@ def main() -> None:
     ap.add_argument("--date", dest="day", default=None,
                     help="The beat date to record against, ISO YYYY-MM-DD. Default: today in IST.")
     ap.add_argument("--undo", type=str, help="Path to a manifest from a previous run")
+    ap.add_argument("--plan", type=str, default=None,
+                    help=f"Exact outcome distribution instead of the weighted mix "
+                         f"(known: {', '.join(sorted(PLANS))})")
     args = ap.parse_args()
 
     if args.undo:
@@ -380,7 +447,8 @@ def main() -> None:
     day = date.fromisoformat(args.day) if args.day else datetime.now(IST).date()
     db = SessionLocal()
     try:
-        record_day(db, day, per_agent=args.per_agent, seed=args.seed, apply_changes=args.apply)
+        record_day(db, day, per_agent=args.per_agent, seed=args.seed,
+                   apply_changes=args.apply, plan=args.plan)
     finally:
         db.close()
 
