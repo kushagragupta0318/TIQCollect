@@ -28,11 +28,15 @@
 // ─────────────────────────────────────────────────────────────────────────
 import { NavLink, Outlet, useNavigate, useLocation } from "react-router";
 import type { Location } from "react-router";
-import { AlertTriangle, Bell, CalendarOff, Ellipsis, X } from "lucide-react";
+import { AlertTriangle, Bell, CalendarOff, Ellipsis, UserCog, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { LeaveRequest } from "@/api/agent";
 import { BrandLogo } from "@/components/ui/BrandLogo";
-import { useState, useEffect, useCallback, useRef } from "react";
+import { BrandLoader } from "@/components/ui/BrandLoader";
+import { ReviewDayProvider } from "@/contexts/ReviewDayContext";
+import { useReviewDay } from "@/contexts/useReviewDay";
+import { ReviewDatePicker } from "@/pages/manager/ReviewDatePicker";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { createPortal, flushSync } from "react-dom";
 import api from "@/api/axios";
 import { useAuthStore } from "@/store/authStore";
@@ -40,6 +44,8 @@ import { AccountMenu } from "@/components/layout/AccountMenu";
 import type { Agent } from "@/types";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getMe } from "@/api/auth";
+import { getAgents } from "@/api/manager";
+import ManagerOnboarding from "@/components/layout/ManagerOnboarding";
 import { useLiveEvents, WORK_EVENTS } from "@/hooks/useLiveEvents";
 import { useModalA11y } from "@/hooks/useModalA11y";
 import { useUnreadAgentMessagingCount, useUnreadMessagingCount } from "@/lib/useMessagingInbox";
@@ -74,6 +80,15 @@ const sidebarStyle = (open: boolean): React.CSSProperties => ({
   boxShadow:   "0 1px 2px rgba(16,24,40,0.04)",
 });
 
+// Destinations an AGENCY_ADMIN does not get. Live Map is per-agent, live field
+// work — a manager watches their OWN team; an agency-wide map is every agent
+// jumbled together rather than anyone's actual day.
+//
+// Field Plan is NOT hidden: a plan belongs to one manager (runs, beats and
+// settings are all keyed by manager_user_id), so the admin picks a manager on
+// that page and reads — or generates — that manager's plan.
+const ADMIN_HIDDEN_NAV = new Set<string>(["/manager/live-map"]);
+
 const navItemStyle = (isActive: boolean, open: boolean): React.CSSProperties => ({
   display:        "flex",
   alignItems:     "center",
@@ -92,8 +107,19 @@ const navItemStyle = (isActive: boolean, open: boolean): React.CSSProperties => 
   transition:     "background 120ms cubic-bezier(0.2,0,0,1), color 120ms cubic-bezier(0.2,0,0,1)",
 });
 
+/** The shell, wrapped so the header's calendar control and the Overview page
+ *  can share one reviewed day across <Outlet />. */
 export default function ManagerLayout() {
+  return (
+    <ReviewDayProvider>
+      <ManagerLayoutInner />
+    </ReviewDayProvider>
+  );
+}
+
+function ManagerLayoutInner() {
   const { user, logout } = useAuthStore();
+  const { reviewDay, setReviewDay } = useReviewDay();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -137,6 +163,15 @@ export default function ManagerLayout() {
   const queryClient = useQueryClient();
   // A14: the header names the agency (from its record), not the viewer's role.
   const { data: me } = useQuery({ queryKey: ["auth-me", user?.id], queryFn: getMe, enabled: !!user, staleTime: 10 * 60_000 });
+  // Day-1 gate: a manager with no agents of their own sees the onboarding
+  // screen, not the full (empty) dashboard. Scoped per manager by the endpoint
+  // (Agent.manager_user_id), and shares the ["manager","agents"] cache with the
+  // Agents page, so adding the first agent flips this without a reload.
+  // refetchOnWindowFocus off: during onboarding the manager tabs away to paste
+  // credentials and back; a focus-refetch returning the agents they just added
+  // must not flip them out of the setup flow before they click Continue (the
+  // onboarding screen itself invalidates this query when they do).
+  const agentsGateQ = useQuery({ queryKey: ["manager", "agents"], queryFn: getAgents, enabled: !!user, staleTime: 30_000, refetchOnWindowFocus: false });
   const invalidateTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useLiveEvents((e) => {
     if (e.type.startsWith("sos.")) fetchSOS();
@@ -185,6 +220,34 @@ export default function ManagerLayout() {
   const closeMore = useCallback(() => setMoreOpenFor(null), []);
   const currentMore = activeMoreItem(location.pathname);
 
+  // The agency admin's rail differs from a manager's: they oversee the whole
+  // agency, so Managers sits directly under Overview, and Live Map is dropped
+  // (watching individual agents live is the managers' job, not theirs). Every
+  // other destination stays — the pages themselves widen to the agency.
+  const isAgencyAdmin = user?.role === "AGENCY_ADMIN";
+  const navItems = useMemo(() => {
+    if (!isAgencyAdmin) return [...MANAGER_NAV];
+    const items = MANAGER_NAV.filter((i) => !ADMIN_HIDDEN_NAV.has(i.to));
+    const afterOverview = items.findIndex((i) => i.to === "/manager/overview") + 1;
+    items.splice(afterOverview, 0, { to: "/manager/managers", icon: UserCog, label: "Managers", primary: false });
+    return items;
+  }, [isAgencyAdmin]);
+
+  // Day-1 gate. While the first agents fetch is in flight, hold on a brand
+  // splash rather than flashing the full dashboard and then replacing it.
+  if (agentsGateQ.isLoading) {
+    return <BrandLoader full label="Loading your dashboard" />;
+  }
+  // No agents of their own → onboarding, not the (empty) feature set. Gated on
+  // a SUCCESSFUL empty fetch: a failed/errored load falls through to the normal
+  // app (whose pages handle their own errors) rather than falsely greeting an
+  // established manager with "add your first agent". Agency admins are exempt —
+  // they manage MANAGERS, not a roster of their own agents, so the agent-
+  // onboarding would trap them away from the Managers page.
+  if (agentsGateQ.isSuccess && agentsGateQ.data.length === 0 && user?.role === "AGENCY_MANAGER") {
+    return <ManagerOnboarding userName={user?.full_name} agencyName={me?.agency_name} onLogout={handleLogout} />;
+  }
+
   return (
     <div
       className="overflow-x-clip-safe"
@@ -209,7 +272,7 @@ export default function ManagerLayout() {
 
         {/* Nav */}
         <nav style={{ flex: 1, padding: "12px 8px", overflowY: "auto", overflowX: "hidden" }}>
-          {MANAGER_NAV.map(({ to, icon: Icon, label }) => (
+          {navItems.map(({ to, icon: Icon, label }) => (
             <NavLink
               key={to}
               to={to}
@@ -294,6 +357,12 @@ export default function ManagerLayout() {
           </div>
           <div className="flex items-center gap-2 sm:gap-2.5 flex-shrink-0">
             <SOSAlertBadge sosCount={sosCount} />
+            {/* Only on Overview: it governs that page's figures, and a control
+                that changes nothing on the page you are looking at is worse
+                than no control. */}
+            {location.pathname.startsWith("/manager/overview") && (
+              <ReviewDatePicker value={reviewDay} onChange={setReviewDay} />
+            )}
             <NotificationBell sosCount={sosCount} sosAgents={sosAgents} leavePending={leavePending} />
             <AccountMenu name={user?.full_name ?? ""} role={user?.role ?? ""} onLogout={handleLogout}
               onAgencyProfile={() => navigate("/manager/agency-profile")} />
@@ -476,7 +545,9 @@ function NotificationBell({ sosCount, sosAgents, leavePending }: { sosCount: num
         onClick={() => setOpen((v) => !v)}
         aria-label={total > 0 ? `Notifications, ${total} active` : "Notifications"}
         aria-expanded={open}
-        className="tap-target relative flex flex-shrink-0 items-center justify-center transition-colors duration-150 hover:bg-muted"
+        // Same dead-hover fix as the calendar beside it: the inline
+        // background below outranked `hover:bg-muted`, so this never reacted.
+        className="tap-target header-icon-btn relative flex flex-shrink-0 items-center justify-center"
         style={{ width: 40, height: 40, borderRadius: 10, background: "#fff", border: "1px solid #E1E3E9", color: "#667085" }}
       >
         <Bell className="w-4 h-4" />

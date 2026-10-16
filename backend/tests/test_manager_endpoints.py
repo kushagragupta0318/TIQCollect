@@ -590,12 +590,45 @@ def test_every_manager_route_that_reads_tenant_data_is_scoped():
         # test_the_route_returns_only_this_managers_team in
         # tests/test_portfolio_breakdown.py, which asserts another manager's
         # branch, city and product are absent from the rows.
+        # `_scoped_agent_ids` (2026-10-14) delegates to services/scope.
+        # agents_in_scope — the one rule — so a manager sees their own agents
+        # and an agency admin sees their whole agency. Recognised here for the
+        # same reason as the helpers above, and under the same obligation: the
+        # behavioural tests are test_an_agency_admin_sees_every_agent_in_their_agency
+        # and test_a_manager_still_sees_only_their_own_agents below.
         if not ('manager_user_id' in chunk or 'current_user.id' in chunk
                 or '_require_own_agent' in chunk
+                or '_scoped_agent_ids' in chunk
                 or '_audit_visible_user_ids' in chunk or '_audit_log_query' in chunk
                 or '_team_breakdown' in chunk):
             unscoped.append(path)
     assert unscoped == [], f'unscoped manager routes: {unscoped}'
+
+
+# ─ _scoped_agent_ids: the behavioural half the sweep above demands ──────────
+# The sweep recognises `_scoped_agent_ids` by NAME, and a name is not proof.
+# These two pin what the helper actually does: a manager's view is unchanged
+# (their own agents only) and an agency admin sees the whole agency — the role
+# split that services/scope.agents_in_scope already declared and this router
+# used to ignore.
+
+def test_an_agency_admin_sees_every_agent_in_their_agency(client, seeded):
+    db = seeded["db"]
+    admin = _user(db, "agencyadmin@t.io", UserRole.AGENCY_ADMIN, "Agency Admin")
+    db.add(admin)
+    db.commit()
+    r = client.get("/api/v1/manager/agents", headers=auth_headers(admin))
+    assert r.status_code == 200
+    codes = sorted(a["employee_code"] for a in r.json())
+    # Both agents, though they belong to two DIFFERENT managers.
+    assert codes == ["EMP001", "EMP002"]
+
+
+def test_a_manager_still_sees_only_their_own_agents(client, seeded):
+    r = client.get("/api/v1/manager/agents", headers=auth_headers(seeded["manager"]))
+    assert r.status_code == 200
+    codes = [a["employee_code"] for a in r.json()]
+    assert codes == ["EMP001"]          # EMP002 is the other manager's
 
 
 # ─ GET /manager/audit-log ──────────────────────────────────────────────────
@@ -850,3 +883,103 @@ def test_live_status_and_dashboard_agree_on_collected(client, seeded):
     if isinstance(live, dict) and "amount_collected_today" in live:
         assert float(dash["amount_collected_today"]) == pytest.approx(
             float(live["amount_collected_today"]))
+
+
+# ─ Per-day review: ?on= and the trend series ───────────────────────────────
+
+def test_dashboard_on_a_past_day_reads_that_day_not_today(client, seeded):
+    from app.models.payment import PaymentStatus
+    db, mgr = seeded["db"], seeded["manager"]
+    case, agent = seeded["cases"][0], seeded["agents"][0]
+    earlier = NOW - timedelta(days=3)
+    _pay(db, case, agent, amount=4242.0, status=PaymentStatus.VERIFIED, when=earlier)
+
+    r = client.get(f"/api/v1/manager/dashboard?on={earlier.date().isoformat()}",
+                   headers=auth_headers(mgr))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["as_of"] == earlier.date().isoformat()
+    assert float(body["amount_collected_today"]) == pytest.approx(4242.0)
+
+
+def test_a_past_day_reports_agents_with_a_plan_not_todays_roster(client, seeded):
+    """workforce.agents.status has no history, so a past day must not show the
+    LIVE on-duty count under an old date."""
+    mgr = seeded["manager"]
+    past = (TODAY - timedelta(days=9)).isoformat()
+
+    today_body = client.get("/api/v1/manager/dashboard", headers=auth_headers(mgr)).json()
+    past_body = client.get(f"/api/v1/manager/dashboard?on={past}", headers=auth_headers(mgr)).json()
+
+    assert today_body["agents_metric"] == "ON_DUTY"
+    assert past_body["agents_metric"] == "WITH_PLAN"
+    # No beats that long ago in the fixture, so the honest answer is zero —
+    # NOT the live roster count.
+    assert past_body["agents_on_duty"] == 0
+
+
+def test_a_day_with_no_activity_reports_real_zeros(client, seeded):
+    mgr = seeded["manager"]
+    quiet = (TODAY - timedelta(days=40)).isoformat()
+    body = client.get(f"/api/v1/manager/dashboard?on={quiet}", headers=auth_headers(mgr)).json()
+    assert body["as_of"] == quiet
+    assert float(body["amount_collected_today"]) == 0.0
+
+
+@pytest.mark.parametrize("bad", ["2099-01-01", "notadate", "2026-13-45"])
+def test_an_impossible_on_value_is_refused_not_silently_today(client, seeded, bad):
+    """Answering a different day than the one asked for is how a reviewer ends
+    up trusting the wrong numbers."""
+    r = client.get(f"/api/v1/manager/dashboard?on={bad}", headers=auth_headers(seeded["manager"]))
+    assert r.status_code == 422, r.text
+
+
+def test_the_series_and_the_dashboard_agree_on_the_same_day(client, seeded):
+    """Both read 'collected' through the same VERIFIED rule, so a day cannot
+    show one number on the chart and another in the tiles."""
+    from app.models.payment import PaymentStatus
+    db, mgr = seeded["db"], seeded["manager"]
+    case, agent = seeded["cases"][0], seeded["agents"][0]
+    when = NOW - timedelta(days=2)
+    _pay(db, case, agent, amount=3300.0, status=PaymentStatus.VERIFIED, when=when)
+    _pay(db, case, agent, amount=1200.0, status=PaymentStatus.REJECTED, when=when)
+    day = when.date().isoformat()
+
+    dash = client.get(f"/api/v1/manager/dashboard?on={day}", headers=auth_headers(mgr)).json()
+    series = client.get("/api/v1/manager/performance-series?days=30",
+                        headers=auth_headers(mgr)).json()
+    point = next(p for p in series["points"] if p["day"] == day)
+
+    assert point["collected"] == pytest.approx(float(dash["amount_collected_today"]))
+    assert point["collected"] == pytest.approx(3300.0)   # the REJECTED 1200 is excluded
+
+
+def test_the_series_returns_every_day_in_the_range_including_empty_ones(client, seeded):
+    """A gap in a trend line is ambiguous; an explicit zero is not."""
+    mgr = seeded["manager"]
+    for days in (30, 60):
+        body = client.get(f"/api/v1/manager/performance-series?days={days}",
+                          headers=auth_headers(mgr)).json()
+        assert body["days"] == days
+        assert len(body["points"]) == days
+        assert body["points"][0]["day"] == (TODAY - timedelta(days=days - 1)).isoformat()
+        assert body["points"][-1]["day"] == TODAY.isoformat()
+        assert all({"day", "target", "collected", "visits"} <= set(p) for p in body["points"])
+
+
+def test_the_series_never_shows_another_managers_money(client, seeded):
+    """Same tenancy rule as every other figure on this router."""
+    from app.models.payment import PaymentStatus
+    db = seeded["db"]
+    other_mgr, other_agent = seeded["other"], seeded["agents"][1]
+    case = seeded["cases"][0]
+    _pay(db, case, other_agent, amount=9999.0, status=PaymentStatus.VERIFIED,
+         when=NOW - timedelta(days=1))
+
+    mine = client.get("/api/v1/manager/performance-series?days=30",
+                      headers=auth_headers(seeded["manager"])).json()
+    assert all(p["collected"] != pytest.approx(9999.0) for p in mine["points"])
+
+    theirs = client.get("/api/v1/manager/performance-series?days=30",
+                        headers=auth_headers(other_mgr)).json()
+    assert any(p["collected"] == pytest.approx(9999.0) for p in theirs["points"])

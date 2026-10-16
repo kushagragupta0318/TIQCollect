@@ -808,6 +808,15 @@
   100% { box-shadow: 0 0 0 0   rgba(34, 197, 94, 0); }
 }
 
+/* The one wait animation. Every "we are loading" moment in the platform — the
+   pre-mount boot splash in index.html, the lazy-route fallback and the
+   post-login hold — breathes the brand mark with this, so a wait always looks
+   the same. index.html carries a copy, because it must paint before this file. */
+@keyframes brandBreathe {
+  0%, 100% { opacity: 0.45; transform: scale(0.94); }
+  50%      { opacity: 1;    transform: scale(1); }
+}
+
 /* ── Global scrollbar ─────────────────────────────────────────────────────── */
 ::-webkit-scrollbar       { width: 5px; height: 5px; }
 ::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 9999px; }
@@ -1191,4 +1200,85 @@ textarea:focus-visible {
 .font-extrabold,
 .font-black {
   font-weight: 600 !important;
+}
+
+/* ── The brand loader ─────────────────────────────────────────────────────────
+   Shared by BrandLoader.tsx (routes, post-login) and mirrored by the inline
+   boot splash in index.html. 1.6s is slow enough to read as breathing rather
+   than blinking on the sub-second waits these cover.                          */
+.brand-loader {
+  min-height: 50vh;
+  display: grid;
+  place-items: center;
+  width: 100%;
+}
+
+.brand-loader--full { min-height: 100svh; background: hsl(var(--background)); }
+
+/* Mark over caption, centred as one unit. */
+.brand-loader__stack {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+}
+
+.brand-loader__label {
+  font-size: 12.5px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: hsl(var(--muted-foreground));
+}
+
+.brand-loader__mark {
+  width: 44px;
+  height: 44px;
+  object-fit: contain;
+  animation: brandBreathe 1.6s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Reduced motion already pins animation-duration globally, which would freeze
+   the mark mid-fade at opacity 0.45. Hold it fully opaque and still instead. */
+@media (prefers-reduced-motion: reduce) {
+  .brand-loader__mark { opacity: 1 !important; transform: none !important; }
+}
+
+/* ── Header icon buttons (calendar, notification bell) ────────────────────────
+   These set `background` as an INLINE style, because it depends on component
+   state (reviewing / unread). An inline background outranks a utility class,
+   so the `hover:bg-muted` they carried never fired — the buttons looked
+   inert. `!important` is what lets a stylesheet rule beat the inline value;
+   it is scoped to this one class so it cannot leak.
+
+   The active variant keeps its own colour and darkens instead, so a
+   "reviewing" calendar does not turn grey under the pointer.               */
+.header-icon-btn {
+  transition: background-color 150ms cubic-bezier(0.16, 1, 0.3, 1),
+              border-color 150ms cubic-bezier(0.16, 1, 0.3, 1),
+              transform 120ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.header-icon-btn:hover {
+  background: #F2F4F7 !important;
+  border-color: #D5D9E0 !important;
+}
+
+.header-icon-btn:active { transform: scale(0.96); }
+
+.header-icon-btn[data-active="true"]:hover {
+  background: #0E5FD8 !important;      /* brand blue, one step darker */
+  border-color: #0E5FD8 !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .header-icon-btn:active { transform: none; }
+}
+
+/* ── Review picker day cells ──────────────────────────────────────────────────
+   Same inline-background situation as .header-icon-btn: the cell's background
+   depends on selected/today state and is set inline, so a utility hover class
+   cannot win. Disabled (future) days are deliberately excluded — a hover on a
+   day you cannot pick suggests you can.                                      */
+.day-cell { transition: background-color 120ms cubic-bezier(0.16, 1, 0.3, 1); }
+.day-cell:hover:not(:disabled):not([style*="rgb(22, 119, 255)"]) {
+  background: #F2F4F7 !important;
 }

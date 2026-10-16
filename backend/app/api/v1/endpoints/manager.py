@@ -55,7 +55,7 @@ from app.models.payment import Payment, PaymentMode, PaymentStatus
 from app.models.ptp import PTP, PTPStatus
 from app.core.permissions import require_perm
 from app.core.csv_safe import csv_row
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.models.visit import Visit, VisitOutcome
 from app.services.bank.agency_scorecard import compute_metrics, fetch_rows
 from app.services.brand import brand_for
@@ -65,26 +65,116 @@ from app.services.leave_service import agent_ids_on_leave, effective_status, lea
 router = APIRouter(prefix="/manager", tags=["manager"])
 
 
+def _scoped_agent_ids(db, current_user) -> list[str]:
+    """Every agent id this principal may see, through the ONE rule
+    (services/scope.agents_in_scope, ADR 0001):
+
+        AGENCY_MANAGER -> their own agents (by manager_user_id)
+        AGENCY_ADMIN   -> every agent of their agency
+
+    This router used to hand-repeat that manager_user_id predicate
+    at every call site, which is why an agency admin — who oversees the whole
+    agency — saw an empty dashboard: they manage managers, not agents, so the
+    hand-written filter matched nothing. Delegating to scope.py keeps a
+    manager's view byte-for-byte what it was and widens only the admin's.
+
+    Routes calling this are recognised by the structural sweep in
+    tests/test_manager_endpoints.py, which REQUIRES them to carry a
+    behavioural tenancy test as well — see
+    test_an_agency_admin_sees_every_agent_in_their_agency and
+    test_a_manager_still_sees_only_their_own_agents there.
+    """
+    from app.services.scope import agents_in_scope
+    return [a.id for a in agents_in_scope(db, current_user).with_entities(Agent.id).all()]
+
+
+def _planning_manager_id(db, current_user, manager_user_id: str | None) -> str:
+    """Whose field plan this request is about.
+
+    A field plan belongs to a MANAGER: allocation runs, beats and allocation
+    settings are all keyed by manager_user_id, and agents report to a manager,
+    never to the agency admin. So:
+
+      AGENCY_MANAGER -> always themselves. An explicit id that is not theirs is
+                        refused rather than quietly ignored.
+      AGENCY_ADMIN   -> has no roster of their own, so they NAME one of their
+                        agency's managers and read (or generate) that manager's
+                        plan. An id outside their agency is the same 404 a
+                        nonexistent one gets, so this cannot enumerate another
+                        agency's staff.
+    """
+    if getattr(current_user, "role", None) != UserRole.AGENCY_ADMIN:
+        if manager_user_id and manager_user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="You can only plan for your own team.")
+        return current_user.id
+    if not manager_user_id:
+        raise HTTPException(status_code=422, detail="Select a manager to see their field plan.")
+    target = (
+        db.query(User)
+        .filter(User.id == manager_user_id,
+                User.agency_id == current_user.agency_id,
+                User.role == UserRole.AGENCY_MANAGER)
+        .first()
+    )
+    if target is None:
+        raise HTTPException(status_code=404, detail="Manager not found")
+    return target.id
+
+
 def _require_own_agent(db, current_user, agent_id: str) -> Agent:
-    """The agent, if this manager owns them. 404 otherwise — never 403.
+    """The agent, if this principal may see them. 404 otherwise — never 403.
 
     404 rather than 403 deliberately: a 403 confirms the id exists, which
     turns this into an enumeration oracle for another agency's roster.
 
-    Tenant scoping in this router is hand-repeated at every call site, and
-    that is precisely why two endpoints shipped without it. New scoped
-    endpoints should call this; the existing ones can migrate to it, but
-    that is a separate change from closing the leaks.
+    Scoped through _scoped_agent_ids, so a manager still reaches only their own
+    agents and an agency admin reaches any agent of their own agency — never
+    another agency's, whichever role is asking.
     """
     agent = (
         db.query(Agent)
-        .filter(Agent.id == agent_id, Agent.manager_user_id == current_user.id)
+        .filter(Agent.id == agent_id, Agent.id.in_(_scoped_agent_ids(db, current_user)))
         .first()
     )
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     return agent
 
+
+
+def _parse_on(on: str | None) -> date | None:
+    """`?on=YYYY-MM-DD` for the review views, or None for "today".
+
+    Refuses a future date with 422 rather than answering with zeros: a day
+    that has not happened has no performance, and a silent empty dashboard
+    reads as a broken screen. Malformed input is also 422, never a fallback
+    to today — quietly answering a different question than the one asked is
+    how a reviewer ends up trusting the wrong day's numbers.
+    """
+    if on is None or on == "":
+        return None
+    try:
+        parsed = date.fromisoformat(on)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="on must be a date as YYYY-MM-DD.")
+    if parsed > date.today():
+        raise HTTPException(status_code=422, detail="on cannot be a future date.")
+    return parsed
+
+
+def _day_window(day: date) -> tuple[datetime, datetime, date]:
+    """The [start, end] bounds of one calendar day, and the day itself.
+
+    Deliberately NOT _effective_today: that helper answers "the latest beat on
+    or before today", which is a display convenience for a paused book. When a
+    reviewer names a date they mean that date, and a day with no plan must
+    report its real zeros rather than silently showing the last day that had
+    one. UTC to match _effective_today's own bounds and the timestamps stored
+    on payments and visits.
+    """
+    start = datetime.combine(day, datetime.min.time()).replace(tzinfo=timezone.utc)
+    end = datetime.combine(day, datetime.max.time()).replace(tzinfo=timezone.utc)
+    return start, end, day
 
 
 def _collected_between(db, agent_ids: list[str], start, end) -> float:
@@ -338,12 +428,30 @@ def _format_case(case: Case, agent_name_map: dict | None = None,
 # ---------------------------------------------------------------------------
 
 @router.get("/dashboard")
-def dashboard(current_user: ManagerOnly, db: DbSession):
+def dashboard(current_user: ManagerOnly, db: DbSession, on: Optional[str] = None):
+    """`on=YYYY-MM-DD` reads a PAST day instead of today (manager review).
+
+    Omitted, every figure is computed exactly as before — the default path is
+    unchanged, so existing callers see no difference.
+
+    WHAT A PAST DAY CAN AND CANNOT SAY. The day-windowed figures (money,
+    visits, PTPs, cases planned) are recomputed from rows that carry their own
+    date, so they are true for that day. `agents_on_duty` is NOT: workforce.
+    agents.status is a single mutable column with no history, so "who was on
+    duty last Tuesday" is not recorded anywhere. For a past date this returns
+    the agents who HELD A BEAT that day — a planning fact, which is recorded —
+    and `agents_metric` says which of the two the number is, so the UI can
+    label it honestly instead of showing today's roster under an old date.
+    """
     # Scope all stats to this manager's agents only
     my_agent_ids = [
-        a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()
+        a.id for a in db.query(Agent.id).filter(Agent.id.in_(_scoped_agent_ids(db, current_user))).all()
     ]
-    start_of_day, end_of_day, today_date = _effective_today(my_agent_ids, db)
+    as_of = _parse_on(on)
+    if as_of is None:
+        start_of_day, end_of_day, today_date = _effective_today(my_agent_ids, db)
+    else:
+        start_of_day, end_of_day, today_date = _day_window(as_of)
 
     total_agents = len(my_agent_ids)
     # On duty = stored ON_DUTY minus anyone on APPROVED leave today. The
@@ -351,10 +459,22 @@ def dashboard(current_user: ManagerOnly, db: DbSession):
     # services/leave_service.py, 2026-09-22.
     _on_leave_today = agent_ids_on_leave(db, leave_today(), my_agent_ids)
     agents_on_leave = len(_on_leave_today)
-    agents_on_duty = sum(
-        1 for a in db.query(Agent).filter(Agent.id.in_(my_agent_ids)).all()
-        if effective_status(a, _on_leave_today) is AgentStatus.ON_DUTY
-    )
+    if as_of is None:
+        agents_on_duty = sum(
+            1 for a in db.query(Agent).filter(Agent.id.in_(my_agent_ids)).all()
+            if effective_status(a, _on_leave_today) is AgentStatus.ON_DUTY
+        )
+        agents_metric = "ON_DUTY"
+    else:
+        # A past day: duty status has no history (see this route's docstring),
+        # so count who was PLANNED that day instead and say that is what this
+        # is. Leave is still judged against the real calendar day, unchanged.
+        agents_on_duty = (
+            db.query(func.count(func.distinct(Beat.agent_id)))
+            .filter(Beat.agent_id.in_(my_agent_ids), Beat.beat_date == as_of)
+            .scalar() or 0
+        )
+        agents_metric = "WITH_PLAN"
     total_cases = (
         db.query(func.count(Case.id)).filter(Case.agent_id.in_(my_agent_ids)).scalar() or 0
     )
@@ -534,6 +654,13 @@ def dashboard(current_user: ManagerOnly, db: DbSession):
     return {
         "total_agents": total_agents,
         "agents_on_duty": agents_on_duty,
+        # Which question `agents_on_duty` answered: ON_DUTY (live roster) or
+        # WITH_PLAN (held a beat that day). Additive — existing callers that
+        # ignore it keep today's behaviour.
+        "agents_metric": agents_metric,
+        # The day these figures describe, so the UI never captions a reviewed
+        # day with today's date.
+        "as_of": today_date.isoformat(),
         "agents_on_leave": agents_on_leave,
         "total_cases": total_cases,
         "cases_assigned": cases_assigned,
@@ -580,7 +707,7 @@ def dashboard_field_activity(
     from app.services import field_activity_service as fa
 
     my_agent_ids = [
-        a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()
+        a.id for a in db.query(Agent.id).filter(Agent.id.in_(_scoped_agent_ids(db, current_user))).all()
     ]
     _, end_of_day, eff_date = _effective_today(my_agent_ids, db)
     bounds = fa.window_bounds(window, eff_date, end_of_day)
@@ -888,12 +1015,20 @@ def _live_monthly_metrics(db, agent_ids: list[str], months: list[str]) -> dict[s
 
 @router.get("/agents")
 def list_agents(current_user: ManagerOnly, db: DbSession):
+    # Scoped through _scoped_agent_ids: a manager's own agents, an agency
+    # admin's whole agency (the Agents page offers a per-manager filter there).
     agents = (db.query(Agent)
-              .filter(Agent.manager_user_id == current_user.id)
+              .filter(Agent.id.in_(_scoped_agent_ids(db, current_user)))
               .options(joinedload(Agent.user))
               .order_by(Agent.employee_code)
               .all())
     agent_ids = [a.id for a in agents]
+    # Manager names for the per-manager filter, in ONE query off the ids we
+    # already hold (never per agent).
+    manager_ids = {a.manager_user_id for a in agents if a.manager_user_id}
+    manager_names: dict[str, str] = dict(
+        db.query(User.id, User.full_name).filter(User.id.in_(manager_ids)).all()
+    ) if manager_ids else {}
     start_of_day, end_of_day, eff_date = _effective_today(agent_ids, db)
     eff_date_str = eff_date.isoformat()
     on_leave_today = agent_ids_on_leave(db, leave_today(), agent_ids)
@@ -989,6 +1124,11 @@ def list_agents(current_user: ManagerOnly, db: DbSession):
         result.append({
             "id": agent.id,
             "user_id": agent.user_id,
+            # Who manages this agent. A manager's own list is all one value;
+            # the agency admin's spans the agency, and the Agents page offers a
+            # per-manager filter off these two.
+            "manager_user_id": agent.manager_user_id,
+            "manager_name": manager_names.get(agent.manager_user_id),
             "employee_code": agent.employee_code,
             "id_card_number": agent.id_card_number,
             "full_name": agent.user.full_name,
@@ -1233,12 +1373,25 @@ def list_cases(
     # Cases with an ACTIVE promise committed inside [ptp_due_from, ptp_due_to].
     ptp_due_from: Optional[str] = None,
     ptp_due_to: Optional[str] = None,
+    # ── Per-manager (2026-10-14) ─────────────────────────────────────────────
+    # An AGENCY_ADMIN's list spans every manager in the agency, so the Cases
+    # page offers a manager picker. NARROWS the scoped set, never widens it:
+    # it intersects with the ids this principal may already see, so passing
+    # another agency's (or another manager's, as a manager) id yields nothing
+    # rather than leaking.
+    manager_user_id: UUIDQuery = None,
     limit: int = 50,
     offset: int = 0,
 ):
     my_agent_ids = [
-        a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()
+        a.id for a in db.query(Agent.id).filter(Agent.id.in_(_scoped_agent_ids(db, current_user))).all()
     ]
+    if manager_user_id:
+        narrowed = {
+            a.id for a in db.query(Agent.id)
+            .filter(Agent.id.in_(my_agent_ids), Agent.manager_user_id == manager_user_id).all()
+        }
+        my_agent_ids = [a for a in my_agent_ids if a in narrowed]
     q = (db.query(Case)
          .filter(Case.agent_id.in_(my_agent_ids))
          .options(joinedload(Case.customer), joinedload(Case.loan)))
@@ -1380,7 +1533,7 @@ def unallocated_cases(current_user: ManagerOnly, db: DbSession):
     from app.services.scope import cases_in_scope
     my_agents = (
         db.query(Agent).join(Agent.user)
-        .filter(Agent.manager_user_id == current_user.id)
+        .filter(Agent.id.in_(_scoped_agent_ids(db, current_user)))
         .options(joinedload(Agent.user)).all()
     )
     _on_leave_today = agent_ids_on_leave(db, leave_today(), [a.id for a in my_agents])
@@ -1389,15 +1542,18 @@ def unallocated_cases(current_user: ManagerOnly, db: DbSession):
     # TENANCY. This query had no tenant bound at all: `Case.status ==
     # UNASSIGNED` matched every unplaced case in the WHOLE DATABASE — any
     # bank, any agency — so one agency's manager saw another's pool, with the
-    # borrower's name attached. Same defect A04 closed in
-    # planner_service.plan_next_day; the fix never reached this endpoint, and
-    # the textual sweep could not see it because `_scoped_agent_ids` appears
-    # just above for the AGENT query.
+    # borrower's name attached. It is the same defect A04 closed in
+    # planner_service.plan_next_day (see its comment there); the fix never
+    # reached this endpoint, and the textual sweep in
+    # test_every_manager_route_that_reads_tenant_data_is_scoped could not see
+    # it, because `_scoped_agent_ids` appears just above for the AGENT query.
     #
     # Bound through services/scope.cases_in_scope — the one definition
-    # (ADR 0001): it already states "the agency's UNASSIGNED pool for the
-    # agency roles … never another agency's pool", and gets AGENCY_ADMIN right
-    # as well as AGENCY_MANAGER.
+    # (ADR 0001), not a hand-written agency_id predicate: it already states
+    # "the agency's UNASSIGNED pool for the agency roles … never another
+    # agency's pool", and it gets AGENCY_ADMIN (whole agency) right as well as
+    # AGENCY_MANAGER, which a `Case.agency_id == current_user.agency_id`
+    # written here would have to repeat and could drift from.
     cases = (
         cases_in_scope(db, current_user)
         .filter(Case.status == CaseStatus.UNASSIGNED)
@@ -1476,6 +1632,90 @@ def unallocated_cases(current_user: ManagerOnly, db: DbSession):
     }
 
 
+@router.get("/performance-series")
+def performance_series(current_user: ManagerOnly, db: DbSession, days: int = 30):
+    """One row per calendar day: target planned, money collected, visits made.
+
+    Feeds the Overview's trend chart (grey target band, blue collected line)
+    and the median comparison beside the day's figures.
+
+    SOURCES, AND WHY THESE AND NOT OTHERS.
+      * target  — planning.beats.total_target_amount, written by the allocator
+        when it planned the day. A genuine historical fact.
+      * collected — VERIFIED payments, through the same `_collected_between`
+        rule the dashboard uses, so a day read here and the same day read on
+        the dashboard cannot disagree.
+      * visits  — collections.visits by check_in_time.
+
+    NOT planning.beats.amount_collected / cases_completed. Those columns are
+    written ONLY by the seed and demo scripts — no live code path maintains
+    them (payment_service and visit_service never touch a Beat, and the 02:00
+    beat_reconciliation fills only the distance/duration actuals). On a real
+    book they stay 0 forever, so reading them would plot a flat zero line and
+    call it performance.
+
+    Every day in the range is returned, including days with no activity: a gap
+    in a trend line is ambiguous (no data, or no collection?) while an explicit
+    zero is not.
+    """
+    days = max(1, min(days, 120))
+    my_agent_ids = [
+        a.id for a in db.query(Agent.id).filter(Agent.id.in_(_scoped_agent_ids(db, current_user))).all()
+    ]
+    end_day = date.today()
+    start_day = end_day - timedelta(days=days - 1)
+    if not my_agent_ids:
+        return {"from": start_day.isoformat(), "to": end_day.isoformat(), "days": days, "points": []}
+
+    window_start = datetime.combine(start_day, datetime.min.time()).replace(tzinfo=timezone.utc)
+    window_end = datetime.combine(end_day, datetime.max.time()).replace(tzinfo=timezone.utc)
+
+    targets = dict(
+        db.query(Beat.beat_date, func.coalesce(func.sum(Beat.total_target_amount), 0.0))
+        .filter(Beat.agent_id.in_(my_agent_ids),
+                Beat.beat_date >= start_day, Beat.beat_date <= end_day)
+        .group_by(Beat.beat_date).all()
+    )
+    planned = dict(
+        db.query(Beat.beat_date, func.coalesce(func.sum(Beat.total_cases), 0))
+        .filter(Beat.agent_id.in_(my_agent_ids),
+                Beat.beat_date >= start_day, Beat.beat_date <= end_day)
+        .group_by(Beat.beat_date).all()
+    )
+    collected = dict(
+        db.query(func.date(Payment.payment_date), func.coalesce(func.sum(Payment.amount), 0.0))
+        .filter(Payment.agent_id.in_(my_agent_ids),
+                Payment.status == PaymentStatus.VERIFIED,
+                Payment.payment_date >= window_start, Payment.payment_date <= window_end)
+        .group_by(func.date(Payment.payment_date)).all()
+    )
+    visits = dict(
+        db.query(func.date(Visit.check_in_time), func.count(Visit.id))
+        .filter(Visit.agent_id.in_(my_agent_ids),
+                Visit.check_in_time >= window_start, Visit.check_in_time <= window_end)
+        .group_by(func.date(Visit.check_in_time)).all()
+    )
+
+    def _key(d):
+        """SQLite's date() hands back a string where Postgres gives a date."""
+        return d if isinstance(d, date) else date.fromisoformat(str(d))
+
+    collected = {_key(k): float(v) for k, v in collected.items()}
+    visits = {_key(k): int(v) for k, v in visits.items()}
+
+    points = []
+    for i in range(days):
+        d = start_day + timedelta(days=i)
+        points.append({
+            "day": d.isoformat(),
+            "target": round(float(targets.get(d, 0.0)), 2),
+            "collected": round(collected.get(d, 0.0), 2),
+            "planned_cases": int(planned.get(d, 0)),
+            "visits": visits.get(d, 0),
+        })
+    return {"from": start_day.isoformat(), "to": end_day.isoformat(), "days": days, "points": points}
+
+
 @router.get("/cases/date-range")
 def cases_date_range(current_user: ManagerOnly, db: DbSession):
     """Oldest and newest allocation_date across this manager's cases.
@@ -1508,7 +1748,7 @@ def cases_date_range(current_user: ManagerOnly, db: DbSession):
     inputs empty, which list_cases above treats as unbounded.
     """
     my_agent_ids = [
-        a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()
+        a.id for a in db.query(Agent.id).filter(Agent.id.in_(_scoped_agent_ids(db, current_user))).all()
     ]
     if not my_agent_ids:
         return {"min": None, "max": None}
@@ -1536,7 +1776,7 @@ def get_case_detail(case_id: UUIDPath, current_user: ManagerOnly, db: DbSession)
     from app.models.ptp import PTP as PTPModel
 
     my_agent_ids = [
-        a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()
+        a.id for a in db.query(Agent.id).filter(Agent.id.in_(_scoped_agent_ids(db, current_user))).all()
     ]
     case = (
         db.query(Case)
@@ -1711,7 +1951,7 @@ def agents_performance(
     months: int = 6,
 ):
     my_agent_ids_perf = [
-        a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()
+        a.id for a in db.query(Agent.id).filter(Agent.id.in_(_scoped_agent_ids(db, current_user))).all()
     ]
     _, _, eff_today_perf = _effective_today(my_agent_ids_perf, db)
     on_leave_today_perf = agent_ids_on_leave(db, leave_today(), my_agent_ids_perf)
@@ -1722,7 +1962,7 @@ def agents_performance(
     my_agents = (
         db.query(Agent, User.full_name)
         .join(User, Agent.user_id == User.id)
-        .filter(Agent.manager_user_id == current_user.id)
+        .filter(Agent.id.in_(_scoped_agent_ids(db, current_user)))
         .order_by(Agent.ranking_score.desc())
         .all()
     )
@@ -2099,7 +2339,7 @@ def fraud_alerts(
     from app.services.fraud_service import FraudService
 
     my_agent_ids = [
-        a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()
+        a.id for a in db.query(Agent.id).filter(Agent.id.in_(_scoped_agent_ids(db, current_user))).all()
     ]
 
     def _parse(raw: Optional[str], label: str):
@@ -2156,7 +2396,7 @@ def review_fraud_alert(body: _ReviewBody, current_user: ManagerOnly, db: DbSessi
     visit = (
         db.query(VisitModel)
         .join(Agent, Agent.id == VisitModel.agent_id)
-        .filter(VisitModel.id == body.visit_id, Agent.manager_user_id == current_user.id)
+        .filter(VisitModel.id == body.visit_id, Agent.id.in_(_scoped_agent_ids(db, current_user)))
         .first()
     )
     if not visit:
@@ -2250,7 +2490,7 @@ def _audit_visible_user_ids(db, current_user) -> list[str]:
     """
     agent_user_ids = [
         r[0] for r in
-        db.query(Agent.user_id).filter(Agent.manager_user_id == current_user.id).all()
+        db.query(Agent.user_id).filter(Agent.id.in_(_scoped_agent_ids(db, current_user))).all()
     ]
     return [current_user.id, *agent_user_ids]
 
@@ -2492,7 +2732,7 @@ def compliance_metrics(current_user: ManagerOnly, db: DbSession):
     # Scoped to this manager's own agents, like every other figure in this
     # router — compliance numbers are per-team, not company-wide.
     my_agent_ids = [
-        a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()
+        a.id for a in db.query(Agent.id).filter(Agent.id.in_(_scoped_agent_ids(db, current_user))).all()
     ]
 
     start_of_month = date.today().replace(day=1)
@@ -2563,7 +2803,7 @@ def compliance_metrics(current_user: ManagerOnly, db: DbSession):
 @router.get("/analytics")
 def analytics(current_user: ManagerOnly, db: DbSession, adb: AnalyticsDb):
     my_agent_ids = [
-        a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()
+        a.id for a in db.query(Agent.id).filter(Agent.id.in_(_scoped_agent_ids(db, current_user))).all()
     ]
     _, _, today = _effective_today(my_agent_ids, db)
 
@@ -2938,7 +3178,7 @@ def get_team_attendance(
     last_day = cal_mod.monthrange(month_start.year, month_start.month)[1]
     month_end = date(month_start.year, month_start.month, last_day)
 
-    my_agent_ids = [a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()]
+    my_agent_ids = [a.id for a in db.query(Agent.id).filter(Agent.id.in_(_scoped_agent_ids(db, current_user))).all()]
     total_agents = len(my_agent_ids)
 
     rows = (
@@ -3023,7 +3263,7 @@ def get_payment_modes(
     db: DbSession,
     month: Optional[str] = None,  # YYYY-MM — if provided, only payments dated in that month
 ):
-    my_agent_ids = [a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()]
+    my_agent_ids = [a.id for a in db.query(Agent.id).filter(Agent.id.in_(_scoped_agent_ids(db, current_user))).all()]
 
     q = (
         db.query(Payment.mode, func.count(Payment.id), func.coalesce(func.sum(Payment.amount), 0.0))
@@ -3135,7 +3375,7 @@ class BreakdownRowOut(_BreakdownBase):
 
 
 def _team_breakdown(db, current_user, *, dimension: str, month: Optional[str]) -> list[BreakdownRowOut]:
-    my_agent_ids = [a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()]
+    my_agent_ids = [a.id for a in db.query(Agent.id).filter(Agent.id.in_(_scoped_agent_ids(db, current_user))).all()]
     try:
         rows = portfolio_breakdown.breakdown(db, dimension=dimension, agent_ids=my_agent_ids, month=month)
     except ValueError as exc:
@@ -3212,7 +3452,7 @@ def get_visit_media_urls(visit_id: UUIDPath, current_user: ManagerOnly, db: DbSe
     visit = (
         db.query(Visit)
         .join(Agent, Visit.agent_id == Agent.id)
-        .filter(Visit.id == visit_id, Agent.manager_user_id == current_user.id)
+        .filter(Visit.id == visit_id, Agent.id.in_(_scoped_agent_ids(db, current_user)))
         .first()
     )
     if not visit:
@@ -3265,7 +3505,7 @@ def ai_briefing(current_user: ManagerOnly, db: DbSession, refresh: bool = False)
             return cached["data"]
 
     my_agent_ids = [
-        a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()
+        a.id for a in db.query(Agent.id).filter(Agent.id.in_(_scoped_agent_ids(db, current_user))).all()
     ]
     start_of_day, end_of_day, eff_date = _effective_today(my_agent_ids, db)
 
@@ -3510,7 +3750,7 @@ def agents_live(current_user: ManagerOnly, db: DbSession):
     from app.services.location_service import LocationService
 
     my_agent_ids = [
-        a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()
+        a.id for a in db.query(Agent.id).filter(Agent.id.in_(_scoped_agent_ids(db, current_user))).all()
     ]
     positions = LocationService(db).live_positions(my_agent_ids)
     return {
@@ -3545,7 +3785,7 @@ def agent_trail(
     agent = (
         db.query(Agent)
         .join(Agent.user)
-        .filter(Agent.id == agent_id, Agent.manager_user_id == current_user.id)
+        .filter(Agent.id == agent_id, Agent.id.in_(_scoped_agent_ids(db, current_user)))
         .options(joinedload(Agent.user))
         .first()
     )
@@ -3568,7 +3808,7 @@ def agent_ai_insight(agent_id: UUIDPath, current_user: ManagerOnly, db: DbSessio
     from app.models.loan import Loan as LoanModel
 
     my_agent_ids = [
-        a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()
+        a.id for a in db.query(Agent.id).filter(Agent.id.in_(_scoped_agent_ids(db, current_user))).all()
     ]
     if agent_id not in my_agent_ids:
         raise HTTPException(status_code=404, detail="Agent not found or not under your team")
@@ -3820,7 +4060,7 @@ def reallocation_plan(agent_id: UUIDPath, current_user: ManagerOnly, db: DbSessi
     from app.models.customer import Customer as CustomerModel
 
     my_agent_ids = [
-        a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()
+        a.id for a in db.query(Agent.id).filter(Agent.id.in_(_scoped_agent_ids(db, current_user))).all()
     ]
     if agent_id not in my_agent_ids:
         raise HTTPException(status_code=404, detail="Agent not found or not under your team")
@@ -4003,7 +4243,7 @@ def update_agent_status(
     agent = (
         db.query(Agent)
         .join(Agent.user)
-        .filter(Agent.id == agent_id, Agent.manager_user_id == current_user.id)
+        .filter(Agent.id == agent_id, Agent.id.in_(_scoped_agent_ids(db, current_user)))
         .options(joinedload(Agent.user))
         .first()
     )
@@ -4054,7 +4294,7 @@ def acknowledge_agent_sos(
     agent = (
         db.query(Agent)
         .options(joinedload(Agent.user))
-        .filter(Agent.id == agent_id, Agent.manager_user_id == current_user.id)
+        .filter(Agent.id == agent_id, Agent.id.in_(_scoped_agent_ids(db, current_user)))
         .first()
     )
     if not agent:
@@ -4100,7 +4340,7 @@ def manager_get_agent_availability_calendar(
     agent = (
         db.query(Agent)
         .options(joinedload(Agent.user))
-        .filter(Agent.id == agent_id, Agent.manager_user_id == current_user.id)
+        .filter(Agent.id == agent_id, Agent.id.in_(_scoped_agent_ids(db, current_user)))
         .first()
     )
     if not agent:
@@ -4277,7 +4517,7 @@ def get_monthly_report(
 
     # Manager-owned agent IDs
     my_agent_ids = [
-        r[0] for r in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()
+        r[0] for r in db.query(Agent.id).filter(Agent.id.in_(_scoped_agent_ids(db, current_user))).all()
     ]
     if agent_id:
         if agent_id not in my_agent_ids:
@@ -4609,7 +4849,7 @@ def get_ptp_outcomes(
     manager's agents (404 otherwise, like every per-agent route here).
     """
     months = max(1, min(int(months), 24))
-    my_agent_ids = [a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()]
+    my_agent_ids = [a.id for a in db.query(Agent.id).filter(Agent.id.in_(_scoped_agent_ids(db, current_user))).all()]
     if agent_id:
         _require_own_agent(db, current_user, agent_id)
         scope_ids = [agent_id]
@@ -4729,7 +4969,7 @@ def list_leave_requests(current_user: ManagerOnly, db: DbSession, status: Option
     """This manager's agents' leave requests, pending first. `status` narrows
     to one of REQUESTED / APPROVED / REJECTED / CANCELLED."""
     from app.services.leave_service import LeaveService, serialize
-    my_agent_ids = [a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()]
+    my_agent_ids = [a.id for a in db.query(Agent.id).filter(Agent.id.in_(_scoped_agent_ids(db, current_user))).all()]
     rows = LeaveService(db).list_for_manager(current_user.id, status)
     rows = [r for r in rows if r.agent_id in set(my_agent_ids)]
     names = _leave_names(db, rows)
@@ -4782,6 +5022,7 @@ def get_latest_allocation_plan(
     current_user: ManagerOnly,
     db: DbSession,
     plan_date: Optional[str] = None,
+    manager_user_id: UUIDQuery = None,
 ):
     """Fetch the latest planned case allocation run and explainable decisions for tomorrow."""
     from app.services.planner_service import PlannerService, get_target_plan_date
@@ -4790,7 +5031,7 @@ def get_latest_allocation_plan(
     from app.models.beat import Beat
 
     target_d = date.fromisoformat(plan_date) if plan_date else get_target_plan_date()
-    planner = PlannerService(db, manager_user_id=current_user.id)
+    planner = PlannerService(db, manager_user_id=_planning_manager_id(db, current_user, manager_user_id))
     run = planner.get_latest_plan(plan_date=target_d)
 
     # A failed nightly run is reported alongside the plan, never as one. Before
@@ -5031,6 +5272,7 @@ def create_or_simulate_allocation_plan(
     current_user: ManagerOnly,
     db: DbSession,
     req: Optional[dict] = None,
+    manager_user_id: UUIDQuery = None,
 ):
     """Trigger on-demand next-day planning, simulation, or replan."""
     from app.services.planner_service import (
@@ -5047,7 +5289,7 @@ def create_or_simulate_allocation_plan(
     force_replan = bool(req.get("force_replan", True))
 
     target_d = date.fromisoformat(plan_date_str) if plan_date_str else get_target_plan_date()
-    planner = PlannerService(db, manager_user_id=current_user.id)
+    planner = PlannerService(db, manager_user_id=_planning_manager_id(db, current_user, manager_user_id))
 
     try:
         run = planner.plan_next_day(
@@ -5093,10 +5335,12 @@ def create_or_simulate_allocation_plan(
 
 
 @router.get("/allocation/settings")
-def get_allocation_settings(current_user: ManagerOnly, db: DbSession):
+def get_allocation_settings(current_user: ManagerOnly, db: DbSession,
+                            manager_user_id: UUIDQuery = None):
     """Retrieve active allocation policy and objective settings."""
     from app.models.allocation_setting import AllocationSetting
-    setting = db.query(AllocationSetting).filter(AllocationSetting.manager_user_id == current_user.id).first()
+    setting = db.query(AllocationSetting).filter(
+        AllocationSetting.manager_user_id == _planning_manager_id(db, current_user, manager_user_id)).first()
     if not setting:
         return {
             "objective": "BALANCED",
@@ -5111,7 +5355,8 @@ def get_allocation_settings(current_user: ManagerOnly, db: DbSession):
 
 
 @router.post("/allocation/settings")
-def update_allocation_settings(req: dict, current_user: ManagerOnly, db: DbSession):
+def update_allocation_settings(req: dict, current_user: ManagerOnly, db: DbSession,
+                               manager_user_id: UUIDQuery = None):
     """Update active allocation policy settings."""
     from app.models.allocation_setting import AllocationSetting
     import uuid
@@ -5120,11 +5365,16 @@ def update_allocation_settings(req: dict, current_user: ManagerOnly, db: DbSessi
     radius = float(req.get("max_territory_radius_km", 16.0))
     max_stops = int(req.get("max_daily_stops_per_agent", 12))
 
-    setting = db.query(AllocationSetting).filter(AllocationSetting.manager_user_id == current_user.id).first()
+    setting = db.query(AllocationSetting).filter(
+        AllocationSetting.manager_user_id == _planning_manager_id(db, current_user, manager_user_id)).first()
     if not setting:
         setting = AllocationSetting(
             id=str(uuid.uuid4()),
-            manager_user_id=current_user.id,
+            # The MANAGER the settings belong to, not the caller: an agency
+            # admin saving an objective for one of their managers must create
+            # that manager's row, never one keyed to themselves (which nothing
+            # would ever read, since planning runs per manager).
+            manager_user_id=_planning_manager_id(db, current_user, manager_user_id),
             objective=objective,
             max_territory_radius_km=radius,
             max_daily_stops_per_agent=max_stops,
@@ -5150,6 +5400,7 @@ def rollback_allocation_plan(
     current_user: ManagerOnly,
     db: DbSession,
     req: dict,
+    manager_user_id: UUIDQuery = None,
 ):
     """Roll back an untouched future PLANNED allocation."""
     from app.services.planner_service import PlannerService
@@ -5158,7 +5409,7 @@ def rollback_allocation_plan(
     if not run_id:
         raise HTTPException(status_code=422, detail="run_id is required.")
 
-    planner = PlannerService(db, manager_user_id=current_user.id)
+    planner = PlannerService(db, manager_user_id=_planning_manager_id(db, current_user, manager_user_id))
     try:
         success = planner.rollback_plan(run_id=run_id)
     except ValueError as e:
@@ -5176,6 +5427,7 @@ def export_allocation_decisions_csv(
     run_id: UUIDQueryRequired,
     current_user: ManagerOnly,
     db: DbSession,
+    manager_user_id: UUIDQuery = None,
 ):
     """Export the explainable allocation decisions for a specific run as CSV.
 
@@ -5185,7 +5437,7 @@ def export_allocation_decisions_csv(
     from fastapi.responses import Response
     from app.services.planner_service import PlannerService
 
-    planner = PlannerService(db, manager_user_id=current_user.id)
+    planner = PlannerService(db, manager_user_id=_planning_manager_id(db, current_user, manager_user_id))
     try:
         csv_text = planner.export_decisions_csv(run_id=run_id)
     except ValueError:
@@ -5311,24 +5563,25 @@ def reassign_case(
     from app.services.scope import cases_in_scope
 
     my_agent_ids = [
-        a.id for a in db.query(Agent.id).filter(Agent.manager_user_id == current_user.id).all()
+        a.id for a in db.query(Agent.id).filter(Agent.id.in_(_scoped_agent_ids(db, current_user))).all()
     ]
     # The case must be inside this manager's pool — held by one of their agents,
     # or unassigned. 404 rather than 403 so the id cannot be used to probe
     # another agency.
     #
     # Unassigned cases are looked up ON PURPOSE, and then refused below with a
-    # sentence rather than falling into this 404. They are visible to every
-    # manager through GET /cases/unallocated, so there is nothing to hide, and
-    # "not found" would send somebody hunting for a scoping bug when the real
-    # answer is "not yet — wait for tonight".
-    # TENANCY (same fix as GET /cases/unallocated). This read
+    # sentence rather than falling into this 404 — the answer a manager needs
+    # is "not yet, wait for tonight", not "not found".
+    #
+    # TENANCY (same fix as GET /cases/unallocated above). This used to read
     # `or_(agent_id.in_(mine), agent_id.is_(None))` with no tenant bound, so
     # the second half matched every unplaced case in the database and another
     # agency's case id resolved here — on a WRITE route. Its own comment
-    # argued there was "nothing to hide, they are visible through
-    # GET /cases/unallocated", which was true only because THAT query was
-    # unscoped too.
+    # argued there was "nothing to hide, they are visible to every manager
+    # through GET /cases/unallocated", which was true only because THAT query
+    # was unscoped too; with it fixed, the premise is gone. cases_in_scope
+    # supplies the bound, so an id outside the tenant falls to the 404 below
+    # and cannot be probed.
     case = (
         cases_in_scope(db, current_user)
         .options(joinedload(Case.customer))

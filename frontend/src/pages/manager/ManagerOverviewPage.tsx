@@ -27,6 +27,8 @@ import { StatCard } from "@/components/ui/Card";
 import { TierBadge } from "@/components/ui/Badge";
 import { exactRupees, shortMoney } from "@/lib/money";
 import type { Agent } from "@/types";
+import { useReviewDay } from "@/contexts/useReviewDay";
+import { PerformanceTrendCard } from "./PerformanceTrendCard";
 
 const EASE = "cubic-bezier(0.16,1,0.3,1)";
 
@@ -106,10 +108,15 @@ export default function ManagerOverviewPage() {
   // Two queries where there was one Promise.all: the request count is identical
   // (both were always issued in parallel), and each 30s poll replaces the single
   // `setInterval(load, 30_000)` the effect used to own.
+  // The reviewed day is owned by ManagerLayout, because its control lives in
+  // the header beside the notification bell. "" = today, which keeps the
+  // default query key byte-identical for the overwhelmingly common case.
+  const { reviewDay, setReviewDay } = useReviewDay();
   const dashboardQ = useQuery({
-    queryKey: ["manager", "dashboard"],
-    queryFn: getDashboard,
-    refetchInterval: 30_000,
+    queryKey: reviewDay ? ["manager", "dashboard", reviewDay] : ["manager", "dashboard"],
+    queryFn: () => getDashboard(reviewDay || undefined),
+    // A past day cannot change under us; only today needs polling.
+    refetchInterval: reviewDay ? false : 30_000,
     ...AS_BEFORE,
   });
   const agentsQ = useQuery({
@@ -223,8 +230,15 @@ export default function ManagerOverviewPage() {
         {[
           // "on duty" excludes approved leave for the day, and says so: a manager
           // reading 14/15 should not have to open the Agents page to learn why.
-          { label: "Agents On Duty",  value: `${s.agents_on_duty}/${s.total_agents}`, icon: <Users className="w-5 h-5" />,       colorClass: "text-brand-600",
-            subtext: s.agents_on_leave > 0 ? `${s.agents_on_leave} on leave today` : "active today" },
+          // On a REVIEWED day the server sends agents_metric=WITH_PLAN, because
+          // duty status has no history — it counts who held a beat that day.
+          // Relabelled rather than silently reused: the same number under the
+          // wrong word is how a reviewer mistakes today's roster for an old one.
+          { label: s.agents_metric === "WITH_PLAN" ? "Agents With A Plan" : "Agents On Duty",
+            value: `${s.agents_on_duty}/${s.total_agents}`, icon: <Users className="w-5 h-5" />, colorClass: "text-brand-600",
+            subtext: s.agents_metric === "WITH_PLAN"
+              ? "had a beat that day"
+              : (s.agents_on_leave > 0 ? `${s.agents_on_leave} on leave today` : "active today") },
           // Allocated, not visited: the backend sets cases_today from the distinct
           // case ids across each agent's latest beat (manager.py:329), so this is
           // today's planned workload. Visits are counted separately (visits_today).
@@ -384,6 +398,15 @@ export default function ManagerOverviewPage() {
         </div>
       </div>
 
+      {/* The trend, directly under today's collection figure: the tiles say
+          what today did, this says whether that is normal. Clicking a day sets
+          the review date above, so a dip is FOUND here and READ in the tiles —
+          which is why it is a card in the flow and not a modal over them. Its
+          30/60d range is independent of the reviewed date on purpose. */}
+      <Reveal style={{ animation: `enter 420ms ${EASE} 240ms both` }}>
+        <PerformanceTrendCard onPickDay={setReviewDay} />
+      </Reveal>
+
       {/* Field Activity + Promises. 2026-09-17. Directly under the money
           (Today's Collections) and before who collected it (the leaderboard):
           what the team actually did in the field for the selected window,
@@ -392,6 +415,7 @@ export default function ManagerOverviewPage() {
         <div className="lg:col-span-3 flex"><FieldActivityCard style={{ flex: 1 }} /></div>
         <div className="lg:col-span-2 flex"><PromisesCard health={s.ptp_health} style={{ flex: 1 }} /></div>
       </Reveal>
+
 
       {/* Agent Leaderboard */}
       <Reveal>
