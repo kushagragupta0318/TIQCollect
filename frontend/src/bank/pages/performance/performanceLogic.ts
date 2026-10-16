@@ -25,6 +25,25 @@ export function formatIndex(value: number | null): string {
   return Math.round(value).toString();
 }
 
+/**
+ * The index where it is RANKED against other rows, at the precision the
+ * estimator actually produced (agency_effect rounds to 1 dp).
+ *
+ * The leaderboard used formatIndex, and whole numbers destroyed the ordering
+ * it was displaying: measured on the demo book, 27 rows held 15 distinct
+ * index values and rendered as 5. The top five — 7.3, 7.2, 7.0, 6.9, 6.8 —
+ * all printed "7", so the ranking looked arbitrary and the next row down
+ * ("6" from 6.5) looked misplaced. The sort was always on the full value;
+ * only the column lied.
+ *
+ * The single-agency headline tile keeps formatIndex: one number on its own,
+ * with nothing to compare against, reads better whole.
+ */
+export function formatIndexPrecise(value: number | null): string {
+  if (value == null) return "—";
+  return value.toFixed(1);
+}
+
 /** cost_per_100_inr: null means no cost rate is configured for this bank yet
  *  — "not configured", never "₹0.00". */
 export function formatCostPer100(value: number | null): string {

@@ -27,7 +27,7 @@ import {
 } from "@/api/bank";
 import { errorDetail } from "@/lib/apiError";
 import {
-  formatCostPer100, formatFraudPer100, formatIndex, formatPerAgentPerDay, formatRatioPercent,
+  formatCostPer100, formatFraudPer100, formatIndex, formatIndexPrecise, formatPerAgentPerDay, formatRatioPercent,
   indexEvidenceCaption, percentBarWidth, rankLeaderboard,
 } from "./performanceLogic";
 
@@ -201,7 +201,14 @@ function LeaderboardSection() {
     <Card>
       <CardHeader>
         <CardTitle>Regional leaderboard</CardTitle>
-        <CardDescription>Every agency ranked by Performance Index descending. An agency the estimator could not score for this window is listed last, unranked.</CardDescription>
+        {/* The grain is stated because it is not guessable from the columns:
+            a multi-region agency appears once per region, and before this said
+            so, the repeated names read as duplicate rows rather than as that
+            agency's separate score in each territory. */}
+        <CardDescription>
+          One row per agency and region — an agency working several regions is scored in each — ranked by
+          Performance Index descending. A row the estimator could not score for this window is listed last, unranked.
+        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="max-w-sm">
@@ -259,7 +266,7 @@ function LeaderboardSection() {
                     {row.index == null ? (
                       <Badge variant="outline" className="text-muted-foreground">Not enough data</Badge>
                     ) : (
-                      <span className="font-semibold tabular-nums">{formatIndex(row.index)}</span>
+                      <span className="font-semibold tabular-nums">{formatIndexPrecise(row.index)}</span>
                     )}
                   </TableCell>
                   <TableCell>{row.n}</TableCell>
