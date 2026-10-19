@@ -120,6 +120,24 @@ def payment_reference_problem(mode, *, upi_reference: str | None, bank_reference
     return None
 
 
+def over_payment_problem(case, amount: float) -> tuple[ErrorCode, str] | None:
+    """None when `amount` fits the case's outstanding balance; otherwise the
+    error code and the message for the agent.
+
+    The ONE definition (ADR 0001): collect_payment checks it before writing
+    anything, and OtpService.generate_and_send checks it before sending a code.
+    Both used to carry their own copy, and the copies were NOT equivalent —
+    collect_payment's ran after the Payment row was flushed and after the
+    single-use OTP had been consumed from Redis, which is not in the
+    transaction, so a mistyped amount burned the borrower's code.
+    """
+    remaining = round(case.target_amount - case.collected_amount, 2)
+    if amount > remaining:
+        return (ErrorCode.VALIDATION_ERROR,
+                f"Payment ₹{amount:,.2f} exceeds remaining balance ₹{remaining:,.2f}")
+    return None
+
+
 class PaymentService:
     """Business logic for payment collection, Razorpay QR links, and PTPs.
     No HTTP knowledge — callable from a router, a Celery task, or a
@@ -186,6 +204,15 @@ class PaymentService:
         if existing:
             return self._payment_response(existing, case)
 
+        # The amount must fit the outstanding balance. Checked HERE — before the
+        # OTP is consumed and before the row is flushed — because the OTP lives
+        # in Redis, outside this transaction: refusing later rolled the Payment
+        # back but left the borrower's single-use code spent, so a typo in the
+        # amount forced a fresh OTP to retry.
+        problem = over_payment_problem(case, req.amount)
+        if problem:
+            raise AppException(400, problem[0], problem[1])
+
         # Borrower OTP gate: if a verification_id is supplied, confirm it is a
         # verified (Redis-held, ephemeral) OTP authorising THIS exact amount/mode
         # and not already spent — the Payment is then trusted (VERIFIED). No
@@ -248,12 +275,6 @@ class PaymentService:
             ))
             self._honor_active_ptps_paid_by_due_date(case.id, agent.id, now_utc)
 
-        remaining = round(case.target_amount - case.collected_amount, 2)
-        if req.amount > remaining:
-            raise AppException(
-                400, ErrorCode.VALIDATION_ERROR,
-                f"Payment ₹{req.amount:,.2f} exceeds remaining balance ₹{remaining:,.2f}",
-            )
         case.collected_amount = round(case.collected_amount + req.amount, 2)
         if case.collected_amount >= case.target_amount:
             case.status = CaseStatus.PAID

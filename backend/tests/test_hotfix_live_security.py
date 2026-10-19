@@ -439,6 +439,62 @@ def test_the_route_answers_the_typed_code(client, world):
     assert r.status_code == 422 and r.json()["code"] == "UPI_REFERENCE_REQUIRED"
 
 
+# ── An over-payment is refused before anything is spent ──────────────────────
+# The balance check used to sit AFTER the Payment row was flushed, after
+# consume_for_payment had deleted the single-use OTP from Redis, and after the
+# audit row. The DB side rolled back (get_db closes an uncommitted session) but
+# Redis is not in that transaction, so a typo in the amount burned the
+# borrower's OTP: the agent had to send a fresh code to retry.
+@pytest.fixture
+def untouched_case(world, request):
+    """A case of its own per test. `world` is module-scoped, so the shared
+    "pay" case carries whatever earlier tests collected against it; these two
+    assert on an exact balance and need a book no other test has moved."""
+    db = world["Session"]()
+    tag = f"over:{request.node.name[-24:]}"
+    agent = db.get(Agent, world["ag"].id)
+    case = _case(db, world["tenant"], tag, agent, f"OVR{abs(hash(tag)) % 10000:04d}",
+                 "Rekha Siwach", "9812300006")
+    db.commit()
+    yield db, agent, case
+    db.close()
+
+
+def test_an_over_payment_is_refused_and_writes_nothing(untouched_case):
+    db, agent, case = untouched_case
+    before = db.query(Payment).count()
+    remaining = case.target_amount - case.collected_amount
+    with pytest.raises(AppException) as e:
+        ps.PaymentService(db).collect_payment(
+            agent, case.id,
+            CollectPaymentRequest(amount=remaining + 1.0, mode=PaymentMode.CASH))
+    assert e.value.code == ErrorCode.VALIDATION_ERROR
+    assert db.query(Payment).count() == before
+    db.rollback()
+    assert db.get(Case, case.id).collected_amount == 0.0
+
+
+def test_an_over_payment_does_not_consume_the_borrower_otp(untouched_case, monkeypatch):
+    """The refusal must come before the OTP is spent, so the agent can correct
+    the amount and re-use the code the borrower already read out."""
+    db, agent, case = untouched_case
+    consumed: list[str] = []
+
+    def _record(self, verification_id, case_id, amount):
+        consumed.append(verification_id)
+        return True
+
+    monkeypatch.setattr("app.services.otp_service.OtpService.consume_for_payment", _record)
+    remaining = case.target_amount - case.collected_amount
+    with pytest.raises(AppException) as e:
+        ps.PaymentService(db).collect_payment(
+            agent, case.id,
+            CollectPaymentRequest(amount=remaining + 1.0, mode=PaymentMode.CASH,
+                                  verification_id="otp-not-to-be-spent"))
+    assert e.value.code == ErrorCode.VALIDATION_ERROR
+    assert consumed == []
+
+
 # ── PAY-2: the payee comes from settings ─────────────────────────────────────
 @pytest.mark.parametrize("vpa,name", [("", ""), ("collections@examplebank", ""), ("", "Example Desk"),
                                       ("${UPI_VPA}", "${UPI_PAYEE_NAME}")])

@@ -62,7 +62,7 @@ from app.services.notification_service import NotificationService
 import structlog
 
 logger = structlog.get_logger()
-from app.services.payment_service import PaymentService
+from app.services.payment_service import PaymentService, over_payment_problem
 
 
 class _InProcessOtpStore:
@@ -265,14 +265,12 @@ class OtpService:
                 raise AppException(409, ErrorCode.PAYMENT_ALREADY_PROCESSED, "Payment is already verified")
             amount, mode = payment.amount, payment.mode
         else:
-            # Pre-collection: the amount must fit the outstanding balance,
-            # same check collect_payment applies before writing the row.
-            remaining = round(case.target_amount - case.collected_amount, 2)
-            if amount > remaining:
-                raise AppException(
-                    400, ErrorCode.VALIDATION_ERROR,
-                    f"Amount ₹{amount:,.2f} exceeds remaining balance ₹{remaining:,.2f}",
-                )
+            # Pre-collection: the amount must fit the outstanding balance — the
+            # same rule collect_payment applies, imported rather than restated
+            # (payment_service.over_payment_problem).
+            problem = over_payment_problem(case, amount)
+            if problem:
+                raise AppException(400, problem[0], problem[1])
 
         mode_s = self._mode_str(mode) if mode is not None else ""
         self._enforce_send_limits(case.id, amount)
