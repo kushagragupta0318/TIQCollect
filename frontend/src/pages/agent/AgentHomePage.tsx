@@ -285,7 +285,7 @@ function CollectionProgressBar({ collected, totalTarget, pct }: { collected: num
         <div className="h-3 rounded-full bg-primary transition-all duration-700" style={{ width: `${animatedPct}%` }} />
       </div>
       <div className="flex justify-between text-xs text-slate-400 mt-1.5">
-        <span>{shortMoney(collected)} collected</span>
+        <span>₹{(collected / 1000).toFixed(1)}K collected</span>
         <span>Target {shortMoney(totalTarget)}</span>
       </div>
     </div>

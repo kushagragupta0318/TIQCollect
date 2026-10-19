@@ -382,32 +382,6 @@ const AS_BEFORE = {
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
-// Shown when the team has no book and no activity yet — a brand-new manager who
-// has added an agent but has no cases, visits or collections. A wall of zeroed
-// KPIs and blank charts reads as broken; this reads as "nothing here yet".
-function AnalyticsEmptyState() {
-  return (
-    <div className="flex items-center justify-center py-16 sm:py-24 px-4">
-      <div className="w-full max-w-md text-center">
-        <div
-          className="mx-auto mb-5 flex items-center justify-center rounded-2xl"
-          style={{ width: 64, height: 64, background: "#EAF2FF", color: "#1677FF" }}
-        >
-          <BarChart2 className="w-7 h-7" />
-        </div>
-        <h2 className="text-xl font-bold mb-2" style={{ color: "#101828", letterSpacing: "-0.02em" }}>
-          No analytics yet
-        </h2>
-        <p className="text-sm" style={{ color: "#667085" }}>
-          Your team&apos;s performance appears here once your agents start working
-          cases — logging visits, collecting payments, and recording promises to
-          pay. Check back after the first day of activity.
-        </p>
-      </div>
-    </div>
-  );
-}
-
 export default function ManagerAnalyticsPage() {
   // Analytics + per-agent performance are react-query-cached (2026-10-06) with
   // the same live cadence the old useEffect+useLiveRefresh pair had (AS_BEFORE
@@ -520,7 +494,7 @@ export default function ManagerAnalyticsPage() {
   // two pages can never show different totals. Added 2026-09-16.
   const dashboardQ = useQuery({
     queryKey: ["manager", "dashboard"],
-    queryFn: () => getDashboard(),
+    queryFn: getDashboard,
     ...AS_BEFORE,
   });
   const navigate = useNavigate();
@@ -545,13 +519,6 @@ export default function ManagerAnalyticsPage() {
 
   if (loading) return <LoadingSkeleton />;
   if (!analytics || !agentPerf) return <p className="text-sm p-6" style={{ color: "#6B6D76" }}>No data.</p>;
-
-  // Day-1 empty state: no open cases and nothing collected or targeted yet means
-  // there is nothing to analyse. Show the empty state rather than zeroed cards.
-  const openCases = analytics.recovery_summary.scored_cases + analytics.recovery_summary.unscored_cases;
-  if (openCases === 0 && analytics.kpis.total_collected_lakhs === 0 && analytics.kpis.total_target_lakhs === 0) {
-    return <AnalyticsEmptyState />;
-  }
 
   const { kpis, monthly_trend, dpd_breakdown, recovery_breakdown, recovery_summary } = analytics;
   const { months, agents } = agentPerf;
@@ -896,28 +863,17 @@ export default function ManagerAnalyticsPage() {
           heights stopped matching. Flat children give two clean rows of two, and
           grid's default stretch keeps each row's cards the same height. */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-stretch" style={{ animation: `enter 420ms ${EASE} 300ms both` }}>
-        {/* Left column: the recovery outlook with the case pipeline stacked
-            under it. The pipeline (flex:1) absorbs any slack so this cell fills
-            the row's height instead of padding the recovery card with blank
-            space (2026-10-12: moved here from the right stack, which had grown
-            to three cards and towered over a lone recovery card — the gap). */}
         <Reveal className="flex flex-col [&>*]:flex-1">
-        <div className="flex flex-col gap-5">
           <RecoveryBreakdownCard
             rows={recovery_breakdown ?? []}
             summary={recovery_summary}
             loading={loading}
             barReady={barReady}
           />
-          <CasePipelineCard
-            counts={dashboardQ.data?.case_status_counts}
-            onOpen={(statuses) => navigate(`/manager/cases?status=${statuses.join(",")}`)}
-            style={{ flex: 1 }}
-          />
-        </div>
         </Reveal>
-        {/* Right column: the same open cases two ways — by DPD, then by
-            branch / state / product. */}
+        {/* Right column: the same 883 cases two ways — by DPD, then by
+            state. Stacked in one cell so the pipeline sits under the bucket
+            card and the pair matches the Recovery outlook's height. */}
         <Reveal className="flex flex-col [&>*]:flex-1">
         <div className="flex flex-col gap-5">
           <DPDBreakdownCard
@@ -934,6 +890,11 @@ export default function ManagerAnalyticsPage() {
           {!selectedAgent && (
             <BreakdownCard selMonth={selTeamMonth} apiMonth={apiTeamMonth} barReady={barReady} />
           )}
+          <CasePipelineCard
+            counts={dashboardQ.data?.case_status_counts}
+            onOpen={(statuses) => navigate(`/manager/cases?status=${statuses.join(",")}`)}
+            style={{ flex: 1 }}
+          />
         </div>
         </Reveal>
         {/* Second row: how the money came in — the mix on the left, the

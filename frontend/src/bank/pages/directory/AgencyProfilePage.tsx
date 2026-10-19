@@ -6,10 +6,9 @@
 // definition, not a second copy for the bank side. Performance is NOT
 // recomputed here: D06's agency_scorecard already owns it; this page links
 // to it instead.
-import { useState } from "react";
 import { useNavigate, useParams } from "react-router";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Building2, ExternalLink, Pencil, Percent, Users } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { Building2, ExternalLink, Percent, Users } from "lucide-react";
 import { ExecutiveHeader, PageFailure, PageLoading, PageRoot } from "../../components/PageTemplate";
 import { Card, CardContent, CardHeader, CardTitle } from "../../ui/card";
 import { Badge } from "../../ui/badge";
@@ -17,8 +16,6 @@ import { Button } from "../../ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../ui/table";
 import { Tile } from "../../components/analytics";
 import { getBankAgencyProfile } from "@/api/bank";
-import { useAuthStore } from "@/store/authStore";
-import { EditIdentityDialog } from "./EditIdentityDialog";
 import { errorDetail } from "@/lib/apiError";
 import { rs } from "../../theme/format";
 
@@ -28,10 +25,7 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div>
       <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</p>
-      {/* div, not p: `value` is sometimes a <Badge>, which renders a <div>,
-          and a <div> inside a <p> is invalid HTML — the browser closes the
-          paragraph early and React warns. */}
-      <div className="text-sm font-semibold text-foreground">{value ?? "—"}</div>
+      <p className="text-sm font-semibold text-foreground">{value ?? "—"}</p>
     </div>
   );
 }
@@ -39,9 +33,6 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
 export default function AgencyProfilePage() {
   const { agencyId = "" } = useParams<{ agencyId: string }>();
   const navigate = useNavigate();
-  const qc = useQueryClient();
-  const mayEdit = useAuthStore((s) => s.user?.role) === "BANK_ADMIN";   // agency.update
-  const [editing, setEditing] = useState(false);
 
   const q = useQuery({
     queryKey: ["bank", "agency-profile", agencyId],
@@ -71,18 +62,7 @@ export default function AgencyProfilePage() {
 
       <Card>
         <CardHeader>
-          {/* Edit sits in the card's own corner, so it reads as acting on this
-              card rather than on the page. BANK_ADMIN only: agency.update is
-              theirs alone (core/permissions), and a button that always 403s is
-              worse than no button. */}
-          <div className="flex items-start justify-between gap-3">
-            <CardTitle className="flex items-center gap-2"><Building2 className="size-4" /> Agency details</CardTitle>
-            {mayEdit && (
-              <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
-                <Pencil className="mr-1.5 size-3.5" /> Edit
-              </Button>
-            )}
-          </div>
+          <CardTitle className="flex items-center gap-2"><Building2 className="size-4" /> Identity</CardTitle>
         </CardHeader>
         <CardContent className="grid grid-cols-2 gap-4 sm:grid-cols-4">
           <Field label="RBI registration" value={agency.rbi_registration_no} />
@@ -180,19 +160,6 @@ export default function AgencyProfilePage() {
           )}
         </CardContent>
       </Card>
-
-      {/* Keyed on `editing` so every opening starts from the agency as it is
-          now — a cancelled edit leaves no stale values behind. */}
-      {mayEdit && editing && (
-        <EditIdentityDialog
-          key={String(editing)}
-          agencyId={agencyId}
-          agency={agency}
-          open={editing}
-          onOpenChange={setEditing}
-          onSaved={() => qc.invalidateQueries({ queryKey: ["bank", "agency-profile", agencyId] })}
-        />
-      )}
     </PageRoot>
   );
 }

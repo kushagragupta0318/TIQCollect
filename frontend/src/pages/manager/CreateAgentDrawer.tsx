@@ -20,10 +20,8 @@ import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
 import { BaseLocationPicker } from "@/components/map/BaseLocationPicker";
 import { useModalA11y } from "@/hooks/useModalA11y";
-import { useQuery } from "@tanstack/react-query";
-import { createAgent, getAgencyManagers } from "@/api/manager";
-import { useAuthStore } from "@/store/authStore";
-import type { CreateAgentBody, CreateAgentResult } from "@/api/manager";
+import { createAgent } from "@/api/manager";
+import type { CreateAgentBody } from "@/api/manager";
 import { errorDetail } from "@/lib/apiError";
 
 // AgentSpecialization / VEHICLE_TYPES / AGENT_GENDER_VALUES, verbatim from
@@ -37,35 +35,16 @@ const GENDER_OPTIONS: Array<{ value: string; label: string }> = [
 ];
 const SPECIALIZATION_OPTIONS = ["SECURED", "UNSECURED", "BOTH"] as const;
 const VEHICLE_OPTIONS = ["TWO_WHEELER", "FOUR_WHEELER", "PUBLIC_TRANSPORT"] as const;
-// The loan products (public.loan_type_enum, backend/app/models/loan.py), with
-// reader-friendly labels. "" is "not specified" — the field is optional.
-const LOAN_PRODUCT_OPTIONS: Array<{ value: string; label: string }> = [
-  { value: "", label: "Not specified" },
-  { value: "HOME", label: "Home loan" },
-  { value: "AUTO", label: "Car / auto loan" },
-  { value: "PERSONAL", label: "Personal loan" },
-  { value: "BUSINESS", label: "Business loan" },
-  { value: "GOLD", label: "Gold loan" },
-  { value: "CREDIT_CARD", label: "Credit card" },
-  { value: "EDUCATION", label: "Education loan" },
-  { value: "MICROFINANCE", label: "Microfinance" },
-];
 
 const FIELD_LABEL = "mb-1.5 block text-[13px] font-normal text-[#98A2B3]";
 
 interface Props {
   open: boolean;
   onClose: () => void;
-  /** Called with the created agent (incl. demo_login / activation) so a caller
-   *  can collect it — e.g. the onboarding roster. */
-  onCreated: (result: CreateAgentResult) => void;
-  /** Whether to pop the success toast here. Default true (the Agents page). The
-   *  onboarding flow sets this false and shows the credentials in its roster
-   *  instead, so the two don't both report the same new agent. */
-  showSuccessToast?: boolean;
+  onCreated: () => void;
 }
 
-export function CreateAgentDrawer({ open, onClose, onCreated, showSuccessToast = true }: Props) {
+export function CreateAgentDrawer({ open, onClose, onCreated }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   useModalA11y(open, ref, onClose);
 
@@ -79,31 +58,16 @@ export function CreateAgentDrawer({ open, onClose, onCreated, showSuccessToast =
   const [specialization, setSpecialization] = useState<(typeof SPECIALIZATION_OPTIONS)[number]>("BOTH");
   const [vehicleType, setVehicleType] = useState<(typeof VEHICLE_OPTIONS)[number]>("TWO_WHEELER");
   const [maxCasesPerDay, setMaxCasesPerDay] = useState(15);
-  const [experienceYears, setExperienceYears] = useState("");
-  const [strongLoanType, setStrongLoanType] = useState("");
-  // AGENCY_ADMIN only: which manager the new agent reports to. Managers add
-  // to their own team, so the field is theirs-only and never shown to them.
-  const [assignManager, setAssignManager] = useState("");
   const [languages, setLanguages] = useState("");
   const [lat, setLat] = useState<number | null>(null);
   const [lon, setLon] = useState<number | null>(null);
   const [locationError, setLocationError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const isAgencyAdmin = useAuthStore((st) => st.user?.role) === "AGENCY_ADMIN";
-  const managersQ = useQuery({
-    queryKey: ["manager", "managers"],
-    queryFn: getAgencyManagers,
-    enabled: open && isAgencyAdmin,
-    staleTime: 60_000,
-  });
-  const managerChoices = managersQ.data ?? [];
-
   function reset() {
     setFullName(""); setEmail(""); setPhone(""); setEmployeeCode(""); setIdCardNumber("");
     setTerritory(""); setGender(""); setSpecialization("BOTH"); setVehicleType("TWO_WHEELER");
-    setMaxCasesPerDay(15); setExperienceYears(""); setStrongLoanType(""); setAssignManager("");
-    setLanguages(""); setLat(null); setLon(null); setLocationError(null);
+    setMaxCasesPerDay(15); setLanguages(""); setLat(null); setLon(null); setLocationError(null);
   }
 
   async function submit(e: FormEvent) {
@@ -129,58 +93,15 @@ export function CreateAgentDrawer({ open, onClose, onCreated, showSuccessToast =
       languages_spoken: languages.split(",").map((l) => l.trim()).filter(Boolean),
     };
     if (gender) body.gender = gender;
-    if (experienceYears.trim() !== "") {
-      body.experience_years = Math.max(0, Math.min(60, Number(experienceYears) || 0));
-    }
-    if (strongLoanType) body.strong_loan_type = strongLoanType as NonNullable<CreateAgentBody["strong_loan_type"]>;
-    if (isAgencyAdmin && assignManager) body.assign_manager_user_id = assignManager;
     try {
       const result = await createAgent(body);
-      if (showSuccessToast && result.demo_login) {
-        // DEMO_MODE: the agent has a known password (no SMS link locally). Show
-        // it in a persistent toast with Copy — a toast lives at the app root, so
-        // it survives this drawer (and the onboarding screen) unmounting when the
-        // roster flips from empty to populated.
-        const cred = result.demo_login;
-        toast(
-          (t) => (
-            <div className="flex flex-col gap-2">
-              <span className="font-bold">{result.full_name} created — agent login</span>
-              <div className="text-xs leading-5">
-                <div>Email: <span className="font-semibold">{cred.email}</span></div>
-                <div>Password: <span className="font-semibold">{cred.password}</span></div>
-              </div>
-              <div className="flex gap-2 mt-1">
-                <button
-                  type="button"
-                  onClick={() => { void navigator.clipboard?.writeText(`${cred.email}\n${cred.password}`); toast.success("Copied", { duration: 1500 }); }}
-                  className="px-2.5 py-1 rounded-lg text-xs font-semibold"
-                  style={{ background: "#1677FF", color: "#fff" }}
-                >
-                  Copy
-                </button>
-                <button
-                  type="button"
-                  onClick={() => toast.dismiss(t.id)}
-                  className="px-2.5 py-1 rounded-lg text-xs font-semibold"
-                  style={{ border: "1px solid #ECEDF1", color: "#475467" }}
-                >
-                  Dismiss
-                </button>
-              </div>
-            </div>
-          ),
-          { duration: Infinity, id: `agent-cred-${result.user_id}` },
-        );
-      } else if (showSuccessToast) {
-        toast.success(
-          result.activation.sent
-            ? `${result.full_name} created — activation link sent by SMS`
-            : `${result.full_name} created — activation SMS could not be sent${result.activation.error ? ` (${result.activation.error})` : ""}. Use Reset Login to send one later.`
-        );
-      }
+      toast.success(
+        result.activation.sent
+          ? `${result.full_name} created — activation link sent by SMS`
+          : `${result.full_name} created — activation SMS could not be sent${result.activation.error ? ` (${result.activation.error})` : ""}. Use Reset Login to send one later.`
+      );
       reset();
-      onCreated(result);
+      onCreated();
       onClose();
     } catch (err) {
       // Drawer stays open, form keeps whatever the manager typed — see
@@ -241,50 +162,11 @@ export function CreateAgentDrawer({ open, onClose, onCreated, showSuccessToast =
             </label>
           </div>
 
-          {isAgencyAdmin && (
-            <label>
-              <span className={FIELD_LABEL}>Reports to (manager)</span>
-              <select
-                className="input w-full"
-                value={assignManager}
-                onChange={(e) => setAssignManager(e.target.value)}
-                required
-              >
-                <option value="">{managersQ.isPending ? "Loading managers…" : "Choose a manager"}</option>
-                {managerChoices.map((m) => (
-                  <option key={m.id} value={m.id}>{m.full_name}</option>
-                ))}
-              </select>
-              {/* An agent reports to a MANAGER, never to the admin themselves
-                  (the server refuses any other role), so with no managers yet
-                  this form cannot be completed. Say so, rather than leaving a
-                  required field with nothing in it and no explanation. */}
-              {!managersQ.isPending && managerChoices.length === 0 && (
-                <p className="mt-1 text-xs" style={{ color: "#B42318" }}>
-                  No managers in this agency yet — add one on the Managers page first.
-                </p>
-              )}
-            </label>
-          )}
           <Input
             label="Max cases per day" type="number" min={1} max={50}
             value={maxCasesPerDay}
             onChange={(e) => setMaxCasesPerDay(Math.max(1, Math.min(50, Number(e.target.value) || 1)))}
           />
-          <div className="grid grid-cols-2 gap-2">
-            <Input
-              label="Experience (years)" type="number" min={0} max={60}
-              placeholder="e.g. 3"
-              value={experienceYears}
-              onChange={(e) => setExperienceYears(e.target.value)}
-            />
-            <label>
-              <span className={FIELD_LABEL}>Strong area</span>
-              <select className="input w-full" value={strongLoanType} onChange={(e) => setStrongLoanType(e.target.value)}>
-                {LOAN_PRODUCT_OPTIONS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
-              </select>
-            </label>
-          </div>
           <Input
             label="Languages spoken (comma-separated)"
             placeholder="Hindi, English"

@@ -29,8 +29,6 @@ celery_app = Celery(
         "app.workers.tasks.partition_maintenance",
         "app.workers.tasks.analytics_refresh",
         "app.workers.tasks.llm_usage",
-        "app.workers.tasks.feed_ingestion",
-        "app.workers.tasks.feed_cutoff",
     ],
 )
 
@@ -58,22 +56,6 @@ celery_app.conf.update(
             {"soft_time_limit": 3600, "time_limit": 3900},
     },
     beat_schedule={
-        # 19:30 — the day's feed cutoff. The nightly chain is
-        #   19:30 cutoff check -> 19:45 scoring -> 20:00 allocation,
-        # and until this entry existed the 19:30 step was only a COMMENT in
-        # three files: nothing checked that the feed had arrived, so a 20:00
-        # allocation would plan on yesterday's book and the first sign of
-        # trouble was agents finding no beats at 06:00.
-        #
-        # It fetches nothing (there is no scheduled file source — banks push to
-        # POST /bank/feed, which ingests on arrival). It reads
-        # bank_feed_batches and reports, so a missing feed is visible with 30
-        # minutes still to go. The 19:45 and 20:00 stages are what REFUSE;
-        # see services/pipeline_readiness.py.
-        "feed-cutoff-check": {
-            "task": "app.workers.tasks.feed_cutoff.check_feed_cutoff",
-            "schedule": crontab(hour=19, minute=30),
-        },
         # Repayment scoring at 7:45 PM IST — after the daily bank ingest
         # (~7:30 PM, scripts/ingest_daily.py) and before allocation at 8 PM.
         # Scoring reads what ingest just wrote; allocation reads what scoring
@@ -115,17 +97,6 @@ celery_app.conf.update(
         "location-trail-retention": {
             "task": "app.workers.tasks.location_retention.prune_location_trail",
             "schedule": crontab(hour=3, minute=0),
-        },
-        # Uploaded feeds that nobody is processing. POST /bank/feed enqueues
-        # the batch itself; this is the backstop for the window where the row
-        # committed but the dispatch did not (broker down, process died), and
-        # for a batch stranded in VALIDATING by a worker that crashed holding
-        # it. Every 15 minutes: frequent enough that a lost dispatch is a short
-        # delay rather than a silent miss, cheap because it is one indexed read
-        # when there is nothing to do.
-        "bank-feed-recovery": {
-            "task": "app.workers.tasks.feed_ingestion.recover_stranded_batches",
-            "schedule": crontab(minute="*/15"),
         },
         # Label matured model predictions at 19:15, BEFORE the 19:30 ingest.
         # ingest_daily applies bank actions (SETTLED / WRITTEN_OFF / RECALL /

@@ -75,10 +75,6 @@ export type RiskCategory = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
 export interface Agent {
   id: string;
   user_id: string;
-  /** Who manages this agent. One value across a manager's own list; spans the
-   *  agency for an AGENCY_ADMIN, which is what the per-manager filters use. */
-  manager_user_id: string | null;
-  manager_name: string | null;
   employee_code: string;
   id_card_number: string;
   full_name: string;
@@ -311,14 +307,6 @@ export interface PtpHealth {
 export interface DashboardSummary {
   total_agents: number;
   agents_on_duty: number;
-  /** Which question `agents_on_duty` answered. ON_DUTY is the live roster;
-   *  WITH_PLAN (a reviewed past day) counts who held a beat then, because
-   *  duty status is a mutable column with no history. Optional: older
-   *  responses predate the field. */
-  agents_metric?: "ON_DUTY" | "WITH_PLAN";
-  /** The day these figures describe (YYYY-MM-DD), so a reviewed day is never
-   *  captioned with today's date. */
-  as_of?: string;
   /** Agents on APPROVED leave for the day — derived from leave requests, so
    *  it is right even before the nightly status sync has run (2026-09-22). */
   agents_on_leave: number;

@@ -14,32 +14,8 @@ import type { ActivityWindow, FieldActivity } from "@/pages/manager/fieldActivit
 import type { PaymentModes } from "@/pages/manager/paymentModes";
 import type { LeaveRequest, LeaveType } from "@/api/agent";
 
-/** `on` reads a PAST day (YYYY-MM-DD) for the Overview's review mode. Omitted,
- *  the server answers for today exactly as it always has. */
-export async function getDashboard(on?: string): Promise<DashboardSummary> {
-  const { data } = await api.get<DashboardSummary>("/manager/dashboard",
-    on ? { params: { on } } : undefined);
-  return data;
-}
-
-/** One point per calendar day: what was planned, and what came in. */
-export interface PerformancePoint {
-  day: string;
-  target: number;
-  collected: number;
-  planned_cases: number;
-  visits: number;
-}
-
-export interface PerformanceSeries {
-  from: string;
-  to: string;
-  days: number;
-  points: PerformancePoint[];
-}
-
-export async function getPerformanceSeries(days = 30): Promise<PerformanceSeries> {
-  const { data } = await api.get<PerformanceSeries>("/manager/performance-series", { params: { days } });
+export async function getDashboard(): Promise<DashboardSummary> {
+  const { data } = await api.get<DashboardSummary>("/manager/dashboard");
   return data;
 }
 
@@ -59,10 +35,6 @@ export async function getCases(params?: {
   status?: string;
   priority?: string;
   agent_id?: string;
-  /** AGENCY_ADMIN only: narrow the agency-wide list to one manager's agents.
-   *  Server-side, because the list is paginated — filtering the fetched page
-   *  would disagree with the count. */
-  manager_user_id?: string;
   date_from?: string;
   date_to?: string;
   /** Field-activity funnel stage — planned | visited | met | paid_or_promised |
@@ -987,14 +959,9 @@ export interface AllocationFailure {
   trigger: string | null;
 }
 
-/** `managerUserId` is AGENCY_ADMIN only: a field plan belongs to one manager,
- *  so the admin names whose plan to read. Ignored for a manager (their own). */
-export async function getLatestAllocation(planDate?: string, managerUserId?: string): Promise<AllocationPlanReport> {
+export async function getLatestAllocation(planDate?: string): Promise<AllocationPlanReport> {
   const { data } = await api.get<AllocationPlanReport>("/manager/allocation/latest", {
-    params: {
-      ...(planDate ? { plan_date: planDate } : {}),
-      ...(managerUserId ? { manager_user_id: managerUserId } : {}),
-    },
+    params: planDate ? { plan_date: planDate } : {},
   });
   return data;
 }
@@ -1005,27 +972,21 @@ export async function triggerAllocationPlan(opts?: {
   plan_date?: string;
   simulate?: boolean;
   force_replan?: boolean;
-  /** AGENCY_ADMIN only: generate for this manager's roster. */
-  manager_user_id?: string;
 }) {
   // LONG_RUNNING_MS, not the 15s default: this endpoint solves the assignment,
   // calls OSRM and writes every beat before it answers. See api/axios.ts.
-  const { manager_user_id, ...body } = opts ?? {};
-  const { data } = await api.post("/manager/allocation/plan", body, {
+  const { data } = await api.post("/manager/allocation/plan", opts ?? {}, {
     timeout: LONG_RUNNING_MS,
-    params: manager_user_id ? { manager_user_id } : {},
   });
   return data;
 }
 
-export async function getAllocationSettings(managerUserId?: string): Promise<{
+export async function getAllocationSettings(): Promise<{
   objective: "BALANCED" | "MAX_RECOVERY" | "MIN_DISTANCE";
   max_territory_radius_km: number;
   max_daily_stops_per_agent: number;
 }> {
-  const { data } = await api.get("/manager/allocation/settings", {
-    params: managerUserId ? { manager_user_id: managerUserId } : {},
-  });
+  const { data } = await api.get("/manager/allocation/settings");
   return data;
 }
 
@@ -1033,23 +994,21 @@ export async function updateAllocationSettings(settings: {
   objective?: "BALANCED" | "MAX_RECOVERY" | "MIN_DISTANCE";
   max_territory_radius_km?: number;
   max_daily_stops_per_agent?: number;
-}, managerUserId?: string) {
-  const { data } = await api.post("/manager/allocation/settings", settings, {
-    params: managerUserId ? { manager_user_id: managerUserId } : {},
-  });
+}) {
+  const { data } = await api.post("/manager/allocation/settings", settings);
   return data;
 }
 
-export async function rollbackAllocationPlan(runId: string, managerUserId?: string) {
+export async function rollbackAllocationPlan(runId: string) {
   // Also long: it deletes and rewrites the same beats the plan wrote.
   const { data } = await api.post("/manager/allocation/rollback", { run_id: runId },
-    { timeout: LONG_RUNNING_MS, params: managerUserId ? { manager_user_id: managerUserId } : {} });
+    { timeout: LONG_RUNNING_MS });
   return data;
 }
 
-export async function exportAllocationDecisions(runId: string, managerUserId?: string): Promise<Blob> {
+export async function exportAllocationDecisions(runId: string): Promise<Blob> {
   const response = await api.get("/manager/allocation/export-decisions", {
-    params: { run_id: runId, ...(managerUserId ? { manager_user_id: managerUserId } : {}) },
+    params: { run_id: runId },
     responseType: "blob",
   });
   return response.data;
@@ -1143,13 +1102,6 @@ export interface CreateAgentBody {
   vehicle_type?: string;
   max_cases_per_day?: number;
   languages_spoken?: string[];
-  /** Years in the field (0–60). */
-  experience_years?: number;
-  /** The loan product the agent collects best — a loan_type_enum value. */
-  strong_loan_type?: "HOME" | "AUTO" | "PERSONAL" | "BUSINESS" | "GOLD" | "CREDIT_CARD" | "EDUCATION" | "MICROFINANCE";
-  /** AGENCY_ADMIN only: the manager this agent reports to (their own agency).
-   *  Omitted → the caller's own roster, which is what a manager always gets. */
-  assign_manager_user_id?: string;
 }
 
 export interface CreateAgentResult {
@@ -1165,55 +1117,10 @@ export interface CreateAgentResult {
    *  `sent: false` most often means no PUBLIC_BASE_URL is configured in this
    *  environment — the agent row still exists; Reset Login is the recovery path. */
   activation: { sent: boolean; expires_at?: string; error?: string };
-  /** DEMO_MODE only: a known password set on the agent so it can log in without
-   *  the SMS activation link (which a local demo can't deliver). Absent in any
-   *  real deployment, where the agent sets their own password via the link. */
-  demo_login?: { email: string; password: string };
 }
 
 export async function createAgent(body: CreateAgentBody): Promise<CreateAgentResult> {
   const { data } = await api.post<CreateAgentResult>("/manager/agents", body);
-  return data;
-}
-
-// ─── Agency managers (AGENCY_ADMIN only) ────────────────────────────────────
-
-export interface AgencyManager {
-  id: string;
-  full_name: string;
-  email: string;
-  phone: string;
-  is_active: boolean;
-  created_at: string;
-  agents_count: number;
-}
-
-export async function getAgencyManagers(): Promise<AgencyManager[]> {
-  const { data } = await api.get<AgencyManager[]>("/manager/managers");
-  return data;
-}
-
-export interface CreateManagerBody {
-  full_name: string;
-  email: string;
-  phone: string;
-}
-
-export interface CreateManagerResult {
-  id?: string;
-  full_name: string;
-  email: string;
-  phone?: string;
-  role?: string;
-  /** DEMO_MODE only: a known password so the manager can log in without the
-   *  invite link (which a local demo can't deliver). Absent in production. */
-  demo_login?: { email: string; password: string };
-  /** Production: the invitation, incl. the one-time link path when channel=LINK. */
-  invite?: { token?: string; path?: string; delivered?: boolean | null };
-}
-
-export async function createManager(body: CreateManagerBody): Promise<CreateManagerResult> {
-  const { data } = await api.post<CreateManagerResult>("/manager/managers", body);
   return data;
 }
 

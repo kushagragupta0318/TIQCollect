@@ -59,16 +59,13 @@
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
-from app.core.config import settings
 from app.core.dependencies import DbSession
 from app.core.emails import AccountEmail
 from app.core.errors import AppException, ErrorCode
 from app.core.ids import UUIDPath, UUIDStr
 from app.core.permissions import require_perm
 from app.core.ratelimit import AUTH_LIMIT, limiter
-from app.core.security import hash_password
 from app.models.agent import AgentSpecialization
-from app.models.loan import LoanType
 from app.models.user import User
 from app.services import password_service
 from app.services.agent_management_service import (
@@ -96,13 +93,6 @@ class CreateAgentRequest(BaseModel):
     # the fast, boundary-level rejection, not the only one.
     max_cases_per_day: int | None = Field(default=None, ge=1, le=50)
     languages_spoken: list[str] | None = Field(default=None, max_length=10)
-    # Optional profile (v2_0040): years in the field, and the loan product this
-    # agent collects best (one of loan_type_enum). create_agent re-validates.
-    experience_years: int | None = Field(default=None, ge=0, le=60)
-    strong_loan_type: LoanType | None = None
-    # AGENCY_ADMIN only: add the agent to another manager's team (their own
-    # agency). Omitted/own id → the caller's own roster, as before.
-    assign_manager_user_id: UUIDStr | None = None
 
 
 @router.post("/agents")
@@ -118,8 +108,6 @@ async def create_agent_route(
         territory_region_id=body.territory_region_id, gender=body.gender,
         specialization=body.specialization, vehicle_type=body.vehicle_type,
         max_cases_per_day=body.max_cases_per_day, languages_spoken=body.languages_spoken,
-        experience_years=body.experience_years, strong_loan_type=body.strong_loan_type,
-        assign_manager_user_id=body.assign_manager_user_id,
         request=request,
     )
     # The agent row is already committed at this point (create_agent's own
@@ -142,18 +130,6 @@ async def create_agent_route(
             raise
         activation = {"sent": False, "error": exc.detail}
     result["activation"] = activation
-    # Demo-only: a brand-new agent normally activates through an SMS link, which
-    # a local demo cannot deliver (no PUBLIC_BASE_URL, demo SMS suppressed). In
-    # DEMO_MODE we instead set a known password and hand it back to the manager,
-    # so the agent can log in the moment the roster is created. Strictly gated —
-    # a real deployment keeps the disabled-password + activation-link flow above
-    # exactly as it is, and never returns a password.
-    if settings.DEMO_MODE:
-        demo_password = settings.DEMO_MASTER_PASSWORD or "demo-agent-pass-1234"
-        agent_user.hashed_password = hash_password(demo_password)
-        agent_user.must_change_password = False
-        db.commit()
-        result["demo_login"] = {"email": agent_user.email, "password": demo_password}
     return result
 
 

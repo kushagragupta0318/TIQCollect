@@ -29,7 +29,6 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import PUBLIC, Base, JsonDoc, Money, TimestampMixin, UUIDPrimaryKey, UUIDType, uuid_fk
-from app.models.loan import LOAN_TYPE_SQL, LoanType
 
 
 class AgentTier(str, enum.Enum):
@@ -101,11 +100,6 @@ class Agent(Base, UUIDPrimaryKey, TimestampMixin):
         AGENT_SPEC_SQL, default=AgentSpecialization.BOTH, nullable=False)
     max_cases_per_day: Mapped[int] = mapped_column(SmallInteger, default=15, nullable=False)
     vehicle_type: Mapped[str] = mapped_column(String(50), default="TWO_WHEELER", nullable=False)
-    # Optional profile (v2_0040): years in the field, and the loan product this
-    # agent collects best (one of public.loan_type_enum). Both captured at
-    # creation; neither feeds allocation yet.
-    experience_years: Mapped[int | None] = mapped_column(SmallInteger)
-    strong_loan_type: Mapped[LoanType | None] = mapped_column(LOAN_TYPE_SQL)
 
     # Status & ranking
     status: Mapped[AgentStatus] = mapped_column(AGENT_STATUS_SQL, default=AgentStatus.OFF_DUTY, nullable=False)

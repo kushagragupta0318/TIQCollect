@@ -39,12 +39,13 @@
 //   it is a feature with its own scoping and retention decisions — not
 //   something to invent underneath a heading that says "Audit Log".
 // ────────────────────────────────────────────────────────────────────────────
-import { Shield, CheckCircle, AlertTriangle, Clock, ScanSearch, MapPin, Copy, Timer, Navigation, Route, X, Check, ChevronDown, ChevronUp, MinusCircle } from "lucide-react";
+import { Shield, CheckCircle, AlertTriangle, Clock, FileText, ScanSearch, MapPin, Copy, Timer, Navigation, Route, X, Check, ChevronDown, ChevronUp, MinusCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { getCompliance, getFraudAlerts, reviewFraudAlert } from "@/api/manager";
-import type { ComplianceMetrics, FraudFinding, FraudReport } from "@/api/manager";
+import { getAuditLog, exportAuditLog, getCompliance, getFraudAlerts, reviewFraudAlert } from "@/api/manager";
+import type { AuditLogPage, ComplianceMetrics, FraudFinding, FraudReport } from "@/api/manager";
 import { toast } from "react-hot-toast";
+import { todayIso } from "@/lib/today";
 
 const EASE = "cubic-bezier(0.16,1,0.3,1)";
 
@@ -285,10 +286,203 @@ export default function ManagerCompliancePage() {
 
       {/* Visit evidence anomalies — computed from real Visit rows. */}
       <VisitAnomalies />
+
+      {/* The real audit trail, replacing the six hardcoded rows this page used
+          to render under "Today's Audit Log". */}
+      <AuditTrail />
     </div>
   );
 }
 
+
+// ─── Audit trail ────────────────────────────────────────────────────────────
+// GET /manager/audit-log — scoped server-side to this manager's own team, last
+// seven days, paginated. The panel it replaces was a fixed array in this file.
+
+const PAGE_SIZE = 25;
+
+/** Human labels for the actions that are actually emitted. Anything unmapped
+ *  falls back to the raw enum name rather than being hidden — a new action type
+ *  appearing unlabelled is better than it silently not rendering. */
+const ACTION_LABEL: Record<string, string> = {
+  LOGIN: "Signed in",
+  LOGOUT: "Signed out",
+  LOGIN_FAILED: "Sign-in failed",
+  TOKEN_REFRESH: "Session refreshed",
+  DEVICE_MISMATCH: "Unrecognised device blocked",
+  PAYMENT_VERIFIED: "Payment verified by borrower OTP",
+  PTP_UPDATED: "Promise to pay updated",
+  ANOMALY_REVIEWED: "Visit anomaly reviewed",
+  DATA_EXPORT: "Data exported",
+};
+
+function AuditTrail() {
+  const [page, setPage] = useState<AuditLogPage | null>(null);
+  const [offset, setOffset] = useState(0);
+  const [error, setError] = useState(false);
+  const [exporting, setExporting] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    getAuditLog(PAGE_SIZE, offset)
+      .then((d) => { if (alive) { setPage(d); setError(false); } })
+      .catch(() => { if (alive) setError(true); });
+    return () => { alive = false; };
+  }, [offset]);
+
+  async function handleExport() {
+    setExporting(true);
+    try {
+      // Blob download, the same pattern as the allocation-decisions export —
+      // the endpoint is authenticated, so a plain href would 401.
+      const blob = await exportAuditLog();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `audit_log_${todayIso()}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast.error("Could not export the audit log");
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  if (error) {
+    return (
+      <div className="card p-4 sm:p-6" style={{ animation: `enter 420ms ${EASE} 180ms both` }}>
+        <h2 className="text-base font-bold mb-2" style={{ color: "#1C1C1F" }}>Audit Trail</h2>
+        <p className="text-sm" style={{ color: "#991B1B" }}>Could not load the audit trail.</p>
+      </div>
+    );
+  }
+
+  const entries = page?.entries ?? [];
+  const total = page?.total ?? 0;
+  const shownTo = Math.min(offset + PAGE_SIZE, total);
+
+  return (
+    <div className="card p-4 sm:p-6" style={{ animation: `enter 420ms ${EASE} 180ms both` }}>
+      <div className="flex items-center justify-between gap-3 mb-1">
+        <h2 className="text-base font-bold min-w-0 truncate" style={{ color: "#1C1C1F" }}>
+          Audit Trail
+        </h2>
+        <button
+          onClick={handleExport}
+          disabled={exporting || total === 0}
+          className="tap-target flex items-center justify-center gap-1.5 text-sm font-semibold text-brand-600 hover:text-brand-700 transition-colors flex-shrink-0 -mr-2 px-2 disabled:opacity-40"
+        >
+          <FileText className="w-4 h-4 flex-shrink-0" />
+          {exporting ? "Exporting…" : "Export CSV"}
+        </button>
+      </div>
+      <p className="text-xs mb-4" style={{ color: "#6B6D76" }}>
+        {page
+          ? `Last ${page.window_days} days · your team only · ${total.toLocaleString("en-IN")} recorded action${total === 1 ? "" : "s"}`
+          : "Loading…"}
+      </p>
+
+      {page && total === 0 && (
+        <p className="text-sm py-3" style={{ color: "#6B6D76" }}>
+          No recorded actions in the last {page.window_days} days.
+        </p>
+      )}
+
+      <div className="space-y-2">
+        {entries.map((e, i) => (
+          <div
+            key={e.id}
+            className="flex items-start gap-3 p-3 rounded-xl text-sm"
+            style={{
+              background: e.success ? "#F5F6F9" : "rgba(220,38,38,0.06)",
+              border: e.success ? "none" : "1px solid rgba(220,38,38,0.18)",
+              animation: `enter 380ms ${EASE} ${Math.min(i, 10) * 40}ms both`,
+            }}
+          >
+            {e.success
+              ? <CheckCircle className="w-4 h-4 text-success-500 mt-0.5 flex-shrink-0" />
+              : <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: "#DC2626" }} />}
+            <div className="flex-1 min-w-0">
+              {/* On a phone the timestamp takes its own line first; `ml-auto`
+                  inside a wrapping row would strand it right-aligned on
+                  whatever line it happened to land on. */}
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="text-xs order-1 sm:order-3 w-full sm:w-auto sm:ml-auto" style={{ color: "#6B6D76" }}>
+                  {e.created_at ? new Date(e.created_at).toLocaleString("en-IN") : "—"}
+                </span>
+                <span className="font-semibold order-2 sm:order-1 min-w-0" style={{ color: "#1C1C1F" }}>
+                  {e.actor_name ?? "System"}
+                </span>
+                <span className={`badge order-3 sm:order-2 ${e.success ? "badge-blue" : "badge-red"}`}>
+                  {ACTION_LABEL[e.action] ?? e.action}
+                </span>
+              </div>
+              <p className="text-xs mt-1 break-words" style={{ color: "#6B6D76" }}>
+                {[
+                  e.entity_type && e.entity_id ? `${e.entity_type} ${e.entity_id}` : null,
+                  e.failure_reason,
+                  e.ip_address ? `from ${e.ip_address}` : null,
+                ].filter(Boolean).join(" · ") || "No further detail recorded"}
+              </p>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {total > PAGE_SIZE && (
+        <div className="flex items-center justify-between gap-3 mt-4">
+          <span className="text-xs" style={{ color: "#6B6D76" }}>
+            {offset + 1}–{shownTo} of {total.toLocaleString("en-IN")}
+          </span>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setOffset((o) => Math.max(0, o - PAGE_SIZE))}
+              disabled={offset === 0}
+              className="tap-target px-3 py-1.5 rounded-lg text-xs font-semibold border disabled:opacity-40"
+              style={{ borderColor: "#EAEBEF", color: "#1C1C1F" }}
+            >
+              Previous
+            </button>
+            <button
+              onClick={() => setOffset((o) => o + PAGE_SIZE)}
+              disabled={shownTo >= total}
+              className="tap-target px-3 py-1.5 rounded-lg text-xs font-semibold border disabled:opacity-40"
+              style={{ borderColor: "#EAEBEF", color: "#1C1C1F" }}
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* THE COVERAGE NOTE. Without it a short trail reads as a quiet week
+          rather than as an uninstrumented one, which on a compliance screen is
+          the difference between "nothing happened" and "we are not recording
+          it". The list comes from the server so there is one definition. */}
+      {page && (
+        <div
+          className="mt-5 pt-4 text-xs"
+          style={{ borderTop: "1px solid #EAEBEF", color: "#6B6D76" }}
+        >
+          <p className="font-semibold mb-1" style={{ color: "#1C1C1F" }}>
+            What this trail does not yet record
+          </p>
+          <p className="mb-2">
+            {page.coverage.not_instrumented.length} of {page.coverage.declared_action_types} declared
+            action types are never written, so their absence below is not evidence they did not happen:{" "}
+            <span style={{ color: "#4A5462" }}>
+              {page.coverage.not_instrumented.map((a) => ACTION_LABEL[a] ?? a).join(", ")}
+            </span>.
+          </p>
+          <p>{page.coverage.note}</p>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ─── Field-visit anomalies (2026-08-19) ─────────────────────────────────────
 // The only section on this page computed from real records. Everything above

@@ -68,16 +68,3 @@ api_router.include_router(bank_reports.router)
 # 2026-10-07 (F11 Tech Ops → Usage & Cost): /bank/usage. Own line, same reason.
 from app.api.v1.endpoints import bank_usage  # noqa: E402
 api_router.include_router(bank_usage.router)
-# Agency-admin manager management, /manager/managers (AGENCY_ADMIN only). Shares
-# the /manager prefix from its own file (like manager_agents_admin). Own line,
-# for the same merge reason as above.
-from app.api.v1.endpoints import agency_managers_admin  # noqa: E402
-api_router.include_router(agency_managers_admin.router)
-# Bank loan-feed ingestion: /bank/feed upload, validate and history
-# (bank_feed.upload). Own line, for the same merge reason as above.
-from app.api.v1.endpoints import bank_feed  # noqa: E402
-api_router.include_router(bank_feed.router)
-# Bank feed quarantine review and safe release (bank_feed.upload). Own line,
-# for the same merge reason as above.
-from app.api.v1.endpoints import bank_feed_quarantine  # noqa: E402
-api_router.include_router(bank_feed_quarantine.router)

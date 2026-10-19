@@ -32,7 +32,7 @@ import {
   listAgencyDirectory, listAgencyLeaderboard, listRegions, AGENCY_STATUSES, LOAN_TYPES,
   type AgencyDirectoryFilters, type AgencyDirectoryRow,
 } from "@/api/bank";
-import { formatIndexPrecise, indexEvidenceCaption } from "../performance/performanceLogic";
+import { formatIndex, indexEvidenceCaption } from "../performance/performanceLogic";
 import { errorDetail } from "@/lib/apiError";
 import { AGENCY_STATUS_LABELS, CONTRACT_STATUS_LABELS, LOAN_TYPE_LABELS, labelFor } from "../../lib/labels";
 import {
@@ -84,50 +84,16 @@ function PerformanceCellView({ cell, onOpen }: { cell: PerformanceCell; onOpen: 
     case "scored":
       return (
         <div>
-          <div className="font-semibold text-foreground tabular-nums">{formatIndexPrecise(cell.index)}</div>
+          <div className="font-semibold text-foreground tabular-nums">{formatIndex(cell.index)}</div>
           <div className="text-[11px] text-muted-foreground">{indexEvidenceCaption(cell.n)}</div>
         </div>
       );
-    // Every state opens the agency's scorecard — "not enough data" and "no
-    // score in this region" are still answers a reader wants the detail behind,
-    // and they were dead text while only the `regions` state was clickable.
-    // stopPropagation on each: the row itself opens the PROFILE, these open
-    // PERFORMANCE, so the inner click must not also fire the row's.
     case "insufficient":
-      return (
-        <button
-          type="button"
-          onClick={(e) => { e.stopPropagation(); onOpen(); }}
-          className="text-left hover:underline"
-          title="Open this agency's scorecard"
-        >
-          <Badge variant="outline" className="text-muted-foreground">Not enough data</Badge>
-        </button>
-      );
+      return <Badge variant="outline" className="text-muted-foreground">Not enough data</Badge>;
     case "not_scored_here":
-      return (
-        <button
-          type="button"
-          onClick={(e) => { e.stopPropagation(); onOpen(); }}
-          className="text-left text-[12px] text-muted-foreground hover:underline"
-          title="Open this agency's scorecard"
-        >
-          No score in this region
-        </button>
-      );
+      return <span className="text-[12px] text-muted-foreground">No score in this region</span>;
     case "regions":
-      if (cell.total === 0) {
-        return (
-          <button
-            type="button"
-            onClick={(e) => { e.stopPropagation(); onOpen(); }}
-            className="text-left text-[12px] text-muted-foreground hover:underline"
-            title="Open this agency's scorecard"
-          >
-            No scored placements yet
-          </button>
-        );
-      }
+      if (cell.total === 0) return <span className="text-[12px] text-muted-foreground">No scored placements yet</span>;
       return (
         <button
           type="button"
@@ -302,7 +268,7 @@ export default function AgencyDirectoryPage() {
                   <TableHead>Agency</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Contract</TableHead>
-                  <TableHead>Coverage</TableHead>
+                  <TableHead>Covered regions</TableHead>
                   <TableHead>Authorised products</TableHead>
                   <TableHead title="Agency Performance Index, latest month">Performance</TableHead>
                 </TableRow>
@@ -315,21 +281,8 @@ export default function AgencyDirectoryPage() {
                     <TableRow
                       key={row.agency_id}
                       onClick={() => openRow(row)}
-                      // EVERY row opens something (openRow sends PENDING to the
-                      // onboarding wizard and the rest to the profile), so every
-                      // row gets the pointer and the hover tint. Only `resumable`
-                      // did before, which left an Active row silently clickable:
-                      // the click worked and nothing said so.
-                      // Light blue, from the bank theme's own --primary
-                      // (#1677FF) at low alpha — a token, not another hardcoded
-                      // hex, so it follows the theme instead of drifting from it.
-                      className="cursor-pointer transition-colors hover:bg-primary/10 focus-visible:bg-primary/10 focus-visible:outline-none"
-                      tabIndex={0}
-                      role="link"
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openRow(row); }
-                      }}
-                      title={resumable ? "Continue onboarding this draft" : `Open ${row.trade_name || row.legal_name}`}
+                      className={resumable ? "cursor-pointer" : undefined}
+                      title={resumable ? "Continue onboarding this draft" : undefined}
                     >
                       <TableCell>
                         <div className="font-semibold text-foreground">{row.legal_name}</div>

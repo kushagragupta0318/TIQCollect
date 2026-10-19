@@ -17,7 +17,6 @@ import {
 import { BrandLogo } from "@/components/ui/BrandLogo";
 import { useEffect, useState, useCallback, useSyncExternalStore } from "react";
 import { toast } from "react-hot-toast";
-import { BrandLoader } from "@/components/ui/BrandLoader";
 import { useAuthStore } from "@/store/authStore";
 import { useSOSStore } from "@/store/sosStore";
 import { SOSButton } from "@/components/ui/SOSButton";
@@ -155,7 +154,7 @@ export default function AgentLayout() {
 function AgentLayoutInner() {
   const { user, logout } = useAuthStore();
   const { setSosActive } = useSOSStore();
-  const { beat, loading: beatLoading } = useBeat();
+  const { beat } = useBeat();
   const navigate = useNavigate();
   const location = useLocation();
   const unreadMessages = useUnreadAgentMessagingCount();
@@ -252,14 +251,6 @@ function AgentLayoutInner() {
       navigate("/login", { replace: true });
     });
   }, [logout, navigate]);
-
-  // Day-start hold, the same one ManagerLayout takes: until the agent's beat
-  // has loaded, show the brand splash rather than flashing an empty shell —
-  // a nav bar with no stops, then the real day replacing it. After the hooks
-  // above on purpose; an early return before them would change hook order.
-  if (beatLoading) {
-    return <BrandLoader full label="Loading your day" />;
-  }
 
   return (
     <div

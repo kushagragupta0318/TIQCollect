@@ -73,16 +73,10 @@ const AS_BEFORE = {
  */
 type Objective = "BALANCED" | "MAX_RECOVERY" | "MIN_DISTANCE";
 
-export function TomorrowAllocationCard(
-  // `managerUserId` is AGENCY_ADMIN only: a plan belongs to ONE manager, so the
-  // admin names whose. Undefined for a manager — the server uses their own id.
-  // It rides every query key, so switching managers refetches rather than
-  // showing the previous manager's plan under the new name.
-  { defaultExpanded = false, managerUserId }: { defaultExpanded?: boolean; managerUserId?: string },
-) {
+export function TomorrowAllocationCard({ defaultExpanded = false }: { defaultExpanded?: boolean }) {
   const planQ = useQuery({
-    queryKey: ["manager", "allocation", "latest", managerUserId ?? null],
-    queryFn: () => getLatestAllocation(undefined, managerUserId),
+    queryKey: ["manager", "allocation", "latest"],
+    queryFn: () => getLatestAllocation(),
     ...AS_BEFORE,
   });
   const plan = planQ.data ?? null;
@@ -94,8 +88,8 @@ export function TomorrowAllocationCard(
   const refetchPlan = planQ.refetch;
 
   const settingsQ = useQuery({
-    queryKey: ["manager", "allocation", "settings", managerUserId ?? null],
-    queryFn: () => getAllocationSettings(managerUserId),
+    queryKey: ["manager", "allocation", "settings"],
+    queryFn: getAllocationSettings,
     ...AS_BEFORE,
   });
 
@@ -116,12 +110,6 @@ export function TomorrowAllocationCard(
     objectiveChoice ?? (settingsQ.data?.objective as Objective | undefined) ?? "BALANCED";
   const setObjective = setObjectiveChoice;
   const [showDecisions, setShowDecisions] = useState(false);
-  // The drawer renders one ~12-element card per decision, and a full book is
-  // ~1,700 of them — about 20k nodes mounted by a single click, which janks
-  // the tab for seconds. Render a page at a time; the filter pills above still
-  // count the whole set, so nothing is hidden, only deferred.
-  const DECISION_PAGE = 100;
-  const [decisionLimit, setDecisionLimit] = useState(DECISION_PAGE);
   // "View Explainable Decisions" opens a ~900-row drawer BELOW the fold, and
   // until 2026-09-17 nothing moved the viewport, so a manager clicked and saw
   // no change. The drawer scrolls into view once it has rendered; a scroll in
@@ -134,13 +122,7 @@ export function TomorrowAllocationCard(
     decisionsRef.current.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
   }, [showDecisions]);
   const [selectedDecision, setSelectedDecision] = useState<AllocationDecisionItem | null>(null);
-  const [decisionFilter, setDecisionFilterRaw] = useState<"ALL" | "ALLOCATED" | "DEFERRED" | "BLOCKED">("ALL");
-  // Switching filter starts the new list from the top, not part-way down the
-  // previous one's page count.
-  const setDecisionFilter = (f: "ALL" | "ALLOCATED" | "DEFERRED" | "BLOCKED") => {
-    setDecisionFilterRaw(f);
-    setDecisionLimit(DECISION_PAGE);
-  };
+  const [decisionFilter, setDecisionFilter] = useState<"ALL" | "ALLOCATED" | "DEFERRED" | "BLOCKED">("ALL");
 
   // Hoisted out of the memo, 2026-09-10. Reading `plan?.decisions` INSIDE it
   // made the React Compiler infer `plan` as the dependency while the array said
@@ -183,7 +165,6 @@ export function TomorrowAllocationCard(
     setPlanning(true);
     try {
       await triggerAllocationPlan({
-        manager_user_id: managerUserId,
         strategy: "SMART",
         objective: activeObj,
         force_replan: true,
@@ -212,20 +193,17 @@ export function TomorrowAllocationCard(
     }
   };
 
-  // Selecting an objective SAVES it; it does not plan. Until 2026-10-16 this
-  // called handleRunPlan(obj), so clicking a pill started a full 40-60s
-  // allocation nobody had asked for — three pills meant three runs, and the
-  // Generate button was decorative. Choosing and running are now separate.
   const handleSelectObjective = (obj: "BALANCED" | "MAX_RECOVERY" | "MIN_DISTANCE") => {
     setObjective(obj);
-    updateAllocationSettings({ objective: obj }, managerUserId).catch(() => {});
+    updateAllocationSettings({ objective: obj }).catch(() => {});
+    handleRunPlan(obj);
   };
 
   const handleRollback = async () => {
     if (!plan?.run_id) return;
     setRollingBack(true);
     try {
-      await rollbackAllocationPlan(plan.run_id, managerUserId);
+      await rollbackAllocationPlan(plan.run_id);
       toast.success("Allocation plan rolled back successfully");
       void refetchPlan();
     } catch {
@@ -239,7 +217,7 @@ export function TomorrowAllocationCard(
     if (!plan?.run_id) return;
     try {
       toast.loading("Generating CSV export...", { id: "csv-export" });
-      const blob = await exportAllocationDecisions(plan.run_id, managerUserId);
+      const blob = await exportAllocationDecisions(plan.run_id);
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -373,7 +351,7 @@ export function TomorrowAllocationCard(
               )}
               {!isExpanded && plan?.has_plan && (
                 <span className="text-xs font-medium text-slate-600 bg-slate-100 px-2.5 py-0.5 rounded-full border border-slate-200">
-                  {plan.total_cases_allocated ?? 0} cases • {shortMoney((plan.allocated_collectable_total || plan.expected_recovery_total) ?? 0)} Expected Recovery • {plan.total_agents_planned ?? 0} agent routes
+                  {plan.total_cases_allocated ?? 0} cases • ₹{(((plan.allocated_collectable_total || plan.expected_recovery_total) ?? 0) / 100000).toFixed(1)}L Expected Recovery • {plan.total_agents_planned ?? 0} agent routes
                 </span>
               )}
             </div>
@@ -471,24 +449,6 @@ export function TomorrowAllocationCard(
           <p className="basis-full text-[11px] text-slate-500 mt-0.5">
             {OBJECTIVE_OPTIONS.find((o) => o.key === objective)?.hint ?? OBJECTIVE_OPTIONS[0].hint}
           </p>
-          {/* The solve takes 40-60s on a full book (matching + OSRM routing over
-              ~1.7k cases). A spinner inside the button alone reads as "nothing
-              happened", so the wait is stated in words and given a live region
-              — managers were re-clicking mid-run and starting a second plan. */}
-          {planning && (
-            <div
-              role="status"
-              aria-live="polite"
-              className="basis-full flex items-center gap-2 rounded-lg border border-brand-200 bg-brand-50 px-3 py-2 mt-1"
-            >
-              <RefreshCw className="w-3.5 h-3.5 text-brand-600 animate-spin flex-shrink-0" aria-hidden="true" />
-              <p className="text-[11px] text-brand-900">
-                <span className="font-semibold">Generating the field plan…</span>{" "}
-                scoring cases, matching agents and sequencing routes. This usually
-                takes under a minute — do not re-run or leave the page.
-              </p>
-            </div>
-          )}
         </div>
       )}
 
@@ -574,12 +534,12 @@ export function TomorrowAllocationCard(
               className="p-3 bg-white rounded-xl border border-slate-200/80"
               title={
                 (plan.allocated_target_total ?? 0) > 0
-                  ? `${shortMoney(plan.allocated_target_total ?? 0)} is the lifetime target on these ` +
-                    `${plan.total_cases_allocated ?? 0} cases. ` +
-                    `${shortMoney((plan.allocated_target_total ?? 0) - (plan.allocated_collectable_total ?? 0))} ` +
-                    `of it has already been paid, leaving ${shortMoney(plan.allocated_collectable_total ?? 0)} ` +
+                  ? `₹${((plan.allocated_target_total ?? 0) / 100000).toFixed(1)}L is the lifetime target on these ` +
+                    `${plan.total_cases_allocated ?? 0} cases. ₹` +
+                    `${(((plan.allocated_target_total ?? 0) - (plan.allocated_collectable_total ?? 0)) / 100000).toFixed(1)}L ` +
+                    `of it has already been paid, leaving ₹${((plan.allocated_collectable_total ?? 0) / 100000).toFixed(1)}L ` +
                     `still owed — the figure shown. The model's own forecast for the next cycle, ` +
-                    `case by case, is ${shortMoney(plan.expected_recovery_total ?? 0)}.`
+                    `case by case, is ₹${((plan.expected_recovery_total ?? 0) / 100000).toFixed(1)}L.`
                   : undefined
               }
             >
@@ -594,10 +554,10 @@ export function TomorrowAllocationCard(
                   per-case line — and the tooltip still states it, so the
                   reconciliation is a hover away rather than gone. Where an old
                   plan has no collectable total the forecast is shown, so the
-                  tile never reads ₹0 on a real plan. */}
+                  tile never reads ₹0.0L on a real plan. */}
               <span className="text-[11px] font-medium text-slate-500">Expected Recovery</span>
               <p className="text-lg font-bold text-emerald-600 mt-0.5">
-                {shortMoney((plan.allocated_collectable_total || plan.expected_recovery_total) ?? 0)}
+                ₹{(((plan.allocated_collectable_total || plan.expected_recovery_total) ?? 0) / 100000).toFixed(1)}L
               </p>
               {(plan.allocated_collectable_total ?? 0) > 0 && (
                 <p className="text-[11px] text-slate-400 mt-0.5">
@@ -728,7 +688,7 @@ export function TomorrowAllocationCard(
                 </div>
               </div>
               <div className="space-y-1.5 px-3 pt-2 pb-3">
-                {sortedDecisions.slice(0, decisionLimit).map((d: AllocationDecisionItem) => (
+                {sortedDecisions.map((d: AllocationDecisionItem) => (
                   <div
                     key={d.decision_id}
                     onClick={() => setSelectedDecision(d === selectedDecision ? null : d)}
@@ -812,18 +772,6 @@ export function TomorrowAllocationCard(
                     )}
                   </div>
                 ))}
-                {sortedDecisions.length > decisionLimit && (
-                  <button
-                    type="button"
-                    onClick={() => setDecisionLimit((n) => n + DECISION_PAGE)}
-                    className="w-full mt-1 py-2 text-[11px] font-semibold text-brand-700 bg-white border border-slate-200 rounded-lg hover:bg-brand-50 transition-colors"
-                  >
-                    Show {Math.min(DECISION_PAGE, sortedDecisions.length - decisionLimit)} more
-                    <span className="text-slate-400 font-medium">
-                      {" "}· showing {decisionLimit} of {sortedDecisions.length}
-                    </span>
-                  </button>
-                )}
               </div>
             </div>
           )}
@@ -845,14 +793,14 @@ export function TomorrowAllocationCard(
 // overview is a cache hit, and the two can never show different plans.
 export function BeatPlanSummaryStrip() {
   const planQ = useQuery({
-    queryKey: ["manager", "allocation", "latest", null],
+    queryKey: ["manager", "allocation", "latest"],
     queryFn: () => getLatestAllocation(),
     ...AS_BEFORE,
   });
   const plan = planQ.data ?? null;
   const settingsQ = useQuery({
-    queryKey: ["manager", "allocation", "settings", null],
-    queryFn: () => getAllocationSettings(),
+    queryKey: ["manager", "allocation", "settings"],
+    queryFn: getAllocationSettings,
     ...AS_BEFORE,
   });
   const objective = (settingsQ.data?.objective as Objective | undefined) ?? "BALANCED";

@@ -227,12 +227,7 @@ assert ROUTES, "route discovery found nothing — app.routes shape changed, fix 
 
 
 def _tenant_id_value(field: str, a: dict) -> str:
-    # `manager_user_id` (2026-10-14): GET /manager/cases takes it so an
-    # AGENCY_ADMIN can narrow an agency-wide list to one manager. Filled with
-    # tenant A's MANAGER so the check below actually crosses the tenant wall —
-    # the filter must narrow within the caller's scope, never widen to A's rows.
-    return {"case_id": a["case"].id, "agent_id": a["agent"].id, "visit_id": a["visit"].id,
-            "manager_user_id": a["manager"].id}[field]
+    return {"case_id": a["case"].id, "agent_id": a["agent"].id, "visit_id": a["visit"].id}[field]
 
 
 def _foreign_markers(a: dict) -> dict:

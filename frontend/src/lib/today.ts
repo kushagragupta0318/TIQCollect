@@ -29,12 +29,3 @@ export function todayIso(): string {
 export function todayMonthIso(): string {
   return istDateStr().slice(0, 7);
 }
-
-/** The IST calendar day BEFORE today, as YYYY-MM-DD. Derived from istDateStr
- *  rather than `new Date()`, which reads as the day before between 00:00 and
- *  05:30 IST — the same trap this module exists to close. */
-export function yesterdayIso(): string {
-  const d = new Date(`${istDateStr()}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() - 1);
-  return d.toISOString().slice(0, 10);
-}

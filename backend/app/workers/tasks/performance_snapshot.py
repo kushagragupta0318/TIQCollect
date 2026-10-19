@@ -25,29 +25,11 @@ def take_monthly_snapshot(self):
         # dates themselves (2026-09-24: they were compared as ISO strings).
         start_at = datetime.combine(month_start, time.min, tzinfo=timezone.utc)
         end_at = datetime.combine(month_end, time.min, tzinfo=timezone.utc)
-        # The month this run archives, for the log line and the return value.
-        # It was referenced at both WITHOUT ever being assigned, so the task
-        # raised NameError after its db.commit(): the rows landed and the task
-        # still reported failure, every month, with nothing on any screen to
-        # say why (the AI monthly report simply read "no data" for the month).
-        month_str = month_start.strftime("%Y-%m")
 
         agents = db.query(Agent).all()
         snapshotted = 0
 
-        # Agents already archived for this month. ix_perf_agent_month is UNIQUE
-        # on (agent_id, month), so a blind re-insert raised IntegrityError and
-        # lost the whole run — a retry, a manual catch-up for a month the job
-        # missed, or two beats firing could never succeed. Skipping what is
-        # already there makes the task safe to run again for the same month.
-        already = {
-            r[0] for r in db.query(AgentPerformance.agent_id)
-            .filter(AgentPerformance.month == month_start).all()
-        }
-
         for agent in agents:
-            if agent.id in already:
-                continue
             payments = db.query(Payment).filter(
                 Payment.agent_id == agent.id,
                 Payment.payment_date >= start_at,

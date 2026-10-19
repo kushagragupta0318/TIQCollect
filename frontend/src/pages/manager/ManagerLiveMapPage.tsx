@@ -248,19 +248,6 @@ export default function ManagerLiveMapPage() {
     teamRef.current = new AdaptivePointGroup(map);
     sosLayerRef.current = L.layerGroup().addTo(map);
     mapRef.current = map;
-    // Same wheel gating as MapCanvas (this page builds its own Leaflet map, so
-    // it does not inherit it): the wheel scrolls the PAGE until the reader
-    // clicks the map, and clicking away hands scrolling back. Without it the
-    // map eats the scroll and traps the reader on the panel.
-    map.scrollWheelZoom.disable();
-    map.on("click focus", () => map.scrollWheelZoom.enable());
-    map.on("blur", () => map.scrollWheelZoom.disable());
-    const releaseWheel = (e: MouseEvent) => {
-      if (mapEl.current && e.target instanceof Node && !mapEl.current.contains(e.target)) {
-        map.scrollWheelZoom.disable();
-      }
-    };
-    document.addEventListener("click", releaseWheel, true);
     // Leaflet measures its container on creation; inside a flex/grid shell that
     // measurement can land before layout settles, leaving grey tiles.
     setTimeout(() => map.invalidateSize(), 0);
@@ -269,7 +256,6 @@ export default function ManagerLiveMapPage() {
     const markers = markersRef.current;
     const drawn = drawnRef.current;
     return () => {
-      document.removeEventListener("click", releaseWheel, true);
       map.remove();
       mapRef.current = null;
       teamRef.current = null;

@@ -58,7 +58,6 @@ from app.models.loan import Loan, LoanType, DPDBucket, LoanStatus, dpd_bucket_fo
 from app.models.case import Case, CaseStatus, CasePriority, ClosureReason, EscalationReason, priority_for
 from app.models.lending import BankFeedBatch
 from app.models.tenancy import Agency, Bank, Branch
-from app.services.pipeline_readiness import business_date
 from app.services.placement_service import UNKNOWN_BRANCH, PlacementRefused, PlacementService
 from app.models.repayment_snapshot import (
     OUTCOME_DECEASED, OUTCOME_RECALLED, OUTCOME_REPAID, OUTCOME_SETTLED,
@@ -164,56 +163,6 @@ def _parse_date(val) -> date | None:
         return date.fromisoformat(s)
     except ValueError:
         return None
-
-
-class IngestionError(Exception):
-    """A run that could not start or complete.
-
-    Raised instead of sys.exit() so the ingestion engine is callable from a
-    Celery worker and an API request, not only from a terminal. The CLI
-    wrapper (main) catches it and restores the old exit code, so
-    `python -m scripts.ingest_daily` behaves exactly as before.
-
-    NOT a @dataclass. It carried that decorator, which generates an
-    `__init__(self)` taking no arguments and so shadows Exception's — every
-    `raise IngestionError("...")` in this file died with a TypeError instead
-    of the refusal it meant to raise. Found by the handoff tests, which are
-    the first caller to exercise the except branch.
-    """
-
-
-@dataclass
-class IngestionResult:
-    """What a run did, for a caller that is not a human reading the log.
-
-    Carries ONLY counts and ids — never a borrower row — so it is safe to
-    store on the batch, return from the API and write to a task log.
-    """
-    ok: bool
-    batch_id: str | None
-    bank_code: str
-    file_name: str
-    dry_run: bool
-    rows_read: int = 0
-    rows_skipped: int = 0
-    rows_quarantined: int = 0
-    cases_inserted: int = 0
-    loans_inserted: int = 0
-    loans_updated: int = 0
-    customers_inserted: int = 0
-    customers_updated: int = 0
-    counters: dict = field(default_factory=dict)
-    error: str | None = None
-
-    @property
-    def status(self) -> str:
-        """The batch status this run earns. COMPLETED_WITH_ERRORS is a real
-        outcome, not a failure: rows landed AND rows were held back."""
-        if not self.ok:
-            return "FAILED"
-        if self.rows_quarantined or self.rows_skipped:
-            return "PARTIAL"
-        return "LOADED"
 
 
 @dataclass
@@ -832,16 +781,7 @@ def _label_snapshots(db, verdicts: dict, today: date) -> dict:
 
 
 def run_ingestion(file_path: Path, dry_run: bool = False, *, bank_code: str,
-                  agency_code: str | None = None,
-                  business_day: date | None = None) -> "IngestionResult":
-    """`business_day` pins which batch row this run belongs to.
-
-    Defaults to the IST business date, which is what the CLI always meant by
-    "today" (it was `date.today()`, the container's UTC date, until Phase 7). The worker
-    passes the BATCH'S OWN business_date instead: an upload for a past date
-    (or one picked up after midnight) would otherwise look up `today`, miss
-    its own batch and open a second one for the same file.
-    """
+                  agency_code: str | None = None) -> None:
     log.info("=" * 60)
     log.info("TIQCollect Daily Ingestion  %s", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     log.info("File    : %s", file_path)
@@ -849,17 +789,10 @@ def run_ingestion(file_path: Path, dry_run: bool = False, *, bank_code: str,
     log.info("=" * 60)
 
     if not file_path.exists():
-        # Raise, never sys.exit: this function runs inside a Celery worker and
-        # an API request as well as the CLI. main() turns this back into the
-        # exit code the CLI always had.
         log.error("File not found: %s", file_path)
-        raise IngestionError(f"File not found: {file_path}")
+        sys.exit(1)
 
-    # The IST business date, not the container's UTC date: a CLI run or a
-    # worker ingest after 18:30 UTC would otherwise stamp the batch with
-    # YESTERDAY, and the 20:00 gate looks the batch up BY business date — so a
-    # late-evening ingest would have read as "no feed for today".
-    today = business_day or business_date()
+    today = date.today()
     db = SessionLocal()
 
     # The file's batch row: what arrived, when, and — at the end — how many
@@ -927,20 +860,6 @@ def run_ingestion(file_path: Path, dry_run: bool = False, *, bank_code: str,
                     if result["skipped_reason"]:
                         log.debug("Row %d skipped: %s", i, result["skipped_reason"])
                         counters["rows_skipped"] += 1
-                        # Record WHY, as a row. The counter alone left an
-                        # operator with "PARTIAL, 500 skipped, 0 quarantined"
-                        # and nowhere to look: the reason went to log.debug,
-                        # which is off in production. SKIPPED, not QUARANTINED
-                        # — these are not releasable (see record_skipped).
-                        if not dry_run and ctx is not None and ctx.batch is not None \
-                                and ctx.placements is not None:
-                            try:
-                                ctx.placements.record_skipped(
-                                    ctx.batch, row_no=i, raw=row,
-                                    detail=str(result["skipped_reason"])[:500])
-                            except Exception as skip_err:
-                                # Bookkeeping must never cost a run.
-                                log.warning("Row %d: could not record skip reason: %s", i, skip_err)
                         continue
 
                     # Customer counters
@@ -1036,18 +955,6 @@ def run_ingestion(file_path: Path, dry_run: bool = False, *, bank_code: str,
         log.error("Fatal error: %s", e)
         raise
     finally:
-        # Read the batch id BEFORE the session closes. The IngestionResult at
-        # the end of this function used `getattr(batch, "id", None)`, which
-        # looks defensive but is not: on a closed session the attribute access
-        # raises DetachedInstanceError, and getattr only swallows
-        # AttributeError. Every successful run therefore died on its own last
-        # statement — the CLI included.
-        batch_id_value = None
-        if batch is not None:
-            try:
-                batch_id_value = batch.id
-            except Exception:          # already detached/expired: not worth failing a good run
-                batch_id_value = None
         db.close()
 
     total_closures = (
@@ -1087,25 +994,6 @@ def run_ingestion(file_path: Path, dry_run: bool = False, *, bank_code: str,
         log.info("")
         log.info("Done. Celery allocation fires at 8:00 PM IST.")
         log.info("   Agents see new cases + beat route from 6:00 AM tomorrow.")
-
-    # Counts only — never a borrower row. Safe to persist on the batch, return
-    # from the API and write to a task log.
-    return IngestionResult(
-        ok=True,
-        batch_id=batch_id_value,
-        bank_code=bank_code,
-        file_name=file_path.name,
-        dry_run=dry_run,
-        rows_read=counters["rows_read"],
-        rows_skipped=counters["rows_skipped"],
-        rows_quarantined=ctx.quarantined,
-        cases_inserted=counters["cases_inserted"],
-        loans_inserted=counters["loans_inserted"],
-        loans_updated=counters["loans_updated"],
-        customers_inserted=counters["customers_inserted"],
-        customers_updated=counters["customers_updated"],
-        counters=dict(counters),
-    )
 
 
 # ─── Sample CSV ───────────────────────────────────────────────────────────────
@@ -1362,14 +1250,7 @@ def main() -> None:
 
     if not args.bank:
         parser.error("--bank is required: a feed belongs to one bank")
-    # The CLI keeps its old contract: a failure that used to sys.exit(1) inside
-    # run_ingestion now surfaces as IngestionError and becomes the same exit 1
-    # here, so `python -m scripts.ingest_daily` behaves exactly as before.
-    try:
-        run_ingestion(file_path, dry_run=args.dry_run, bank_code=args.bank, agency_code=args.agency)
-    except IngestionError as exc:
-        log.error("%s", exc)
-        sys.exit(1)
+    run_ingestion(file_path, dry_run=args.dry_run, bank_code=args.bank, agency_code=args.agency)
 
 
 def find_todays_file() -> Path | None:

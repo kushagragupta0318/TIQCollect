@@ -34,25 +34,17 @@ logger = structlog.get_logger()
     bind=True,
     max_retries=3,
 )
-def run_nightly_repayment_scoring(self, dry_run: bool = False, force: bool = False):
+def run_nightly_repayment_scoring(self, dry_run: bool = False):
     """Score every loan, roll up to customers, snapshot what changed.
 
     `dry_run=True` computes and reports the full distribution without writing
     anything at all — useful for inspecting the shift from a running worker
     before the write gate is opened.
-
-    `force=True` scores even when the day's feed has not finished ingesting.
-    The upstream check is there because scoring reads the DPD and amounts the
-    ingest writes: scoring before it lands produces snapshots of yesterday's
-    book stamped with today's date, which then silently become today's
-    training rows and today's allocation inputs. An operator re-running a
-    stage by hand can override it; the scheduled run cannot.
     """
     from datetime import date
 
     from app.core.config import settings
     from app.core.database import SessionLocal
-    from app.services.pipeline_readiness import business_date, ingestion_status
     from app.services.repayment_service import RepaymentService
 
     db = SessionLocal()
@@ -64,24 +56,7 @@ def run_nightly_repayment_scoring(self, dry_run: bool = False, force: bool = Fal
             reprice_open_cases_enabled=settings.REPAYMENT_REPRICE_OPEN_CASES,
         )
         service = RepaymentService(db)
-        # The IST business date, not date.today(): this task is scheduled at
-        # 19:45 IST, and a UTC worker's `date.today()` is the previous day for
-        # anything past 18:30 UTC. One definition, in pipeline_readiness.
-        today = business_date()
-
-        # UPSTREAM GATE. Skipped rather than failed: a feed that has not
-        # arrived is not an error this task can retry away, and writing
-        # snapshots now would stamp yesterday's book with today's date.
-        if not dry_run and not force:
-            upstream = ingestion_status(db, today)
-            if not upstream.ready:
-                # as_json() already carries business_date; passing it again
-                # collides on the keyword.
-                logger.warning("repayment_scoring.skipped_upstream_not_ready",
-                               **upstream.as_json())
-                return {"skipped": True, "reason": upstream.reason,
-                        "business_date": str(today), "upstream": upstream.as_json()}
-
+        today = date.today()
         result = service.rescore(as_of=today, dry_run=dry_run)
 
         # Labelling and pruning run AFTER scoring and only on a real run.

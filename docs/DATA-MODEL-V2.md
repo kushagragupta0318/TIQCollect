@@ -2756,7 +2756,6 @@ router at the v1-main merge; it listed 76 capabilities.)*
 | `bank.regions.manage` | edit the region hierarchy and branches | |
 | `bank.audit.read` | the bank-wide audit trail | |
 | `bank_feed.upload` | submit a feed file (a person or a SERVICE account) | S |
-| `bank_feed.pii.read` | read a quarantined feed row AS RECEIVED (borrower name, phone, address, masked PAN). Writes DATA_EXPORT on every read | S |
 | `agency.read` | directory, scorecards, agency drill (read-only) | |
 | `agency.onboard` | create a draft agency, send the master-login invite | S |
 | `agency.update` | edit agency identity and contacts | |
@@ -2844,7 +2843,6 @@ Legend:
 | `bank.settings.manage`, `bank.users.manage`, `bank.users.sessions.revoke`, `bank.regions.manage` | · | Y | · | · | · | · | · | · |
 | `bank.audit.read` | · | Y | · | Y | · | · | · | · |
 | `bank_feed.upload` | · | Y | · | Y | · | · | · | Y |
-| `bank_feed.pii.read` | · | Y | · | · | · | · | · | · |
 | `agency.read` | · | Y | Y | Y | · | · | · | · |
 | `agency.onboard`, `agency.update`, `agency.documents.verify`, `agency.contract.manage`, `agency.suspend`, `agency.offboard` | · | Y | · | · | · | · | · | · |
 | `agency.profile.read` | · | · | · | · | Y | · | · | · |

@@ -3,7 +3,6 @@ import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-route
 import { Toaster } from "react-hot-toast";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-import { BrandLoader } from "@/components/ui/BrandLoader";
 import { ProtectedRoute } from "@/components/layout/ProtectedRoute";
 import AgentLayout from "@/components/layout/AgentLayout";
 import ManagerLayout from "@/components/layout/ManagerLayout";
@@ -32,7 +31,6 @@ const AgentMessagingPage = lazy(() => import("@/pages/agent/AgentMessagingPage")
 
 const ManagerOverviewPage = lazy(() => import("@/pages/manager/ManagerOverviewPage"));
 const ManagerAgentsPage = lazy(() => import("@/pages/manager/ManagerAgentsPage"));
-const AgencyManagersPage = lazy(() => import("@/pages/manager/AgencyManagersPage"));
 const ManagerLiveMapPage = lazy(() => import("@/pages/manager/ManagerLiveMapPage"));
 const ManagerBeatPlanPage = lazy(() => import("@/pages/manager/ManagerBeatPlanPage"));
 const ManagerCasesPage = lazy(() => import("@/pages/manager/ManagerCasesPage"));
@@ -90,10 +88,15 @@ const queryClient = new QueryClient({
   },
 });
 
-// Was a spinning ring plus "Loading view..."; it is the shared brand mark now,
-// so a lazy route's wait matches the boot splash and the post-login hold.
 function PageLoader() {
-  return <BrandLoader label="Loading view" />;
+  return (
+    <div className="flex min-h-[50vh] w-full items-center justify-center">
+      <div className="flex flex-col items-center gap-3">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary-500 border-t-transparent" />
+        <span className="text-xs font-medium text-slate-400">Loading view...</span>
+      </div>
+    </div>
+  );
 }
 
 function RootRedirect() {
@@ -194,7 +197,6 @@ export default function App() {
               <Route index element={<Navigate to="overview" replace />} />
               <Route path="overview" element={<ManagerOverviewPage />} />
               <Route path="agents" element={<ManagerAgentsPage />} />
-              <Route path="managers" element={<AgencyManagersPage />} />
               <Route path="live-map" element={<ManagerLiveMapPage />} />
               <Route path="beat-plan" element={<ManagerBeatPlanPage />} />
               <Route path="cases" element={<ManagerCasesPage />} />

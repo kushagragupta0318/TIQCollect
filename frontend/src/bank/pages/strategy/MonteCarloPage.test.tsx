@@ -57,23 +57,6 @@ function renderPage() {
   render(<QueryClientProvider client={qc}><MonteCarloPage /></QueryClientProvider>);
 }
 
-/**
- * The headline tile's Gross NPA figure.
- *
- * The same p50 is deliberately on screen twice: the headline Tile, and the
- * "Gross NPA at the horizon" range card added with the charts. Both are
- * labelled "Gross NPA", so neither the figure nor the label alone identifies
- * one. The Tile is the card WITHOUT the range card's `group` class — matching
- * either copy (getAllByText) would still pass if the tile lost its number,
- * which is the regression this test exists to catch.
- */
-function gnpaHeadline(): string | null {
-  const tile = screen.getAllByText("Gross NPA")
-    .map((l) => l.closest("div.rounded-card, div.rounded-\\[14px\\]"))
-    .find((c) => c?.classList.contains("rounded-card"));
-  return tile?.querySelector(".tabular-nums")?.textContent ?? null;
-}
-
 afterEach(() => {
   cleanup();
   vi.mocked(api.post).mockReset();
@@ -85,7 +68,7 @@ describe("Monte Carlo simulator", () => {
     renderPage();
 
     expect(await screen.findByText(CAVEAT)).toBeTruthy();
-    expect(gnpaHeadline()).toBe("13.9%");                                 // p50, 1 dp from sem
+    expect(screen.getByText("13.9%")).toBeTruthy();                       // p50, 1 dp from sem
     expect(screen.getByText("11.3% to 16.6% at 12 months")).toBeTruthy(); // the band beneath it
     expect(screen.getByText(/8 in 10 simulated paths/)).toBeTruthy();
     expect(screen.getByText(/1,478 synthetic loans at 2026-09-30/)).toBeTruthy();
@@ -117,13 +100,13 @@ describe("Monte Carlo simulator", () => {
   it("keeps the figures with the run that produced them until a new run is asked for", async () => {
     vi.mocked(api.post).mockResolvedValue({ data: run() });
     renderPage();
-    await waitFor(() => expect(gnpaHeadline()).toBe("13.9%"));
+    await screen.findByText("13.9%");
     expect(vi.mocked(api.post)).toHaveBeenCalledTimes(1);
 
     // Move a lever: the figures on screen still belong to the previous run.
     fireEvent.change(screen.getByLabelText("Placed with agencies"), { target: { value: "0.8" } });
     expect(screen.getByText("Changed: Placed with agencies: 80%")).toBeTruthy();
-    expect(gnpaHeadline()).toBe("13.9%");
+    expect(screen.getByText("13.9%")).toBeTruthy();
     expect(vi.mocked(api.post)).toHaveBeenCalledTimes(1);
 
     // Running sends only the lever that moved; the rest stay the engine's defaults.
@@ -137,7 +120,6 @@ describe("Monte Carlo simulator", () => {
       // A Monte Carlo run can exceed the default 15s timeout; runSimulation raises it.
       { timeout: LONG_RUNNING_MS },
     ]);
-    // The new run's figure replaces the old one in the headline.
-    await waitFor(() => expect(gnpaHeadline()).toBe("11.2%"));
+    await screen.findByText("11.2%");
   });
 });

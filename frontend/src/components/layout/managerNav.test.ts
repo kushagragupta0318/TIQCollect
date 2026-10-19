@@ -25,14 +25,6 @@ describe("the one nav list", () => {
     expect(primary.length + more.length).toBe(all.length);
   });
 
-  it("ends on Compliance, on the rail and in the More sheet alike", () => {
-    // Asked for directly: Compliance is the last tab for every manager role.
-    // AGENCY_ADMIN only ever filters items out (ManagerLayout's ADMIN_HIDDEN_NAV)
-    // and inserts Managers near the top, so last here is last for them too.
-    expect(MANAGER_NAV.at(-1)?.to).toBe("/manager/compliance");
-    expect(MOBILE_MORE.at(-1)?.to).toBe("/manager/compliance");
-  });
-
   it("keeps the desktop rail's order within each half", () => {
     const rank = (to: string) => paths(MANAGER_NAV).indexOf(to);
     const ascending = (xs: string[]) => xs.every((x, i) => i === 0 || rank(xs[i - 1]) < rank(x));

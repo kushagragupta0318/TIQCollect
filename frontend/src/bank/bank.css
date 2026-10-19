@@ -377,11 +377,8 @@
   .bank-root .tiq-table tbody tr {
     transition: background-color 150ms cubic-bezier(0.16, 1, 0.3, 1);
   }
-  /* Light blue, from --primary (#1677FF) at low alpha, not the neutral grey:
-     a hovered row in the bank tables reads as "this opens something". One rule
-     for both table variants below, so every bank table agrees. */
   .bank-root .tiq-table tbody tr:hover {
-    @apply bg-primary/10;
+    @apply bg-muted/30;
   }
 
   /* ── Clean Default Tables (Borderless) ──────────────────────────────────── */
@@ -400,7 +397,7 @@
     transition: background-color 150ms cubic-bezier(0.16, 1, 0.3, 1);
   }
   .bank-root table:not(.tiq-table) tbody tr:hover {
-    @apply bg-primary/10;
+    @apply bg-muted/30;
   }
 
   /* ── Status Badges (pill radius) ────────────────────────────────────────── */

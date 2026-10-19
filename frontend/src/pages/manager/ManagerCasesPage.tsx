@@ -25,7 +25,6 @@ import {
 } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { getCases, getCaseDetail, getCasesDateRange, getAgents, reassignCase } from "@/api/manager";
-import { ALL_MANAGERS, managerOptions, resolveManagerFilter, showManagerFilter } from "@/lib/managerFilter";
 import { errorDetail } from "@/lib/apiError";
 import type { ManagerCaseDetail, VisitRecord, VisitPriority } from "@/api/manager";
 import { Input } from "@/components/ui/Input";
@@ -62,14 +61,11 @@ const TABLE_COLS = [
 ].join(" ");
 
 import { useModalA11y } from "@/hooks/useModalA11y";
-import type { Agent, Case } from "@/types";
+import type { Case } from "@/types";
 import { LIVE } from "@/lib/liveQuery";
 
 const EASE = "cubic-bezier(0.16,1,0.3,1)";
 const PAGE_SIZE = 50;
-// One stable identity for "the roster has not arrived yet", so a `?? []`
-// fallback does not hand every dependent memo a new array each render.
-const EMPTY_ROSTER: Agent[] = [];
 
 // ── Outcome helpers ──────────────────────────────────────────────────────────
 
@@ -1170,15 +1166,7 @@ export default function ManagerCasesPage() {
   // The roster, for the Agent picker. Same key as the reassign modal's query,
   // so the two share one fetch.
   const rosterQ = useQuery({ queryKey: ["manager", "agents"], queryFn: getAgents, staleTime: 60_000 });
-  // `?? []` built a NEW empty array every render while the fetch was in
-  // flight, so anything depending on `roster` saw a changed identity each
-  // time. One frozen constant instead — the memos below then re-run when the
-  // roster actually arrives, not on every keystroke.
-  const roster = rosterQ.data ?? EMPTY_ROSTER;
-  // Agency admins see every manager's cases, so they can narrow to one.
-  // Server-side (the list is paginated), hence it rides the query key too.
-  const [managerFilter, setManagerFilter] = useState<string>(ALL_MANAGERS);
-  const activeManagerFilter = resolveManagerFilter(roster, managerFilter);
+  const roster = rosterQ.data ?? [];
 
   // ─── React Query, 2026-09-10 ────────────────────────────────────────────
   //
@@ -1208,7 +1196,7 @@ export default function ManagerCasesPage() {
     queryKey: ["manager", "cases", {
       status: statusFilter, bucket: bucketFilter, recovery: recoveryFilter, sort: prioritySort,
       band: priorityBand, from: dateFrom, to: dateTo,
-      agent: agentId ?? null, manager: activeManagerFilter, page,
+      agent: agentId ?? null, page,
       activity: activity ? `${activity.stage}|${activity.window}|${activity.outcome ?? ""}` : null,
       ptpDue: ptpDue ? `${ptpDue.from}|${ptpDue.to}` : null,
     }],
@@ -1223,7 +1211,6 @@ export default function ManagerCasesPage() {
           date_from: dateFrom || undefined,
           date_to: dateTo || undefined,
           agent_id: agentId || undefined,
-          manager_user_id: activeManagerFilter !== ALL_MANAGERS ? activeManagerFilter : undefined,
           activity: activity?.stage,
           activity_window: activity?.window,
           visit_outcome: activity?.outcome ?? undefined,
@@ -1382,14 +1369,8 @@ export default function ManagerCasesPage() {
       });
     }
     return out;
-    // `activity` and `ptpDue` are READ above (their two chips) but were missing
-    // from the deps, so clearing either chip left it on screen until some other
-    // filter happened to re-run this memo — the list had already narrowed, so
-    // the chip row was lying. Reached from the Overview funnel (?activity=) and
-    // the PTP card.
   }, [statusFilter, bucketFilter, recoveryFilter, prioritySort, priorityBand,
-      dateFrom, dateTo, defaultRange, agentId, roster, agentName,
-      activity, ptpDue]);
+      dateFrom, dateTo, defaultRange, agentId, roster, agentName]);
   const clearAllFilters = () => activeFilters.forEach((f) => f.clear());
 
   return (
@@ -1425,19 +1406,6 @@ export default function ManagerCasesPage() {
                 leftIcon={<Search className="w-4 h-4" />}
               />
             </div>
-            {showManagerFilter(roster) && (
-              <select
-                className="input text-[13px] py-2 px-2.5 tap-target-h flex-1 min-w-0 sm:flex-none sm:w-52"
-                value={activeManagerFilter}
-                onChange={(e) => { setManagerFilter(e.target.value); setAgentId(null); setPage(0); }}
-                aria-label="Filter by manager"
-              >
-                <option value={ALL_MANAGERS}>All managers</option>
-                {managerOptions(roster).map((m) => (
-                  <option key={m.id} value={m.id}>{m.name}</option>
-                ))}
-              </select>
-            )}
             <select
               className="input text-[13px] py-2 px-2.5 tap-target-h flex-1 min-w-0 sm:flex-none sm:w-52"
               value={agentId ?? ""}
@@ -1445,9 +1413,7 @@ export default function ManagerCasesPage() {
               aria-label="Filter by agent"
             >
               <option value="">All agents{roster.length ? ` (${roster.length})` : ""}</option>
-              {roster
-                .filter((a) => activeManagerFilter === ALL_MANAGERS || a.manager_user_id === activeManagerFilter)
-                .map((a) => <option key={a.id} value={a.id}>{a.full_name}</option>)}
+              {roster.map((a) => <option key={a.id} value={a.id}>{a.full_name}</option>)}
             </select>
             <button
               type="button"

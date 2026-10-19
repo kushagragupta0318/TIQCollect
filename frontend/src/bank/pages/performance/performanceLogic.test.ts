@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  formatCostPer100, formatFraudPer100, formatIndex, formatIndexPrecise, formatPerAgentPerDay, formatRatioPercent,
+  formatCostPer100, formatFraudPer100, formatIndex, formatPerAgentPerDay, formatRatioPercent,
   indexEvidenceCaption, percentBarWidth, rankLeaderboard,
 } from "./performanceLogic";
 import type { PerformanceIndex } from "@/api/bank";
@@ -46,26 +46,6 @@ describe("formatIndex — the headline number", () => {
 
   it("a real zero index is distinct from null", () => {
     expect(formatIndex(0)).toBe("0");
-  });
-});
-
-describe("formatIndexPrecise — the index where rows are ranked against each other", () => {
-  it("keeps the decimal the estimator produced, so the ranking is readable", () => {
-    // Measured on the demo book: these five are leaderboard ranks 1-5 and
-    // every one of them printed "7" under whole-number rounding.
-    expect([7.3, 7.2, 7.0, 6.9, 6.8].map(formatIndexPrecise))
-      .toEqual(["7.3", "7.2", "7.0", "6.9", "6.8"]);
-  });
-
-  it("separates values that round to the same whole number", () => {
-    // 6.5 ranks below 6.9 but showed "6" against its "7" — a one-rank gap
-    // that looked like a one-point gap.
-    expect(formatIndexPrecise(6.9)).not.toBe(formatIndexPrecise(6.5));
-  });
-
-  it("still says 'not enough data' rather than 0.0", () => {
-    expect(formatIndexPrecise(null)).toBe("—");
-    expect(formatIndexPrecise(0)).toBe("0.0");   // a real zero is a score
   });
 });
 

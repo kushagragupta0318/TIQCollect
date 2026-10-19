@@ -116,10 +116,3 @@ backend/docs/rollback/
 # Production database dumps (docker-compose.prod.yml mounts ./backups).
 backups/
 .worktrees/
-
-# Caddy's local development CA, copied out of the container by
-# docs/LOCAL-PROD.md so the browser trusts https://localhost. Caddy mints a
-# DIFFERENT root per machine on first run, so a committed copy would trust
-# nothing anyone else runs. The public cert only — the key stays in the
-# container.
-caddy-local-root.crt
